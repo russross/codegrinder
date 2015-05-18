@@ -1,5 +1,5 @@
 FROM python:2
-MAINTAINER russ@dixie.edu
+MAINTAINER russ@russross.com
 
 RUN pip install autopep8
 
