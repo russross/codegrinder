@@ -4,6 +4,10 @@ import (
 	"database/sql"
 	"net/http"
 	"time"
+
+	"github.com/go-martini/martini"
+	"github.com/martini-contrib/render"
+	"github.com/russross/meddler"
 )
 
 // ProblemType defines one type of problem.
@@ -35,6 +39,8 @@ type ProblemTypeAction struct {
 	Class   string `json:"className,omitempty"`
 	handler autoHandler
 }
+
+type autoHandler func([]string, []string, chan *EventMessage)
 
 func GetProblemTypes(w http.ResponseWriter, tx *sql.Tx, render render.Render) {
 	problemsTypes := []*ProblemType{}

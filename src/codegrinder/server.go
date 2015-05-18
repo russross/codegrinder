@@ -10,8 +10,10 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/fsouza/go-dockerclient"
 	"github.com/go-martini/martini"
 	"github.com/gorilla/websocket"
+	"github.com/martini-contrib/sessions"
 )
 
 type Action struct {
@@ -19,7 +21,7 @@ type Action struct {
 	Files map[string]string
 }
 
-var loge, logi log.Logger
+var loge, logi, logd log.Logger
 var Config struct {
 	ToolName          string
 	ToolID            string
@@ -79,21 +81,31 @@ func main() {
 
 		// problem types
 		r.Get("/api/v2/problemtypes", AuthenticationRequired, transaction, GetProblemTypes)
-		r.Get("/api/v2/problemtypes/:name", AuthenticationRequired, transaction, GetProblemType)
+		r.Get("/api/v2/problemtypes/:id", AuthenticationRequired, transaction, GetProblemType)
 
 		// problems
 		r.Get("/api/v2/problems", AuthenticationRequired, transaction, GetProblems)
-		r.Get("/api/v2/problems/:id", AuthenticationRequired, transaction, GetProblem)
+		r.Get("/api/v2/problems/:problem_id", AuthenticationRequired, transaction, GetProblem)
 
 		// problem steps
-
-		// users
+		r.Get("/api/v2/problems/:problem_id/steps", AuthenticationRequired, transaction, GetProblemSteps)
+		r.Get("/api/v2/problems/:problem_id/steps/:step_id", AuthenticationRequired, transaction, GetProblemSteps)
 
 		// courses
+		r.Get("/api/v2/courses", AuthenticationRequired, transaction, GetCourses)
+		r.Get("/api/v2/courses/:course_id", AuthenticationRequired, transaction, GetCourse)
+
+		// users
+		r.Get("/api/v2/users", AuthenticationRequired, transaction, GetUsers)
+		r.Get("/api/v2/users/:user_id", AuthenticationRequired, transaction, GetUser)
 
 		// assignments
+		r.Get("/api/v2/users/:user_id/assignments", AuthenticationRequired, transaction, GetAssignments)
+		r.Get("/api/v2/users/:user_id/assignments/:assignment_id", AuthenticationRequired, transaction, GetAssignment)
 
 		// commits
+		r.Get("/api/v2/users/:user_id/assignments/:assignment_id/commits", AuthenticationRequired, transaction, GetCommits)
+		r.Get("/api/v2/users/:user_id/assignments/:assignment_id/commits/:commit_id", AuthenticationRequired, transaction, GetCommit)
 	}
 
 	// set up daycare role
@@ -104,37 +116,36 @@ func main() {
 	var err error
 	dockerClient, err = docker.NewVersionedClient("unix:///var/run/docker.sock", "1.18")
 	if err != nil {
-		log.Fatalf("NewVersionedClient: %v", err)
+		loge.Fatalf("NewVersionedClient: %v", err)
 	}
 	if err = dockerClient.Ping(); err != nil {
-		log.Fatalf("Ping: %v", err)
+		loge.Fatalf("Ping: %v", err)
 	}
 
 	// set up a web handler
-	m := martini.Classic()
 	m.Get("/python2unittest", func(w http.ResponseWriter, r *http.Request) {
 		// set up websocket
 		socket, err := websocket.Upgrade(w, r, nil, 1024, 1024)
 		if err != nil {
-			log.Printf("websocket error: %v", err)
+			loge.Printf("websocket error: %v", err)
 			http.Error(w, "websocket error", http.StatusBadRequest)
 			return
 		}
-		log.Printf("websocket upgraded")
+		loge.Printf("websocket upgraded")
 
 		// get the first message
 		var action Action
 		if err := socket.ReadJSON(&action); err != nil {
-			log.Printf("error reading Action message: %v", err)
+			loge.Printf("error reading Action message: %v", err)
 			socket.Close()
 			return
 		}
-		log.Printf("read request: type = %s", action.Type)
+		loge.Printf("read request: type = %s", action.Type)
 
 		// launch a nanny process
 		n, err := NewNanny("codegrinder/python2", "foo")
 		if err != nil {
-			log.Fatalf("error creating nanny")
+			loge.Fatalf("error creating nanny")
 		}
 
 		// start a listener
@@ -143,7 +154,7 @@ func main() {
 			for event := range n.Events {
 				// feed events back to client
 				if err := socket.WriteJSON(event); err != nil {
-					log.Printf("error writing event JSON: %v", err)
+					loge.Printf("error writing event JSON: %v", err)
 				}
 			}
 			finished <- struct{}{}
@@ -156,7 +167,7 @@ func main() {
 
 		// shutdown the nanny
 		if err := n.Shutdown(); err != nil {
-			log.Printf("nanny shutdown error: %v", err)
+			logi.Printf("nanny shutdown error: %v", err)
 		}
 
 		// wait for listener to finish
@@ -179,15 +190,24 @@ func setupLogging(tag string, useSyslog bool) {
 		}
 		loge = log.New(os.Stderr, "[e] ", 0)
 		loge = f(syslog.LOG_ERR, "[e] ", log.Lshortfile, log.Lshortfile)
-		lowi = f(syslog.LOG_INFO, "[i] ", 0)
+		logi = f(syslog.LOG_INFO, "[i] ", 0)
+		logd = f(syslog.LOG_DEBUG, "[d] ", 0)
 	} else {
 		loge = log.New(os.Stderr, "[e] ", log.Ltime|log.Lmicroseconds|log.Lshortfile)
 		logi = log.New(os.Stderr, "[i] ", log.Ltime|log.Lmicroseconds)
+		logd = log.New(os.Stderr, "[d] ", log.Ltime|log.Lmicroseconds)
 	}
 }
 
-func HTTPErrorf(w http.ResponseWriter, status http.Status, format string, params ...interface{}) error {
+func HTTPErrorf(w http.ResponseWriter, status int, format string, params ...interface{}) error {
 	msg := fmt.Sprintf(format, params...)
 	http.Error(w, msg, status)
 	return error.New(msg)
+}
+
+func AuthenticationRequired(response http.ResponseWriter, session sessions.Session) {
+	if userID := session.Get("user_id"); userID == nil {
+		logi.Printf("authentication: no user_id found in session")
+		response.WriteHeader(http.StatusUnauthorized)
+	}
 }
