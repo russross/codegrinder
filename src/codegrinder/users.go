@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/go-martini/martini"
-	"github.com/gorilla/sessions"
 	"github.com/martini-contrib/render"
+	"github.com/martini-contrib/sessions"
 	"github.com/russross/meddler"
 )
 

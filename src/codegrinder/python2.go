@@ -11,6 +11,125 @@ import (
 
 const workingDir = "/home/student"
 
+func init() {
+	problemTypes["python2unittest"] = &ProblemTypeDefinition{
+		MaxCPU:      10,
+		MaxFD:       10,
+		MaxFileSize: 10,
+		MaxMemory:   32,
+		MaxThreads:  20,
+		Actions: []*ProblemTypeAction{
+			&ProblemTypeAction{
+				Action:  "grade",
+				Button:  "Grade",
+				Message: "Grading‥",
+				Class:   "btn-grade",
+				//handler: autoHandler(python27UnittestGrade),
+			},
+			&ProblemTypeAction{
+				Action: "",
+				Button: "Save",
+				Class:  "btn-save",
+			},
+			&ProblemTypeAction{
+				Action:  "interactive",
+				Button:  "Run",
+				Message: "Running %s‥",
+				Class:   "btn-run",
+				//handler: autoHandler(python27Interactive),
+			},
+			&ProblemTypeAction{
+				Action:  "debug",
+				Button:  "Debug",
+				Message: "Running debugger on %s‥",
+				Class:   "btn-debug",
+				//handler: autoHandler(python27Debug),
+			},
+			&ProblemTypeAction{
+				Action:  "adhoc",
+				Button:  "Shell",
+				Message: "Running Python shell‥",
+				Class:   "btn-shell",
+				//handler: autoHandler(python27Adhoc),
+			},
+			&ProblemTypeAction{
+				Action:  "stylecheck",
+				Button:  "Check style",
+				Message: "Checking for pep8 style problems‥",
+				//handler: autoHandler(python27StyleCheck),
+			},
+			&ProblemTypeAction{
+				Action:  "stylefix",
+				Button:  "Fix style",
+				Message: "Auto-correcting pep8 style problems‥",
+				//handler: autoHandler(python27StyleFix),
+			},
+			&ProblemTypeAction{
+				Action: "_setup",
+				//handler: autoHandler(python27UnittestSetup),
+			},
+		},
+	}
+	problemTypes["python27inout"] = &ProblemTypeDefinition{
+		MaxCPU:      10,
+		MaxFD:       10,
+		MaxFileSize: 10,
+		MaxMemory:   32,
+		MaxThreads:  20,
+		Actions: []*ProblemTypeAction{
+			&ProblemTypeAction{
+				Action:  "grade",
+				Button:  "Grade",
+				Message: "Grading‥",
+				Class:   "btn-grade",
+				//handler: autoHandler(python27InOutGrade),
+			},
+			&ProblemTypeAction{
+				Action: "",
+				Button: "Save",
+				Class:  "btn-save",
+			},
+			&ProblemTypeAction{
+				Action:  "interactive",
+				Button:  "Run",
+				Message: "Running %s‥",
+				Class:   "btn-run",
+				//handler: autoHandler(python27Interactive),
+			},
+			&ProblemTypeAction{
+				Action:  "debug",
+				Button:  "Debug",
+				Message: "Running debugger on %s‥",
+				Class:   "btn-debug",
+				//handler: autoHandler(python27Debug),
+			},
+			&ProblemTypeAction{
+				Action:  "adhoc",
+				Button:  "Shell",
+				Message: "Running Python shell‥",
+				Class:   "btn-shell",
+				//handler: autoHandler(python27Adhoc),
+			},
+			&ProblemTypeAction{
+				Action:  "stylecheck",
+				Button:  "Check style",
+				Message: "Checking for pep8 style problems‥",
+				//handler: autoHandler(python27StyleCheck),
+			},
+			&ProblemTypeAction{
+				Action:  "stylefix",
+				Button:  "Fix style",
+				Message: "Auto-correcting pep8 style problems‥",
+				//handler: autoHandler(python27StyleFix),
+			},
+			&ProblemTypeAction{
+				Action: "_setup",
+				//handler: autoHandler(python27InOutSetup),
+			},
+		},
+	}
+}
+
 func python2UnittestGrade(n *Nanny, rc *ReportCard, args []string, options []string, files map[string]string) {
 	// put the files in the container
 	if err := n.PutFiles(files); err != nil {

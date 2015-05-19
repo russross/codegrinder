@@ -1,13 +1,11 @@
 package main
 
 import (
-	"database/sql"
 	"net/http"
 	"time"
 
 	"github.com/go-martini/martini"
 	"github.com/martini-contrib/render"
-	"github.com/russross/meddler"
 )
 
 // ProblemType defines one type of problem.
@@ -42,32 +40,17 @@ type ProblemTypeAction struct {
 
 type autoHandler func([]string, []string, chan *EventMessage)
 
-func GetProblemTypes(w http.ResponseWriter, tx *sql.Tx, render render.Render) {
-	problemsTypes := []*ProblemType{}
-	if err := meddler.QueryAll(tx, &problemTypes, `SELECT * FROM problem_types`); err != nil {
-		loge.Print(HTTPErrorf(w, http.StatusInternalServerError, "DB error getting problem list: %v", err))
-		return
-	}
-
+func GetProblemTypes(w http.ResponseWriter, render render.Render) {
 	render.JSON(http.StatusOK, problemTypes)
 }
 
-func GetProblemType(w http.ResponseWriter, tx *sql.Tx, params martini.Params, render render.Render) {
-	problemTypeID, err := stdconv.Atoi(params["id"])
-	if err != nil {
-		loge.Print(HTTPErrorf(w, http.StatusBadRequest, "Malformed problem ID in URL: %v", err))
-		return
-	}
+func GetProblemType(w http.ResponseWriter, params martini.Params, render render.Render) {
+	name := params["name"]
 
-	problemType := new(ProblemType)
-	if err := meddler.Load(db, "problem_types", problemType, int64(problemTypeID)); err != nil {
-		if err == sql.ErrNoRows {
-			loge.Print(HTTPErrorf(w, http.StatusNotFound, "Problem not found"))
-		} else {
-			loge.Print(HTTPErrorf(w, http.StatusInternalServerError, "DB error loading problem: %v", err))
-		}
+	if problemType, exists := problemTypes[name]; !exists {
+		loge.Print(HTTPErrorf(w, http.StatusNotFound, "Problem type %q not found", name))
 		return
+	} else {
+		render.JSON(http.StatusOK, problemType)
 	}
-
-	render.JSON(http.StatusOK, problemType)
 }

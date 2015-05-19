@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-martini/martini"
 	"github.com/martini-contrib/render"
+	"github.com/russross/meddler"
 )
 
 type Assignment struct {
@@ -32,17 +33,37 @@ type Assignment struct {
 	UpdatedAt          time.Time      `json:"updatedAt" meddler:"updated_at,localtime"`
 }
 
-func GetAssignment(w http.ResponseWriter, currentUser *User, db *sql.Tx, params martini.Params, render render.Render) {
+func GetAssignment(w http.ResponseWriter, currentUser *User, tx *sql.Tx, params martini.Params, render render.Render) {
 	assignmentID, err := strconv.Atoi(params["assignment_id"])
 	if err != nil {
-		loge.Printf("error parsing assignmentID from URL: %v", err)
-		http.Error(w, "Not found", http.StatusNotFound)
+		loge.Print(HTTPErrorf(w, http.StatusBadRequest, "error parsing assignmentID from URL: %v", err))
 		return
 	}
 
-	assignment := loadAssignment(w, currentUser, db, assignmentID)
-	if assignment == nil {
+	assignment := new(Assignment)
+	if err := meddler.Load(tx, "assignments", assignment, int64(assignmentID)); err != nil {
+		if err == sql.ErrNoRows {
+			loge.Print(HTTPErrorf(w, http.StatusNotFound, "Assignment not found"))
+			return
+		}
+		loge.Print(HTTPErrorf(w, http.StatusInternalServerError, "db error loading assignment %d: %v", assignmentID, err))
 		return
+	}
+
+	// authorized?
+	if currentUser.ID != assignment.UserID {
+		// see if this user is an instructor for the course
+		// if so, access to student commits is okay
+		courses, err := currentUser.GetInstructorCourses(tx)
+		if err != nil {
+			loge.Print(HTTPErrorf(w, http.StatusInternalServerError, "DB error checking if the user is an instructor"))
+			return
+		}
+		if !intContains(courses, assignment.CourseID) {
+			loge.Print(HTTPErrorf(w, http.StatusUnauthorized, "user %d (%s) attempting to access assignment %d, belonging to user %d",
+				currentUser.ID, currentUser.Email, assignment.ID, assignment.UserID))
+			return
+		}
 	}
 
 	render.JSON(http.StatusOK, assignment)

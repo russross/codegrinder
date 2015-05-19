@@ -71,25 +71,6 @@ func GetProblem(w http.ResponseWriter, db *sql.Tx, params martini.Params, render
 		return
 	}
 
-	problem.ProblemSteps = []*ProblemStep{}
-	err = meddler.QueryAll(db, &problem.ProblemSteps, `SELECT * FROM problem_steps WHERE problem_id = $1 ORDER BY position`, problem.ID)
-	if err != nil {
-		loge.Printf("db error querying problem steps for problem %d: %v", problem.ID, err)
-		http.Error(w, "DB error loading problem steps", http.StatusInternalServerError)
-		return
-	}
-
-	problem.ProblemType = new(ProblemType)
-	if err = meddler.Load(db, "problem_types", problem.ProblemType, int64(problem.ProblemTypeID)); err != nil {
-		if err == sql.ErrNoRows {
-			http.Error(w, "Problem type not found for this problem", http.StatusInternalServerError)
-		} else {
-			loge.Printf("db error loading problem type %d: %v", problem.ProblemTypeID, err)
-			http.Error(w, "DB error loading problem type", http.StatusInternalServerError)
-		}
-		return
-	}
-
 	problem.FilterOutgoing()
 	render.JSON(http.StatusOK, problem)
 }

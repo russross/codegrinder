@@ -321,7 +321,7 @@ func encode(v url.Values) string {
 // LtiProblem handles /lti/problem/:unique requests.
 // It creates the user/course/assignment if necessary, creates a session,
 // and redirects the user to the main UI URL.
-func LtiProblem(w http.ResponseWriter, r *http.Request, db *sql.Tx, form LTIRequest, params martini.Params, session sessions.Session) {
+func LtiProblem(w http.ResponseWriter, r *http.Request, tx *sql.Tx, form LTIRequest, params martini.Params, session sessions.Session) {
 	unique := params["unique"]
 	if unique == "" {
 		loge.Print(HTTPErrorf(w, http.StatusBadRequest, "Malformed URL: missing unique ID for problem"))
@@ -336,7 +336,7 @@ func LtiProblem(w http.ResponseWriter, r *http.Request, db *sql.Tx, form LTIRequ
 
 	// load the problem
 	problem := new(Problem)
-	if err := meddler.QueryRow(db, problem, `SELECT * FROM problems WHERE unique_id = $1`, unique); err != nil {
+	if err := meddler.QueryRow(tx, problem, `SELECT * FROM problems WHERE unique_id = $1`, unique); err != nil {
 		if err == sql.ErrNoRows {
 			// no such problem
 			loge.Print(HTTPErrorf(w, http.StatusNotFound, "no problem found with ID %s", unique))
@@ -347,21 +347,21 @@ func LtiProblem(w http.ResponseWriter, r *http.Request, db *sql.Tx, form LTIRequ
 	}
 
 	// load the course
-	course, err := getUpdateCourse(db, &form, now)
+	course, err := getUpdateCourse(tx, &form, now)
 	if err != nil {
 		http.Error(w, "DB error getting course", http.StatusInternalServerError)
 		return
 	}
 
 	// load the user
-	user, err := getUpdateUser(db, &form, now)
+	user, err := getUpdateUser(tx, &form, now)
 	if err != nil {
 		http.Error(w, "DB error getting user", http.StatusInternalServerError)
 		return
 	}
 
 	// load the assignment
-	asst, err := getUpdateAssignment(db, &form, now, course, problem, user)
+	asst, err := getUpdateAssignment(tx, &form, now, course, problem, user)
 	if err != nil {
 		http.Error(w, "DB error getting assignment", http.StatusInternalServerError)
 		return
@@ -377,17 +377,17 @@ func LtiProblem(w http.ResponseWriter, r *http.Request, db *sql.Tx, form LTIRequ
 // LtiProblems handles /lti/problems requests.
 // It creates the user/course if necessary, creates a session,
 // and redirects the user to the problem picker UI URL.
-func LtiProblems(w http.ResponseWriter, r *http.Request, db *sql.Tx, form LTIRequest, render render.Render, session sessions.Session) {
+func LtiProblems(w http.ResponseWriter, r *http.Request, tx *sql.Tx, form LTIRequest, render render.Render, session sessions.Session) {
 	now := time.Now()
 
 	// load the coarse
-	if _, err := getUpdateCourse(db, &form, now); err != nil {
+	if _, err := getUpdateCourse(tx, &form, now); err != nil {
 		http.Error(w, "DB error getting course", http.StatusInternalServerError)
 		return
 	}
 
 	// load the user
-	user, err := getUpdateUser(db, &form, now)
+	user, err := getUpdateUser(tx, &form, now)
 	if err != nil {
 		http.Error(w, "DB error getting user", http.StatusInternalServerError)
 		return
@@ -408,9 +408,9 @@ func LtiProblems(w http.ResponseWriter, r *http.Request, db *sql.Tx, form LTIReq
 }
 
 // get/create/update this user
-func getUpdateUser(db *sql.Tx, form *LTIRequest, now time.Time) (*User, error) {
+func getUpdateUser(tx *sql.Tx, form *LTIRequest, now time.Time) (*User, error) {
 	user := new(User)
-	if err := meddler.QueryRow(db, user, `SELECT * FROM users WHERE lti_id = $1`, form.UserID); err != nil {
+	if err := meddler.QueryRow(tx, user, `SELECT * FROM users WHERE lti_id = $1`, form.UserID); err != nil {
 		if err != sql.ErrNoRows {
 			loge.Printf("db error loading user %s (%s): %v", form.UserID, form.PersonContactEmailPrimary, err)
 			return nil, err
@@ -420,15 +420,23 @@ func getUpdateUser(db *sql.Tx, form *LTIRequest, now time.Time) (*User, error) {
 		user.CreatedAt = now
 		user.UpdatedAt = now
 	}
-	oldUser := new(User)
-	*oldUser = *user
+
+	// any changes?
+	changed := user.Name != form.PersonNameFull ||
+		user.Email != form.PersonContactEmailPrimary ||
+		user.LtiID != form.UserID ||
+		user.ImageURL != form.UserImage ||
+		user.CanvasLogin != form.CanvasUserLoginID ||
+		user.CanvasID != form.CanvasUserID
+
+		// make any changes
 	user.Name = form.PersonNameFull
 	user.Email = form.PersonContactEmailPrimary
 	user.LtiID = form.UserID
 	user.ImageURL = form.UserImage
 	user.CanvasLogin = form.CanvasUserLoginID
 	user.CanvasID = form.CanvasUserID
-	if user.ID > 0 && *user != *oldUser {
+	if user.ID > 0 && changed {
 		// if something changed, note the update time
 		logi.Printf("user %d (%s) updated", user.ID, user.Email)
 		user.UpdatedAt = now
@@ -436,7 +444,7 @@ func getUpdateUser(db *sql.Tx, form *LTIRequest, now time.Time) (*User, error) {
 
 	// always save to note the last signed in time
 	user.LastSignedInAt = now
-	if err := meddler.Save(db, "users", user); err != nil {
+	if err := meddler.Save(tx, "users", user); err != nil {
 		loge.Printf("db error updating user %s (%s): %v", user.LtiID, user.Email, err)
 		return nil, err
 	}
@@ -445,9 +453,9 @@ func getUpdateUser(db *sql.Tx, form *LTIRequest, now time.Time) (*User, error) {
 }
 
 // get/create/update this course
-func getUpdateCourse(db *sql.Tx, form *LTIRequest, now time.Time) (*Course, error) {
+func getUpdateCourse(tx *sql.Tx, form *LTIRequest, now time.Time) (*Course, error) {
 	course := new(Course)
-	if err := meddler.QueryRow(db, course, `SELECT * FROM courses WHERE lti_id = $1`, form.ContextID); err != nil {
+	if err := meddler.QueryRow(tx, course, `SELECT * FROM courses WHERE lti_id = $1`, form.ContextID); err != nil {
 		if err != sql.ErrNoRows {
 			loge.Printf("db error loading course %s (%s): %v", form.ContextID, form.ContextTitle, err)
 			return nil, err
@@ -457,19 +465,25 @@ func getUpdateCourse(db *sql.Tx, form *LTIRequest, now time.Time) (*Course, erro
 		course.CreatedAt = now
 		course.UpdatedAt = now
 	}
-	oldCourse := new(Course)
-	*oldCourse = *course
+
+	// any changes?
+	changed := course.Name != form.ContextTitle ||
+		course.Label != form.ContextLabel ||
+		course.LtiID != form.ContextID ||
+		course.CanvasID != form.CanvasCourseID
+
+	// make any changes
 	course.Name = form.ContextTitle
 	course.Label = form.ContextLabel
 	course.LtiID = form.ContextID
 	course.CanvasID = form.CanvasCourseID
-	if course.ID < 1 || *course != *oldCourse {
+	if course.ID < 1 || changed {
 		// if something changed, note the update time and save
 		if course.ID > 0 {
 			logi.Printf("course %d (%s) updated", course.ID, course.Name)
 		}
 		course.UpdatedAt = now
-		if err := meddler.Save(db, "courses", course); err != nil {
+		if err := meddler.Save(tx, "courses", course); err != nil {
 			loge.Printf("db error saving course %s (%s): %v", course.LtiID, course.Name, err)
 			return nil, err
 		}
@@ -479,9 +493,9 @@ func getUpdateCourse(db *sql.Tx, form *LTIRequest, now time.Time) (*Course, erro
 }
 
 // get/create/update this assignment
-func getUpdateAssignment(db *sql.Tx, form *LTIRequest, now time.Time, course *Course, problem *Problem, user *User) (*Assignment, error) {
+func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Course, problem *Problem, user *User) (*Assignment, error) {
 	asst := new(Assignment)
-	err := meddler.QueryRow(db, asst, `SELECT * FROM assignments WHERE course_id = $1 AND problem_id = $2 AND user_id = $3`,
+	err := meddler.QueryRow(tx, asst, `SELECT * FROM assignments WHERE course_id = $1 AND problem_id = $2 AND user_id = $3`,
 		course.ID, problem.ID, user.ID)
 	if err != nil {
 		if err != sql.ErrNoRows {
@@ -495,8 +509,25 @@ func getUpdateAssignment(db *sql.Tx, form *LTIRequest, now time.Time, course *Co
 		asst.CreatedAt = now
 		asst.UpdatedAt = now
 	}
-	oldAsst := new(Assignment)
-	*oldAsst = *asst
+
+	// any changes?
+	changed := asst.CourseID != course.ID ||
+		asst.ProblemID != problem.ID ||
+		asst.UserID != user.ID ||
+		asst.Roles != form.Roles ||
+		asst.Points != form.CanvasAssignmentPointsPossible ||
+		(form.PersonSourcedID != "" && asst.GradeID != form.PersonSourcedID) ||
+		asst.LtiID != form.ResourceLinkID ||
+		asst.CanvasTitle != form.CanvasAssignmentTitle ||
+		asst.CanvasID != form.CanvasAssignmentID ||
+		asst.CanvasAPIDomain != form.CanvasAPIDomain ||
+		asst.OutcomeURL != form.OutcomeServiceURL ||
+		asst.OutcomeExtURL != form.ExtIMSBasicOutcomeURL ||
+		asst.OutcomeExtAccepted != form.ExtOutcomeDataValuesAccepted ||
+		asst.FinishedURL != form.LaunchPresentationReturnURL ||
+		asst.ConsumerKey != form.OAuthConsumerKey
+
+	// make any changes
 	asst.CourseID = course.ID
 	asst.ProblemID = problem.ID
 	asst.UserID = user.ID
@@ -514,14 +545,14 @@ func getUpdateAssignment(db *sql.Tx, form *LTIRequest, now time.Time, course *Co
 	asst.OutcomeExtAccepted = form.ExtOutcomeDataValuesAccepted
 	asst.FinishedURL = form.LaunchPresentationReturnURL
 	asst.ConsumerKey = form.OAuthConsumerKey
-	if asst.ID < 1 || *asst != *oldAsst {
+	if asst.ID < 1 || changed {
 		// if something changed, note the update time and save
 		if asst.ID > 0 {
 			logi.Printf("assignment %d (course %d (%s), problem %d (%s), user %d (%s) updated",
 				asst.ID, course.ID, course.Name, problem.ID, problem.Name, user.ID, user.Email)
 		}
 		asst.UpdatedAt = now
-		if err := meddler.Save(db, "assignments", asst); err != nil {
+		if err := meddler.Save(tx, "assignments", asst); err != nil {
 			loge.Printf("db error saving assignment for course %d, problem %d, user %d: %v", course.ID, problem.ID, user.ID, err)
 			loge.Printf("LtiID (resource_link_id) = %v, GradeID = %v", asst.LtiID, asst.GradeID)
 
@@ -540,14 +571,14 @@ func getUpdateAssignment(db *sql.Tx, form *LTIRequest, now time.Time, course *Co
 	return asst, nil
 }
 
-func saveGrade(db *sql.Tx, commit *Commit) error {
+func saveGrade(tx *sql.Tx, commit *Commit) error {
 	if commit.ReportCard == nil {
 		return nil
 	}
 
 	// get the assignment
 	asst := new(Assignment)
-	if err := meddler.QueryRow(db, asst, `SELECT * FROM assignments WHERE id = $1`, commit.AssignmentID); err != nil {
+	if err := meddler.QueryRow(tx, asst, `SELECT * FROM assignments WHERE id = $1`, commit.AssignmentID); err != nil {
 		loge.Printf("db error getting assignment %d associated with commit %d: %v", commit.AssignmentID, commit.ID, err)
 		return err
 	}
@@ -562,14 +593,14 @@ func saveGrade(db *sql.Tx, commit *Commit) error {
 
 	// get the user
 	user := new(User)
-	if err := meddler.Load(db, "users", user, int64(asst.UserID)); err != nil {
+	if err := meddler.Load(tx, "users", user, int64(asst.UserID)); err != nil {
 		loge.Printf("db error getting user %d: %v", asst.UserID, err)
 		return err
 	}
 
 	// get grading fields from each step in this problem
 	var steps []*ProblemStep
-	err := meddler.QueryAll(db, &steps, `SELECT id, position, score_weight FROM problem_steps WHERE problem_id = $1 ORDER BY position`, asst.ProblemID)
+	err := meddler.QueryAll(tx, &steps, `SELECT id, position, score_weight FROM problem_steps WHERE problem_id = $1 ORDER BY position`, asst.ProblemID)
 	if err != nil {
 		loge.Printf("db error getting problem step weights for problem %d: %v", asst.ProblemID, err)
 		return err
@@ -639,7 +670,7 @@ func saveGrade(db *sql.Tx, commit *Commit) error {
 		loge.Printf("error rendering XML grade response: %v", err)
 		return err
 	}
-	result := fmt.Sprintf("%s%s", xml.Header, raw)
+	result := fmt.Sprintf("%s%s\n", xml.Header, raw)
 
 	// sign the request
 	auth := signXMLRequest(asst.ConsumerKey, "POST", outcomeURL, result, Config.OAuthSharedSecret)
