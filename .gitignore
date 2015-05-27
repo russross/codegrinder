@@ -1,4 +1,5 @@
 bin
 pkg
+run
 *.swp
 config.json

@@ -48,7 +48,7 @@ func GetProblemType(w http.ResponseWriter, params martini.Params, render render.
 	name := params["name"]
 
 	if problemType, exists := problemTypes[name]; !exists {
-		loge.Print(HTTPErrorf(w, http.StatusNotFound, "Problem type %q not found", name))
+		loggedHTTPErrorf(w, http.StatusNotFound, "Problem type %q not found", name)
 		return
 	} else {
 		render.JSON(http.StatusOK, problemType)

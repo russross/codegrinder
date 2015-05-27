@@ -1,13 +1,16 @@
 package main
 
 import (
+	"crypto/tls"
 	"database/sql"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"log/syslog"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -22,30 +25,33 @@ import (
 	"github.com/russross/meddler"
 )
 
+var Config struct {
+	ToolName            string   // LTI human readable name: "CodeGrinder"
+	ToolID              string   // LTI unique ID: "codegrinder"
+	ToolDescription     string   // LTI description: "Programming exercises with grading"
+	OAuthSharedSecret   string   // LTI authentication shared secret. Must match that given to Canvas course: "asdf..."
+	PublicURL           string   // Base URL for the site: "https://your.host.goes.here"
+	HTTPAddress         string   // Address to bind on for HTTP connections: ":80"
+	HTTPSAddress        string   // Address to bind on for HTTPS connections: ":443"
+	CertFile            string   // Full path of TLS certificate file: "/etc/codegrinder/hostname.crt"
+	KeyFile             string   // Full path of TLS key file: "/etc/codegrinder/hostname.key"
+	StaticDir           string   // Full path of directory holding static files to serve: "/home/foo/codegrinder/client"
+	SessionSecret       string   // Random string used to sign cookie sessions: "asdf..."
+	PostgresHost        string   // Host parameter for Postgres: "/var/run/postgresql"
+	PostgresPort        string   // Port parameter for Postgres: "5432"
+	PostgresUsername    string   // Username parameter for Postgres: "codegrinder"
+	PostgresPassword    string   // Password parameter for Postgres: "super$trong"
+	PostgresDatabase    string   // Database parameter for Postgres: "codegrinder"
+	AdministratorEmails []string // list of email addresses of administrators: [ "foo@bar.com", "baz@goo.edu" ]
+}
+
+var problemTypes = make(map[string]*ProblemTypeDefinition)
+var loge, logi, logd *log.Logger
+
 type Action struct {
 	Type  string
 	Files map[string]string
 }
-
-var loge, logi, logd *log.Logger
-var Config struct {
-	ToolName          string
-	ToolID            string
-	ToolDescription   string
-	OAuthSharedSecret string
-	PublicURL         string
-	StaticDir         string
-	SessionSecret     string
-	PostgresHost      string
-	PostgresPort      string
-	PostgresUsername  string
-	PostgresPassword  string
-	PostgresDatabase  string
-}
-
-type TransactionClosed bool
-
-var problemTypes = make(map[string]*ProblemTypeDefinition)
 
 func main() {
 	// parse command line
@@ -92,12 +98,12 @@ func main() {
 		// set up the database
 		db := setupDB(Config.PostgresHost, Config.PostgresPort, Config.PostgresUsername, Config.PostgresPassword, Config.PostgresDatabase)
 
-		// martini service to wrap handlers in transactions
-		transaction := func(c martini.Context, w http.ResponseWriter) {
+		// martini service: wrap handler in a transaction
+		withTx := func(c martini.Context, w http.ResponseWriter) {
 			// start a transaction
 			tx, err := db.Begin()
 			if err != nil {
-				loge.Print(HTTPErrorf(w, http.StatusInternalServerError, "db error starting transaction: %v", err))
+				loggedHTTPErrorf(w, http.StatusInternalServerError, "db error starting transaction: %v", err)
 				return
 			}
 
@@ -110,59 +116,132 @@ func main() {
 			if rw.Status() < http.StatusBadRequest {
 				// commit the transaction
 				if err := tx.Commit(); err != nil {
-					loge.Print(HTTPErrorf(w, http.StatusInternalServerError, "db error committing transaction: %v", err))
+					loggedHTTPErrorf(w, http.StatusInternalServerError, "db error committing transaction: %v", err)
 					return
 				}
 			} else {
 				// rollback
 				logd.Printf("rolling back transaction")
 				if err := tx.Rollback(); err != nil {
-					loge.Print(HTTPErrorf(w, http.StatusInternalServerError, "db error rolling back transaction: %v", err))
+					loggedHTTPErrorf(w, http.StatusInternalServerError, "db error rolling back transaction: %v", err)
 					return
 				}
 			}
 		}
 
-		authenticationRequired := func(w http.ResponseWriter, session sessions.Session) {
+		// martini service: to require an active logged-in session
+		auth := func(w http.ResponseWriter, session sessions.Session) {
 			if userID := session.Get("user_id"); userID == nil {
-				logi.Printf("authentication: no user_id found in session")
 				return
-				w.WriteHeader(http.StatusUnauthorized)
+				loggedHTTPErrorf(w, http.StatusUnauthorized, "authentication: no user_id found in session")
+				return
+			}
+		}
+
+		// martini service: include the current logged-in user (requires withTx and auth)
+		withCurrentUser := func(c martini.Context, w http.ResponseWriter, tx *sql.Tx, session sessions.Session) {
+			rawID := session.Get("user_id")
+			if rawID == nil {
+				loggedHTTPErrorf(w, http.StatusInternalServerError, "cannot find user ID in session")
+				return
+			}
+			userID, ok := rawID.(int)
+			if !ok {
+				session.Clear()
+				loggedHTTPErrorf(w, http.StatusInternalServerError, "error extracting user ID from session")
+				return
+			}
+
+			// load the user record
+			user := new(User)
+			if err := meddler.Load(tx, "users", user, int64(userID)); err != nil {
+				if err == sql.ErrNoRows {
+					loggedHTTPErrorf(w, http.StatusUnauthorized, "user %d not found", userID)
+					return
+				}
+				loggedHTTPErrorf(w, http.StatusInternalServerError, "db error loading user")
+				return
+			}
+
+			// map the current user to the request context
+			c.Map(user)
+		}
+
+		// martini service: require logged in user to be an instructor or administrator (requires withCurrentUser)
+		instructorOnly := func(w http.ResponseWriter, tx *sql.Tx, currentUser *User) {
+			if currentUser.isAdministrator() {
+				return
+			}
+			if instructor, err := currentUser.isInstructor(tx); err != nil {
+				loggedHTTPErrorf(w, http.StatusInternalServerError, "db error checking if user %d (%s) is an instructor: %v", currentUser.ID, currentUser.Email, err)
+				return
+			} else if !instructor {
+				loggedHTTPErrorf(w, http.StatusUnauthorized, "user %d (%s) is not an instructor", currentUser.ID, currentUser.Email)
+				return
+			}
+		}
+
+		// martini service: require logged in user to be an administrator (requires withCurrentUser)
+		administratorOnly := func(w http.ResponseWriter, currentUser *User) {
+			if !currentUser.isAdministrator() {
+				loggedHTTPErrorf(w, http.StatusUnauthorized, "user %d (%s) is not an administrator", currentUser.ID, currentUser.Email)
+				return
 			}
 		}
 
 		// LTI
 		r.Get("/lti/config.xml", GetConfigXML)
-		r.Post("/lti/problems", binding.Bind(LTIRequest{}), checkOAuthSignature, transaction, LtiProblems)
-		r.Post("/lti/problems/:unique", binding.Bind(LTIRequest{}), checkOAuthSignature, transaction, LtiProblem)
+		r.Post("/lti/problems", binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblems)
+		r.Post("/lti/problems/:unique", binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblem)
+		r.Get("/cookie", auth, func(w http.ResponseWriter, r *http.Request) {
+			cookie := r.Header.Get("Cookie")
+			for _, field := range strings.Fields(cookie) {
+				if strings.HasPrefix(field, "codegrinder_session=") {
+					fmt.Fprintf(w, "%s", field)
+				}
+			}
+		})
 
 		// problem types
-		r.Get("/api/v2/problemtypes", authenticationRequired, GetProblemTypes)
-		r.Get("/api/v2/problemtypes/:name", authenticationRequired, GetProblemType)
+		r.Get("/api/v2/problemtypes", auth, GetProblemTypes)
+		r.Get("/api/v2/problemtypes/:name", auth, GetProblemType)
 
 		// problems
-		r.Get("/api/v2/problems", authenticationRequired, transaction, GetProblems)
-		r.Get("/api/v2/problems/:problem_id", authenticationRequired, transaction, GetProblem)
-
-		// problem steps
-		//r.Get("/api/v2/problems/:problem_id/steps", authenticationRequired, transaction, GetProblemSteps)
-		//r.Get("/api/v2/problems/:problem_id/steps/:step_id", authenticationRequired, transaction, GetProblemSteps)
+		r.Get("/api/v2/problems", auth, withTx, withCurrentUser, instructorOnly, GetProblems)
+		r.Get("/api/v2/problems/:problem_id", auth, withTx, GetProblem)
+		r.Post("/api/v2/problems", auth, withTx, withCurrentUser, instructorOnly, binding.Json(Problem{}), PostProblem)
+		r.Put("/api/v2/problems/:problem_id", auth, withTx, withCurrentUser, instructorOnly, PutProblem)
+		r.Delete("/api/v2/problems/:problem_id", auth, withTx, withCurrentUser, administratorOnly, DeleteProblem)
 
 		// courses
-		//r.Get("/api/v2/courses", authenticationRequired, transaction, GetCourses)
-		//r.Get("/api/v2/courses/:course_id", authenticationRequired, transaction, GetCourse)
+		r.Get("/api/v2/courses", auth, withTx, GetCourses)
+		r.Get("/api/v2/courses/:course_id", auth, withTx, GetCourse)
+		r.Delete("/api/v2/courses/:course_id", auth, withTx, withCurrentUser, administratorOnly, DeleteCourse)
 
 		// users
-		//r.Get("/api/v2/users", authenticationRequired, transaction, GetUsers)
-		//r.Get("/api/v2/users/:user_id", authenticationRequired, transaction, GetUser)
+		r.Get("/api/v2/users", auth, withTx, withCurrentUser, instructorOnly, GetUsers)
+		r.Get("/api/v2/users/me", auth, withTx, withCurrentUser, GetUserMe)
+		r.Get("/api/v2/users/:user_id", auth, withTx, withCurrentUser, instructorOnly, GetUser)
+		r.Get("/api/v2/courses/:course_id/users", auth, withTx, withCurrentUser, instructorOnly, GetCourseUsers)
+		r.Delete("/api/v2/users/:user_id", auth, withTx, withCurrentUser, administratorOnly, DeleteUser)
 
 		// assignments
-		//r.Get("/api/v2/users/:user_id/assignments", authenticationRequired, transaction, GetAssignments)
-		//r.Get("/api/v2/users/:user_id/assignments/:assignment_id", authenticationRequired, transaction, GetAssignment)
+		r.Get("/api/v2/users/me/assignments", auth, withTx, withCurrentUser, GetMeAssignments)
+		r.Get("/api/v2/users/me/assignments/:assignment_id", auth, withTx, withCurrentUser, GetMeAssignment)
+		r.Get("/api/v2/users/:user_id/assignments", auth, withTx, withCurrentUser, instructorOnly, GetUserAssignments)
+		r.Get("/api/v2/users/:user_id/assignments/:assignment_id", auth, withTx, withCurrentUser, instructorOnly, GetUserAssignment)
+		r.Delete("/api/v2/users/:user_id/assignments/:assignment_id", auth, withTx, withCurrentUser, administratorOnly, DeleteUserAssignment)
 
 		// commits
-		//r.Get("/api/v2/users/:user_id/assignments/:assignment_id/commits", authenticationRequired, transaction, GetCommits)
-		//r.Get("/api/v2/users/:user_id/assignments/:assignment_id/commits/:commit_id", authenticationRequired, transaction, GetCommit)
+		r.Get("/api/v2/users/me/assignments/:assignment_id/commits", auth, withTx, withCurrentUser, GetUserMeAssignmentCommits)
+		r.Get("/api/v2/users/me/assignments/:assignment_id/commits/last", auth, withTx, withCurrentUser, GetUserMeAssignmentCommitLast)
+		r.Get("/api/v2/users/me/assignments/:assignment_id/commits/:commit_id", auth, withTx, withCurrentUser, GetUserMeAssignmentCommit)
+		r.Get("/api/v2/users/:user_id/assignments/:assignment_id/commits", auth, withTx, withCurrentUser, instructorOnly, GetUserAssignmentCommits)
+		r.Get("/api/v2/users/:user_id/assignments/:assignment_id/commits/last", auth, withTx, withCurrentUser, instructorOnly, GetUserAssignmentCommitLast)
+		r.Get("/api/v2/users/:user_id/assignments/:assignment_id/commits/:commit_id", auth, withTx, withCurrentUser, instructorOnly, GetUserAssignmentCommit)
+		r.Post("/api/v2/users/me/assignments/:assignment_id/commits", auth, withTx, withCurrentUser, binding.Json(Commit{}), PostUserAssignmentCommit)
+		r.Delete("/api/v2/users/:user_id/assignments/:assignment_id/commits", auth, withTx, withCurrentUser, administratorOnly, DeleteUserAssignmentCommits)
+		r.Delete("/api/v2/users/:user_id/assignments/:assignment_id/commits/:commit_id", auth, withTx, withCurrentUser, administratorOnly, DeleteUserAssignmentCommit)
 	}
 
 	// set up daycare role
@@ -232,7 +311,40 @@ func main() {
 			socket.Close()
 		})
 	}
-	m.RunOnAddr(":8080")
+
+	// start web server
+	logi.Printf("starting http -> https forwarder")
+	go http.ListenAndServe(Config.HTTPAddress, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// get the address of the client
+		addr := r.Header.Get("X-Real-IP")
+		if addr == "" {
+			addr = r.Header.Get("X-Forwarded-For")
+			if addr == "" {
+				addr = r.RemoteAddr
+			}
+		}
+
+		// make sure the request is for the right host name
+		u, err := url.Parse(Config.PublicURL)
+		if err != nil {
+			loggedHTTPErrorf(w, http.StatusInternalServerError, "error parsing config.PublicURL: %v", err)
+			return
+		}
+		if u.Host != r.Host {
+			loggedHTTPErrorf(w, http.StatusNotFound, "http request to invalid host: %s", r.Host)
+			return
+		}
+		u.Path = r.URL.Path
+		logi.Printf("redirecting http request from %s to %s", addr, u.String())
+		http.Redirect(w, r, u.String(), http.StatusMovedPermanently)
+	}))
+
+	logi.Printf("accepting https connections at %s", Config.HTTPSAddress)
+	tls := &tls.Config{MinVersion: tls.VersionTLS10}
+	server := &http.Server{Addr: Config.HTTPSAddress, Handler: m, TLSConfig: tls}
+	if err := server.ListenAndServeTLS(Config.CertFile, Config.KeyFile); err != nil {
+		loge.Fatalf("ListenAndServeTLS: %v", err)
+	}
 }
 
 func setupLogging(tag string, useSyslog bool) {

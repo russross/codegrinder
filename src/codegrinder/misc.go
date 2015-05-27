@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -41,10 +40,10 @@ func fixNewLines(s string) string {
 	return s
 }
 
-func HTTPErrorf(w http.ResponseWriter, status int, format string, params ...interface{}) error {
+func loggedHTTPErrorf(w http.ResponseWriter, status int, format string, params ...interface{}) {
 	msg := fmt.Sprintf(format, params...)
+	loge.Print(msg)
 	http.Error(w, msg, status)
-	return errors.New(msg)
 }
 
 func loggedErrorf(f string, params ...interface{}) error {

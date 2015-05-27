@@ -163,14 +163,12 @@ func GetConfigXML(w http.ResponseWriter) {
 	}
 	raw, err := xml.MarshalIndent(c, "", "  ")
 	if err != nil {
-		loge.Printf("error rendering XML config data: %v", err)
-		http.Error(w, "Error rendering XML", http.StatusInternalServerError)
+		loggedHTTPErrorf(w, http.StatusInternalServerError, "error rendering XML config data: %v", err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/xml")
 	if _, err = fmt.Fprintf(w, "%s%s\n", xml.Header, raw); err != nil {
-		loge.Printf("error writing XML: %v", err)
-		http.Error(w, "Error writing XML", http.StatusInternalServerError)
+		loggedHTTPErrorf(w, http.StatusInternalServerError, "error writing XML: %v", err)
 		return
 	}
 }
@@ -226,8 +224,7 @@ func checkOAuthSignature(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
 	expected := r.Form.Get("oauth_signature")
 	if expected == "" {
-		loge.Printf("Missing oauth_signature form field")
-		w.WriteHeader(http.StatusUnauthorized)
+		loggedHTTPErrorf(w, http.StatusUnauthorized, "Missing oauth_signature form field")
 		return
 	}
 
@@ -236,11 +233,8 @@ func checkOAuthSignature(w http.ResponseWriter, r *http.Request) {
 
 	// verify it
 	if sig != expected {
-		loge.Printf("Signature mismatch: got %s but expected %s", sig, expected)
-		w.WriteHeader(http.StatusUnauthorized)
+		loggedHTTPErrorf(w, http.StatusUnauthorized, "Signature mismatch: got %s but expected %s", sig, expected)
 	}
-
-	//logi.Printf("Signature %s checks out", sig)
 }
 
 func computeOAuthSignature(method, urlString string, parameters url.Values, secret string) string {
@@ -324,11 +318,11 @@ func encode(v url.Values) string {
 func LtiProblem(w http.ResponseWriter, r *http.Request, tx *sql.Tx, form LTIRequest, params martini.Params, session sessions.Session) {
 	unique := params["unique"]
 	if unique == "" {
-		loge.Print(HTTPErrorf(w, http.StatusBadRequest, "Malformed URL: missing unique ID for problem"))
+		loggedHTTPErrorf(w, http.StatusBadRequest, "Malformed URL: missing unique ID for problem")
 		return
 	}
 	if unique != url.QueryEscape(unique) {
-		loge.Print(HTTPErrorf(w, http.StatusBadRequest, "unique ID must be URL friendly: %s is escaped as %s", unique, url.QueryEscape(unique)))
+		loggedHTTPErrorf(w, http.StatusBadRequest, "unique ID must be URL friendly: %s is escaped as %s", unique, url.QueryEscape(unique))
 		return
 	}
 
@@ -339,10 +333,10 @@ func LtiProblem(w http.ResponseWriter, r *http.Request, tx *sql.Tx, form LTIRequ
 	if err := meddler.QueryRow(tx, problem, `SELECT * FROM problems WHERE unique_id = $1`, unique); err != nil {
 		if err == sql.ErrNoRows {
 			// no such problem
-			loge.Print(HTTPErrorf(w, http.StatusNotFound, "no problem found with ID %s", unique))
+			loggedHTTPErrorf(w, http.StatusNotFound, "no problem found with ID %s", unique)
 			return
 		}
-		loge.Print(HTTPErrorf(w, http.StatusInternalServerError, "db error loading problem %s: %v", unique, err))
+		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error loading problem %s: %v", unique, err)
 		return
 	}
 
@@ -598,20 +592,19 @@ func saveGrade(tx *sql.Tx, commit *Commit) error {
 		return err
 	}
 
-	// get grading fields from each step in this problem
-	var steps []*ProblemStep
-	err := meddler.QueryAll(tx, &steps, `SELECT id, position, score_weight FROM problem_steps WHERE problem_id = $1 ORDER BY position`, asst.ProblemID)
-	if err != nil {
-		loge.Printf("db error getting problem step weights for problem %d: %v", asst.ProblemID, err)
+	// get the problem
+	problem := new(Problem)
+	if err := meddler.Load(tx, "problems", problem, int64(asst.ProblemID)); err != nil {
+		loge.Printf("db error getting problem %d: %v", asst.ProblemID, err)
 		return err
 	}
 
 	// assign a grade: all previous steps get full credit, this one gets partial credit, future steps get none
 	score, possible := 0.0, 0.0
 	foundCurrent := false
-	for _, step := range steps {
+	for n, step := range problem.Steps {
 		possible += step.ScoreWeight
-		if step.ID == commit.ProblemStepID {
+		if n == commit.ProblemStepNumber {
 			if commit.ReportCard.Passed {
 				// award full credit for this step
 				score += step.ScoreWeight
