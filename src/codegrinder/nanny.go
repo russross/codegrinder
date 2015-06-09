@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"log"
 	"time"
 
 	"github.com/fsouza/go-dockerclient"
@@ -14,12 +13,12 @@ import (
 var dockerClient *docker.Client
 
 type Nanny struct {
-	Start       time.Time
-	Container   *docker.Container
-	ReportCard  *ReportCard
-	Input       chan string
-	Events      chan *EventMessage
-	EventStream []*EventMessage
+	Start      time.Time
+	Container  *docker.Container
+	ReportCard *ReportCard
+	Input      chan string
+	Events     chan *EventMessage
+	Transcript []*EventMessage
 }
 
 func NewNanny(image, name string) (*Nanny, error) {
@@ -31,30 +30,30 @@ func NewNanny(image, name string) (*Nanny, error) {
 			Cmd: []string{
 				"/bin/sh",
 				"-c",
-				"sleep 30",
+				"sleep infinity",
 			},
 			Image: image,
 		},
 	})
 	if err != nil {
-		log.Printf("NewNanny->CreateContainer: %v", err)
+		logi.Printf("NewNanny->CreateContainer: %v", err)
 		return nil, err
 	}
 
 	// start it
 	err = dockerClient.StartContainer(container.ID, nil)
 	if err != nil {
-		log.Printf("NewNanny->StartContainer: %v", err)
+		logi.Printf("NewNanny->StartContainer: %v", err)
 		return nil, err
 	}
 
 	return &Nanny{
-		Start:       time.Now(),
-		Container:   container,
-		ReportCard:  new(ReportCard),
-		Input:       make(chan string),
-		Events:      make(chan *EventMessage),
-		EventStream: []*EventMessage{},
+		Start:      time.Now(),
+		Container:  container,
+		ReportCard: new(ReportCard),
+		Input:      make(chan string),
+		Events:     make(chan *EventMessage),
+		Transcript: []*EventMessage{},
 	}, nil
 }
 
@@ -65,7 +64,7 @@ func (n *Nanny) Shutdown() error {
 		Force: true,
 	})
 	if err != nil {
-		log.Printf("Nanny.Shutdown: %v", err)
+		logi.Printf("Nanny.Shutdown: %v", err)
 		return err
 	}
 	return nil
@@ -98,16 +97,16 @@ func (n *Nanny) PutFiles(files map[string]string) error {
 			ChangeTime: now,
 		}
 		if err := writer.WriteHeader(header); err != nil {
-			log.Printf("PutFiles: writing tar header: %v", err)
+			loge.Printf("PutFiles: writing tar header: %v", err)
 			return err
 		}
 		if _, err := writer.Write([]byte(contents)); err != nil {
-			log.Printf("PutFiles: writing to tar file: %v", err)
+			loge.Printf("PutFiles: writing to tar file: %v", err)
 			return err
 		}
 	}
 	if err := writer.Close(); err != nil {
-		log.Printf("PutFiles: closing tar file: %v", err)
+		loge.Printf("PutFiles: closing tar file: %v", err)
 		return err
 	}
 
@@ -121,7 +120,7 @@ func (n *Nanny) PutFiles(files map[string]string) error {
 		Container:    n.Container.ID,
 	})
 	if err != nil {
-		log.Printf("PutFiles: creating exec command: %v", err)
+		loge.Printf("PutFiles: creating exec command: %v", err)
 		return err
 	}
 	out := new(bytes.Buffer)
@@ -134,12 +133,12 @@ func (n *Nanny) PutFiles(files map[string]string) error {
 		RawTerminal:  false,
 	})
 	if err != nil {
-		log.Printf("PutFiles: starting exec command: %v", err)
+		loge.Printf("PutFiles: starting exec command: %v", err)
 		return err
 	}
 
 	if out.Len() != 0 {
-		log.Printf("PutFiles: tar output: %q", out.String())
+		loge.Printf("PutFiles: tar output: %q", out.String())
 		return fmt.Errorf("PutFiles: tar gave non-empty output")
 	}
 	return nil
@@ -163,7 +162,7 @@ func (n *Nanny) GetFiles(filenames []string) (map[string]string, error) {
 		Container:    n.Container.ID,
 	})
 	if err != nil {
-		log.Printf("GetFiles: creating exec command: %v", err)
+		loge.Printf("GetFiles: creating exec command: %v", err)
 		return nil, err
 	}
 	tarFile := new(bytes.Buffer)
@@ -177,12 +176,12 @@ func (n *Nanny) GetFiles(filenames []string) (map[string]string, error) {
 		RawTerminal:  false,
 	})
 	if err != nil {
-		log.Printf("GetFiles: starting exec command: %v", err)
+		loge.Printf("GetFiles: starting exec command: %v", err)
 		return nil, err
 	}
 
 	if tarErr.Len() != 0 {
-		log.Printf("GetFiles: tar error output: %q", tarErr.String())
+		loge.Printf("GetFiles: tar error output: %q", tarErr.String())
 		return nil, fmt.Errorf("GetFiles: tar gave non-empty error output")
 	}
 
@@ -195,7 +194,7 @@ func (n *Nanny) GetFiles(filenames []string) (map[string]string, error) {
 			break
 		}
 		if err != nil {
-			log.Printf("GetFiles: reading tar file header: %v", err)
+			loge.Printf("GetFiles: reading tar file header: %v", err)
 			return nil, err
 		}
 		if header.Typeflag != tar.TypeReg {
@@ -207,7 +206,7 @@ func (n *Nanny) GetFiles(filenames []string) (map[string]string, error) {
 		}
 		contents := make([]byte, int(header.Size))
 		if _, err = reader.Read(contents); err != nil {
-			log.Printf("GetFiles: reading tar file contents: %v", err)
+			loge.Printf("GetFiles: reading tar file contents: %v", err)
 			return nil, err
 		}
 		files[header.Name] = string(contents)
@@ -228,12 +227,12 @@ type execStdout execOutput
 func (out *execStdout) Write(data []byte) (n int, err error) {
 	n, err = out.stdout.Write(data)
 	if err != nil || n != len(data) {
-		log.Printf("execStdout.Write: error writing to stdout buffer: %v", err)
+		loge.Printf("execStdout.Write: error writing to stdout buffer: %v", err)
 		return n, err
 	}
 	n, err = out.script.Write(data)
 	if err != nil || n != len(data) {
-		log.Printf("execStdout.Write: error writing to script buffer: %v", err)
+		loge.Printf("execStdout.Write: error writing to script buffer: %v", err)
 		return n, err
 	}
 
@@ -251,12 +250,12 @@ type execStderr execOutput
 func (out *execStderr) Write(data []byte) (n int, err error) {
 	n, err = out.stderr.Write(data)
 	if err != nil || n != len(data) {
-		log.Printf("execStderr.Write: error writing to stderr buffer: %v", err)
+		loge.Printf("execStderr.Write: error writing to stderr buffer: %v", err)
 		return n, err
 	}
 	n, err = out.script.Write(data)
 	if err != nil || n != len(data) {
-		log.Printf("execStderr.Write: error writing to script buffer: %v", err)
+		loge.Printf("execStderr.Write: error writing to script buffer: %v", err)
 		return n, err
 	}
 
@@ -280,7 +279,7 @@ func (n *Nanny) ExecNonInteractive(cmd []string) (stdout, stderr, script *bytes.
 		Container:    n.Container.ID,
 	})
 	if err != nil {
-		log.Printf("Nanny.ExecNonInteractive->docker.CreateExec: %v", err)
+		loge.Printf("Nanny.ExecNonInteractive->docker.CreateExec: %v", err)
 		return nil, nil, nil, -1, err
 	}
 
@@ -298,18 +297,18 @@ func (n *Nanny) ExecNonInteractive(cmd []string) (stdout, stderr, script *bytes.
 		RawTerminal:  false,
 	})
 	if err != nil {
-		log.Printf("Nanny.ExecNonInteractive->docker.StartExec: %v", err)
+		loge.Printf("Nanny.ExecNonInteractive->docker.StartExec: %v", err)
 		return nil, nil, nil, -1, err
 	}
 
 	// inspect
 	inspect, err := dockerClient.InspectExec(exec.ID)
 	if err != nil {
-		log.Printf("Nanny.ExecNonInteractive->docker.InspectExec: %v", err)
+		loge.Printf("Nanny.ExecNonInteractive->docker.InspectExec: %v", err)
 		return nil, nil, nil, -1, err
 	}
 	if inspect.Running {
-		log.Printf("Nanny.ExecNonInteractive: process still running")
+		loge.Printf("Nanny.ExecNonInteractive: process still running")
 	}
 	return &out.stdout, &out.stderr, &out.script, inspect.ExitCode, nil
 }

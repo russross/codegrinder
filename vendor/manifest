@@ -1,0 +1,33 @@
+{
+	"version": 0,
+	"dependencies": [
+		{
+			"importpath": "github.com/russross/blackfriday",
+			"repository": "https://github.com/russross/blackfriday",
+			"revision": "386ef80f18233ea97960e855a54382ec446c6637",
+			"branch": "master",
+			"path": ""
+		},
+		{
+			"importpath": "github.com/shurcooL/sanitized_anchor_name",
+			"repository": "https://github.com/shurcooL/sanitized_anchor_name",
+			"revision": "11a20b799bf22a02808c862eb6ca09f7fb38f84a",
+			"branch": "master",
+			"path": ""
+		},
+		{
+			"importpath": "golang.org/x/net/html",
+			"repository": "https://go.googlesource.com/net",
+			"revision": "dfe268fd2bb5c793f4c083803609fce9806c6f80",
+			"branch": "master",
+			"path": "/html"
+		},
+		{
+			"importpath": "github.com/codegangsta/cli",
+			"repository": "https://github.com/codegangsta/cli",
+			"revision": "616b730509ef3f11384d159cc52545639103ea86",
+			"branch": "master",
+			"path": ""
+		}
+	]
+}

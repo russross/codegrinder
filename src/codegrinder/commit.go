@@ -1,8 +1,13 @@
 package main
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
+	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -22,15 +27,49 @@ type Commit struct {
 	AssignmentID      int               `json:"assignmentID" meddler:"assignment_id"`
 	ProblemStepNumber int               `json:"problemStepNumber" meddler:"problem_step_number"`
 	UserID            int               `json:"userID" meddler:"user_id"`
-	Action            string            `json:"action" meddler:"action,zeroisnull"`
 	Closed            bool              `json:"closed" meddler:"closed"`
+	Action            string            `json:"action" meddler:"action,zeroisnull"`
 	Comment           string            `json:"comment" meddler:"comment,zeroisnull"`
-	Score             float64           `json:"score" meddler:"score,zeroisnull"`
-	ReportCard        *ReportCard       `json:"reportCard" meddler:"report_card,json"`
-	Submission        map[string]string `json:"submission" meddler:"submission,json"`
+	Files             map[string]string `json:"files" meddler:"files,json"`
 	Transcript        []*EventMessage   `json:"transcript,omitempty" meddler:"transcript,json"`
+	ReportCard        *ReportCard       `json:"reportCard" meddler:"report_card,json"`
+	Score             float64           `json:"score" meddler:"score,zeroisnull"`
 	CreatedAt         time.Time         `json:"createdAt" meddler:"created_at,localtime"`
 	UpdatedAt         time.Time         `json:"updatedAt" meddler:"updated_at,localtime"`
+
+	ProblemSignature string     `json:"problemSignature,omitempty" meddler:"-"`
+	Timestamp        *time.Time `json:"timestamp,omitempty" meddler:"-"`
+	Signature        string     `json:"signature,omitempty" meddler:"-"`
+}
+
+func (commit *Commit) computeSignature(secret string) string {
+	v := make(url.Values)
+
+	// gather all relevant fields
+	v.Add("assignmentID", strconv.Itoa(commit.AssignmentID))
+	v.Add("problemStepNumber", strconv.Itoa(commit.ProblemStepNumber))
+	v.Add("userID", strconv.Itoa(commit.UserID))
+	v.Add("closed", strconv.FormatBool(commit.Closed))
+	v.Add("action", commit.Action)
+	v.Add("comment", commit.Comment)
+	for name, contents := range commit.Files {
+		v.Add(fmt.Sprintf("file-%s", name), contents)
+	}
+	// TODO: transcript
+	// TODO: reportcard
+	v.Add("score", strconv.FormatFloat(commit.Score, 'g', -1, 64))
+	v.Add("createdAt", commit.CreatedAt.UTC().Format(time.RFC3339Nano))
+	v.Add("updatedAt", commit.UpdatedAt.UTC().Format(time.RFC3339Nano))
+	v.Add("problemSignature", commit.ProblemSignature)
+	if commit.Timestamp != nil {
+		v.Add("timestamp", commit.Timestamp.UTC().Format(time.RFC3339Nano))
+	}
+
+	// compute signature
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(encode(v)))
+	sum := mac.Sum(nil)
+	return base64.StdEncoding.EncodeToString(sum)
 }
 
 // GetUserMeAssignmentCommits handles requests to /api/v2/users/me/assignments/:assignment_id/commits,
@@ -251,7 +290,7 @@ func PostUserAssignmentCommit(w http.ResponseWriter, tx *sql.Tx, currentUser *Us
 	}
 
 	// TODO: validate commit
-	if len(commit.Submission) == 0 {
+	if len(commit.Files) == 0 {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "commit does not contain any submission files")
 		return
 	}

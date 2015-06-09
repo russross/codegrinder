@@ -1,12 +1,13 @@
 CREATE TABLE problems (
   id bigserial PRIMARY KEY,
-  problem_type text NOT NULL,
   name text NOT NULL,
   unique_id text UNIQUE NOT NULL,
   description text,
+  problem_type text NOT NULL,
   tags json NOT NULL,
   options json NOT NULL,
   steps json NOT NULL,
+  confirmed boolean NOT NULL,
   created_at timestamp with time zone NOT NULL,
   updated_at timestamp with time zone NOT NULL
 );
@@ -37,8 +38,8 @@ CREATE TABLE courses (
 CREATE TABLE assignments (
   id bigserial PRIMARY KEY,
   course_id bigint NOT NULL REFERENCES courses (id) ON DELETE CASCADE,
-  problem_id bigint NOT NULL REFERENCES problems (id), ON DELETE CASCADE
-  user_id bigint NOT NULL REFERENCES users (id), ON DELETE CASCADE
+  problem_id bigint NOT NULL REFERENCES problems (id) ON DELETE CASCADE,
+  user_id bigint NOT NULL REFERENCES users (id) ON DELETE CASCADE,
   roles text NOT NULL,
   points numeric,
   survey json NOT NULL,
@@ -61,15 +62,14 @@ CREATE TABLE commits (
   id bigserial PRIMARY KEY,
   assignment_id bigint NOT NULL REFERENCES assignments (id) ON DELETE CASCADE,
   problem_step_number bigint NOT NULL,
-  parent_commit_id bigint REFERENCES commits (id) ON DELETE CASCADE,
   user_id bigint NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  closed boolean NOT NULL,
   action text,
-  closed boolean,
   comment text,
-  score numeric,
-  report_card json NOT NULL,
-  submission json NOT NULL,
+  files json NOT NULL,
   transcript json NOT NULL,
+  report_card json NOT NULL,
+  score numeric,
   created_at timestamp with time zone NOT NULL,
   updated_at timestamp with time zone NOT NULL
 );

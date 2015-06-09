@@ -37,6 +37,7 @@ var Config struct {
 	KeyFile             string   // Full path of TLS key file: "/etc/codegrinder/hostname.key"
 	StaticDir           string   // Full path of directory holding static files to serve: "/home/foo/codegrinder/client"
 	SessionSecret       string   // Random string used to sign cookie sessions: "asdf..."
+	DaycareSecret       string   // Random string used to sign daycare requests: "asdf..."
 	PostgresHost        string   // Host parameter for Postgres: "/var/run/postgresql"
 	PostgresPort        string   // Port parameter for Postgres: "5432"
 	PostgresUsername    string   // Username parameter for Postgres: "codegrinder"
@@ -193,14 +194,6 @@ func main() {
 		r.Get("/lti/config.xml", GetConfigXML)
 		r.Post("/lti/problems", binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblems)
 		r.Post("/lti/problems/:unique", binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblem)
-		r.Get("/cookie", auth, func(w http.ResponseWriter, r *http.Request) {
-			cookie := r.Header.Get("Cookie")
-			for _, field := range strings.Fields(cookie) {
-				if strings.HasPrefix(field, "codegrinder_session=") {
-					fmt.Fprintf(w, "%s", field)
-				}
-			}
-		})
 
 		// problem types
 		r.Get("/api/v2/problemtypes", auth, GetProblemTypes)
@@ -211,6 +204,7 @@ func main() {
 		r.Get("/api/v2/problems/:problem_id", auth, withTx, GetProblem)
 		r.Post("/api/v2/problems", auth, withTx, withCurrentUser, instructorOnly, binding.Json(Problem{}), PostProblem)
 		r.Put("/api/v2/problems/:problem_id", auth, withTx, withCurrentUser, instructorOnly, PutProblem)
+		r.Post("/api/v2/problems/unconfirmed", auth, withTx, withCurrentUser, instructorOnly, binding.Json(Problem{}), PostProblemUnconfirmed)
 		r.Delete("/api/v2/problems/:problem_id", auth, withTx, withCurrentUser, administratorOnly, DeleteProblem)
 
 		// courses
@@ -224,6 +218,14 @@ func main() {
 		r.Get("/api/v2/users/:user_id", auth, withTx, withCurrentUser, instructorOnly, GetUser)
 		r.Get("/api/v2/courses/:course_id/users", auth, withTx, withCurrentUser, instructorOnly, GetCourseUsers)
 		r.Delete("/api/v2/users/:user_id", auth, withTx, withCurrentUser, administratorOnly, DeleteUser)
+		r.Get("/api/v2/users/me/cookie", auth, func(w http.ResponseWriter, r *http.Request) {
+			cookie := r.Header.Get("Cookie")
+			for _, field := range strings.Fields(cookie) {
+				if strings.HasPrefix(field, "codegrinder_session=") {
+					fmt.Fprintf(w, "%s", field)
+				}
+			}
+		})
 
 		// assignments
 		r.Get("/api/v2/users/me/assignments", auth, withTx, withCurrentUser, GetMeAssignments)
@@ -255,6 +257,9 @@ func main() {
 		if err = dockerClient.Ping(); err != nil {
 			loge.Fatalf("Ping: %v", err)
 		}
+
+		// arguments are passed as query arguments named "arg"
+		r.Get("/api/v2/sockets/:problem_type/:action", SocketProblemTypeAction)
 
 		// set up a web handler
 		r.Get("/api/v2/sockets/python2unittest", func(w http.ResponseWriter, r *http.Request) {
@@ -296,7 +301,7 @@ func main() {
 
 			// grade the problem
 			rc := NewReportCard()
-			python2UnittestGrade(n, rc, nil, nil, action.Files)
+			python2UnittestGrade(n, nil, nil, action.Files)
 			dump(rc)
 
 			// shutdown the nanny

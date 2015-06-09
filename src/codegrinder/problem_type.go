@@ -19,13 +19,14 @@ type ProblemType struct {
 
 // ProblemTypeDefinition defines the default parameters and actions of a problem type.
 type ProblemTypeDefinition struct {
-	MaxCPU      int                  `json:"maxcpu"`
-	MaxFD       int                  `json:"maxfd"`
-	MaxFileSize int                  `json:"maxfilesize"`
-	MaxMemory   int                  `json:"maxmemory"`
-	MaxThreads  int                  `json:"maxthreads"`
-	Actions     []*ProblemTypeAction `json:"actions"`
-	Files       map[string]string    `json:"files,omitempty"`
+	Image       string                        `json:"image"`
+	MaxCPU      int                           `json:"maxcpu"`
+	MaxFD       int                           `json:"maxfd"`
+	MaxFileSize int                           `json:"maxfilesize"`
+	MaxMemory   int                           `json:"maxmemory"`
+	MaxThreads  int                           `json:"maxthreads"`
+	Actions     map[string]*ProblemTypeAction `json:"actions"`
+	Files       map[string]string             `json:"files,omitempty"`
 }
 
 // ProblemTypeAction defines the label, button, UI classes, and handler for a
@@ -35,10 +36,10 @@ type ProblemTypeAction struct {
 	Button  string `json:"button,omitempty"`
 	Message string `json:"message,omitempty"`
 	Class   string `json:"className,omitempty"`
-	handler autoHandler
+	handler nannyHandler
 }
 
-type autoHandler func([]string, []string, chan *EventMessage)
+type nannyHandler func(*Nanny, []string, []string, map[string]string)
 
 func GetProblemTypes(w http.ResponseWriter, render render.Render) {
 	render.JSON(http.StatusOK, problemTypes)

@@ -18,53 +18,53 @@ func init() {
 		MaxFileSize: 10,
 		MaxMemory:   32,
 		MaxThreads:  20,
-		Actions: []*ProblemTypeAction{
-			&ProblemTypeAction{
+		Actions: map[string]*ProblemTypeAction{
+			"grade": &ProblemTypeAction{
 				Action:  "grade",
 				Button:  "Grade",
 				Message: "Grading‥",
 				Class:   "btn-grade",
 				//handler: autoHandler(python27UnittestGrade),
 			},
-			&ProblemTypeAction{
+			"": &ProblemTypeAction{
 				Action: "",
 				Button: "Save",
 				Class:  "btn-save",
 			},
-			&ProblemTypeAction{
+			"interactive": &ProblemTypeAction{
 				Action:  "interactive",
 				Button:  "Run",
 				Message: "Running %s‥",
 				Class:   "btn-run",
 				//handler: autoHandler(python27Interactive),
 			},
-			&ProblemTypeAction{
+			"debug": &ProblemTypeAction{
 				Action:  "debug",
 				Button:  "Debug",
 				Message: "Running debugger on %s‥",
 				Class:   "btn-debug",
 				//handler: autoHandler(python27Debug),
 			},
-			&ProblemTypeAction{
+			"adhoc": &ProblemTypeAction{
 				Action:  "adhoc",
 				Button:  "Shell",
 				Message: "Running Python shell‥",
 				Class:   "btn-shell",
 				//handler: autoHandler(python27Adhoc),
 			},
-			&ProblemTypeAction{
+			"stylecheck": &ProblemTypeAction{
 				Action:  "stylecheck",
 				Button:  "Check style",
 				Message: "Checking for pep8 style problems‥",
 				//handler: autoHandler(python27StyleCheck),
 			},
-			&ProblemTypeAction{
+			"stylefix": &ProblemTypeAction{
 				Action:  "stylefix",
 				Button:  "Fix style",
 				Message: "Auto-correcting pep8 style problems‥",
 				//handler: autoHandler(python27StyleFix),
 			},
-			&ProblemTypeAction{
+			"_setup": &ProblemTypeAction{
 				Action: "_setup",
 				//handler: autoHandler(python27UnittestSetup),
 			},
@@ -76,53 +76,53 @@ func init() {
 		MaxFileSize: 10,
 		MaxMemory:   32,
 		MaxThreads:  20,
-		Actions: []*ProblemTypeAction{
-			&ProblemTypeAction{
+		Actions: map[string]*ProblemTypeAction{
+			"grade": &ProblemTypeAction{
 				Action:  "grade",
 				Button:  "Grade",
 				Message: "Grading‥",
 				Class:   "btn-grade",
 				//handler: autoHandler(python27InOutGrade),
 			},
-			&ProblemTypeAction{
+			"": &ProblemTypeAction{
 				Action: "",
 				Button: "Save",
 				Class:  "btn-save",
 			},
-			&ProblemTypeAction{
+			"interactive": &ProblemTypeAction{
 				Action:  "interactive",
 				Button:  "Run",
 				Message: "Running %s‥",
 				Class:   "btn-run",
 				//handler: autoHandler(python27Interactive),
 			},
-			&ProblemTypeAction{
+			"debug": &ProblemTypeAction{
 				Action:  "debug",
 				Button:  "Debug",
 				Message: "Running debugger on %s‥",
 				Class:   "btn-debug",
 				//handler: autoHandler(python27Debug),
 			},
-			&ProblemTypeAction{
+			"adhoc": &ProblemTypeAction{
 				Action:  "adhoc",
 				Button:  "Shell",
 				Message: "Running Python shell‥",
 				Class:   "btn-shell",
 				//handler: autoHandler(python27Adhoc),
 			},
-			&ProblemTypeAction{
+			"stylecheck": &ProblemTypeAction{
 				Action:  "stylecheck",
 				Button:  "Check style",
 				Message: "Checking for pep8 style problems‥",
 				//handler: autoHandler(python27StyleCheck),
 			},
-			&ProblemTypeAction{
+			"stylefix": &ProblemTypeAction{
 				Action:  "stylefix",
 				Button:  "Fix style",
 				Message: "Auto-correcting pep8 style problems‥",
 				//handler: autoHandler(python27StyleFix),
 			},
-			&ProblemTypeAction{
+			"_setup": &ProblemTypeAction{
 				Action: "_setup",
 				//handler: autoHandler(python27InOutSetup),
 			},
@@ -130,17 +130,19 @@ func init() {
 	}
 }
 
-func python2UnittestGrade(n *Nanny, rc *ReportCard, args []string, options []string, files map[string]string) {
+func python2UnittestGrade(n *Nanny, args []string, options []string, files map[string]string) {
 	// put the files in the container
 	if err := n.PutFiles(files); err != nil {
-		log.Fatalf("PutFiles error")
+		n.ReportCard.LogAndFailf("PutFiles error: %v", err)
+		return
 	}
 
 	// launch the unit test runner
 	_, stderr, _, status, err := n.ExecNonInteractive(
 		[]string{"python", "-m", "unittest", "discover", "-vbs", "tests"})
 	if err != nil {
-		log.Fatalf("exec error")
+		n.ReportCard.LogAndFailf("exec error: %v", err)
+		return
 	}
 
 	// read the summary lines: one per test followed by a blank line
@@ -151,33 +153,33 @@ func python2UnittestGrade(n *Nanny, rc *ReportCard, args []string, options []str
 
 		// note: an error here means the buffer does not end with newline, which makes us angry
 		if err != nil {
-			rc.LogAndFailf("Error reading test results: %v", err)
+			n.ReportCard.LogAndFailf("Error reading test results: %v", err)
 			break
 		}
 
 		// summaries end with a blank line
 		if line == "\n" {
-			if len(rc.Results) == 0 {
+			if len(n.ReportCard.Results) == 0 {
 				continue
 			}
 			break
 		}
 
 		// start with some default values, then look for better values
-		name := fmt.Sprintf("test #%d", len(rc.Results)+1)
+		name := fmt.Sprintf("test #%d", len(n.ReportCard.Results)+1)
 		details := htmlEscapePara("error reading results")
 
 		// parse a summary line
 		groups := summaryLine.FindStringSubmatch(line)
 		if len(groups) == 0 {
-			if len(rc.Results) == 1 {
+			if len(n.ReportCard.Results) == 1 {
 				// failed to parse the first line? something serious must be wrong
-				rc.Failf("unable to run unit tests")
-				rc.AddFailedResult(name, htmlEscapePara(stderr.String()), "")
+				n.ReportCard.Failf("unable to run unit tests")
+				n.ReportCard.AddFailedResult(name, htmlEscapePara(stderr.String()), "")
 			} else {
 				// try to hobble along: previous tests seemed okay
-				rc.Failf("bad result from test %d", len(rc.Results))
-				rc.AddFailedResult(name, "<h1>Unexpected test result summary</h1>\n"+htmlEscapePara(strings.TrimSpace(line)), "")
+				n.ReportCard.Failf("bad result from test %d", len(n.ReportCard.Results))
+				n.ReportCard.AddFailedResult(name, "<h1>Unexpected test result summary</h1>\n"+htmlEscapePara(strings.TrimSpace(line)), "")
 			}
 			break
 		}
@@ -191,14 +193,14 @@ func python2UnittestGrade(n *Nanny, rc *ReportCard, args []string, options []str
 			context = "tests/" + file + ".py"
 		}
 		if result == "ok" {
-			rc.AddPassedResult(name, details)
+			n.ReportCard.AddPassedResult(name, details)
 		} else {
-			failed = append(failed, rc.AddFailedResult(name, details, context))
+			failed = append(failed, n.ReportCard.AddFailedResult(name, details, context))
 		}
 
 	}
-	if len(rc.Results) == 0 {
-		rc.Failf("No unit test results found")
+	if len(n.ReportCard.Results) == 0 {
+		n.ReportCard.Failf("No unit test results found")
 	}
 
 	// gather details for failed tests
@@ -210,7 +212,7 @@ func python2UnittestGrade(n *Nanny, rc *ReportCard, args []string, options []str
 			line, err := stderr.ReadString('\n')
 			if err == io.EOF {
 				elt.Details = htmlEscapePara("End-of-file while reading failed test details")
-				log.Printf("EOF while reading failed test details")
+				log.Printf("End-of-file while reading failed test details")
 				break
 			}
 			if err != nil {
@@ -251,11 +253,11 @@ func python2UnittestGrade(n *Nanny, rc *ReportCard, args []string, options []str
 
 	// check exit status code
 	if status != 0 {
-		rc.Passed = false
+		n.ReportCard.Passed = false
 	}
 
 	// generate a top-level summary
-	if rc.Message == "" {
-		rc.Message = fmt.Sprintf("%d/%d tests passed in %v", len(rc.Results)-len(failed), len(rc.Results), rc.Time)
+	if n.ReportCard.Message == "" {
+		n.ReportCard.Message = fmt.Sprintf("%d/%d tests passed in %v", len(n.ReportCard.Results)-len(failed), len(n.ReportCard.Results), n.ReportCard.Time)
 	}
 }
