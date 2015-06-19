@@ -55,6 +55,7 @@ func getAllFiles() map[string]string {
 }
 
 func main() {
+	log.SetFlags(log.Ltime | log.Lmicroseconds | log.Lshortfile)
 	app := cli.NewApp()
 	app.Name = "grind"
 	app.Usage = "command-line interface to codegrinder"
@@ -67,6 +68,11 @@ func main() {
 			Name:   "init",
 			Usage:  "connect to codegrinder server",
 			Action: CommandInit,
+		},
+		{
+			Name:   "create",
+			Usage:  "create a new problem (instructors only)",
+			Action: CommandCreate,
 		},
 	}
 	app.Run(os.Args)
@@ -145,7 +151,7 @@ Paste here: `)
 
 	// try it out by fetching a user record
 	user := new(User)
-	mustFetchObject("/users/me", cookie, user)
+	mustFetchObject("/users/me", nil, cookie, user)
 
 	// save config for later use
 	mustWriteConfig()
@@ -158,12 +164,23 @@ Paste here: `)
 	fmt.Printf("%s\n", raw)
 }
 
-func mustFetchObject(url string, cookie string, obj interface{}) {
-	req, err := http.NewRequest("GET", fmt.Sprintf("https://%s/api/v2%s", Config.Host, url), nil)
+func mustFetchObject(path string, params map[string]string, cookie string, obj interface{}) {
+	if !strings.HasPrefix(path, "/") {
+		panic("mustFetchObject path must start with /")
+	}
+	req, err := http.NewRequest("GET", fmt.Sprintf("https://%s/api/v2%s", Config.Host, path), nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error creating http request: %v\n", err)
 		os.Exit(1)
 	}
+	if params != nil {
+		values := req.URL.Query()
+		for key, value := range params {
+			values.Add(key, value)
+		}
+		req.URL.RawQuery = values.Encode()
+	}
+
 	req.Header["Accept"] = []string{"application/json"}
 	req.Header["Cookie"] = []string{cookie}
 

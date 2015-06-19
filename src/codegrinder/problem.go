@@ -45,6 +45,9 @@ type Problem struct {
 
 	Signature string     `json:"signature,omitempty" meddler:"-"`
 	Timestamp *time.Time `json:"timestamp,omitempty" meddler:"-"`
+
+	// only included when a problem is being created/updated
+	Commits []*Commit `json:"commits,omitempty" meddler:"-"`
 }
 
 func (problem *Problem) computeSignature(secret string) string {
@@ -90,6 +93,65 @@ func (problem *Problem) filterIncoming() {
 	for _, step := range problem.Steps {
 		step.filterIncoming()
 	}
+}
+
+func (problem *Problem) normalize() error {
+	// make sure the name is valid
+	problem.Name = strings.TrimSpace(problem.Name)
+	if problem.Name == "" {
+		return fmt.Errorf("name cannot be empty")
+	}
+
+	// make sure the unique ID is valid
+	problem.Unique = strings.TrimSpace(problem.Unique)
+	if problem.Unique == "" {
+		return fmt.Errorf("unique ID cannot be empty")
+	}
+	if url.QueryEscape(problem.Unique) != problem.Unique {
+		return fmt.Errorf("unique ID must be URL friendly: %s is escaped as %s", problem.Unique, url.QueryEscape(problem.Unique))
+	}
+
+	// fix description
+	problem.Description = strings.TrimSpace(problem.Description)
+
+	// make sure the problem type is legitimate
+	if _, exists := problemTypes[problem.ProblemType]; !exists {
+		return fmt.Errorf("unrecognized problem type: %q", problem.ProblemType)
+	}
+
+	// check tags
+	for i, tag := range problem.Tags {
+		problem.Tags[i] = strings.TrimSpace(tag)
+	}
+	sort.Strings(problem.Tags)
+
+	// check options
+	for i, option := range problem.Options {
+		problem.Options[i] = strings.TrimSpace(option)
+	}
+
+	// check steps
+	if len(problem.Steps) == 0 {
+		return fmt.Errorf("problem must have at least one step")
+	}
+	for n, step := range problem.Steps {
+		step.filterIncoming()
+		description, err := buildDescription(step.Files)
+		if err != nil {
+			return fmt.Errorf("error building description for step %d: %v", n+1, err)
+		}
+		step.Name = strings.TrimSpace(step.Name)
+		if step.Name == "" {
+			return fmt.Errorf("missing name for step %d", n+1)
+		}
+		step.Description = description
+		if step.ScoreWeight <= 0.0 {
+			// default to 1.0
+			step.ScoreWeight = 1.0
+		}
+	}
+
+	return nil
 }
 
 type ProblemStep struct {
@@ -138,6 +200,10 @@ func (step *ProblemStep) filterIncoming() {
 // GetProblems handles a request to /api/v2/problems,
 // returning a list of all problems.
 // If parameter steps=true, all problem steps will be included as well.
+// If parameter unique=<...> present, results will be filtered by matching Unique field.
+// TODO: If parameter tags=<...> present, results will be filtered by matching tags (problem must include all supplied tags).
+// If parameter problemType=<...> present, results will be filtered by matching ProblemType.
+// If parameter name=<...> present, results will be filtered by case-insensitive substring match on Name field.
 func GetProblems(w http.ResponseWriter, r *http.Request, tx *sql.Tx, render render.Render) {
 	withStepsRaw := r.FormValue("steps")
 	withSteps, err := strconv.ParseBool(withStepsRaw)
@@ -154,7 +220,42 @@ func GetProblems(w http.ResponseWriter, r *http.Request, tx *sql.Tx, render rend
 	if withSteps {
 		fields += ", steps"
 	}
-	if err := meddler.QueryAll(tx, &problems, `SELECT `+fields+` FROM problems ORDER BY id`); err != nil {
+
+	// build search terms
+	where := ""
+	args := []interface{}{}
+
+	if unique := r.FormValue("unique"); unique != "" {
+		if where == "" {
+			where = " WHERE"
+		} else {
+			where += " AND"
+		}
+		args = append(args, strings.ToLower(unique))
+		where += fmt.Sprintf(" unique = $%d", len(args))
+	}
+
+	if problemType := r.FormValue("problemType"); problemType != "" {
+		if where == "" {
+			where = " WHERE"
+		} else {
+			where += " AND"
+		}
+		args = append(args, strings.ToLower(problemType))
+		where += fmt.Sprintf(" problem_type = $%d", len(args))
+	}
+
+	if name := r.FormValue("name"); name != "" {
+		if where == "" {
+			where = " WHERE"
+		} else {
+			where += " AND"
+		}
+		args = append(args, "%"+strings.ToLower(name)+"%")
+		where += fmt.Sprintf(" lower(name) like $%d", len(args))
+	}
+
+	if err := meddler.QueryAll(tx, &problems, `SELECT `+fields+` FROM problems`+where+` ORDER BY id`, args...); err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error getting problem list: %v", err)
 		return
 	}
@@ -186,23 +287,148 @@ func GetProblem(w http.ResponseWriter, tx *sql.Tx, params martini.Params, render
 
 // PostProblem handles a request to /api/v2/problems,
 // creating a new problem.
-// Confirmed must be true, and the problem must have a valid Signature from the daycare.
+// Confirmed must be false, and the problem must have a full set of passing commits signed by the daycare.
 func PostProblem(w http.ResponseWriter, tx *sql.Tx, problem Problem, render render.Render) {
+	if problem.ID != 0 {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "new problem cannot already have a problem ID")
+		return
+	}
 
+	saveProblemCommon(w, tx, &problem, render)
 }
 
 // PutProblem handles a request to /api/v2/problems/:problem_id,
 // updating an existing problem.
-// Confirmed must be true, and the problem must have a valid Signature from the daycare.
+// Confirmed must be false, and the problem must have a full set of passing commits signed by the daycare.
 // If any assignments exist that refer to this problem, then the updates cannot change the number
 // of steps in the problem.
 func PutProblem(w http.ResponseWriter, tx *sql.Tx, params martini.Params, problem Problem, render render.Render) {
+	if problem.ID <= 0 {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "updated problem must have ID > 0")
+		return
+	}
+
+	old := new(Problem)
+	if err := meddler.Load(tx, "problems", old, int64(problem.ID)); err != nil {
+		if err == sql.ErrNoRows {
+			loggedHTTPErrorf(w, http.StatusNotFound, "problem with ID %d not found", problem.ID)
+		} else {
+			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error loading existing problem: %v", err)
+		}
+		return
+	}
+	if problem.Unique != old.Unique {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "updating a problem cannot change its unique ID from %q to %q; create a new problem instead", old.Unique, problem.Unique)
+		return
+	}
+	if problem.ProblemType != old.ProblemType {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "updating a problem cannot change its type from %q to %q; create a new problem instead", old.ProblemType, problem.ProblemType)
+		return
+	}
+	if !problem.CreatedAt.Equal(old.CreatedAt) {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "updating a problem cannot change its created time from %v to %v", old.CreatedAt, problem.CreatedAt)
+		return
+	}
+
+	var assignmentCount int
+	if err := tx.QueryRow(`SELECT COUNT(1) FROM assignments WHERE problem_id = $1`, problem.ID).Scan(&assignmentCount); err != nil {
+		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error counting assignments that use problem %d: %v", problem.ID, err)
+		return
+	}
+	if assignmentCount > 0 && len(problem.Steps) != len(old.Steps) {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "cannot change the number of steps in a problem that is already in use")
+		return
+	}
+
+	saveProblemCommon(w, tx, &problem, render)
+}
+
+func saveProblemCommon(w http.ResponseWriter, tx *sql.Tx, problem *Problem, render render.Render) {
+	now := time.Now()
+
+	// clean up basic fields and do some checks
+	if err := problem.normalize(); err != nil {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "%v", err)
+		return
+	}
+
+	// confirmed must be false
+	if problem.Confirmed {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "only unconfirmed problems can be saved")
+		return
+	}
+
+	// note: unique constraint will be checked by the database
+
+	// verify the signature
+	sig := problem.computeSignature(Config.DaycareSecret)
+	if sig != problem.Signature {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "problem signature does not check out: found %s but expected %s", problem.Signature, sig)
+		return
+	}
+
+	// verify all the commits
+	if len(problem.Steps) != len(problem.Commits) {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "problem must have exactly one commit for each problem step")
+		return
+	}
+	for i, commit := range problem.Commits {
+		// check the commit's signature
+		csig := commit.computeSignature(Config.DaycareSecret)
+		if csig != commit.Signature {
+			loggedHTTPErrorf(w, http.StatusBadRequest, "commit for step %d has a bad signature", i+1)
+			return
+		}
+
+		// make sure it refers to the right step of this problem
+		if commit.ProblemSignature != problem.Signature {
+			loggedHTTPErrorf(w, http.StatusBadRequest, "commit for step %d does not match this problem", i+1)
+			return
+		}
+		if commit.ProblemStepNumber != i {
+			loggedHTTPErrorf(w, http.StatusBadRequest, "commit for step %d says it is for step %d", i+1, commit.ProblemStepNumber+1)
+			return
+		}
+
+		// make sure this step passed
+		if commit.Score != 1.0 || commit.ReportCard == nil || commit.ReportCard.Passed {
+			loggedHTTPErrorf(w, http.StatusBadRequest, "commit for step %d did not pass", i+1)
+			return
+		}
+	}
+
+	// save it with current timestamp
+	problem.CreatedAt = now
+	problem.UpdatedAt = now
+	if err := meddler.Save(tx, "problems", problem); err != nil {
+		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error saving problem: %v", err)
+		return
+	}
+
+	// return it with updated signature
+	problem.Commits = nil
+	problem.Timestamp = &now
+	problem.Signature = problem.computeSignature(Config.DaycareSecret)
+
+	render.JSON(http.StatusOK, problem)
 }
 
 // PostProblemUnconfirmed handles a request to /api/v2/problems/unconfirmed,
 // signing a new/updated problem that has not yet been tested on the daycare.
 func PostProblemUnconfirmed(w http.ResponseWriter, tx *sql.Tx, problem Problem, render render.Render) {
 	now := time.Now()
+
+	// clean up basic fields and do some checks
+	if err := problem.normalize(); err != nil {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "%v", err)
+		return
+	}
+
+	// confirmed must be false
+	if problem.Confirmed {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "a problem must not claim to be confirmed when preparing it to be confirmed")
+		return
+	}
 
 	// if this is an update to an existing problem, we need to check that some things match
 	if problem.ID != 0 {
@@ -234,23 +460,7 @@ func PostProblemUnconfirmed(w http.ResponseWriter, tx *sql.Tx, problem Problem, 
 		problem.UpdatedAt = now
 	}
 
-	// make sure the name is valid
-	problem.Name = strings.TrimSpace(problem.Name)
-	if problem.Name == "" {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "name cannot be empty")
-		return
-	}
-
-	// make sure the unique ID is valid and unique
-	problem.Unique = strings.TrimSpace(problem.Unique)
-	if problem.Unique == "" {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "unique ID cannot be empty")
-		return
-	}
-	if url.QueryEscape(problem.Unique) != problem.Unique {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "unique ID must be URL friendly: %s is escaped as %s", problem.Unique, url.QueryEscape(problem.Unique))
-		return
-	}
+	// make sure the unique ID is unique
 	conflict := new(Problem)
 	if err := meddler.QueryRow(tx, conflict, `SELECT * FROM problems WHERE unique_id = $1`, problem.Unique); err != nil {
 		if err == sql.ErrNoRows {
@@ -263,56 +473,6 @@ func PostProblemUnconfirmed(w http.ResponseWriter, tx *sql.Tx, problem Problem, 
 	if conflict.ID != 0 && conflict.ID != problem.ID {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "unique ID %q is already in use by problem %d", problem.Unique, conflict.ID)
 		return
-	}
-
-	// check description
-	problem.Description = strings.TrimSpace(problem.Description)
-
-	// make sure the problem type is legitimate
-	if _, exists := problemTypes[problem.ProblemType]; !exists {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "unrecognized problem type: %q", problem.ProblemType)
-		return
-	}
-
-	// confirmed must be false
-	if problem.Confirmed {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "a problem must not claim to be confirmed when preparing it to be confirmed")
-		return
-	}
-
-	// check tags
-	for i, tag := range problem.Tags {
-		problem.Tags[i] = strings.TrimSpace(tag)
-	}
-	sort.Strings(problem.Tags)
-
-	// check options
-	for i, option := range problem.Options {
-		problem.Options[i] = strings.TrimSpace(option)
-	}
-
-	// check steps
-	if len(problem.Steps) == 0 {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "problem must have at least one step")
-		return
-	}
-	for n, step := range problem.Steps {
-		step.filterIncoming()
-		description, err := buildDescription(step.Files)
-		if err != nil {
-			loggedHTTPErrorf(w, http.StatusBadRequest, "error building description for step %d: %v", n+1, err)
-			return
-		}
-		step.Name = strings.TrimSpace(step.Name)
-		if step.Name == "" {
-			loggedHTTPErrorf(w, http.StatusBadRequest, "missing name for step %d", n+1)
-			return
-		}
-		step.Description = description
-		if step.ScoreWeight <= 0.0 {
-			// default to 1.0
-			step.ScoreWeight = 1.0
-		}
 	}
 
 	// timestamps

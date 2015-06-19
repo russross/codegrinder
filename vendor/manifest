@@ -28,6 +28,13 @@
 			"revision": "616b730509ef3f11384d159cc52545639103ea86",
 			"branch": "master",
 			"path": ""
+		},
+		{
+			"importpath": "github.com/russross/gcfg",
+			"repository": "https://github.com/russross/gcfg",
+			"revision": "a61e4006af9f737e57ddeb5cb335d10b7e3cf208",
+			"branch": "master",
+			"path": ""
 		}
 	]
 }
