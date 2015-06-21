@@ -203,8 +203,8 @@ func main() {
 		r.Get("/api/v2/problems", auth, withTx, withCurrentUser, instructorOnly, GetProblems)
 		r.Get("/api/v2/problems/:problem_id", auth, withTx, GetProblem)
 		r.Post("/api/v2/problems", auth, withTx, withCurrentUser, instructorOnly, binding.Json(Problem{}), PostProblem)
-		r.Put("/api/v2/problems/:problem_id", auth, withTx, withCurrentUser, instructorOnly, PutProblem)
 		r.Post("/api/v2/problems/unconfirmed", auth, withTx, withCurrentUser, instructorOnly, binding.Json(Problem{}), PostProblemUnconfirmed)
+		r.Put("/api/v2/problems/:problem_id", auth, withTx, withCurrentUser, instructorOnly, PutProblem)
 		r.Delete("/api/v2/problems/:problem_id", auth, withTx, withCurrentUser, administratorOnly, DeleteProblem)
 
 		// courses

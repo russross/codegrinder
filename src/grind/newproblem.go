@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
+	"time"
 
 	"github.com/codegangsta/cli"
 	"github.com/russross/gcfg"
@@ -17,6 +17,9 @@ import (
 const ProblemConfigName string = "problem.cfg"
 
 func CommandCreate(context *cli.Context) {
+	mustLoadConfig()
+	now := time.Now()
+
 	// find the directory
 	d := context.Args().First()
 	if d == "" {
@@ -81,6 +84,9 @@ func CommandCreate(context *cli.Context) {
 		ProblemType: cfg.Problem.Type,
 		Tags:        cfg.Problem.Tag,
 		Options:     cfg.Problem.Option,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		Timestamp:   &now,
 	}
 
 	// import steps
@@ -90,6 +96,14 @@ func CommandCreate(context *cli.Context) {
 			Name:        s.Name,
 			ScoreWeight: s.Weight,
 			Files:       make(map[string]string),
+		}
+		commit := &Commit{
+			ProblemStepNumber: i,
+			Action:            "confirm",
+			Files:             make(map[string]string),
+			CreatedAt:         now,
+			UpdatedAt:         now,
+			Timestamp:         &now,
 		}
 
 		// read files
@@ -101,18 +115,22 @@ func CommandCreate(context *cli.Context) {
 			if info.IsDir() {
 				return nil
 			}
-
-			// TODO: filter out junk files, *~, *.bak, etc.
-			if strings.HasPrefix(path, ".") {
-				return nil
+			relpath, err := filepath.Rel(stepdir, path)
+			if err != nil {
+				log.Fatalf("error finding relative path of %s: %v", path, err)
 			}
 
+			// load the file and add it to the appropriate place
 			contents, err := ioutil.ReadFile(path)
 			if err != nil {
-				log.Fatalf("error reading %s: %v", path, err)
+				log.Fatalf("error reading %s: %v", relpath, err)
 			}
-			fmt.Printf("loaded %s with %d bytes\n", path, len(contents))
-			step.Files[path] = string(contents)
+			reldir, relfile := filepath.Split(relpath)
+			if reldir == "_solution/" && reldir != "" {
+				commit.Files[relfile] = string(contents)
+			} else {
+				step.Files[relpath] = string(contents)
+			}
 			return nil
 		})
 		if err != nil {
@@ -120,14 +138,20 @@ func CommandCreate(context *cli.Context) {
 		}
 
 		problem.Steps = append(problem.Steps, step)
+		problem.Commits = append(problem.Commits, commit)
+		log.Printf("step %d: found %d problem file%s and %d solution file%s", i, len(step.Files), plural(len(step.Files)), len(commit.Files), plural(len(commit.Files)))
 	}
 
 	if len(problem.Steps) != len(cfg.Step) {
 		log.Fatalf("expected to find %d steps, but only found %d", len(cfg.Step), len(problem.Steps))
 	}
 
+	// get the request validated and signed
+	signed := new(Problem)
+	mustPostFetchObject("/problems/unconfirmed", nil, Config.Cookie, problem, signed)
+
 	fmt.Printf("problem so far:\n")
-	raw, err := json.MarshalIndent(problem, "", "    ")
+	raw, err := json.MarshalIndent(signed, "", "    ")
 	if err != nil {
 		log.Fatalf("JSON encoding error: %v", err)
 	}

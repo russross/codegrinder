@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -55,7 +56,7 @@ func getAllFiles() map[string]string {
 }
 
 func main() {
-	log.SetFlags(log.Ltime | log.Lmicroseconds | log.Lshortfile)
+	log.SetFlags(log.Ltime)
 	app := cli.NewApp()
 	app.Name = "grind"
 	app.Usage = "command-line interface to codegrinder"
@@ -166,12 +167,11 @@ Paste here: `)
 
 func mustFetchObject(path string, params map[string]string, cookie string, obj interface{}) {
 	if !strings.HasPrefix(path, "/") {
-		panic("mustFetchObject path must start with /")
+		log.Panicf("mustFetchObject path must start with /")
 	}
 	req, err := http.NewRequest("GET", fmt.Sprintf("https://%s/api/v2%s", Config.Host, path), nil)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error creating http request: %v\n", err)
-		os.Exit(1)
+		log.Fatalf("error creating http request: %v\n", err)
 	}
 	if params != nil {
 		values := req.URL.Query()
@@ -186,21 +186,63 @@ func mustFetchObject(path string, params map[string]string, cookie string, obj i
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error connecting to %s: %v\n", Config.Host, err)
-		os.Exit(1)
+		log.Fatalf("error connecting to %s: %v\n", Config.Host, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		fmt.Fprintf(os.Stderr, "unexpected status from %s: %s\n", Config.Host, resp.Status)
+		log.Printf("unexpected status from %s: %s\n", Config.Host, resp.Status)
 		io.Copy(os.Stderr, resp.Body)
-		os.Exit(1)
+		log.Fatalf("giving up")
 	}
 
 	// parse the result
 	decoder := json.NewDecoder(resp.Body)
 	if err := decoder.Decode(obj); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to parse object from server: %v\n", err)
-		os.Exit(1)
+		log.Fatalf("failed to parse object from server: %v\n", err)
+	}
+}
+
+func mustPostFetchObject(path string, params map[string]string, cookie string, upload interface{}, obj interface{}) {
+	if !strings.HasPrefix(path, "/") {
+		log.Panicf("mustPostFetchObject path must start with /")
+	}
+	req, err := http.NewRequest("POST", fmt.Sprintf("https://%s/api/v2%s", Config.Host, path), nil)
+	if err != nil {
+		log.Fatalf("error creating http request: %v\n", err)
+	}
+	if params != nil {
+		values := req.URL.Query()
+		for key, value := range params {
+			values.Add(key, value)
+		}
+		req.URL.RawQuery = values.Encode()
+	}
+
+	req.Header["Accept"] = []string{"application/json"}
+	req.Header["Content-Type"] = []string{"application/json"}
+	req.Header["Cookie"] = []string{cookie}
+
+	payload, err := json.MarshalIndent(upload, "", "    ")
+	if err != nil {
+		log.Fatalf("mustPostFetchObject: JSON error encoding object to upload: %v", err)
+	}
+	req.Body = ioutil.NopCloser(bytes.NewReader(payload))
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Fatalf("error connecting to %s: %v\n", Config.Host, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("unexpected status from %s: %s\n", Config.Host, resp.Status)
+		io.Copy(os.Stderr, resp.Body)
+		log.Fatalf("giving up")
+	}
+
+	// parse the result
+	decoder := json.NewDecoder(resp.Body)
+	if err := decoder.Decode(obj); err != nil {
+		log.Fatalf("failed to parse object from server: %v\n", err)
 	}
 }
 
@@ -249,4 +291,11 @@ func mustWriteConfig() {
 		fmt.Fprintf(os.Stderr, "error writing %s: %v", configFile, err)
 		os.Exit(1)
 	}
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
