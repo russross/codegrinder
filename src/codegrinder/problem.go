@@ -23,6 +23,8 @@ import (
 	"github.com/russross/meddler"
 )
 
+var beginningOfTime = time.Date(2015, 1, 1, 0, 0, 0, 0, time.UTC)
+
 // problem files in these directories do not have line endings cleaned up
 var directoryWhitelist = map[string]bool{
 	"in":   true,
@@ -95,7 +97,7 @@ func (problem *Problem) filterIncoming() {
 	}
 }
 
-func (problem *Problem) normalize() error {
+func (problem *Problem) normalize(now time.Time) error {
 	// make sure the name is valid
 	problem.Name = strings.TrimSpace(problem.Name)
 	if problem.Name == "" {
@@ -149,6 +151,14 @@ func (problem *Problem) normalize() error {
 			// default to 1.0
 			step.ScoreWeight = 1.0
 		}
+	}
+
+	// sanity check timestamps
+	if problem.CreatedAt.Before(beginningOfTime) || problem.CreatedAt.After(now) {
+		return fmt.Errorf("problem CreatedAt time of %v is invalid", problem.CreatedAt)
+	}
+	if problem.UpdatedAt.Before(beginningOfTime) || problem.UpdatedAt.After(now) {
+		return fmt.Errorf("problem UpdatedAt time of %v is invalid", problem.UpdatedAt)
 	}
 
 	return nil
@@ -347,7 +357,7 @@ func saveProblemCommon(w http.ResponseWriter, tx *sql.Tx, problem *Problem, rend
 	now := time.Now()
 
 	// clean up basic fields and do some checks
-	if err := problem.normalize(); err != nil {
+	if err := problem.normalize(now); err != nil {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "%v", err)
 		return
 	}
@@ -415,11 +425,11 @@ func saveProblemCommon(w http.ResponseWriter, tx *sql.Tx, problem *Problem, rend
 
 // PostProblemUnconfirmed handles a request to /api/v2/problems/unconfirmed,
 // signing a new/updated problem that has not yet been tested on the daycare.
-func PostProblemUnconfirmed(w http.ResponseWriter, tx *sql.Tx, problem Problem, render render.Render) {
+func PostProblemUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser *User, problem Problem, render render.Render) {
 	now := time.Now()
 
 	// clean up basic fields and do some checks
-	if err := problem.normalize(); err != nil {
+	if err := problem.normalize(now); err != nil {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "%v", err)
 		return
 	}
@@ -481,6 +491,40 @@ func PostProblemUnconfirmed(w http.ResponseWriter, tx *sql.Tx, problem Problem, 
 	// compute signature
 	problem.Timestamp = &now
 	problem.Signature = problem.computeSignature(Config.DaycareSecret)
+
+	// check the commits
+	if len(problem.Commits) != len(problem.Steps) {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "found %d commits for %d steps; must have the same number of commits as steps", len(problem.Commits), len(problem.Steps))
+		return
+	}
+	for n, commit := range problem.Commits {
+		commit.ID = 0
+		commit.AssignmentID = 0
+		if commit.ProblemStepNumber != n {
+			loggedHTTPErrorf(w, http.StatusBadRequest, "commit %d has ProblemStepNumber of %d", n, commit.ProblemStepNumber)
+			return
+		}
+		commit.UserID = currentUser.ID
+		if commit.Action != "confirm" {
+			loggedHTTPErrorf(w, http.StatusBadRequest, "commit %d has action %q, expected %q", n, commit.Action, "confirm")
+			return
+		}
+		if !commit.Closed {
+			loggedHTTPErrorf(w, http.StatusBadRequest, "commit %d must be closed", n)
+			return
+		}
+		if err := commit.normalize(now); err != nil {
+			loggedHTTPErrorf(w, http.StatusBadRequest, "commit %d: %v", n, err)
+			return
+		}
+
+		// set timestamps and compute signature
+		commit.CreatedAt = now
+		commit.UpdatedAt = now
+		commit.ProblemSignature = problem.Signature
+		commit.Timestamp = &now
+		commit.Signature = commit.computeSignature(Config.DaycareSecret)
+	}
 
 	render.JSON(http.StatusOK, &problem)
 }

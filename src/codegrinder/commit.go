@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-martini/martini"
@@ -70,6 +71,88 @@ func (commit *Commit) computeSignature(secret string) string {
 	mac.Write([]byte(encode(v)))
 	sum := mac.Sum(nil)
 	return base64.StdEncoding.EncodeToString(sum)
+}
+
+func (commit *Commit) normalize(now time.Time) error {
+	// ID, AssignmentID, ProblemStepNumber, and UserID are all checked elsewhere
+	commit.Action = strings.TrimSpace(commit.Action)
+	commit.Comment = strings.TrimSpace(commit.Comment)
+	commit.filterIncoming()
+	commit.compress()
+	if commit.Score < 0.0 || commit.Score > 1.0 {
+		return fmt.Errorf("commit score must be between 0 and 1")
+	}
+	if commit.CreatedAt.Before(beginningOfTime) || commit.CreatedAt.After(now) {
+		return fmt.Errorf("commit CreatedAt time of %v is invalid", commit.CreatedAt)
+	}
+	if commit.UpdatedAt.Before(beginningOfTime) || commit.UpdatedAt.After(now) {
+		return fmt.Errorf("commit UpdatedAt time of %v is invalid", commit.UpdatedAt)
+	}
+
+	return nil
+}
+
+// filter out files in subdirectories, and clean up line endings
+func (commit *Commit) filterIncoming() {
+	clean := make(map[string]string)
+	for name, contents := range commit.Files {
+		// remove any files in subdirectories
+		if len(strings.Split(name, "/")) == 1 {
+			// normalize line endings
+			clean[name] = fixLineEndings(contents)
+		}
+	}
+	commit.Files = clean
+}
+
+// filter out files with underscore prefix
+func (commit *Commit) filterOutgoing() {
+	clean := make(map[string]string)
+	for name, contents := range commit.Files {
+		if !strings.HasPrefix(name, "_") {
+			clean[name] = contents
+		}
+	}
+	commit.Files = clean
+}
+
+// compress merges adjacent Transcript events of the same type.
+// it also truncates the total stdin, stdout, stderr data to a fixed limit
+// and sets a maximum number of events
+func (commit *Commit) compress() {
+	count := 0
+	overflow := 0
+	out := []*EventMessage{}
+	for _, elt := range commit.Transcript {
+		if len(out) > 0 {
+			prev := out[len(out)-1]
+			if elt.Event == "stdin" || elt.Event == "stdout" || elt.Event == "stderr" {
+				if count >= transcriptDataLimit {
+					overflow += len(elt.StreamData)
+					continue
+				}
+				count += len(elt.StreamData)
+				if prev.Event == elt.Event {
+					prev.StreamData += elt.StreamData
+					prev.When = elt.When
+					continue
+				}
+			}
+		}
+		out = append(out, elt)
+	}
+
+	if overflow > 0 {
+		logi.Printf("transcript compressed from %d to %d events, %d bytes discarded", len(commit.Transcript), len(out), overflow)
+	} else {
+		logi.Printf("transcript compressed from %d to %d events", len(commit.Transcript), len(out))
+	}
+	if len(out) > transcriptEventCountLimit {
+		logi.Printf("transcript truncated from %d to %d events", len(out), transcriptEventCountLimit)
+		out = out[:transcriptEventCountLimit]
+	}
+
+	commit.Transcript = out
 }
 
 // GetUserMeAssignmentCommits handles requests to /api/v2/users/me/assignments/:assignment_id/commits,

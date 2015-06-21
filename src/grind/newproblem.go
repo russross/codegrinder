@@ -98,9 +98,10 @@ func CommandCreate(context *cli.Context) {
 			Files:       make(map[string]string),
 		}
 		commit := &Commit{
-			ProblemStepNumber: i,
+			ProblemStepNumber: i - 1,
 			Action:            "confirm",
 			Files:             make(map[string]string),
+			Closed:            true,
 			CreatedAt:         now,
 			UpdatedAt:         now,
 			Timestamp:         &now,
