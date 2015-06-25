@@ -44,6 +44,13 @@ func NewNanny(image, name string) (*Nanny, error) {
 	err = dockerClient.StartContainer(container.ID, nil)
 	if err != nil {
 		logi.Printf("NewNanny->StartContainer: %v", err)
+		err2 := dockerClient.RemoveContainer(docker.RemoveContainerOptions{
+			ID:    container.ID,
+			Force: true,
+		})
+		if err2 != nil {
+			logi.Printf("NewNanny->StartContainer error killing container: %v", err)
+		}
 		return nil, err
 	}
 
@@ -237,7 +244,7 @@ func (out *execStdout) Write(data []byte) (n int, err error) {
 	}
 
 	out.events <- &EventMessage{
-		When:       time.Now(),
+		Time:       time.Now(),
 		Event:      "stdout",
 		StreamData: string(data),
 	}
@@ -260,7 +267,7 @@ func (out *execStderr) Write(data []byte) (n int, err error) {
 	}
 
 	out.events <- &EventMessage{
-		When:       time.Now(),
+		Time:       time.Now(),
 		Event:      "stderr",
 		StreamData: string(data),
 	}

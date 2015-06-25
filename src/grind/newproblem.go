@@ -3,14 +3,19 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/codegangsta/cli"
+	"github.com/fatih/color"
+	"github.com/gorilla/websocket"
 	"github.com/russross/gcfg"
 )
 
@@ -151,10 +156,87 @@ func CommandCreate(context *cli.Context) {
 	signed := new(Problem)
 	mustPostFetchObject("/problems/unconfirmed", nil, Config.Cookie, problem, signed)
 
+	// validate the commits one at a time
+	commitList := signed.Commits
+	signed.Commits = nil
+	var signedCommits []*Commit
+	for n, commit := range commitList {
+		log.Printf("validating solution for step %d", n+1)
+		signedCommit := mustConfirmCommit(signed, commit, nil)
+		signedCommits = append(signedCommits, signedCommit)
+	}
+
+	signed.Commits = signedCommits
+
 	fmt.Printf("problem so far:\n")
 	raw, err := json.MarshalIndent(signed, "", "    ")
 	if err != nil {
 		log.Fatalf("JSON encoding error: %v", err)
 	}
 	fmt.Printf("%s\n", raw)
+}
+
+type DaycareRequest struct {
+	Problem *Problem `json:"problem,omitempty"`
+	Commit  *Commit  `json:"commit,omitempty"`
+	Stdin   string   `json:"stdin,omitempty"`
+}
+
+type DaycareResponse struct {
+	Commit *Commit       `json:"commit,omitempty"`
+	Event  *EventMessage `json:"event,omitempty"`
+}
+
+func mustConfirmCommit(problem *Problem, commit *Commit, args []string) *Commit {
+	// create a websocket connection to the server
+	headers := make(http.Header)
+	socket, resp, err := websocket.DefaultDialer.Dial("wss://"+Config.Host+"/api/v2/sockets/"+problem.ProblemType+"/confirm", headers)
+	if err != nil {
+		log.Printf("websocket dial: %v", err)
+		if resp != nil && resp.Body != nil {
+			io.Copy(os.Stderr, resp.Body)
+			resp.Body.Close()
+		}
+		log.Fatalf("giving up")
+	}
+	defer socket.Close()
+
+	// form the initial request
+	req := &DaycareRequest{Problem: problem, Commit: commit}
+	if err := socket.WriteJSON(req); err != nil {
+		log.Fatalf("error writing request message: %v", err)
+	}
+
+	// start listening for events
+	for {
+		reply := new(DaycareResponse)
+		if err := socket.ReadJSON(reply); err != nil {
+			log.Fatalf("socket error reading event: %v", err)
+			break
+		}
+		if reply.Commit != nil {
+			log.Printf("server returned a commit object")
+			return reply.Commit
+		} else if reply.Event != nil {
+			switch reply.Event.Event {
+			case "exec":
+				color.Cyan("$ %s\n", strings.Join(reply.Event.ExecCommand, " "))
+			case "stdin":
+				color.Yellow("%s", reply.Event.StreamData)
+			case "stdout":
+				color.White("%s", reply.Event.StreamData)
+			case "stderr":
+				color.Red("%s", reply.Event.StreamData)
+			case "exit":
+				color.Cyan("exit status %d\n", reply.Event.ExitStatus)
+			case "error":
+				color.Red("Error: %s\n", reply.Event.Error)
+			}
+		} else {
+			log.Fatalf("unexpected reply from server")
+		}
+	}
+
+	log.Fatalf("no commit returned from server")
+	return nil
 }

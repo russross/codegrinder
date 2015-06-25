@@ -13,6 +13,7 @@ const workingDir = "/home/student"
 
 func init() {
 	problemTypes["python2unittest"] = &ProblemTypeDefinition{
+		Image:       "codegrinder/python2",
 		MaxCPU:      10,
 		MaxFD:       10,
 		MaxFileSize: 10,
@@ -24,7 +25,7 @@ func init() {
 				Button:  "Grade",
 				Message: "Grading‥",
 				Class:   "btn-grade",
-				//handler: autoHandler(python27UnittestGrade),
+				handler: nannyHandler(python2UnittestGrade),
 			},
 			"": &ProblemTypeAction{
 				Action: "",
@@ -64,13 +65,14 @@ func init() {
 				Message: "Auto-correcting pep8 style problems‥",
 				//handler: autoHandler(python27StyleFix),
 			},
-			"_setup": &ProblemTypeAction{
-				Action: "_setup",
-				//handler: autoHandler(python27UnittestSetup),
+			"confirm": &ProblemTypeAction{
+				Action:  "confirm",
+				handler: nannyHandler(python2UnittestGrade),
 			},
 		},
 	}
 	problemTypes["python27inout"] = &ProblemTypeDefinition{
+		Image:       "codegrinder/python2",
 		MaxCPU:      10,
 		MaxFD:       10,
 		MaxFileSize: 10,
@@ -131,6 +133,8 @@ func init() {
 }
 
 func python2UnittestGrade(n *Nanny, args []string, options []string, files map[string]string) {
+	logi.Printf("python2UnittestGrade")
+
 	// put the files in the container
 	if err := n.PutFiles(files); err != nil {
 		n.ReportCard.LogAndFailf("PutFiles error: %v", err)

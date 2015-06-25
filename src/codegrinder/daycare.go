@@ -2,15 +2,15 @@ package main
 
 import (
 	"crypto/hmac"
+	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/go-martini/martini"
 	"github.com/gorilla/websocket"
 )
 
-const MaxDaycareRequestAge = time.Minute
+const MaxDaycareRequestAge = 15 * time.Minute
 
 type DaycareRequest struct {
 	Problem *Problem `json:"problem,omitempty"`
@@ -24,6 +24,8 @@ type DaycareResponse struct {
 }
 
 func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params martini.Params) {
+	now := time.Now()
+
 	problemType, exists := problemTypes[params["problem_type"]]
 	if !exists {
 		loggedHTTPErrorf(w, http.StatusNotFound, "problem type %q not found", params["problem_type"])
@@ -65,14 +67,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		loge.Printf("problem must have a valid timestamp")
 		return
 	}
-	age := time.Since(*problem.Timestamp)
-	if age < 0 {
-		age = -age
-	}
-	if age > MaxDaycareRequestAge {
-		loge.Printf("problem signature is %v off, cannot be more than %v", age, MaxDaycareRequestAge)
-		return
-	}
+
 	if problem.Signature == "" {
 		loge.Printf("problem must be signed")
 		return
@@ -92,7 +87,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		loge.Printf("commit must have a valid timestamp")
 		return
 	}
-	age = time.Since(*commit.Timestamp)
+	age := time.Since(*commit.Timestamp)
 	if age < 0 {
 		age = -age
 	}
@@ -102,10 +97,6 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	}
 	if commit.Signature == "" {
 		loge.Printf("commit must be signed")
-		return
-	}
-	if !commit.Closed {
-		loge.Printf("commit must be closed")
 		return
 	}
 	if commit.Action != params["action"] {
@@ -128,16 +119,15 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	for name, contents := range step.Files {
 		files[name] = contents
 	}
-	for name, contents := range commit.Files {
-		// TODO: filter commit files?
-		if len(strings.Split(name, "/")) == 1 {
-			files[name] = contents
-		}
+	if err := commit.normalize(now); err != nil {
+		loge.Printf("error in commit: %v", err)
+		return
 	}
 
 	// launch a nanny process
-	logi.Printf("launching container for nanny-%s", commitSig)
-	n, err := NewNanny(problemType.Image, "nanny-"+commitSig)
+	nannyName := fmt.Sprintf("nanny-user-%d", commit.UserID)
+	logi.Printf("launching container for %s", nannyName)
+	n, err := NewNanny(problemType.Image, nannyName)
 	if err != nil {
 		loge.Printf("error creating nanny: %v", err)
 		return
@@ -147,20 +137,26 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	finished := make(chan struct{})
 	go func() {
 		for event := range n.Events {
-			// feed events back to client
-			res := &DaycareResponse{Event: event}
-			if err := socket.WriteJSON(res); err != nil {
-				loge.Printf("error writing event JSON: %v", err)
+			// record the event
+			commit.Transcript = append(commit.Transcript, event)
+
+			// feed event back to client
+			switch event.Event {
+			case "exec", "exit", "stdin", "stdout", "stderr", "stdinclosed", "error":
+				res := &DaycareResponse{Event: event}
+				if err := socket.WriteJSON(res); err != nil {
+					loge.Printf("error writing event JSON: %v", err)
+				}
 			}
 		}
 		finished <- struct{}{}
 	}()
 
 	// grade the problem
-	rc := NewReportCard()
 	r.ParseForm()
 	action.handler(n, r.Form["args"], problem.Options, files)
-	dump(rc)
+	commit.ReportCard = n.ReportCard
+	dump(commit.ReportCard)
 
 	// shutdown the nanny
 	if err := n.Shutdown(); err != nil {
@@ -172,27 +168,25 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	<-finished
 
 	// send the final commit back to the client
-	commit.Transcript = n.Transcript
-	commit.ReportCard = rc
+	commit.compress()
 
 	// compute the score for this step on a scale of 0.0 to 1.0
-	if rc.Passed {
+	if commit.ReportCard.Passed {
 		// award full credit for this step
 		commit.Score = 1.0
-	} else if len(rc.Results) == 0 {
+	} else if len(commit.ReportCard.Results) == 0 {
 		// no results? that's a fail...
 		commit.Score = 0.0
 	} else {
 		// compute partial credit for this step
 		passed := 0
-		for _, elt := range rc.Results {
+		for _, elt := range commit.ReportCard.Results {
 			if elt.Outcome == "passed" {
 				passed++
 			}
 		}
-		commit.Score = float64(passed) / float64(len(rc.Results))
+		commit.Score = float64(passed) / float64(len(commit.ReportCard.Results))
 	}
-	now := time.Now()
 	commit.Timestamp = &now
 	commit.Signature = commit.computeSignature(Config.DaycareSecret)
 

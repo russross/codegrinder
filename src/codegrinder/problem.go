@@ -32,6 +32,22 @@ var directoryWhitelist = map[string]bool{
 	"_doc": true,
 }
 
+// Problem defines a complete problem with all steps.
+// A few special cases:
+//
+// * When creating a problem, submit it along with a full set of Commit objects
+//   with a sample solution, one per problem step. When submitted,
+//   Confirmed=false, Signature="", Timestamp=nil. Signature and Timestamp will
+//   be filled in.
+// * Submit the signed Problem with a Commit to the daycare for validation.
+//   Upon success, it will return the signed commits with Transcript and
+//   ReportCard objects.
+// * Include a complete collection of signed commits when submitting so the
+//   Problem can be confirmed and added to the set of active problems.
+//
+// * When using a problem, it will include a valid Timestamp and Signature. The
+//   signature must be included when getting a Commit signed before sending it
+//   to the daycare for validation.
 type Problem struct {
 	ID          int            `json:"id" meddler:"id,pk"`
 	Name        string         `json:"name" meddler:"name"`
@@ -45,8 +61,8 @@ type Problem struct {
 	CreatedAt   time.Time      `json:"createdAt" meddler:"created_at,localtime"`
 	UpdatedAt   time.Time      `json:"updatedAt" meddler:"updated_at,localtime"`
 
-	Signature string     `json:"signature,omitempty" meddler:"-"`
-	Timestamp *time.Time `json:"timestamp,omitempty" meddler:"-"`
+	Signature string     `json:"signature,omitempty" meddler:"signature,zeroisnull"`
+	Timestamp *time.Time `json:"timestamp,omitempty" meddler:"signature_timestamp"`
 
 	// only included when a problem is being created/updated
 	Commits []*Commit `json:"commits,omitempty" meddler:"-"`
@@ -507,10 +523,6 @@ func PostProblemUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser *User
 		commit.UserID = currentUser.ID
 		if commit.Action != "confirm" {
 			loggedHTTPErrorf(w, http.StatusBadRequest, "commit %d has action %q, expected %q", n, commit.Action, "confirm")
-			return
-		}
-		if !commit.Closed {
-			loggedHTTPErrorf(w, http.StatusBadRequest, "commit %d must be closed", n)
 			return
 		}
 		if err := commit.normalize(now); err != nil {

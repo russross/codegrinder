@@ -565,17 +565,11 @@ func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Co
 	return asst, nil
 }
 
-func saveGrade(tx *sql.Tx, commit *Commit) error {
+func saveGrade(tx *sql.Tx, commit *Commit, asst *Assignment, user *User) error {
 	if commit.ReportCard == nil {
 		return nil
 	}
 
-	// get the assignment
-	asst := new(Assignment)
-	if err := meddler.QueryRow(tx, asst, `SELECT * FROM assignments WHERE id = $1`, commit.AssignmentID); err != nil {
-		loge.Printf("db error getting assignment %d associated with commit %d: %v", commit.AssignmentID, commit.ID, err)
-		return err
-	}
 	if asst.GradeID == "" {
 		logi.Printf("cannot post grade for assignment %d user %d because no grade ID is present", asst.ID, asst.UserID)
 		return nil
@@ -583,13 +577,6 @@ func saveGrade(tx *sql.Tx, commit *Commit) error {
 	if asst.OutcomeURL == "" {
 		logi.Printf("cannot post grade for assignment %d user %d because no outcome URL is present", asst.ID, asst.UserID)
 		return nil
-	}
-
-	// get the user
-	user := new(User)
-	if err := meddler.Load(tx, "users", user, int64(asst.UserID)); err != nil {
-		loge.Printf("db error getting user %d: %v", asst.UserID, err)
-		return err
 	}
 
 	// get the problem

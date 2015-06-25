@@ -14,116 +14,18 @@ import (
 
 const MaxDetailsLen = 50e3
 
-// An ActionMessage follows one of these forms:
-//   auto ProblemType ProblemAction ProblemArguments ProblemOptions
-//   stdin StreamData
-//   stdinclosed
-//   put Files
-//   get Globs
-//   exec ExecCommand
-//   kill Signal
-//   shutdown
-type ActionMessage struct {
-	Action           string            `json:"action"`
-	ProblemType      string            `json:"problemtype,omitempty"`
-	ProblemAction    string            `json:"problemaction,omitempty"`
-	ProblemArguments []string          `json:"problemarguments,omitempty"`
-	ProblemOptions   []string          `json:"problemoptions,omitempty"`
-	StreamData       string            `json:"streamdata,omitempty"`
-	Files            map[string]string `json:"files,omitempty"`
-	Globs            []string          `json:"globs,omitempty"`
-	ExecCommand      []string          `json:"execcommand,omitempty"`
-	Signal           int               `json:"signal,omitempty"`
+// ReportCard gives the results of a graded run
+type ReportCard struct {
+	Passed  bool                `json:"passed"`
+	Message string              `json:"message"`
+	Time    time.Duration       `json:"time"`
+	Results []*ReportCardResult `json:"results"`
 }
 
-func (a *ActionMessage) String() string {
-	switch a.Action {
-	case "auto":
-		return fmt.Sprintf("action: auto %s %s %s (%s)",
-			a.ProblemType,
-			a.ProblemAction,
-			strings.Join(a.ProblemArguments, " "),
-			strings.Join(a.ProblemOptions, " "))
-	case "stdin":
-		return fmt.Sprintf("action: stdin %q", a.StreamData)
-	case "stdinclosed", "shutdown":
-		return fmt.Sprintf("action: %s", a.Action)
-	case "put":
-		names := []string{}
-		for name := range a.Files {
-			names = append(names, name)
-		}
-		return fmt.Sprintf("action: put %s", strings.Join(names, ", "))
-	case "get":
-		return fmt.Sprintf("action: get %s", strings.Join(a.Globs, ", "))
-	case "exec":
-		return fmt.Sprintf("action: exec %s", strings.Join(a.ExecCommand, " "))
-	case "kill":
-		return fmt.Sprintf("action: kill %d", a.Signal)
-	default:
-		return fmt.Sprintf("unknown action: %s", a.Action)
-	}
-}
-
-// An EventMessage follows one of these forms:
-//   exec ExecCommand
-//   exit ExitStatus
-//   ended
-//   stdinblocked
-//   stdin StreamData
-//   stdout StreamData
-//   stderr StreamData
-//   error Error
-//   reportcard ReportCard
-//   files Files
-//   shutdown
-type EventMessage struct {
-	Pid         int               `json:"pid,omitempty"`
-	When        time.Time         `json:"-"`
-	Since       time.Duration     `json:"since"`
-	Event       string            `json:"event"`
-	ExecCommand []string          `json:"execcommand,omitempty"`
-	ExitStatus  string            `json:"exitstatus,omitempty"`
-	StreamData  string            `json:"streamdata,omitempty"`
-	Error       string            `json:"error,omitempty"`
-	ReportCard  *ReportCard       `json:"reportcard,omitempty"`
-	Files       map[string]string `json:"files,omitempty"`
-}
-
-func (e *EventMessage) String() string {
-	switch e.Event {
-	case "exec":
-		return fmt.Sprintf("event[%d]: exec %s", e.Pid, strings.Join(e.ExecCommand, " "))
-	case "exit":
-		return fmt.Sprintf("event[%d]: exit %s", e.Pid, e.ExitStatus)
-	case "ended", "stdinblocked", "stdinclosed":
-		return fmt.Sprintf("event[%d]: %s", e.Pid, e.Event)
-	case "stdin", "stdout", "stderr":
-		return fmt.Sprintf("event[%d]: %s %q", e.Pid, e.Event, e.StreamData)
-	case "error":
-		return fmt.Sprintf("event[%d]: error %s", e.Pid, e.Error)
-	case "reportcard":
-		return fmt.Sprintf("event[%d]: reportcard passed=%v %s in %v",
-			e.Pid,
-			e.ReportCard.Passed,
-			e.ReportCard.Message,
-			e.ReportCard.Time)
-	case "files":
-		names := []string{}
-		for name := range e.Files {
-			names = append(names, name)
-		}
-		return fmt.Sprintf("event[%d]: files %s", e.Pid, strings.Join(names, ", "))
-	case "shutdown":
-		return fmt.Sprintf("event[%d]: shutdown", e.Pid)
-	default:
-		return fmt.Sprintf("unknown event[%d]: %s", e.Pid, e.Event)
-	}
-}
-
-// ReportCardResult types:
+// ReportCardResult Outcomes:
 //   passed
 //   failed
+//   error
 //   skipped
 // Details: a multi-line message that should
 //   be displayed in a monospace font
@@ -136,12 +38,56 @@ type ReportCardResult struct {
 	Context string `json:"context,omitempty"`
 }
 
-// ReportCard gives the results of a graded run
-type ReportCard struct {
-	Passed  bool                `json:"passed"`
-	Message string              `json:"message"`
-	Time    time.Duration       `json:"time"`
-	Results []*ReportCardResult `json:"results"`
+// EventMessage follows one of these forms:
+//   exec ExecCommand
+//   exit ExitStatus
+//   stdin StreamData
+//   stdout StreamData
+//   stderr StreamData
+//   stdinclosed
+//   error Error
+//   reportcard ReportCard
+//   files Files
+//   shutdown
+type EventMessage struct {
+	Time        time.Time         `json:"time"`
+	Event       string            `json:"event"`
+	ExecCommand []string          `json:"execcommand,omitempty"`
+	ExitStatus  string            `json:"exitstatus,omitempty"`
+	StreamData  string            `json:"streamdata,omitempty"`
+	Error       string            `json:"error,omitempty"`
+	ReportCard  *ReportCard       `json:"reportcard,omitempty"`
+	Files       map[string]string `json:"files,omitempty"`
+}
+
+func (e *EventMessage) String() string {
+	switch e.Event {
+	case "exec":
+		return fmt.Sprintf("event: exec %s", strings.Join(e.ExecCommand, " "))
+	case "exit":
+		return fmt.Sprintf("event: exit %s", e.ExitStatus)
+	case "stdin", "stdout", "stderr":
+		return fmt.Sprintf("event: %s %q", e.Event, e.StreamData)
+	case "stdinclosed":
+		return fmt.Sprintf("event: %s", e.Event)
+	case "error":
+		return fmt.Sprintf("event: error %s", e.Error)
+	case "reportcard":
+		return fmt.Sprintf("event: reportcard passed=%v %s in %v",
+			e.ReportCard.Passed,
+			e.ReportCard.Message,
+			e.ReportCard.Time)
+	case "files":
+		names := []string{}
+		for name := range e.Files {
+			names = append(names, name)
+		}
+		return fmt.Sprintf("event: files %s", strings.Join(names, ", "))
+	case "shutdown":
+		return fmt.Sprintf("event: shutdown")
+	default:
+		return fmt.Sprintf("unknown event: %s", e.Event)
+	}
 }
 
 func NewReportCard() *ReportCard {

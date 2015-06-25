@@ -21,14 +21,40 @@ const (
 	transcriptEventCountLimit = 500
 	transcriptDataLimit       = 1e5
 	openCommitTimeout         = 20 * time.Minute
+	signedCommitTimeout       = 15 * time.Minute
 )
 
+// Commit defines an attempt at solving one step of a Problem.
+// A few special cases:
+//
+// * When creating a problem, include a full set of Commit objects, one for
+//   each step in the problem, when getting it signed in its unconfirmed state.
+//   Set ID=0, AssignmentID=0, Action="confirm".
+// * Submit one Commit at a time to the daycare for validation. The daycare
+//   will return it signed with a ReportCard and Transcript.
+// * Include the full set of successful Commits when submitting the Problem to
+//   be saved and made available for use.
+//
+// * When saving a commit, set Action="", Transcript=nil, ReportCard=nil,
+//   Score=0.0 to save only.
+// * For all other Actions, submit and save the Commit, and it will be signed
+//   with the ProblemSignature of the corresponding problem.
+// * Note: check to make sure the problem you are submitting with the commit
+//   has a matching signature. If not, go back and fetch the latest version of
+//   the problem before submitting to the daycare.
+// * Use this signed version of the commit and the problem itself to submit to
+//   the daycare for validation.
+// * The daycare will be return a new version of the Commit with Transcript,
+//   ReportCard, and Score filled in and a fresh signature and timestamp.
+// * Submit this signed Commit to save it and record the grade.
+//
+// Note: ProblemStepNumber is zero based. Always present to user using
+// ProblemStepNumber+1
 type Commit struct {
 	ID                int               `json:"id" meddler:"id,pk"`
 	AssignmentID      int               `json:"assignmentID" meddler:"assignment_id"`
 	ProblemStepNumber int               `json:"problemStepNumber" meddler:"problem_step_number"`
 	UserID            int               `json:"userID" meddler:"user_id"`
-	Closed            bool              `json:"closed" meddler:"closed"`
 	Action            string            `json:"action" meddler:"action,zeroisnull"`
 	Comment           string            `json:"comment" meddler:"comment,zeroisnull"`
 	Files             map[string]string `json:"files" meddler:"files,json"`
@@ -50,7 +76,6 @@ func (commit *Commit) computeSignature(secret string) string {
 	v.Add("assignmentID", strconv.Itoa(commit.AssignmentID))
 	v.Add("problemStepNumber", strconv.Itoa(commit.ProblemStepNumber))
 	v.Add("userID", strconv.Itoa(commit.UserID))
-	v.Add("closed", strconv.FormatBool(commit.Closed))
 	v.Add("action", commit.Action)
 	v.Add("comment", commit.Comment)
 	for name, contents := range commit.Files {
@@ -78,6 +103,9 @@ func (commit *Commit) normalize(now time.Time) error {
 	commit.Action = strings.TrimSpace(commit.Action)
 	commit.Comment = strings.TrimSpace(commit.Comment)
 	commit.filterIncoming()
+	if len(commit.Files) == 0 {
+		return fmt.Errorf("commit must have at least one file")
+	}
 	commit.compress()
 	if commit.Score < 0.0 || commit.Score > 1.0 {
 		return fmt.Errorf("commit score must be between 0 and 1")
@@ -134,7 +162,7 @@ func (commit *Commit) compress() {
 				count += len(elt.StreamData)
 				if prev.Event == elt.Event {
 					prev.StreamData += elt.StreamData
-					prev.When = elt.When
+					prev.Time = elt.Time
 					continue
 				}
 			}
@@ -144,7 +172,7 @@ func (commit *Commit) compress() {
 
 	if overflow > 0 {
 		logi.Printf("transcript compressed from %d to %d events, %d bytes discarded", len(commit.Transcript), len(out), overflow)
-	} else {
+	} else if len(commit.Transcript) != len(out) {
 		logi.Printf("transcript compressed from %d to %d events", len(commit.Transcript), len(out))
 	}
 	if len(out) > transcriptEventCountLimit {
@@ -362,6 +390,7 @@ func PostUserAssignmentCommit(w http.ResponseWriter, tx *sql.Tx, currentUser *Us
 		return
 	}
 
+	// get the assignment and make sure it is for this user
 	assignment := new(Assignment)
 	if err = meddler.QueryRow(tx, assignment, `SELECT * FROM assignments WHERE id = $1 AND user_id = $2`, assignmentID, currentUser.ID); err != nil {
 		if err == sql.ErrNoRows {
@@ -372,32 +401,54 @@ func PostUserAssignmentCommit(w http.ResponseWriter, tx *sql.Tx, currentUser *Us
 		return
 	}
 
-	// TODO: validate commit
-	if len(commit.Files) == 0 {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "commit does not contain any submission files")
+	// validate commit
+	if err = commit.normalize(now); err != nil {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "%v", err)
 		return
 	}
 
+	// get the problem signature
+	problemSignature := ""
+	if err = tx.QueryRow(`SELECT signature FROM problems join assignments on problems.ID = assignments.ProblemID WHERE assignments.ID = $1 LIMIT 1`, assignmentID).Scan(&problemSignature); err != nil {
+		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error loading problem signature: %v", err)
+		return
+	}
+
+	// is this a signed commit from the daycare?
+	if commit.Action != "" && commit.Signature != "" && commit.Timestamp != nil && commit.ReportCard != nil && len(commit.Transcript) > 0 {
+		// validate the signature
+		if commit.ProblemSignature != problemSignature {
+			loggedHTTPErrorf(w, http.StatusBadRequest, "problem signature for this commit does not match the current problem signature; please update the problem and re-run the test")
+			return
+		}
+		age := now.Sub(*commit.Timestamp)
+		if age < 0 {
+			age = -age
+		}
+		if age > signedCommitTimeout {
+			loggedHTTPErrorf(w, http.StatusBadRequest, "commit signature has expired")
+			return
+		}
+		if commit.computeSignature(Config.DaycareSecret) != commit.Signature {
+			loggedHTTPErrorf(w, http.StatusBadRequest, "commit signature is incorrect")
+			return
+		}
+
+		// post grade to LMS using LTI
+		if err := saveGrade(tx, &commit, assignment, currentUser); err != nil {
+			loggedHTTPErrorf(w, http.StatusInternalServerError, "error posting grade back to LMS: %v", err)
+			return
+		}
+	}
+
 	openCommit := new(Commit)
-	if err = meddler.QueryRow(tx, openCommit, `SELECT * FROM commits WHERE NOT closed AND assignment_id = $1 LIMIT 1`, assignmentID); err != nil {
+	if err = meddler.QueryRow(tx, openCommit, `SELECT * FROM commits WHERE assignment_id = $1 AND problem_step_number = $2 AND action IS NULL AND updated_at > $3 LIMIT 1`, assignmentID, commit.ProblemStepNumber, now.Add(-openCommitTimeout)); err != nil {
 		if err == sql.ErrNoRows {
 			openCommit = nil
 		} else {
 			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error loading open commit for assignment %d for user %d: %v", assignmentID, currentUser.ID, err)
 			return
 		}
-	}
-
-	// close the old commit?
-	if openCommit != nil && (now.Sub(openCommit.UpdatedAt) > openCommitTimeout || openCommit.ProblemStepNumber != commit.ProblemStepNumber) {
-		openCommit.Closed = true
-		openCommit.UpdatedAt = now
-		if err := meddler.Update(tx, "commits", openCommit); err != nil {
-			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error closing old commit %d: %v", openCommit.ID, err)
-			return
-		}
-		logi.Printf("closed old commit %d due to timeout/wrong step number", openCommit.ID)
-		openCommit = nil
 	}
 
 	// update an existing commit?
@@ -410,12 +461,14 @@ func PostUserAssignmentCommit(w http.ResponseWriter, tx *sql.Tx, currentUser *Us
 	}
 	commit.AssignmentID = assignmentID
 	commit.UserID = currentUser.ID
-	if commit.ReportCard != nil || len(commit.Transcript) > 0 {
-		commit.Closed = true
-	}
 	commit.UpdatedAt = now
 
-	// TODO: sign the commit for execution
+	// sign the commit for execution
+	if commit.Action != "" && commit.Signature == "" && commit.Timestamp == nil && commit.ReportCard == nil && len(commit.Transcript) == 0 {
+		commit.ProblemSignature = problemSignature
+		commit.Timestamp = &now
+		commit.Signature = commit.computeSignature(Config.DaycareSecret)
+	}
 
 	if err := meddler.Save(tx, "commits", &commit); err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error saving commit: %v", err)

@@ -31,6 +31,7 @@ var Config struct {
 	ToolDescription     string   // LTI description: "Programming exercises with grading"
 	OAuthSharedSecret   string   // LTI authentication shared secret. Must match that given to Canvas course: "asdf..."
 	PublicURL           string   // Base URL for the site: "https://your.host.goes.here"
+	PublicWSURL         string   // Base URL for websockets: "wss://your.host.goes.here"
 	HTTPAddress         string   // Address to bind on for HTTP connections: ":80"
 	HTTPSAddress        string   // Address to bind on for HTTPS connections: ":443"
 	CertFile            string   // Full path of TLS certificate file: "/etc/codegrinder/hostname.crt"

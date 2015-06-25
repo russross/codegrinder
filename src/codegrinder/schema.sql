@@ -9,7 +9,9 @@ CREATE TABLE problems (
   steps json NOT NULL,
   confirmed boolean NOT NULL,
   created_at timestamp with time zone NOT NULL,
-  updated_at timestamp with time zone NOT NULL
+  updated_at timestamp with time zone NOT NULL,
+  signature text,
+  signature_timestamp timestamp with time zone
 );
 
 CREATE TABLE users (
