@@ -108,7 +108,7 @@ func CommandCreate(context *cli.Context) {
 		if !context.Bool("update") {
 			log.Fatalf("you did not specify --update, but a problem already exists with unique ID %q", problem.Unique)
 		}
-		log.Printf("this is an update of problem %d (%q), which has a matching unique ID", existing[0].ID, existing[0].Name)
+		log.Printf("based on the unique ID %s, this is an update of problem %d (%q)", problem.Unique, existing[0].ID, existing[0].Name)
 		problem.ID = existing[0].ID
 		problem.CreatedAt = existing[0].CreatedAt
 	default:
@@ -153,6 +153,9 @@ func CommandCreate(context *cli.Context) {
 			if err != nil {
 				log.Fatalf("error reading %s: %v", relpath, err)
 			}
+
+			// TODO: alternate path structure
+			// TODO: detect and filter out non-whitelist files
 			reldir, relfile := filepath.Split(relpath)
 			if reldir == "_solution/" && reldir != "" {
 				commit.Files[relfile] = string(contents)
@@ -167,7 +170,7 @@ func CommandCreate(context *cli.Context) {
 
 		problem.Steps = append(problem.Steps, step)
 		problem.Commits = append(problem.Commits, commit)
-		log.Printf("step %d: found %d problem definition file%s and %d solution file%s", i, len(step.Files), plural(len(step.Files)), len(commit.Files), plural(len(commit.Files)))
+		log.Printf("gathering step %d: found %d problem definition file%s and %d solution file%s", i, len(step.Files), plural(len(step.Files)), len(commit.Files), plural(len(commit.Files)))
 	}
 
 	if len(problem.Steps) != len(cfg.Step) {

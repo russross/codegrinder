@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -180,6 +181,31 @@ func (problem *Problem) normalize(now time.Time) error {
 	return nil
 }
 
+func getStepWhitelists(problem *Problem) []map[string]bool {
+	var lists []map[string]bool
+
+	// compute the white list of commit files for each step
+	for _, step := range problem.Steps {
+		// carry everything forward
+		m := make(map[string]bool)
+		if len(lists) > 0 {
+			for name := range lists[len(lists)-1] {
+				m[name] = true
+			}
+		}
+
+		// add files defined in the root directory of the problem step
+		for name := range step.Files {
+			if len(filepath.SplitList(name)) == 1 {
+				m[name] = true
+			}
+		}
+		lists = append(lists, m)
+	}
+
+	return lists
+}
+
 type ProblemStep struct {
 	Name        string            `json:"name"`
 	Description string            `json:"description"`
@@ -281,7 +307,6 @@ func GetProblems(w http.ResponseWriter, r *http.Request, tx *sql.Tx, render rend
 		where += fmt.Sprintf(" lower(name) like $%d", len(args))
 	}
 
-	logd.Printf("%s, %v", `SELECT `+fields+` FROM problems`+where+` ORDER BY id`, args)
 	if err := meddler.QueryAll(tx, &problems, `SELECT `+fields+` FROM problems`+where+` ORDER BY id`, args...); err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error getting problem list: %v", err)
 		return
@@ -515,6 +540,9 @@ func PostProblemUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser *User
 		loggedHTTPErrorf(w, http.StatusBadRequest, "found %d commits for %d steps; must have the same number of commits as steps", len(problem.Commits), len(problem.Steps))
 		return
 	}
+
+	whitelists := getStepWhitelists(&problem)
+
 	for n, commit := range problem.Commits {
 		commit.ID = 0
 		commit.AssignmentID = 0
@@ -527,7 +555,7 @@ func PostProblemUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser *User
 			loggedHTTPErrorf(w, http.StatusBadRequest, "commit %d has action %q, expected %q", n, commit.Action, "confirm")
 			return
 		}
-		if err := commit.normalize(now); err != nil {
+		if err := commit.normalize(now, whitelists[n]); err != nil {
 			loggedHTTPErrorf(w, http.StatusBadRequest, "commit %d: %v", n, err)
 			return
 		}

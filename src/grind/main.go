@@ -26,35 +26,6 @@ var Config struct {
 	Host   string
 }
 
-func getAllFiles() map[string]string {
-	// gather all the files in the current directory
-	files := make(map[string]string)
-	err := filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			log.Printf("walk error for %s: %v", path, err)
-			return err
-		}
-		if info.IsDir() {
-			return nil
-		}
-		if strings.HasPrefix(path, ".") {
-			return nil
-		}
-		contents, err := ioutil.ReadFile(path)
-		if err != nil {
-			log.Printf("error loading %s: %v", path, err)
-			return err
-		}
-		log.Printf("found %s with %d bytes", path, len(contents))
-		files[path] = string(contents)
-		return nil
-	})
-	if err != nil {
-		log.Fatalf("walk error: %v", err)
-	}
-	return files
-}
-
 func main() {
 	log.SetFlags(log.Ltime)
 	app := cli.NewApp()
@@ -83,40 +54,6 @@ func main() {
 		},
 	}
 	app.Run(os.Args)
-
-	/*
-		// create a websocket connection to the server
-		headers := make(http.Header)
-		socket, resp, err := websocket.DefaultDialer.Dial("ws://dorking.cs.dixie.edu:8080/python2unittest", headers)
-		if err != nil {
-			log.Printf("websocket dial: %v", err)
-			if resp != nil && resp.Body != nil {
-				io.Copy(os.Stderr, resp.Body)
-				resp.Body.Close()
-			}
-			log.Fatalf("giving up")
-		}
-
-			// get the files to submit
-			var action Action
-			action.Type = "python2unittest"
-			action.Files = getAllFiles()
-			if err := socket.WriteJSON(&action); err != nil {
-				log.Fatalf("error writing Action message: %v", err)
-			}
-
-			// start listening for events
-			for {
-				var event EventMessage
-				if err := socket.ReadJSON(&event); err != nil {
-					log.Printf("socket error reading event: %v", err)
-					break
-				}
-				fmt.Print(event.StreamData)
-			}
-			socket.Close()
-			log.Printf("quitting")
-	*/
 }
 
 func CommandInit(context *cli.Context) {
@@ -140,16 +77,13 @@ Paste here: `)
 	var cookie string
 	n, err := fmt.Scanln(&cookie)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error encountered while reading the cookie you pasted: %v\n", err)
-		os.Exit(1)
+		log.Fatalf("error encountered while reading the cookie you pasted: %v\n", err)
 	}
 	if n != 1 {
-		fmt.Fprintf(os.Stderr, "failed to read the cookie you pasted; please try again\n")
-		os.Exit(1)
+		log.Fatalf("failed to read the cookie you pasted; please try again\n")
 	}
 	if !strings.HasPrefix(cookie, cookiePrefix) {
-		fmt.Fprintf(os.Stderr, "the cookie must start with %s; perhaps you copied the wrong thing?\n", cookiePrefix)
-		os.Exit(1)
+		log.Fatalf("the cookie must start with %s; perhaps you copied the wrong thing?\n", cookiePrefix)
 	}
 
 	// set up config
@@ -163,12 +97,7 @@ Paste here: `)
 	// save config for later use
 	mustWriteConfig()
 
-	raw, err := json.MarshalIndent(user, "", "    ")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "JSON error encoding user record: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Printf("%s\n", raw)
+	log.Printf("cookie verified and saved: welcome %s", user.Name)
 }
 
 func mustGetObject(path string, params map[string]string, download interface{}) {
@@ -244,19 +173,16 @@ func mustLoadConfig() {
 		home = os.Getenv("USERPROFILE")
 	}
 	if home == "" {
-		fmt.Fprintf(os.Stderr, "Unable to locate home directory, giving up\n")
-		os.Exit(1)
+		log.Fatalf("Unable to locate home directory, giving up\n")
 	}
 	configFile := filepath.Join(home, rcFile)
 
 	if raw, err := ioutil.ReadFile(configFile); err != nil {
-		fmt.Fprintf(os.Stderr, "Unable to load config file; try running \"grind init\"\n")
-		os.Exit(1)
+		log.Fatalf("Unable to load config file; try running \"grind init\"\n")
 	} else {
 		if err := json.Unmarshal(raw, &Config); err != nil {
-			fmt.Fprintf(os.Stderr, "failed to parse %s: %v", configFile, err)
-			fmt.Fprintf(os.Stderr, "you may wish to try deleting the file and running \"grind init\" again\n")
-			os.Exit(1)
+			log.Printf("failed to parse %s: %v", configFile, err)
+			log.Fatalf("you may wish to try deleting the file and running \"grind init\" again\n")
 		}
 	}
 }
@@ -267,21 +193,18 @@ func mustWriteConfig() {
 		home = os.Getenv("USERPROFILE")
 	}
 	if home == "" {
-		fmt.Fprintf(os.Stderr, "Unable to locate home directory, giving up\n")
-		os.Exit(1)
+		log.Fatalf("Unable to locate home directory, giving up\n")
 	}
 	configFile := filepath.Join(home, rcFile)
 
 	raw, err := json.MarshalIndent(&Config, "", "    ")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "JSON error encoding cookie file: %v", err)
-		os.Exit(1)
+		log.Fatalf("JSON error encoding cookie file: %v", err)
 	}
 	raw = append(raw, '\n')
 
 	if err = ioutil.WriteFile(configFile, raw, 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "error writing %s: %v", configFile, err)
-		os.Exit(1)
+		log.Fatalf("error writing %s: %v", configFile, err)
 	}
 }
 

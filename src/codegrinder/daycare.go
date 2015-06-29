@@ -123,7 +123,8 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	}
 
 	// add the files from the commit
-	if err := commit.normalize(now); err != nil {
+	whitelists := getStepWhitelists(problem)
+	if err := commit.normalize(now, whitelists[commit.ProblemStepNumber]); err != nil {
 		loge.Printf("error in commit: %v", err)
 		return
 	}

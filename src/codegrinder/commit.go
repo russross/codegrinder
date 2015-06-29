@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -98,11 +99,11 @@ func (commit *Commit) computeSignature(secret string) string {
 	return base64.StdEncoding.EncodeToString(sum)
 }
 
-func (commit *Commit) normalize(now time.Time) error {
+func (commit *Commit) normalize(now time.Time, whitelist map[string]bool) error {
 	// ID, AssignmentID, ProblemStepNumber, and UserID are all checked elsewhere
 	commit.Action = strings.TrimSpace(commit.Action)
 	commit.Comment = strings.TrimSpace(commit.Comment)
-	commit.filterIncoming()
+	commit.filterIncoming(whitelist)
 	if len(commit.Files) == 0 {
 		return fmt.Errorf("commit must have at least one file")
 	}
@@ -120,14 +121,25 @@ func (commit *Commit) normalize(now time.Time) error {
 	return nil
 }
 
-// filter out files in subdirectories, and clean up line endings
-func (commit *Commit) filterIncoming() {
+// filter out files in subdirectories/not on whitelist, and clean up line endings
+func (commit *Commit) filterIncoming(whitelist map[string]bool) {
 	clean := make(map[string]string)
 	for name, contents := range commit.Files {
-		// remove any files in subdirectories
-		if len(strings.Split(name, "/")) == 1 {
-			// normalize line endings
-			clean[name] = fixLineEndings(contents)
+		// normalize line endings
+		if whitelist == nil {
+			// only keep files not in a subdirectory
+			if len(filepath.SplitList(name)) == 1 {
+				clean[name] = fixLineEndings(contents)
+			} else {
+				logi.Printf("filtered out %s, which is in a subdirectory", name)
+			}
+		} else {
+			// only keep files on the whitelist
+			if whitelist[name] {
+				clean[name] = fixLineEndings(contents)
+			} else {
+				logi.Printf("filtered out %s, which is not on the problem step whitelist", name)
+			}
 		}
 	}
 	commit.Files = clean
@@ -401,23 +413,28 @@ func PostUserAssignmentCommit(w http.ResponseWriter, tx *sql.Tx, currentUser *Us
 		return
 	}
 
-	// validate commit
-	if err = commit.normalize(now); err != nil {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "%v", err)
+	// get the problem
+	problem := new(Problem)
+	if err = meddler.QueryRow(tx, problem, `SELECT problems.* FROM problems join assignments on problems.ID = assignments.ProblemID WHERE assignments.ID = $1 LIMIT 1`, assignmentID); err != nil {
+		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error loading problem: %v", err)
 		return
 	}
 
-	// get the problem signature
-	problemSignature := ""
-	if err = tx.QueryRow(`SELECT signature FROM problems join assignments on problems.ID = assignments.ProblemID WHERE assignments.ID = $1 LIMIT 1`, assignmentID).Scan(&problemSignature); err != nil {
-		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error loading problem signature: %v", err)
+	// validate commit
+	if commit.ProblemStepNumber >= len(problem.Steps) {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "commit has step number %d, but there are only %d steps in the problem", commit.ProblemStepNumber+1, len(problem.Steps))
+		return
+	}
+	whitelists := getStepWhitelists(problem)
+	if err = commit.normalize(now, whitelists[commit.ProblemStepNumber]); err != nil {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "%v", err)
 		return
 	}
 
 	// is this a signed commit from the daycare?
 	if commit.Action != "" && commit.Signature != "" && commit.Timestamp != nil && commit.ReportCard != nil && len(commit.Transcript) > 0 {
 		// validate the signature
-		if commit.ProblemSignature != problemSignature {
+		if commit.ProblemSignature != problem.Signature {
 			loggedHTTPErrorf(w, http.StatusBadRequest, "problem signature for this commit does not match the current problem signature; please update the problem and re-run the test")
 			return
 		}
@@ -465,7 +482,7 @@ func PostUserAssignmentCommit(w http.ResponseWriter, tx *sql.Tx, currentUser *Us
 
 	// sign the commit for execution
 	if commit.Action != "" && commit.Signature == "" && commit.Timestamp == nil && commit.ReportCard == nil && len(commit.Transcript) == 0 {
-		commit.ProblemSignature = problemSignature
+		commit.ProblemSignature = problem.Signature
 		commit.Timestamp = &now
 		commit.Signature = commit.computeSignature(Config.DaycareSecret)
 	}
