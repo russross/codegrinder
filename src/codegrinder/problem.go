@@ -268,7 +268,7 @@ func GetProblems(w http.ResponseWriter, r *http.Request, tx *sql.Tx, render rend
 
 	// get the problems
 	problems := []*Problem{}
-	fields := "id, problem_type, name, unique_id, description, tags, options, created_at, updated_at"
+	fields := "id, name, unique_id, description, problem_type, confirmed, tags, options, created_at, updated_at, signature, signature_timestamp"
 	if withSteps {
 		fields += ", steps"
 	}

@@ -25,11 +25,13 @@ func CommandCreate(context *cli.Context) {
 	now := time.Now()
 
 	// find the directory
-	d := context.Args().First()
-	if d == "" {
+	d := ""
+	switch len(context.Args()) {
+	case 0:
 		d = "."
-	}
-	if context.Args().First() != "" {
+	case 1:
+		d = context.Args().First()
+	default:
 		cli.ShowSubcommandHelp(context)
 		return
 	}
@@ -42,14 +44,15 @@ func CommandCreate(context *cli.Context) {
 	for {
 		path := filepath.Join(dir, ProblemConfigName)
 		if _, err := os.Stat(path); err != nil {
-			if err == os.ErrNotExist {
+			if os.IsNotExist(err) {
 				// try moving up a directory
 				old := dir
 				dir = filepath.Dir(dir)
 				if dir == old {
 					log.Fatalf("unable to find %s in %s or an ancestor directory", ProblemConfigName, d)
 				}
-				fmt.Printf("could not find %s in %s, trying %s", ProblemConfigName, old, dir)
+				log.Printf("could not find %s in %s, trying %s", ProblemConfigName, old, dir)
+				continue
 			}
 
 			log.Fatalf("error searching for %s in %s: %v", ProblemConfigName, dir, err)
@@ -112,7 +115,7 @@ func CommandCreate(context *cli.Context) {
 		problem.ID = existing[0].ID
 		problem.CreatedAt = existing[0].CreatedAt
 	default:
-		// cannot happen
+		// server does not know what "unique" means
 		log.Fatalf("error: server found multiple problems with matching unique ID")
 	}
 
