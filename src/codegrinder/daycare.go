@@ -114,14 +114,21 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		loge.Printf("commit refers to step number that does not exist: %d", commit.ProblemStepNumber)
 		return
 	}
+
+	// collect the files from the problem step
 	step := problem.Steps[commit.ProblemStepNumber]
 	files := make(map[string]string)
 	for name, contents := range step.Files {
 		files[name] = contents
 	}
+
+	// add the files from the commit
 	if err := commit.normalize(now); err != nil {
 		loge.Printf("error in commit: %v", err)
 		return
+	}
+	for name, contents := range commit.Files {
+		files[name] = contents
 	}
 
 	// launch a nanny process
@@ -156,7 +163,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	r.ParseForm()
 	action.handler(n, r.Form["args"], problem.Options, files)
 	commit.ReportCard = n.ReportCard
-	dump(commit.ReportCard)
+	//dump(commit.ReportCard)
 
 	// shutdown the nanny
 	if err := n.Shutdown(); err != nil {

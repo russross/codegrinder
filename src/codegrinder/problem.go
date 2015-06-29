@@ -258,7 +258,7 @@ func GetProblems(w http.ResponseWriter, r *http.Request, tx *sql.Tx, render rend
 			where += " AND"
 		}
 		args = append(args, strings.ToLower(unique))
-		where += fmt.Sprintf(" unique = $%d", len(args))
+		where += fmt.Sprintf(" unique_id = $%d", len(args))
 	}
 
 	if problemType := r.FormValue("problemType"); problemType != "" {
@@ -281,6 +281,7 @@ func GetProblems(w http.ResponseWriter, r *http.Request, tx *sql.Tx, render rend
 		where += fmt.Sprintf(" lower(name) like $%d", len(args))
 	}
 
+	logd.Printf("%s, %v", `SELECT `+fields+` FROM problems`+where+` ORDER BY id`, args)
 	if err := meddler.QueryAll(tx, &problems, `SELECT `+fields+` FROM problems`+where+` ORDER BY id`, args...); err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error getting problem list: %v", err)
 		return
@@ -399,7 +400,7 @@ func saveProblemCommon(w http.ResponseWriter, tx *sql.Tx, problem *Problem, rend
 		return
 	}
 	for i, commit := range problem.Commits {
-		// check the commit's signature
+		// check the commit signature
 		csig := commit.computeSignature(Config.DaycareSecret)
 		if csig != commit.Signature {
 			loggedHTTPErrorf(w, http.StatusBadRequest, "commit for step %d has a bad signature", i+1)
@@ -417,25 +418,26 @@ func saveProblemCommon(w http.ResponseWriter, tx *sql.Tx, problem *Problem, rend
 		}
 
 		// make sure this step passed
-		if commit.Score != 1.0 || commit.ReportCard == nil || commit.ReportCard.Passed {
+		if commit.Score != 1.0 || commit.ReportCard == nil || !commit.ReportCard.Passed {
 			loggedHTTPErrorf(w, http.StatusBadRequest, "commit for step %d did not pass", i+1)
 			return
 		}
 	}
 
-	// save it with current timestamp
+	// save it with current timestamp and updated signature
 	problem.CreatedAt = now
 	problem.UpdatedAt = now
+	problem.Commits = nil
+	problem.Confirmed = true
+	problem.Timestamp = &now
+	problem.Signature = problem.computeSignature(Config.DaycareSecret)
+
 	if err := meddler.Save(tx, "problems", problem); err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error saving problem: %v", err)
 		return
 	}
 
 	// return it with updated signature
-	problem.Commits = nil
-	problem.Timestamp = &now
-	problem.Signature = problem.computeSignature(Config.DaycareSecret)
-
 	render.JSON(http.StatusOK, problem)
 }
 

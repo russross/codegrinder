@@ -57,7 +57,7 @@ func NewNanny(image, name string) (*Nanny, error) {
 	return &Nanny{
 		Start:      time.Now(),
 		Container:  container,
-		ReportCard: new(ReportCard),
+		ReportCard: NewReportCard(),
 		Input:      make(chan string),
 		Events:     make(chan *EventMessage),
 		Transcript: []*EventMessage{},
@@ -276,6 +276,13 @@ func (out *execStderr) Write(data []byte) (n int, err error) {
 }
 
 func (n *Nanny) ExecNonInteractive(cmd []string) (stdout, stderr, script *bytes.Buffer, status int, err error) {
+	// log the event
+	n.Events <- &EventMessage{
+		Time:        time.Now(),
+		Event:       "exec",
+		ExecCommand: cmd,
+	}
+
 	// create
 	exec, err := dockerClient.CreateExec(docker.CreateExecOptions{
 		AttachStdin:  false,
@@ -316,6 +323,12 @@ func (n *Nanny) ExecNonInteractive(cmd []string) (stdout, stderr, script *bytes.
 	}
 	if inspect.Running {
 		loge.Printf("Nanny.ExecNonInteractive: process still running")
+	} else {
+		n.Events <- &EventMessage{
+			Time:       time.Now(),
+			Event:      "exit",
+			ExitStatus: fmt.Sprintf("exit status %d", inspect.ExitCode),
+		}
 	}
 	return &out.stdout, &out.stderr, &out.script, inspect.ExitCode, nil
 }

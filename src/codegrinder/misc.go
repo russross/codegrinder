@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"runtime"
 	"strings"
 )
 
@@ -42,13 +43,29 @@ func fixNewLines(s string) string {
 
 func loggedHTTPErrorf(w http.ResponseWriter, status int, format string, params ...interface{}) {
 	msg := fmt.Sprintf(format, params...)
-	loge.Print(msg)
+	loge.Print(logPrefix() + msg)
 	http.Error(w, msg, status)
 }
 
 func loggedErrorf(f string, params ...interface{}) error {
-	loge.Printf(f, params...)
+	loge.Print(logPrefix() + fmt.Sprintf(f, params...))
 	return fmt.Errorf(f, params...)
+}
+
+func logPrefix() string {
+	prefix := ""
+	if _, file, line, ok := runtime.Caller(2); ok {
+		short := file
+		for i := len(file) - 1; i > 0; i-- {
+			if file[i] == '/' {
+				short = file[i+1:]
+				break
+			}
+		}
+		file = short
+		prefix = fmt.Sprintf("%s:%d: ", file, line)
+	}
+	return prefix
 }
 
 func intContains(lst []int, n int) bool {

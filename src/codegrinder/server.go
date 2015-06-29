@@ -205,7 +205,7 @@ func main() {
 		r.Get("/api/v2/problems/:problem_id", auth, withTx, GetProblem)
 		r.Post("/api/v2/problems", auth, withTx, withCurrentUser, instructorOnly, binding.Json(Problem{}), PostProblem)
 		r.Post("/api/v2/problems/unconfirmed", auth, withTx, withCurrentUser, instructorOnly, binding.Json(Problem{}), PostProblemUnconfirmed)
-		r.Put("/api/v2/problems/:problem_id", auth, withTx, withCurrentUser, instructorOnly, PutProblem)
+		r.Put("/api/v2/problems/:problem_id", auth, withTx, withCurrentUser, instructorOnly, binding.Json(Problem{}), PutProblem)
 		r.Delete("/api/v2/problems/:problem_id", auth, withTx, withCurrentUser, administratorOnly, DeleteProblem)
 
 		// courses
@@ -363,11 +363,11 @@ func setupLogging(tag string, useSyslog bool) {
 			return log.New(s, prefix, flags)
 		}
 		loge = log.New(os.Stderr, "[e] ", 0)
-		loge = f(syslog.LOG_ERR, "[e] ", log.Lshortfile)
+		loge = f(syslog.LOG_ERR, "[e] ", 0)
 		logi = f(syslog.LOG_INFO, "[i] ", 0)
 		logd = f(syslog.LOG_DEBUG, "[d] ", 0)
 	} else {
-		loge = log.New(os.Stderr, "[e] ", log.Ltime|log.Lmicroseconds|log.Lshortfile)
+		loge = log.New(os.Stderr, "[e] ", log.Ltime|log.Lmicroseconds)
 		logi = log.New(os.Stderr, "[i] ", log.Ltime|log.Lmicroseconds)
 		logd = log.New(os.Stderr, "[d] ", log.Ltime|log.Lmicroseconds)
 	}

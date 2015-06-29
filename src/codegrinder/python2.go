@@ -149,6 +149,11 @@ func python2UnittestGrade(n *Nanny, args []string, options []string, files map[s
 		return
 	}
 
+	// check exit status code
+	if status != 0 {
+		n.ReportCard.Passed = false
+	}
+
 	// read the summary lines: one per test followed by a blank line
 	summaryLine := regexp.MustCompile(`^((\w+) \(([\w\.]+)\.(\w+)\) \.\.\. (ok|FAIL|ERROR))\n$`)
 	var failed []*ReportCardResult
@@ -255,13 +260,11 @@ func python2UnittestGrade(n *Nanny, args []string, options []string, files map[s
 		elt.Details = htmlEscapePre(strings.Join(lines, "\n"))
 	}
 
-	// check exit status code
-	if status != 0 {
-		n.ReportCard.Passed = false
-	}
-
 	// generate a top-level summary
 	if n.ReportCard.Message == "" {
 		n.ReportCard.Message = fmt.Sprintf("%d/%d tests passed in %v", len(n.ReportCard.Results)-len(failed), len(n.ReportCard.Results), n.ReportCard.Time)
+		if len(failed) == 0 && status != 0 {
+			n.ReportCard.Message += fmt.Sprintf(", exit status %d", status)
+		}
 	}
 }

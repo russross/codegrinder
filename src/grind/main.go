@@ -74,6 +74,12 @@ func main() {
 			Name:   "create",
 			Usage:  "create a new problem (instructors only)",
 			Action: CommandCreate,
+			Flags: []cli.Flag{
+				cli.BoolFlag{
+					Name:  "update",
+					Usage: "update an existing problem",
+				},
+			},
 		},
 	}
 	app.Run(os.Args)
@@ -152,7 +158,7 @@ Paste here: `)
 
 	// try it out by fetching a user record
 	user := new(User)
-	mustFetchObject("/users/me", nil, cookie, user)
+	mustGetObject("/users/me", nil, user)
 
 	// save config for later use
 	mustWriteConfig()
@@ -165,52 +171,32 @@ Paste here: `)
 	fmt.Printf("%s\n", raw)
 }
 
-func mustFetchObject(path string, params map[string]string, cookie string, obj interface{}) {
-	if !strings.HasPrefix(path, "/") {
-		log.Panicf("mustFetchObject path must start with /")
-	}
-	req, err := http.NewRequest("GET", fmt.Sprintf("https://%s/api/v2%s", Config.Host, path), nil)
-	if err != nil {
-		log.Fatalf("error creating http request: %v\n", err)
-	}
-	if params != nil {
-		values := req.URL.Query()
-		for key, value := range params {
-			values.Add(key, value)
-		}
-		req.URL.RawQuery = values.Encode()
-	}
-
-	req.Header["Accept"] = []string{"application/json"}
-	req.Header["Cookie"] = []string{cookie}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		log.Fatalf("error connecting to %s: %v\n", Config.Host, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("unexpected status from %s: %s\n", Config.Host, resp.Status)
-		io.Copy(os.Stderr, resp.Body)
-		log.Fatalf("giving up")
-	}
-
-	// parse the result
-	decoder := json.NewDecoder(resp.Body)
-	if err := decoder.Decode(obj); err != nil {
-		log.Fatalf("failed to parse object from server: %v\n", err)
-	}
+func mustGetObject(path string, params map[string]string, download interface{}) {
+	mustRequest(path, params, Config.Cookie, "GET", nil, download)
 }
 
-func mustPostFetchObject(path string, params map[string]string, cookie string, upload interface{}, obj interface{}) {
+func mustPostObject(path string, params map[string]string, upload interface{}, download interface{}) {
+	mustRequest(path, params, Config.Cookie, "POST", upload, download)
+}
+
+func mustPutObject(path string, params map[string]string, upload interface{}, download interface{}) {
+	mustRequest(path, params, Config.Cookie, "PUT", upload, download)
+}
+
+func mustRequest(path string, params map[string]string, cookie string, method string, upload interface{}, download interface{}) {
 	if !strings.HasPrefix(path, "/") {
-		log.Panicf("mustPostFetchObject path must start with /")
+		log.Panicf("mustRequest path must start with /")
 	}
-	req, err := http.NewRequest("POST", fmt.Sprintf("https://%s/api/v2%s", Config.Host, path), nil)
+	if method != "GET" && method != "POST" && method != "PUT" && method != "DELETE" {
+		log.Panicf("mustRequest only recognizes GET, POST, PUT, and DELETE methods")
+	}
+	req, err := http.NewRequest(method, fmt.Sprintf("https://%s/api/v2%s", Config.Host, path), nil)
 	if err != nil {
 		log.Fatalf("error creating http request: %v\n", err)
 	}
-	if params != nil {
+
+	// add any parameters
+	if params != nil && len(params) > 0 {
 		values := req.URL.Query()
 		for key, value := range params {
 			values.Add(key, value)
@@ -218,15 +204,19 @@ func mustPostFetchObject(path string, params map[string]string, cookie string, u
 		req.URL.RawQuery = values.Encode()
 	}
 
+	// set the headers
 	req.Header["Accept"] = []string{"application/json"}
-	req.Header["Content-Type"] = []string{"application/json"}
 	req.Header["Cookie"] = []string{cookie}
 
-	payload, err := json.MarshalIndent(upload, "", "    ")
-	if err != nil {
-		log.Fatalf("mustPostFetchObject: JSON error encoding object to upload: %v", err)
+	// upload the payload if any
+	if upload != nil && (method == "POST" || method == "PUT") {
+		req.Header["Content-Type"] = []string{"application/json"}
+		payload, err := json.MarshalIndent(upload, "", "    ")
+		if err != nil {
+			log.Fatalf("mustPostObject: JSON error encoding object to upload: %v", err)
+		}
+		req.Body = ioutil.NopCloser(bytes.NewReader(payload))
 	}
-	req.Body = ioutil.NopCloser(bytes.NewReader(payload))
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -239,10 +229,12 @@ func mustPostFetchObject(path string, params map[string]string, cookie string, u
 		log.Fatalf("giving up")
 	}
 
-	// parse the result
-	decoder := json.NewDecoder(resp.Body)
-	if err := decoder.Decode(obj); err != nil {
-		log.Fatalf("failed to parse object from server: %v\n", err)
+	// parse the result if any
+	if download != nil {
+		decoder := json.NewDecoder(resp.Body)
+		if err := decoder.Decode(download); err != nil {
+			log.Fatalf("failed to parse result object from server: %v\n", err)
+		}
 	}
 }
 
