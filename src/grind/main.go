@@ -42,27 +42,26 @@ func main() {
 			Action: CommandInit,
 		},
 		{
-			Name:   "create",
-			Usage:  "create a new problem (instructors only)",
-			Action: CommandCreate,
-			Flags: []cli.Flag{
-				cli.BoolFlag{Name: "update", Usage: "update an existing problem"},
-			},
-		},
-		{
 			Name:   "list",
 			Usage:  "list all of your active assignments",
 			Action: CommandList,
-			Flags:  []cli.Flag{
-			//cli.StringFlag{Name: "course", Usage: "only list assignments for the given course"},
-			},
 		},
 		{
 			Name:   "get",
 			Usage:  "download an assignment to work on it locally",
 			Action: CommandGet,
+		},
+		{
+			Name:   "save",
+			Usage:  "save your work to the server without additional action",
+			Action: CommandSave,
+		},
+		{
+			Name:   "create",
+			Usage:  "create a new problem (instructors only)",
+			Action: CommandCreate,
 			Flags: []cli.Flag{
-				cli.IntFlag{Name: "id", Usage: "get the assignment using its ID number"},
+				cli.BoolFlag{Name: "update", Usage: "update an existing problem"},
 			},
 		},
 	}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -8,12 +9,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/codegangsta/cli"
 )
 
 func CommandGet(context *cli.Context) {
 	mustLoadConfig()
+	now := time.Now()
 
 	// parse parameters
 	name, target := "", ""
@@ -115,5 +118,27 @@ func CommandGet(context *cli.Context) {
 				log.Fatalf("error saving file %q: %v", path, err)
 			}
 		}
+	}
+
+	// save the commit
+	if commit == nil {
+		commit = &Commit{
+			AssignmentID:      assignment.ID,
+			ProblemStepNumber: 0,
+			UserID:            assignment.UserID,
+			Comment:           "empty commit for new problem",
+			Files:             map[string]string{},
+			CreatedAt:         now,
+			UpdatedAt:         now,
+		}
+	}
+	path := filepath.Join(target, GrindAssignmentIDName)
+	contents, err := json.MarshalIndent(commit, "", "    ")
+	if err != nil {
+		log.Fatalf("JSON error marshalling commit: %v", err)
+	}
+	contents = append(contents, '\n')
+	if err := ioutil.WriteFile(path, contents, 0644); err != nil {
+		log.Fatalf("error saving file %q: %v", path, err)
 	}
 }

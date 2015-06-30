@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -196,7 +195,7 @@ func getStepWhitelists(problem *Problem) []map[string]bool {
 
 		// add files defined in the root directory of the problem step
 		for name := range step.Files {
-			if len(filepath.SplitList(name)) == 1 {
+			if len(strings.Split(name, "/")) == 1 {
 				m[name] = true
 			}
 		}

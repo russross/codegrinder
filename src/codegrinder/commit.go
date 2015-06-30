@@ -415,7 +415,7 @@ func PostUserAssignmentCommit(w http.ResponseWriter, tx *sql.Tx, currentUser *Us
 
 	// get the problem
 	problem := new(Problem)
-	if err = meddler.QueryRow(tx, problem, `SELECT problems.* FROM problems join assignments on problems.ID = assignments.ProblemID WHERE assignments.ID = $1 LIMIT 1`, assignmentID); err != nil {
+	if err = meddler.QueryRow(tx, problem, `SELECT problems.* FROM problems JOIN assignments ON problems.ID = assignments.problem_id WHERE assignments.id = $1 LIMIT 1`, assignmentID); err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error loading problem: %v", err)
 		return
 	}
