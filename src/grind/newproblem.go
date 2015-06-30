@@ -120,7 +120,9 @@ func CommandCreate(context *cli.Context) {
 	}
 
 	// import steps
+	whitelist := make(map[string]bool)
 	for i := 1; cfg.Step[strconv.Itoa(i)] != nil; i++ {
+		log.Printf("gathering step %d", i)
 		s := cfg.Step[strconv.Itoa(i)]
 		step := &ProblemStep{
 			Name:        s.Name,
@@ -131,13 +133,13 @@ func CommandCreate(context *cli.Context) {
 			ProblemStepNumber: i - 1,
 			Action:            "confirm",
 			Files:             make(map[string]string),
-			Closed:            true,
 			CreatedAt:         now,
 			UpdatedAt:         now,
 			Timestamp:         &now,
 		}
 
 		// read files
+		starter, solution, root := make(map[string]string), make(map[string]string), make(map[string]string)
 		stepdir := filepath.Join(dir, strconv.Itoa(i))
 		err := filepath.Walk(stepdir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
@@ -157,23 +159,62 @@ func CommandCreate(context *cli.Context) {
 				log.Fatalf("error reading %s: %v", relpath, err)
 			}
 
-			// TODO: alternate path structure
-			// TODO: detect and filter out non-whitelist files
+			// pick out solution/starter files
 			reldir, relfile := filepath.Split(relpath)
-			if reldir == "_solution/" && reldir != "" {
-				commit.Files[relfile] = string(contents)
+			if reldir == "_solution/" && relfile != "" {
+				solution[relfile] = string(contents)
+			} else if reldir == "_starter/" && relfile != "" {
+				starter[relfile] = string(contents)
+			} else if reldir == "" && relfile != "" {
+				root[relfile] = string(contents)
 			} else {
 				step.Files[relpath] = string(contents)
 			}
+
 			return nil
 		})
 		if err != nil {
 			log.Fatalf("walk error for %s: %v", stepdir, err)
 		}
 
+		// find starter files and solution files
+		if len(solution) > 0 && len(starter) > 0 && len(root) > 0 {
+			log.Fatalf("found files in _starter, _solution, and root directory; unsure how to proceed")
+		}
+		if len(solution) > 0 {
+			// explicit solution
+		} else if len(root) > 0 {
+			// files in root directory must be the solution
+			solution = root
+			root = nil
+		} else {
+			log.Fatalf("no solution files found in _solution or root directory; problem must have a solution")
+		}
+		if len(starter) == 0 && root != nil {
+			starter = root
+		}
+
+		// copy the starter files into the step
+		for name, contents := range starter {
+			step.Files[name] = contents
+
+			// if the file exists as a starter in this or earlier steps, it can be part of the solution
+			whitelist[name] = true
+		}
+
+		// copy the solution files into the commit
+		for name, contents := range solution {
+			if whitelist[name] {
+				commit.Files[name] = contents
+			} else {
+				log.Printf("Warning: skipping solution file %q", name)
+				log.Printf("  because it is not in the starter file set of this or any previous step")
+			}
+		}
+
 		problem.Steps = append(problem.Steps, step)
 		problem.Commits = append(problem.Commits, commit)
-		log.Printf("gathering step %d: found %d problem definition file%s and %d solution file%s", i, len(step.Files), plural(len(step.Files)), len(commit.Files), plural(len(commit.Files)))
+		log.Printf("  found %d problem definition file%s and %d solution file%s", len(step.Files), plural(len(step.Files)), len(commit.Files), plural(len(commit.Files)))
 	}
 
 	if len(problem.Steps) != len(cfg.Step) {
@@ -191,9 +232,9 @@ func CommandCreate(context *cli.Context) {
 	for n, commit := range commitList {
 		log.Printf("validating solution for step %d", n+1)
 		signedCommit := mustConfirmCommit(signed, commit, nil)
-		log.Printf("finished validating solution for step %d", n+1)
+		log.Printf("  finished validating solution")
 		if signedCommit.ReportCard == nil || signedCommit.Score != 1.0 || !signedCommit.ReportCard.Passed {
-			log.Printf("solution for step %d failed: %s", n+1, signedCommit.ReportCard.Message)
+			log.Printf("  solution for step %d failed: %s", n+1, signedCommit.ReportCard.Message)
 
 			// play the transcript
 			for _, event := range signedCommit.Transcript {
@@ -219,14 +260,14 @@ func CommandCreate(context *cli.Context) {
 
 	signed.Commits = signedCommits
 
-	log.Printf("problem confirmed, submitting to database")
+	log.Printf("problem and solution confirmed successfully")
 	final := new(Problem)
 	if signed.ID == 0 {
 		mustPostObject("/problems", nil, signed, final)
 	} else {
 		mustPutObject(fmt.Sprintf("/problems/%d", signed.ID), nil, signed, final)
 	}
-	log.Printf("problem %q (%s) saved and ready to use", final.Name, final.Unique)
+	log.Printf("problem %s (%q) saved and ready to use", final.Unique, final.Name)
 }
 
 type DaycareRequest struct {

@@ -51,7 +51,6 @@ type Commit struct {
 	AssignmentID      int               `json:"assignmentID" meddler:"assignment_id"`
 	ProblemStepNumber int               `json:"problemStepNumber" meddler:"problem_step_number"`
 	UserID            int               `json:"userID" meddler:"user_id"`
-	Closed            bool              `json:"closed" meddler:"closed"`
 	Action            string            `json:"action" meddler:"action,zeroisnull"`
 	Comment           string            `json:"comment" meddler:"comment,zeroisnull"`
 	Files             map[string]string `json:"files" meddler:"files,json"`

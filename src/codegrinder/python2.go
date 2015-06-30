@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 const workingDir = "/home/student"
@@ -259,6 +260,7 @@ func python2UnittestGrade(n *Nanny, args []string, options []string, files map[s
 		}
 		elt.Details = htmlEscapePre(strings.Join(lines, "\n"))
 	}
+	n.ReportCard.Time = time.Since(n.Start)
 
 	// generate a top-level summary
 	if n.ReportCard.Message == "" {

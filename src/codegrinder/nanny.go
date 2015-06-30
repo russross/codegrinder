@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net/http"
+	"regexp"
 	"time"
 
 	"github.com/fsouza/go-dockerclient"
@@ -21,23 +23,52 @@ type Nanny struct {
 	Transcript []*EventMessage
 }
 
+var getContainerIDRE = regexp.MustCompile(`The name .* is already in use by container (.*)\. You have to delete \(or rename\) that container to be able to reuse that name`)
+
+func getContainerID(msg string) string {
+	groups := getContainerIDRE.FindStringSubmatch(msg)
+	if len(groups) != 2 {
+		return ""
+	}
+	return groups[1]
+}
+
 func NewNanny(image, name string) (*Nanny, error) {
 	// create a container
 	container, err := dockerClient.CreateContainer(docker.CreateContainerOptions{
 		Name: name,
 		Config: &docker.Config{
 			NetworkDisabled: true,
-			Cmd: []string{
-				"/bin/sh",
-				"-c",
-				"sleep infinity",
-			},
-			Image: image,
+			Cmd:             []string{"/bin/sh", "-c", "sleep infinity"},
+			Image:           image,
 		},
 	})
 	if err != nil {
-		logi.Printf("NewNanny->CreateContainer: %v", err)
-		return nil, err
+		if apiError, ok := err.(*docker.Error); ok && apiError.Status == http.StatusConflict && getContainerID(apiError.Message) != "" {
+			// container already exists with that name--try killing it
+			err2 := dockerClient.RemoveContainer(docker.RemoveContainerOptions{
+				ID:    getContainerID(apiError.Message),
+				Force: true,
+			})
+			if err2 != nil {
+				logi.Printf("NewNanny->StartContainer error killing existing container: %v", err2)
+				return nil, err2
+			}
+
+			// try it one more time
+			container, err = dockerClient.CreateContainer(docker.CreateContainerOptions{
+				Name: name,
+				Config: &docker.Config{
+					NetworkDisabled: true,
+					Cmd:             []string{"/bin/sh", "-c", "sleep infinity"},
+					Image:           image,
+				},
+			})
+		}
+		if err != nil {
+			logi.Printf("NewNanny->CreateContainer: %#v", err)
+			return nil, err
+		}
 	}
 
 	// start it
@@ -49,7 +80,7 @@ func NewNanny(image, name string) (*Nanny, error) {
 			Force: true,
 		})
 		if err2 != nil {
-			logi.Printf("NewNanny->StartContainer error killing container: %v", err)
+			logi.Printf("NewNanny->StartContainer error killing container: %v", err2)
 		}
 		return nil, err
 	}
