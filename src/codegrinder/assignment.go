@@ -35,12 +35,32 @@ type Assignment struct {
 
 // GetMeAssignments handles requests to /api/v2/users/me/assignments,
 // returning a list of assignments for the current user.
-func GetMeAssignments(w http.ResponseWriter, tx *sql.Tx, currentUser *User, render render.Render) {
+//
+// If parameter course_lti_label=<...> present, results will be filtered by the lti_label of the course.
+// If parameter problem_unique=<...> present, results will be filtered by the unique id of the problem.
+func GetMeAssignments(w http.ResponseWriter, r *http.Request, tx *sql.Tx, currentUser *User, render render.Render) {
+	courseLabel := r.FormValue("course_lti_label")
+	problemUnique := r.FormValue("problem_unique")
+
 	assignments := []*Assignment{}
-	if err := meddler.QueryAll(tx, &assignments, `SELECT * FROM assignments WHERE user_id = $1`, currentUser.ID); err != nil {
-		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error getting all assignments for user %d: %v", currentUser.ID, err)
+	switch {
+	case courseLabel == "" && problemUnique == "":
+		if err := meddler.QueryAll(tx, &assignments, `SELECT * FROM assignments WHERE user_id = $1 ORDER BY course_id, updated_at`, currentUser.ID); err != nil {
+			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error getting all assignments for user %d: %v", currentUser.ID, err)
+			return
+		}
+
+	case courseLabel != "" && problemUnique != "":
+		if err := meddler.QueryAll(tx, &assignments, `SELECT assignments.* FROM assignments JOIN courses ON assignments.course_id = courses.id JOIN problems ON assignments.problem_id = problems.id WHERE assignments.user_id = $1 AND courses.lti_label = $2 AND problems.unique_id = $3 ORDER BY course_id, updated_at`, currentUser.ID, courseLabel, problemUnique); err != nil {
+			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error getting assignments for user %d: %v", currentUser.ID, err)
+			return
+		}
+
+	default:
+		loggedHTTPErrorf(w, http.StatusInternalServerError, "not implemented yet")
 		return
 	}
+
 	render.JSON(http.StatusOK, assignments)
 }
 

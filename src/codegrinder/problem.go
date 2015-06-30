@@ -251,6 +251,7 @@ func (step *ProblemStep) filterIncoming() {
 
 // GetProblems handles a request to /api/v2/problems,
 // returning a list of all problems.
+//
 // If parameter steps=true, all problem steps will be included as well.
 // If parameter unique=<...> present, results will be filtered by matching Unique field.
 // TODO: If parameter tags=<...> present, results will be filtered by matching tags (problem must include all supplied tags).
@@ -278,33 +279,15 @@ func GetProblems(w http.ResponseWriter, r *http.Request, tx *sql.Tx, render rend
 	args := []interface{}{}
 
 	if unique := r.FormValue("unique"); unique != "" {
-		if where == "" {
-			where = " WHERE"
-		} else {
-			where += " AND"
-		}
-		args = append(args, strings.ToLower(unique))
-		where += fmt.Sprintf(" unique_id = $%d", len(args))
+		where, args = addWhereEq(where, args, "unique_id", unique)
 	}
 
 	if problemType := r.FormValue("problemType"); problemType != "" {
-		if where == "" {
-			where = " WHERE"
-		} else {
-			where += " AND"
-		}
-		args = append(args, strings.ToLower(problemType))
-		where += fmt.Sprintf(" problem_type = $%d", len(args))
+		where, args = addWhereEq(where, args, "problem_type", problemType)
 	}
 
 	if name := r.FormValue("name"); name != "" {
-		if where == "" {
-			where = " WHERE"
-		} else {
-			where += " AND"
-		}
-		args = append(args, "%"+strings.ToLower(name)+"%")
-		where += fmt.Sprintf(" lower(name) like $%d", len(args))
+		where, args = addWhereLike(where, args, "name", name)
 	}
 
 	if err := meddler.QueryAll(tx, &problems, `SELECT `+fields+` FROM problems`+where+` ORDER BY id`, args...); err != nil {

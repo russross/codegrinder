@@ -140,3 +140,35 @@ func (e *EventMessage) String() string {
 		return fmt.Sprintf("unknown event: %s", e.Event)
 	}
 }
+
+type Assignment struct {
+	ID                 int            `json:"id" meddler:"id,pk"`
+	CourseID           int            `json:"courseID" meddler:"course_id"`
+	ProblemID          int            `json:"problemID" meddler:"problem_id"`
+	UserID             int            `json:"userID" meddler:"user_id"`
+	Roles              string         `json:"roles" meddler:"roles"`
+	Points             float64        `json:"points" meddler:"points,zeroisnull"`
+	Survey             map[string]int `json:"survey" meddler:"survey,json"`
+	GradeID            string         `json:"-" meddler:"grade_id,zeroisnull"`
+	LtiID              string         `json:"-" meddler:"lti_id"`
+	CanvasTitle        string         `json:"canvasTitle" meddler:"canvas_title"`
+	CanvasID           int            `json:"canvasID" meddler:"canvas_id"`
+	CanvasAPIDomain    string         `json:"canvasAPIDomain" meddler:"canvas_api_domain"`
+	OutcomeURL         string         `json:"-" meddler:"outcome_url"`
+	OutcomeExtURL      string         `json:"-" meddler:"outcome_ext_url"`
+	OutcomeExtAccepted string         `json:"-" meddler:"outcome_ext_accepted"`
+	FinishedURL        string         `json:"finishedURL" meddler:"finished_url"`
+	ConsumerKey        string         `json:"-" meddler:"consumer_key"`
+	CreatedAt          time.Time      `json:"createdAt" meddler:"created_at,localtime"`
+	UpdatedAt          time.Time      `json:"updatedAt" meddler:"updated_at,localtime"`
+}
+
+type Course struct {
+	ID        int       `json:"id" meddler:"id,pk"`
+	Name      string    `json:"name" meddler:"name"`
+	Label     string    `json:"label" meddler:"lti_label"`
+	LtiID     string    `json:"ltiID" meddler:"lti_id"`
+	CanvasID  int       `json:"canvasID" meddler:"canvas_id"`
+	CreatedAt time.Time `json:"createdAt" meddler:"created_at,localtime"`
+	UpdatedAt time.Time `json:"updatedAt" meddler:"updated_at,localtime"`
+}

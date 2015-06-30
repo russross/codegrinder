@@ -403,3 +403,25 @@ func setupDB(host, port, user, password, database string) *sql.DB {
 	}
 	return db
 }
+
+func addWhereEq(where string, args []interface{}, label string, value interface{}) (string, []interface{}) {
+	if where == "" {
+		where = " WHERE"
+	} else {
+		where += " AND"
+	}
+	args = append(args, value)
+	where += fmt.Sprintf(" %s = $%d", label, len(args))
+	return where, args
+}
+
+func addWhereLike(where string, args []interface{}, label string, value string) (string, []interface{}) {
+	if where == "" {
+		where = " WHERE"
+	} else {
+		where += " AND"
+	}
+	args = append(args, "%"+strings.ToLower(value)+"%")
+	where += fmt.Sprintf(" lower(%s) LIKE $%d", label, len(args))
+	return where, args
+}

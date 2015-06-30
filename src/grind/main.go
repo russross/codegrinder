@@ -46,10 +46,23 @@ func main() {
 			Usage:  "create a new problem (instructors only)",
 			Action: CommandCreate,
 			Flags: []cli.Flag{
-				cli.BoolFlag{
-					Name:  "update",
-					Usage: "update an existing problem",
-				},
+				cli.BoolFlag{Name: "update", Usage: "update an existing problem"},
+			},
+		},
+		{
+			Name:   "list",
+			Usage:  "list all of your active assignments",
+			Action: CommandList,
+			Flags:  []cli.Flag{
+			//cli.StringFlag{Name: "course", Usage: "only list assignments for the given course"},
+			},
+		},
+		{
+			Name:   "get",
+			Usage:  "download an assignment to work on it locally",
+			Action: CommandGet,
+			Flags: []cli.Flag{
+				cli.IntFlag{Name: "id", Usage: "get the assignment using its ID number"},
 			},
 		},
 	}
@@ -101,23 +114,27 @@ Paste here: `)
 }
 
 func mustGetObject(path string, params map[string]string, download interface{}) {
-	mustRequest(path, params, Config.Cookie, "GET", nil, download)
+	doRequest(path, params, Config.Cookie, "GET", nil, download, false)
+}
+
+func getObject(path string, params map[string]string, download interface{}) bool {
+	return doRequest(path, params, Config.Cookie, "GET", nil, download, true)
 }
 
 func mustPostObject(path string, params map[string]string, upload interface{}, download interface{}) {
-	mustRequest(path, params, Config.Cookie, "POST", upload, download)
+	doRequest(path, params, Config.Cookie, "POST", upload, download, false)
 }
 
 func mustPutObject(path string, params map[string]string, upload interface{}, download interface{}) {
-	mustRequest(path, params, Config.Cookie, "PUT", upload, download)
+	doRequest(path, params, Config.Cookie, "PUT", upload, download, false)
 }
 
-func mustRequest(path string, params map[string]string, cookie string, method string, upload interface{}, download interface{}) {
+func doRequest(path string, params map[string]string, cookie string, method string, upload interface{}, download interface{}, notfoundokay bool) bool {
 	if !strings.HasPrefix(path, "/") {
-		log.Panicf("mustRequest path must start with /")
+		log.Panicf("doRequest path must start with /")
 	}
 	if method != "GET" && method != "POST" && method != "PUT" && method != "DELETE" {
-		log.Panicf("mustRequest only recognizes GET, POST, PUT, and DELETE methods")
+		log.Panicf("doRequest only recognizes GET, POST, PUT, and DELETE methods")
 	}
 	req, err := http.NewRequest(method, fmt.Sprintf("https://%s/api/v2%s", Config.Host, path), nil)
 	if err != nil {
@@ -152,6 +169,9 @@ func mustRequest(path string, params map[string]string, cookie string, method st
 		log.Fatalf("error connecting to %s: %v\n", Config.Host, err)
 	}
 	defer resp.Body.Close()
+	if notfoundokay && resp.StatusCode == http.StatusNotFound {
+		return false
+	}
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("unexpected status from %s: %s\n", Config.Host, resp.Status)
 		io.Copy(os.Stderr, resp.Body)
@@ -164,7 +184,9 @@ func mustRequest(path string, params map[string]string, cookie string, method st
 		if err := decoder.Decode(download); err != nil {
 			log.Fatalf("failed to parse result object from server: %v\n", err)
 		}
+		return true
 	}
+	return false
 }
 
 func mustLoadConfig() {

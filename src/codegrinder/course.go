@@ -23,9 +23,20 @@ type Course struct {
 
 // GetCourses handles /api/v2/courses requests,
 // returning a list of all courses.
-func GetCourses(w http.ResponseWriter, tx *sql.Tx, render render.Render) {
+//
+// If parameter lti_label=<...> present, results will be filtered by matching lti_label field.
+// If parameter name=<...> present, results will be filtered by case-insensitive substring matching on name field.
+func GetCourses(w http.ResponseWriter, r *http.Request, tx *sql.Tx, render render.Render) {
 	courses := []*Course{}
-	if err := meddler.QueryAll(tx, &courses, `SELECT * FROM courses`); err != nil {
+	where := ""
+	args := []interface{}{}
+	if lti_label := r.FormValue("lti_label"); lti_label != "" {
+		where, args = addWhereEq(where, args, "lti_label", lti_label)
+	}
+	if name := r.FormValue("name"); name != "" {
+		where, args = addWhereLike(where, args, "name", name)
+	}
+	if err := meddler.QueryAll(tx, &courses, `SELECT * FROM courses`+where+` ORDER BY lti_label`, args...); err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error getting all courses: %v", err)
 		return
 	}
