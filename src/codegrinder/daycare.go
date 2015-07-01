@@ -21,10 +21,11 @@ type DaycareRequest struct {
 type DaycareResponse struct {
 	Commit *Commit       `json:"commit,omitempty"`
 	Event  *EventMessage `json:"event,omitempty"`
+	Error  string        `json:"error,omitempty"`
 }
 
 func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params martini.Params) {
-	now := time.Now()
+	now := time.Now().Round(time.Second)
 
 	problemType, exists := problemTypes[params["problem_type"]]
 	if !exists {
@@ -44,47 +45,55 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		return
 	}
 	defer socket.Close()
+	logAndTransmitErrorf := func(format string, args ...interface{}) {
+		msg := fmt.Sprintf(format, args...)
+		loge.Print(msg)
+		res := &DaycareResponse{Error: msg}
+		if err := socket.WriteJSON(res); err != nil {
+			// what can we do? we already logged the error
+		}
+	}
 
 	// get the first message
 	req := new(DaycareRequest)
 	if err := socket.ReadJSON(req); err != nil {
-		loge.Printf("error reading first request message: %v", err)
+		logAndTransmitErrorf("error reading first request message: %v", err)
 		return
 	}
 	if req.Problem == nil {
-		loge.Printf("first request message must include the problem")
+		logAndTransmitErrorf("first request message must include the problem")
 		return
 	}
 	problem := req.Problem
 	if req.Commit == nil {
-		loge.Printf("first request message must include the commit")
+		logAndTransmitErrorf("first request message must include the commit")
 		return
 	}
 	commit := req.Commit
 
 	// check problem signature
 	if problem.Timestamp == nil {
-		loge.Printf("problem must have a valid timestamp")
+		logAndTransmitErrorf("problem must have a valid timestamp")
 		return
 	}
 
 	if problem.Signature == "" {
-		loge.Printf("problem must be signed")
+		logAndTransmitErrorf("problem must be signed")
 		return
 	}
 	problemSig := problem.computeSignature(Config.DaycareSecret)
 	if !hmac.Equal([]byte(problem.Signature), []byte(problemSig)) {
-		loge.Printf("problem signature mismatch: found %s but expected %s", problem.Signature, problemSig)
+		logAndTransmitErrorf("problem signature mismatch: found %s but expected %s", problem.Signature, problemSig)
 		return
 	}
 
 	// check commit signature
 	if commit.ProblemSignature != problemSig {
-		loge.Printf("commit says problem signature is %s, but it is actually %s", commit.ProblemSignature, problemSig)
+		logAndTransmitErrorf("commit says problem signature is %s, but it is actually %s", commit.ProblemSignature, problemSig)
 		return
 	}
 	if commit.Timestamp == nil {
-		loge.Printf("commit must have a valid timestamp")
+		logAndTransmitErrorf("commit must have a valid timestamp")
 		return
 	}
 	age := time.Since(*commit.Timestamp)
@@ -92,26 +101,26 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		age = -age
 	}
 	if age > MaxDaycareRequestAge {
-		loge.Printf("commit signature is %v off, cannot be more than %v", age, MaxDaycareRequestAge)
+		logAndTransmitErrorf("commit signature is %v off, cannot be more than %v", age, MaxDaycareRequestAge)
 		return
 	}
 	if commit.Signature == "" {
-		loge.Printf("commit must be signed")
+		logAndTransmitErrorf("commit must be signed")
 		return
 	}
 	if commit.Action != params["action"] {
-		loge.Printf("commit says action is %s, but request says %s", commit.Action, params["action"])
+		logAndTransmitErrorf("commit says action is %s, but request says %s", commit.Action, params["action"])
 		return
 	}
 	commitSig := commit.computeSignature(Config.DaycareSecret)
 	if !hmac.Equal([]byte(commit.Signature), []byte(commitSig)) {
-		loge.Printf("commit signature mismatch: found %s but expected %s", commit.Signature, commitSig)
+		logAndTransmitErrorf("commit signature mismatch: found %s but expected %s", commit.Signature, commitSig)
 		return
 	}
 
 	// prepare the problem step
 	if commit.ProblemStepNumber < 0 || commit.ProblemStepNumber >= len(problem.Steps) {
-		loge.Printf("commit refers to step number that does not exist: %d", commit.ProblemStepNumber)
+		logAndTransmitErrorf("commit refers to step number that does not exist: %d", commit.ProblemStepNumber)
 		return
 	}
 
@@ -125,7 +134,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	// add the files from the commit
 	whitelists := getStepWhitelists(problem)
 	if err := commit.normalize(now, whitelists[commit.ProblemStepNumber]); err != nil {
-		loge.Printf("error in commit: %v", err)
+		logAndTransmitErrorf("error in commit: %v", err)
 		return
 	}
 	for name, contents := range commit.Files {
@@ -137,7 +146,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	logi.Printf("launching container for %s", nannyName)
 	n, err := NewNanny(problemType.Image, nannyName)
 	if err != nil {
-		loge.Printf("error creating nanny: %v", err)
+		logAndTransmitErrorf("error creating nanny: %v", err)
 		return
 	}
 
@@ -153,7 +162,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 			case "exec", "exit", "stdin", "stdout", "stderr", "stdinclosed", "error":
 				res := &DaycareResponse{Event: event}
 				if err := socket.WriteJSON(res); err != nil {
-					loge.Printf("error writing event JSON: %v", err)
+					logAndTransmitErrorf("error writing event JSON: %v", err)
 				}
 			}
 		}
@@ -168,7 +177,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 
 	// shutdown the nanny
 	if err := n.Shutdown(); err != nil {
-		loge.Printf("nanny shutdown error: %v", err)
+		logAndTransmitErrorf("nanny shutdown error: %v", err)
 	}
 
 	// wait for listener to finish
@@ -200,7 +209,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 
 	res := &DaycareResponse{Commit: commit}
 	if err := socket.WriteJSON(res); err != nil {
-		loge.Printf("error writing final commit JSON: %v", err)
+		logAndTransmitErrorf("error writing final commit JSON: %v", err)
 		return
 	}
 }

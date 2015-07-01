@@ -20,31 +20,48 @@ func CommandSave(context *cli.Context) {
 	now := time.Now()
 
 	// find the directory
-	d := ""
+	dir := ""
 	switch len(context.Args()) {
 	case 0:
-		d = "."
+		dir = "."
 	case 1:
-		d = context.Args().First()
+		dir = context.Args().First()
 	default:
 		cli.ShowSubcommandHelp(context)
 		return
 	}
-	dir, err := filepath.Abs(d)
-	if err != nil {
-		log.Fatalf("error finding directory %q: %v", d, err)
-	}
 
-	// find the .grind file
+	_, _, commit := gather(now, dir)
+	commit.Action = ""
+	commit.Comment = "saving from grind tool"
+
+	// send the commit to the server
+	signed := new(Commit)
+	mustPostObject(fmt.Sprintf("/users/me/assignments/%d/commits", commit.AssignmentID), nil, commit, signed)
+
+	saveCommit(dir, signed)
+}
+
+func gather(now time.Time, dir string) (*Problem, *Assignment, *Commit) {
+	// find the .grind file containing the commit
+	abs := false
 	for {
 		path := filepath.Join(dir, GrindAssignmentIDName)
 		if _, err := os.Stat(path); err != nil {
 			if os.IsNotExist(err) {
+				if !abs {
+					abs = true
+					path, err := filepath.Abs(dir)
+					if err != nil {
+						log.Fatalf("error finding absolute path of %s: %v", dir, err)
+					}
+					dir = path
+				}
 				// try moving up a directory
 				old := dir
 				dir = filepath.Dir(dir)
 				if dir == old {
-					log.Fatalf("unable to find %s in %s or an ancestor directory", GrindAssignmentIDName, d)
+					log.Fatalf("unable to find %s in %s or an ancestor directory", GrindAssignmentIDName, dir)
 				}
 				log.Printf("could not find %s in %s, trying %s", GrindAssignmentIDName, old, dir)
 				continue
@@ -95,6 +112,7 @@ func CommandSave(context *cli.Context) {
 			return err
 		}
 		if path == dir {
+			// descent into the main directory
 			return nil
 		}
 		if info.IsDir() {
@@ -136,8 +154,6 @@ func CommandSave(context *cli.Context) {
 
 	// form a commit object
 	commit.ID = 0
-	commit.Action = ""
-	commit.Comment = "saving from grind tool"
 	commit.Files = files
 	commit.Transcript = nil
 	commit.ReportCard = nil
@@ -148,15 +164,14 @@ func CommandSave(context *cli.Context) {
 	commit.Timestamp = nil
 	commit.Signature = ""
 
-	// send the commit to the server
-	signed := new(Commit)
-	mustPostObject(fmt.Sprintf("/users/me/assignments/%d/commits", commit.AssignmentID), nil, commit, signed)
+	return problem, assignment, commit
+}
 
-	// save the commit locally
-	path = filepath.Join(dir, GrindAssignmentIDName)
-	contents, err = json.MarshalIndent(signed, "", "    ")
+func saveCommit(dir string, commit *Commit) {
+	path := filepath.Join(dir, GrindAssignmentIDName)
+	contents, err := json.MarshalIndent(commit, "", "    ")
 	if err != nil {
-		log.Fatalf("JSON error marshalling commit: %v", err)
+		log.Fatalf("JSON error encoding commit: %v", err)
 	}
 	contents = append(contents, '\n')
 	if err := ioutil.WriteFile(path, contents, 0644); err != nil {

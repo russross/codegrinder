@@ -47,14 +47,27 @@ func main() {
 			Action: CommandList,
 		},
 		{
-			Name:   "get",
-			Usage:  "download an assignment to work on it locally",
+			Name:  "get",
+			Usage: "download an assignment to work on it locally",
+			Description: "   Give either the numeric ID (given at the start of each listing)\n" +
+				"   or the course/problem identifier (given in parentheses).\n\n" +
+				"   Use \"grind list\" to see a list of assignments available to you.\n\n" +
+				"   By default, the assignment will be stored in a directory matching the\n" +
+				"   course/problem name, but you can override this by supplying the directory\n" +
+				"   name as an additional argument.\n\n" +
+				"   Example: grind get CS-1400/cs1400-loops\n\n" +
+				"   Note: you must load an assignment through Canvas before you can access it.",
 			Action: CommandGet,
 		},
 		{
 			Name:   "save",
 			Usage:  "save your work to the server without additional action",
 			Action: CommandSave,
+		},
+		{
+			Name:   "grade",
+			Usage:  "save your work and submit it for grading",
+			Action: CommandGrade,
 		},
 		{
 			Name:   "create",

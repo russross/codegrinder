@@ -6,7 +6,9 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"sort"
@@ -72,6 +74,7 @@ func (problem *Problem) computeSignature(secret string) string {
 	v := make(url.Values)
 
 	// gather all relevant fields
+	v.Add("id", strconv.Itoa(problem.ID))
 	v.Add("name", problem.Name)
 	v.Add("unique", problem.Unique)
 	v.Add("description", problem.Description)
@@ -87,10 +90,10 @@ func (problem *Problem) computeSignature(secret string) string {
 			v.Add(fmt.Sprintf("step-%d-file-%s", n, name), contents)
 		}
 	}
-	v.Add("createdAt", problem.CreatedAt.UTC().Format(time.RFC3339Nano))
-	v.Add("updatedAt", problem.UpdatedAt.UTC().Format(time.RFC3339Nano))
+	v.Add("createdAt", problem.CreatedAt.UTC().Format(time.RFC3339))
+	v.Add("updatedAt", problem.UpdatedAt.UTC().Format(time.RFC3339))
 	if problem.Timestamp != nil {
-		v.Add("timestamp", problem.Timestamp.UTC().Format(time.RFC3339Nano))
+		v.Add("timestamp", problem.Timestamp.UTC().Format(time.RFC3339))
 	}
 
 	// compute signature
@@ -170,9 +173,11 @@ func (problem *Problem) normalize(now time.Time) error {
 	}
 
 	// sanity check timestamps
+	problem.CreatedAt = problem.CreatedAt.Round(time.Second)
 	if problem.CreatedAt.Before(beginningOfTime) || problem.CreatedAt.After(now) {
 		return fmt.Errorf("problem CreatedAt time of %v is invalid", problem.CreatedAt)
 	}
+	problem.UpdatedAt = problem.UpdatedAt.Round(time.Second)
 	if problem.UpdatedAt.Before(beginningOfTime) || problem.UpdatedAt.After(now) {
 		return fmt.Errorf("problem UpdatedAt time of %v is invalid", problem.UpdatedAt)
 	}
@@ -316,6 +321,10 @@ func GetProblem(w http.ResponseWriter, tx *sql.Tx, params martini.Params, render
 		return
 	}
 
+	// verify signature
+	if problem.computeSignature(Config.DaycareSecret) != problem.Signature {
+		loge.Printf("SIGNATURE MISMATCH: found %s but expected %s", problem.computeSignature(Config.DaycareSecret), problem.Signature)
+	}
 	render.JSON(http.StatusOK, problem)
 }
 
@@ -378,7 +387,7 @@ func PutProblem(w http.ResponseWriter, tx *sql.Tx, params martini.Params, proble
 }
 
 func saveProblemCommon(w http.ResponseWriter, tx *sql.Tx, problem *Problem, render render.Render) {
-	now := time.Now()
+	now := time.Now().Round(time.Second)
 
 	// clean up basic fields and do some checks
 	if err := problem.normalize(now); err != nil {
@@ -438,11 +447,24 @@ func saveProblemCommon(w http.ResponseWriter, tx *sql.Tx, problem *Problem, rend
 	problem.Confirmed = true
 	problem.Timestamp = &now
 	problem.Signature = problem.computeSignature(Config.DaycareSecret)
+	log.Printf("%s is signature at save time", problem.Signature)
+	time.Sleep(3 * time.Second)
+	log.Printf("%s is signature recomputed", problem.computeSignature(Config.DaycareSecret))
+	raw, _ := json.Marshal(problem)
+	jsonproblem := new(Problem)
+	json.Unmarshal(raw, jsonproblem)
+	time.Sleep(3 * time.Second)
+	log.Printf("%s is signature after JSON round trip", jsonproblem.computeSignature(Config.DaycareSecret))
 
 	if err := meddler.Save(tx, "problems", problem); err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error saving problem: %v", err)
 		return
 	}
+
+	dbproblem := new(Problem)
+	meddler.Load(tx, "problems", dbproblem, int64(problem.ID))
+	time.Sleep(3 * time.Second)
+	log.Printf("%s is signature after DB round trip", dbproblem.computeSignature(Config.DaycareSecret))
 
 	// return it with updated signature
 	render.JSON(http.StatusOK, problem)
@@ -451,7 +473,7 @@ func saveProblemCommon(w http.ResponseWriter, tx *sql.Tx, problem *Problem, rend
 // PostProblemUnconfirmed handles a request to /api/v2/problems/unconfirmed,
 // signing a new/updated problem that has not yet been tested on the daycare.
 func PostProblemUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser *User, problem Problem, render render.Render) {
-	now := time.Now()
+	now := time.Now().Round(time.Second)
 
 	// clean up basic fields and do some checks
 	if err := problem.normalize(now); err != nil {

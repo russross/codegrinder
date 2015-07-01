@@ -111,7 +111,8 @@ func CommandCreate(context *cli.Context) {
 		if !context.Bool("update") {
 			log.Fatalf("you did not specify --update, but a problem already exists with unique ID %q", problem.Unique)
 		}
-		log.Printf("based on the unique ID %s, this is an update of problem %d (%q)", problem.Unique, existing[0].ID, existing[0].Name)
+		log.Printf("unique ID is %s", problem.Unique)
+		log.Printf("  this is an update of problem %d (%q)", existing[0].ID, existing[0].Name)
 		problem.ID = existing[0].ID
 		problem.CreatedAt = existing[0].CreatedAt
 	default:
@@ -119,7 +120,7 @@ func CommandCreate(context *cli.Context) {
 		log.Fatalf("error: server found multiple problems with matching unique ID")
 	}
 
-	// import steps
+	// generate steps
 	whitelist := make(map[string]bool)
 	for i := 1; cfg.Step[strconv.Itoa(i)] != nil; i++ {
 		log.Printf("gathering step %d", i)
@@ -267,7 +268,7 @@ func CommandCreate(context *cli.Context) {
 	} else {
 		mustPutObject(fmt.Sprintf("/problems/%d", signed.ID), nil, signed, final)
 	}
-	log.Printf("problem %s (%q) saved and ready to use", final.Unique, final.Name)
+	log.Printf("problem saved and ready to use")
 }
 
 type DaycareRequest struct {
@@ -279,6 +280,7 @@ type DaycareRequest struct {
 type DaycareResponse struct {
 	Commit *Commit       `json:"commit,omitempty"`
 	Event  *EventMessage `json:"event,omitempty"`
+	Error  string        `json:"error,omitempty"`
 }
 
 func mustConfirmCommit(problem *Problem, commit *Commit, args []string) *Commit {
@@ -286,7 +288,7 @@ func mustConfirmCommit(problem *Problem, commit *Commit, args []string) *Commit 
 
 	// create a websocket connection to the server
 	headers := make(http.Header)
-	socket, resp, err := websocket.DefaultDialer.Dial("wss://"+Config.Host+"/api/v2/sockets/"+problem.ProblemType+"/confirm", headers)
+	socket, resp, err := websocket.DefaultDialer.Dial("wss://"+Config.Host+"/api/v2/sockets/"+problem.ProblemType+"/"+commit.Action, headers)
 	if err != nil {
 		log.Printf("websocket dial: %v", err)
 		if resp != nil && resp.Body != nil {
@@ -329,6 +331,9 @@ func mustConfirmCommit(problem *Problem, commit *Commit, args []string) *Commit 
 					color.Red("Error: %s\n", reply.Event.Error)
 				}
 			}
+		} else if reply.Error != "" {
+			log.Printf("server returned an error:")
+			log.Fatalf("  %s", reply.Error)
 		} else {
 			log.Fatalf("unexpected reply from server")
 		}

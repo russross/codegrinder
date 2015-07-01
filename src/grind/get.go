@@ -76,10 +76,10 @@ func CommandGet(context *cli.Context) {
 	}
 
 	if _, err := os.Stat(target); err == nil {
-		log.Printf("directory %q already exists", target)
+		log.Printf("directory %s already exists", target)
 		log.Fatalf("delete it first if you want to re-download the assignment")
 	} else if !os.IsNotExist(err) {
-		log.Fatalf("error checking if directory %q exists: %v", target, err)
+		log.Fatalf("error checking if directory %s exists: %v", target, err)
 	}
 
 	// get the most recent commit (if one exists)
@@ -91,7 +91,7 @@ func CommandGet(context *cli.Context) {
 	// create the target directory
 	log.Printf("creating directory %s", target)
 	if err := os.MkdirAll(target, 0755); err != nil {
-		log.Fatalf("error creating directory %q: %v", target, err)
+		log.Fatalf("error creating directory %s: %v", target, err)
 	}
 
 	// create the files
@@ -104,10 +104,10 @@ func CommandGet(context *cli.Context) {
 		path := filepath.Join(target, name)
 		log.Printf("writing step %d file %s", stepNumber+1, path)
 		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-			log.Fatalf("error create directory %q: %v", filepath.Dir(path), err)
+			log.Fatalf("error create directory %s: %v", filepath.Dir(path), err)
 		}
 		if err := ioutil.WriteFile(path, []byte(contents), 0644); err != nil {
-			log.Fatalf("error saving file %q: %v", path, err)
+			log.Fatalf("error saving file %s: %v", path, err)
 		}
 	}
 	if commit != nil {
@@ -115,7 +115,7 @@ func CommandGet(context *cli.Context) {
 			path := filepath.Join(target, name)
 			log.Printf("writing commit file %s", path)
 			if err := ioutil.WriteFile(path, []byte(contents), 0644); err != nil {
-				log.Fatalf("error saving file %q: %v", path, err)
+				log.Fatalf("error saving file %s: %v", path, err)
 			}
 		}
 	}
@@ -139,6 +139,6 @@ func CommandGet(context *cli.Context) {
 	}
 	contents = append(contents, '\n')
 	if err := ioutil.WriteFile(path, contents, 0644); err != nil {
-		log.Fatalf("error saving file %q: %v", path, err)
+		log.Fatalf("error saving file %s: %v", path, err)
 	}
 }

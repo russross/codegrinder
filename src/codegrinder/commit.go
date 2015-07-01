@@ -74,6 +74,7 @@ func (commit *Commit) computeSignature(secret string) string {
 	v := make(url.Values)
 
 	// gather all relevant fields
+	v.Add("id", strconv.Itoa(commit.ID))
 	v.Add("assignmentID", strconv.Itoa(commit.AssignmentID))
 	v.Add("problemStepNumber", strconv.Itoa(commit.ProblemStepNumber))
 	v.Add("userID", strconv.Itoa(commit.UserID))
@@ -82,14 +83,30 @@ func (commit *Commit) computeSignature(secret string) string {
 	for name, contents := range commit.Files {
 		v.Add(fmt.Sprintf("file-%s", name), contents)
 	}
-	// TODO: transcript
-	// TODO: reportcard
+	for n, event := range commit.Transcript {
+		v.Add(fmt.Sprintf("transcript-%d", n), event.String())
+	}
+	if commit.ReportCard != nil {
+		v.Add("reportcard-passed", strconv.FormatBool(commit.ReportCard.Passed))
+		v.Add("reportcard-message", commit.ReportCard.Message)
+		v.Add("reportcard-time", commit.ReportCard.Time.String())
+		for n, result := range commit.ReportCard.Results {
+			v.Add(fmt.Sprintf("reportcard-%d-name", n), result.Name)
+			v.Add(fmt.Sprintf("reportcard-%d-outcome", n), result.Outcome)
+			if result.Details != "" {
+				v.Add(fmt.Sprintf("reportcard-%d-details", n), result.Details)
+			}
+			if result.Context != "" {
+				v.Add(fmt.Sprintf("reportcard-%d-context", n), result.Context)
+			}
+		}
+	}
 	v.Add("score", strconv.FormatFloat(commit.Score, 'g', -1, 64))
-	v.Add("createdAt", commit.CreatedAt.UTC().Format(time.RFC3339Nano))
-	v.Add("updatedAt", commit.UpdatedAt.UTC().Format(time.RFC3339Nano))
+	v.Add("createdAt", commit.CreatedAt.UTC().Format(time.RFC3339))
+	v.Add("updatedAt", commit.UpdatedAt.UTC().Format(time.RFC3339))
 	v.Add("problemSignature", commit.ProblemSignature)
 	if commit.Timestamp != nil {
-		v.Add("timestamp", commit.Timestamp.UTC().Format(time.RFC3339Nano))
+		v.Add("timestamp", commit.Timestamp.UTC().Format(time.RFC3339))
 	}
 
 	// compute signature
@@ -111,9 +128,11 @@ func (commit *Commit) normalize(now time.Time, whitelist map[string]bool) error 
 	if commit.Score < 0.0 || commit.Score > 1.0 {
 		return fmt.Errorf("commit score must be between 0 and 1")
 	}
+	commit.CreatedAt = commit.CreatedAt.Round(time.Second)
 	if commit.CreatedAt.Before(beginningOfTime) || commit.CreatedAt.After(now) {
 		return fmt.Errorf("commit CreatedAt time of %v is invalid", commit.CreatedAt)
 	}
+	commit.UpdatedAt = commit.UpdatedAt.Round(time.Second)
 	if commit.UpdatedAt.Before(beginningOfTime) || commit.UpdatedAt.After(now) {
 		return fmt.Errorf("commit UpdatedAt time of %v is invalid", commit.UpdatedAt)
 	}
@@ -394,7 +413,7 @@ func DeleteUserAssignmentCommit(w http.ResponseWriter, tx *sql.Tx, params martin
 // PostUserAssignmentCommit handles requests to /api/v2/users/me/assignments/:assignment_id/commits,
 // adding a new commit (or updating the most recent one) for the given assignment for the current user.
 func PostUserAssignmentCommit(w http.ResponseWriter, tx *sql.Tx, currentUser *User, params martini.Params, commit Commit, render render.Render) {
-	now := time.Now()
+	now := time.Now().Round(time.Second)
 
 	assignmentID, err := strconv.Atoi(params["assignment_id"])
 	if err != nil {
@@ -480,16 +499,16 @@ func PostUserAssignmentCommit(w http.ResponseWriter, tx *sql.Tx, currentUser *Us
 	commit.UserID = currentUser.ID
 	commit.UpdatedAt = now
 
+	if err := meddler.Save(tx, "commits", &commit); err != nil {
+		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error saving commit: %v", err)
+		return
+	}
+
 	// sign the commit for execution
 	if commit.Action != "" && commit.Signature == "" && commit.Timestamp == nil && commit.ReportCard == nil && len(commit.Transcript) == 0 {
 		commit.ProblemSignature = problem.Signature
 		commit.Timestamp = &now
 		commit.Signature = commit.computeSignature(Config.DaycareSecret)
-	}
-
-	if err := meddler.Save(tx, "commits", &commit); err != nil {
-		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error saving commit: %v", err)
-		return
 	}
 
 	render.JSON(http.StatusOK, &commit)
