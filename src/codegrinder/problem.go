@@ -39,15 +39,14 @@ var directoryWhitelist = map[string]bool{
 //
 // * When creating a problem, submit it along with a full set of Commit objects
 //   with a sample solution, one per problem step. When submitted,
-//   Confirmed=false, Signature="", Timestamp=nil. Signature and Timestamp will
-//   be filled in.
+//   Confirmed=false, Signature="", Signature will be filled in.
 // * Submit the signed Problem with a Commit to the daycare for validation.
 //   Upon success, it will return the signed commits with Transcript and
 //   ReportCard objects.
 // * Include a complete collection of signed commits when submitting so the
 //   Problem can be confirmed and added to the set of active problems.
 //
-// * When using a problem, it will include a valid Timestamp and Signature. The
+// * When using a problem, it will include a valid Signature. The
 //   signature must be included when getting a Commit signed before sending it
 //   to the daycare for validation.
 type Problem struct {
@@ -63,8 +62,7 @@ type Problem struct {
 	CreatedAt   time.Time      `json:"createdAt" meddler:"created_at,localtime"`
 	UpdatedAt   time.Time      `json:"updatedAt" meddler:"updated_at,localtime"`
 
-	Signature string     `json:"signature,omitempty" meddler:"signature,zeroisnull"`
-	Timestamp *time.Time `json:"timestamp,omitempty" meddler:"signature_timestamp"`
+	Signature string `json:"signature,omitempty" meddler:"signature,zeroisnull"`
 
 	// only included when a problem is being created/updated
 	Commits []*Commit `json:"commits,omitempty" meddler:"-"`
@@ -90,11 +88,8 @@ func (problem *Problem) computeSignature(secret string) string {
 			v.Add(fmt.Sprintf("step-%d-file-%s", n, name), contents)
 		}
 	}
-	v.Add("createdAt", problem.CreatedAt.UTC().Format(time.RFC3339))
-	v.Add("updatedAt", problem.UpdatedAt.UTC().Format(time.RFC3339))
-	if problem.Timestamp != nil {
-		v.Add("timestamp", problem.Timestamp.UTC().Format(time.RFC3339))
-	}
+	v.Add("createdAt", problem.CreatedAt.Round(time.Second).UTC().Format(time.RFC3339))
+	v.Add("updatedAt", problem.UpdatedAt.Round(time.Second).UTC().Format(time.RFC3339))
 
 	// compute signature
 	mac := hmac.New(sha256.New, []byte(secret))
@@ -173,11 +168,9 @@ func (problem *Problem) normalize(now time.Time) error {
 	}
 
 	// sanity check timestamps
-	problem.CreatedAt = problem.CreatedAt.Round(time.Second)
 	if problem.CreatedAt.Before(beginningOfTime) || problem.CreatedAt.After(now) {
 		return fmt.Errorf("problem CreatedAt time of %v is invalid", problem.CreatedAt)
 	}
-	problem.UpdatedAt = problem.UpdatedAt.Round(time.Second)
 	if problem.UpdatedAt.Before(beginningOfTime) || problem.UpdatedAt.After(now) {
 		return fmt.Errorf("problem UpdatedAt time of %v is invalid", problem.UpdatedAt)
 	}
@@ -387,7 +380,7 @@ func PutProblem(w http.ResponseWriter, tx *sql.Tx, params martini.Params, proble
 }
 
 func saveProblemCommon(w http.ResponseWriter, tx *sql.Tx, problem *Problem, render render.Render) {
-	now := time.Now().Round(time.Second)
+	now := time.Now()
 
 	// clean up basic fields and do some checks
 	if err := problem.normalize(now); err != nil {
@@ -445,7 +438,6 @@ func saveProblemCommon(w http.ResponseWriter, tx *sql.Tx, problem *Problem, rend
 	problem.UpdatedAt = now
 	problem.Commits = nil
 	problem.Confirmed = true
-	problem.Timestamp = &now
 	problem.Signature = problem.computeSignature(Config.DaycareSecret)
 	log.Printf("%s is signature at save time", problem.Signature)
 	time.Sleep(3 * time.Second)
@@ -473,7 +465,7 @@ func saveProblemCommon(w http.ResponseWriter, tx *sql.Tx, problem *Problem, rend
 // PostProblemUnconfirmed handles a request to /api/v2/problems/unconfirmed,
 // signing a new/updated problem that has not yet been tested on the daycare.
 func PostProblemUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser *User, problem Problem, render render.Render) {
-	now := time.Now().Round(time.Second)
+	now := time.Now()
 
 	// clean up basic fields and do some checks
 	if err := problem.normalize(now); err != nil {
@@ -536,7 +528,6 @@ func PostProblemUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser *User
 	problem.UpdatedAt = now
 
 	// compute signature
-	problem.Timestamp = &now
 	problem.Signature = problem.computeSignature(Config.DaycareSecret)
 
 	// check the commits
@@ -568,7 +559,6 @@ func PostProblemUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser *User
 		commit.CreatedAt = now
 		commit.UpdatedAt = now
 		commit.ProblemSignature = problem.Signature
-		commit.Timestamp = &now
 		commit.Signature = commit.computeSignature(Config.DaycareSecret)
 	}
 

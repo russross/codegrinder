@@ -65,9 +65,8 @@ type Commit struct {
 	CreatedAt         time.Time         `json:"createdAt" meddler:"created_at,localtime"`
 	UpdatedAt         time.Time         `json:"updatedAt" meddler:"updated_at,localtime"`
 
-	ProblemSignature string     `json:"problemSignature,omitempty" meddler:"-"`
-	Timestamp        *time.Time `json:"timestamp,omitempty" meddler:"-"`
-	Signature        string     `json:"signature,omitempty" meddler:"-"`
+	ProblemSignature string `json:"problemSignature,omitempty" meddler:"-"`
+	Signature        string `json:"signature,omitempty" meddler:"-"`
 }
 
 func (commit *Commit) computeSignature(secret string) string {
@@ -102,12 +101,9 @@ func (commit *Commit) computeSignature(secret string) string {
 		}
 	}
 	v.Add("score", strconv.FormatFloat(commit.Score, 'g', -1, 64))
-	v.Add("createdAt", commit.CreatedAt.UTC().Format(time.RFC3339))
-	v.Add("updatedAt", commit.UpdatedAt.UTC().Format(time.RFC3339))
+	v.Add("createdAt", commit.CreatedAt.Round(time.Second).UTC().Format(time.RFC3339))
+	v.Add("updatedAt", commit.UpdatedAt.Round(time.Second).UTC().Format(time.RFC3339))
 	v.Add("problemSignature", commit.ProblemSignature)
-	if commit.Timestamp != nil {
-		v.Add("timestamp", commit.Timestamp.UTC().Format(time.RFC3339))
-	}
 
 	// compute signature
 	mac := hmac.New(sha256.New, []byte(secret))
@@ -128,11 +124,9 @@ func (commit *Commit) normalize(now time.Time, whitelist map[string]bool) error 
 	if commit.Score < 0.0 || commit.Score > 1.0 {
 		return fmt.Errorf("commit score must be between 0 and 1")
 	}
-	commit.CreatedAt = commit.CreatedAt.Round(time.Second)
 	if commit.CreatedAt.Before(beginningOfTime) || commit.CreatedAt.After(now) {
 		return fmt.Errorf("commit CreatedAt time of %v is invalid", commit.CreatedAt)
 	}
-	commit.UpdatedAt = commit.UpdatedAt.Round(time.Second)
 	if commit.UpdatedAt.Before(beginningOfTime) || commit.UpdatedAt.After(now) {
 		return fmt.Errorf("commit UpdatedAt time of %v is invalid", commit.UpdatedAt)
 	}
@@ -413,7 +407,7 @@ func DeleteUserAssignmentCommit(w http.ResponseWriter, tx *sql.Tx, params martin
 // PostUserAssignmentCommit handles requests to /api/v2/users/me/assignments/:assignment_id/commits,
 // adding a new commit (or updating the most recent one) for the given assignment for the current user.
 func PostUserAssignmentCommit(w http.ResponseWriter, tx *sql.Tx, currentUser *User, params martini.Params, commit Commit, render render.Render) {
-	now := time.Now().Round(time.Second)
+	now := time.Now()
 
 	assignmentID, err := strconv.Atoi(params["assignment_id"])
 	if err != nil {
@@ -451,13 +445,13 @@ func PostUserAssignmentCommit(w http.ResponseWriter, tx *sql.Tx, currentUser *Us
 	}
 
 	// is this a signed commit from the daycare?
-	if commit.Action != "" && commit.Signature != "" && commit.Timestamp != nil && commit.ReportCard != nil && len(commit.Transcript) > 0 {
+	if commit.Action != "" && commit.Signature != "" && commit.ReportCard != nil && len(commit.Transcript) > 0 {
 		// validate the signature
 		if commit.ProblemSignature != problem.Signature {
 			loggedHTTPErrorf(w, http.StatusBadRequest, "problem signature for this commit does not match the current problem signature; please update the problem and re-run the test")
 			return
 		}
-		age := now.Sub(*commit.Timestamp)
+		age := now.Sub(commit.UpdatedAt)
 		if age < 0 {
 			age = -age
 		}
@@ -505,9 +499,8 @@ func PostUserAssignmentCommit(w http.ResponseWriter, tx *sql.Tx, currentUser *Us
 	}
 
 	// sign the commit for execution
-	if commit.Action != "" && commit.Signature == "" && commit.Timestamp == nil && commit.ReportCard == nil && len(commit.Transcript) == 0 {
+	if commit.Action != "" && commit.Signature == "" && commit.ReportCard == nil && len(commit.Transcript) == 0 {
 		commit.ProblemSignature = problem.Signature
-		commit.Timestamp = &now
 		commit.Signature = commit.computeSignature(Config.DaycareSecret)
 	}
 

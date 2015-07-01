@@ -161,7 +161,6 @@ func gather(now time.Time, dir string) (*Problem, *Assignment, *Commit) {
 	commit.CreatedAt = now
 	commit.UpdatedAt = now
 	commit.ProblemSignature = problem.Signature
-	commit.Timestamp = nil
 	commit.Signature = ""
 
 	return problem, assignment, commit

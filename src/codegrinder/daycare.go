@@ -25,7 +25,7 @@ type DaycareResponse struct {
 }
 
 func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params martini.Params) {
-	now := time.Now().Round(time.Second)
+	now := time.Now()
 
 	problemType, exists := problemTypes[params["problem_type"]]
 	if !exists {
@@ -71,12 +71,6 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	}
 	commit := req.Commit
 
-	// check problem signature
-	if problem.Timestamp == nil {
-		logAndTransmitErrorf("problem must have a valid timestamp")
-		return
-	}
-
 	if problem.Signature == "" {
 		logAndTransmitErrorf("problem must be signed")
 		return
@@ -92,11 +86,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		logAndTransmitErrorf("commit says problem signature is %s, but it is actually %s", commit.ProblemSignature, problemSig)
 		return
 	}
-	if commit.Timestamp == nil {
-		logAndTransmitErrorf("commit must have a valid timestamp")
-		return
-	}
-	age := time.Since(*commit.Timestamp)
+	age := time.Since(commit.UpdatedAt)
 	if age < 0 {
 		age = -age
 	}
@@ -192,7 +182,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		// award full credit for this step
 		commit.Score = 1.0
 	} else if len(commit.ReportCard.Results) == 0 {
-		// no results? that's a fail...
+		// no results? fail...
 		commit.Score = 0.0
 	} else {
 		// compute partial credit for this step
@@ -204,7 +194,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		}
 		commit.Score = float64(passed) / float64(len(commit.ReportCard.Results))
 	}
-	commit.Timestamp = &now
+	commit.UpdatedAt = now
 	commit.Signature = commit.computeSignature(Config.DaycareSecret)
 
 	res := &DaycareResponse{Commit: commit}

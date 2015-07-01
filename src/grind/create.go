@@ -93,7 +93,6 @@ func CommandCreate(context *cli.Context) {
 		Options:     cfg.Problem.Option,
 		CreatedAt:   now,
 		UpdatedAt:   now,
-		Timestamp:   &now,
 	}
 
 	// check if this is an existing problem
@@ -136,7 +135,6 @@ func CommandCreate(context *cli.Context) {
 			Files:             make(map[string]string),
 			CreatedAt:         now,
 			UpdatedAt:         now,
-			Timestamp:         &now,
 		}
 
 		// read files

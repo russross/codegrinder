@@ -32,8 +32,7 @@ type Problem struct {
 	CreatedAt   time.Time      `json:"createdAt" meddler:"created_at,localtime"`
 	UpdatedAt   time.Time      `json:"updatedAt" meddler:"updated_at,localtime"`
 
-	Signature string     `json:"signature,omitempty" meddler:"-"`
-	Timestamp *time.Time `json:"timestamp,omitempty" meddler:"-"`
+	Signature string `json:"signature,omitempty" meddler:"-"`
 
 	// only included when a problem is being created/updated
 	Commits []*Commit `json:"commits,omitempty" meddler:"-"`
@@ -60,9 +59,8 @@ type Commit struct {
 	CreatedAt         time.Time         `json:"createdAt" meddler:"created_at,localtime"`
 	UpdatedAt         time.Time         `json:"updatedAt" meddler:"updated_at,localtime"`
 
-	ProblemSignature string     `json:"problemSignature,omitempty" meddler:"-"`
-	Timestamp        *time.Time `json:"timestamp,omitempty" meddler:"-"`
-	Signature        string     `json:"signature,omitempty" meddler:"-"`
+	ProblemSignature string `json:"problemSignature,omitempty" meddler:"-"`
+	Signature        string `json:"signature,omitempty" meddler:"-"`
 }
 
 // ReportCard gives the results of a graded run

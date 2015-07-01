@@ -126,7 +126,6 @@ func CommandGrade(context *cli.Context) {
 			now := time.Now()
 			commit.CreatedAt = now
 			commit.UpdatedAt = now
-			commit.Timestamp = nil
 			commit.Signature = ""
 
 			// save this initial commit of the next step
