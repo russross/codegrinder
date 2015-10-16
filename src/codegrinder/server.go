@@ -17,7 +17,6 @@ import (
 
 	"github.com/fsouza/go-dockerclient"
 	"github.com/go-martini/martini"
-	"github.com/gorilla/websocket"
 	_ "github.com/lib/pq"
 	"github.com/martini-contrib/binding"
 	"github.com/martini-contrib/render"
@@ -25,6 +24,8 @@ import (
 	"github.com/russross/meddler"
 )
 
+// Config holds site-specific configuration data.
+// Contains a mix of Daycare and main server parameters.
 var Config struct {
 	ToolName            string   // LTI human readable name: "CodeGrinder"
 	ToolID              string   // LTI unique ID: "codegrinder"
@@ -49,11 +50,6 @@ var Config struct {
 
 var problemTypes = make(map[string]*ProblemTypeDefinition)
 var loge, logi, logd *log.Logger
-
-type Action struct {
-	Type  string
-	Files map[string]string
-}
 
 func main() {
 	// parse command line
@@ -134,7 +130,6 @@ func main() {
 		// martini service: to require an active logged-in session
 		auth := func(w http.ResponseWriter, session sessions.Session) {
 			if userID := session.Get("user_id"); userID == nil {
-				return
 				loggedHTTPErrorf(w, http.StatusUnauthorized, "authentication: no user_id found in session")
 				return
 			}
@@ -261,61 +256,6 @@ func main() {
 
 		// arguments are passed as query arguments named "arg"
 		r.Get("/api/v2/sockets/:problem_type/:action", SocketProblemTypeAction)
-
-		// set up a web handler
-		r.Get("/api/v2/sockets/python2unittest", func(w http.ResponseWriter, r *http.Request) {
-			// set up websocket
-			socket, err := websocket.Upgrade(w, r, nil, 1024, 1024)
-			if err != nil {
-				loge.Printf("websocket error: %v", err)
-				http.Error(w, "websocket error", http.StatusBadRequest)
-				return
-			}
-			loge.Printf("websocket upgraded")
-
-			// get the first message
-			var action Action
-			if err := socket.ReadJSON(&action); err != nil {
-				loge.Printf("error reading Action message: %v", err)
-				socket.Close()
-				return
-			}
-			loge.Printf("read request: type = %s", action.Type)
-
-			// launch a nanny process
-			n, err := NewNanny("codegrinder/python2", "foo")
-			if err != nil {
-				loge.Fatalf("error creating nanny")
-			}
-
-			// start a listener
-			finished := make(chan struct{})
-			go func() {
-				for event := range n.Events {
-					// feed events back to client
-					if err := socket.WriteJSON(event); err != nil {
-						loge.Printf("error writing event JSON: %v", err)
-					}
-				}
-				finished <- struct{}{}
-			}()
-
-			// grade the problem
-			rc := NewReportCard()
-			python2UnittestGrade(n, nil, nil, action.Files)
-			dump(rc)
-
-			// shutdown the nanny
-			if err := n.Shutdown(); err != nil {
-				logi.Printf("nanny shutdown error: %v", err)
-			}
-
-			// wait for listener to finish
-			close(n.Events)
-			<-finished
-
-			socket.Close()
-		})
 	}
 
 	// start web server

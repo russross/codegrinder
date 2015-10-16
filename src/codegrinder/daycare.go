@@ -10,20 +10,31 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// MaxDaycareRequestAge is the maximum age of a daycare-signed commit to be saved.
+// Any commit older than this will be rejected.
 const MaxDaycareRequestAge = 15 * time.Minute
 
+// DaycareRequest represents a single request from a client to the daycare.
+// These objects are streamed across a websockets connection.
 type DaycareRequest struct {
 	Problem *Problem `json:"problem,omitempty"`
 	Commit  *Commit  `json:"commit,omitempty"`
 	Stdin   string   `json:"stdin,omitempty"`
 }
 
+// DaycareResponse represents a single response from the daycare back to a client.
+// These objects are streamed across a websockets connection.
 type DaycareResponse struct {
 	Commit *Commit       `json:"commit,omitempty"`
 	Event  *EventMessage `json:"event,omitempty"`
 	Error  string        `json:"error,omitempty"`
 }
 
+// SocketProblemTypeAction handles a request to /sockets/:problem_type/:action
+// It expects a websocket connection, which will receive a series of DaycareRequest objects
+// and will respond with DaycareResponse objects, though not in a one-to-one fashion.
+// The first DaycareRequest must have the Problem and Commit fields present. Future requests
+// should only have Stdin present.
 func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params martini.Params) {
 	now := time.Now()
 

@@ -11,16 +11,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/codegangsta/cli"
+	"github.com/spf13/cobra"
 )
 
-func CommandGet(context *cli.Context) {
+func CommandGet(cmd *cobra.Command, args []string) {
 	mustLoadConfig()
 	now := time.Now()
 
 	// parse parameters
 	name, target := "", ""
-	args := context.Args()
 	switch len(args) {
 	case 0:
 		log.Printf("you must specify the problem to download")
@@ -31,7 +30,7 @@ func CommandGet(context *cli.Context) {
 		name = args[0]
 		target = args[1]
 	default:
-		cli.ShowSubcommandHelp(context)
+		cmd.Help()
 		return
 	}
 

@@ -9,23 +9,23 @@ import (
 	"strings"
 	"time"
 
-	"github.com/codegangsta/cli"
 	"github.com/fatih/color"
+	"github.com/spf13/cobra"
 )
 
-func CommandGrade(context *cli.Context) {
+func CommandGrade(cmd *cobra.Command, args []string) {
 	mustLoadConfig()
 	now := time.Now()
 
 	// find the directory
 	dir := ""
-	switch len(context.Args()) {
+	switch len(args) {
 	case 0:
 		dir = "."
 	case 1:
-		dir = context.Args().First()
+		dir = args[0]
 	default:
-		cli.ShowSubcommandHelp(context)
+		cmd.Help()
 		return
 	}
 

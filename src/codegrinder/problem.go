@@ -203,6 +203,10 @@ func getStepWhitelists(problem *Problem) []map[string]bool {
 	return lists
 }
 
+// ProblemStep represents a single step of a problem.
+// Anything in the root directory of Files is added to the working directory,
+// possibly overwriting existing content. The subdirectory contents of Files
+// replace all subdirectory contents in the problem from earlier steps.
 type ProblemStep struct {
 	Name        string            `json:"name"`
 	Description string            `json:"description"`
@@ -586,7 +590,7 @@ func DeleteProblem(w http.ResponseWriter, tx *sql.Tx, params martini.Params, ren
 func buildDescription(files map[string]string) (string, error) {
 	// get a list of all files in the _doc directory
 	used := make(map[string]bool)
-	for name, _ := range files {
+	for name := range files {
 		if strings.HasPrefix(name, "_doc/") {
 			used[name] = false
 		}

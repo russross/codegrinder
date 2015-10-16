@@ -41,17 +41,23 @@ type ProblemTypeAction struct {
 
 type nannyHandler func(*Nanny, []string, []string, map[string]string)
 
+// GetProblemTypes handles a request to /api/v2/problemtypes,
+// returning a complete list of problem types.
 func GetProblemTypes(w http.ResponseWriter, render render.Render) {
 	render.JSON(http.StatusOK, problemTypes)
 }
 
+// GetProblemType handles a request to /api/v2/problemtypes/:name,
+// returning a single problem type with the given name.
 func GetProblemType(w http.ResponseWriter, params martini.Params, render render.Render) {
 	name := params["name"]
 
-	if problemType, exists := problemTypes[name]; !exists {
+	problemType, exists := problemTypes[name]
+
+	if !exists {
 		loggedHTTPErrorf(w, http.StatusNotFound, "Problem type %q not found", name)
 		return
-	} else {
-		render.JSON(http.StatusOK, problemType)
 	}
+
+	render.JSON(http.StatusOK, problemType)
 }

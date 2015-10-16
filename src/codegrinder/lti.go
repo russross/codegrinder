@@ -173,7 +173,7 @@ func GetConfigXML(w http.ResponseWriter) {
 	}
 }
 
-func signXMLRequest(consumerKey, method, targetUrl, content, secret string) string {
+func signXMLRequest(consumerKey, method, targetURL, content, secret string) string {
 	sum := sha1.Sum([]byte(content))
 	bodyHash := base64.StdEncoding.EncodeToString(sum[:])
 
@@ -188,7 +188,7 @@ func signXMLRequest(consumerKey, method, targetUrl, content, secret string) stri
 	v.Set("oauth_nonce", strconv.FormatInt(time.Now().UnixNano(), 10))
 
 	// compute the signature and add it to the mix
-	sig := computeOAuthSignature(method, targetUrl, v, secret)
+	sig := computeOAuthSignature(method, targetURL, v, secret)
 	v.Set("oauth_signature", sig)
 
 	// form the Authorization header

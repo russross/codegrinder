@@ -11,6 +11,7 @@ import (
 	"github.com/russross/meddler"
 )
 
+// Course represents a single instance of a course as defined by LTI.
 type Course struct {
 	ID        int       `json:"id" meddler:"id,pk"`
 	Name      string    `json:"name" meddler:"name"`
@@ -30,8 +31,8 @@ func GetCourses(w http.ResponseWriter, r *http.Request, tx *sql.Tx, render rende
 	courses := []*Course{}
 	where := ""
 	args := []interface{}{}
-	if lti_label := r.FormValue("lti_label"); lti_label != "" {
-		where, args = addWhereEq(where, args, "lti_label", lti_label)
+	if ltiLabel := r.FormValue("lti_label"); ltiLabel != "" {
+		where, args = addWhereEq(where, args, "lti_label", ltiLabel)
 	}
 	if name := r.FormValue("name"); name != "" {
 		where, args = addWhereLike(where, args, "name", name)

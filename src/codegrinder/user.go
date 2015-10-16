@@ -12,6 +12,7 @@ import (
 	"github.com/russross/meddler"
 )
 
+// User represents a single user as defined by LTI.
 type User struct {
 	ID             int       `json:"id" meddler:"id,pk"`
 	Name           string    `json:"name" meddler:"name"`

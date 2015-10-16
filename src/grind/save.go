@@ -10,24 +10,24 @@ import (
 	"strings"
 	"time"
 
-	"github.com/codegangsta/cli"
+	"github.com/spf13/cobra"
 )
 
 const GrindAssignmentIDName = ".grind"
 
-func CommandSave(context *cli.Context) {
+func CommandSave(cmd *cobra.Command, args []string) {
 	mustLoadConfig()
 	now := time.Now()
 
 	// find the directory
 	dir := ""
-	switch len(context.Args()) {
+	switch len(args) {
 	case 0:
 		dir = "."
 	case 1:
-		dir = context.Args().First()
+		dir = args[0]
 	default:
-		cli.ShowSubcommandHelp(context)
+		cmd.Help()
 		return
 	}
 

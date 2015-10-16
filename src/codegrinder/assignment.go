@@ -11,6 +11,8 @@ import (
 	"github.com/russross/meddler"
 )
 
+// Assignment represents a single instance of a problem for a student in a course.
+// Many commits (attempts to solve the problem) are linked to an assignment.
 type Assignment struct {
 	ID                 int            `json:"id" meddler:"id,pk"`
 	CourseID           int            `json:"courseID" meddler:"course_id"`

@@ -2,18 +2,65 @@
 	"version": 0,
 	"dependencies": [
 		{
+			"importpath": "github.com/betacraft/yaag",
+			"repository": "https://github.com/betacraft/yaag",
+			"revision": "4f7abe3408200a635d421cb4ff1b54626a3e88e1",
+			"branch": "master"
+		},
+		{
+			"importpath": "github.com/cpuguy83/go-md2man/md2man",
+			"repository": "https://github.com/cpuguy83/go-md2man",
+			"revision": "71acacd42f85e5e82f70a55327789582a5200a90",
+			"branch": "master",
+			"path": "/md2man"
+		},
+		{
+			"importpath": "github.com/fatih/color",
+			"repository": "https://github.com/fatih/color",
+			"revision": "1b35f289c47d5c73c398cea8e006b7bcb6234a96",
+			"branch": "master"
+		},
+		{
+			"importpath": "github.com/inconshreveable/mousetrap",
+			"repository": "https://github.com/inconshreveable/mousetrap",
+			"revision": "76626ae9c91c4f2a10f34cad8ce83ea42c93bb75",
+			"branch": "master"
+		},
+		{
 			"importpath": "github.com/russross/blackfriday",
 			"repository": "https://github.com/russross/blackfriday",
-			"revision": "386ef80f18233ea97960e855a54382ec446c6637",
-			"branch": "master",
-			"path": ""
+			"revision": "8cec3a854e68dba10faabbe31c089abf4a3e57a6",
+			"branch": "master"
+		},
+		{
+			"importpath": "github.com/russross/gcfg",
+			"repository": "https://github.com/russross/gcfg",
+			"revision": "a61e4006af9f737e57ddeb5cb335d10b7e3cf208",
+			"branch": "master"
+		},
+		{
+			"importpath": "github.com/shiena/ansicolor",
+			"repository": "https://github.com/shiena/ansicolor",
+			"revision": "23296fbcefa1c43b2151a2c65812b71b85cf9f9b",
+			"branch": "master"
 		},
 		{
 			"importpath": "github.com/shurcooL/sanitized_anchor_name",
 			"repository": "https://github.com/shurcooL/sanitized_anchor_name",
-			"revision": "11a20b799bf22a02808c862eb6ca09f7fb38f84a",
-			"branch": "master",
-			"path": ""
+			"revision": "244f5ac324cb97e1987ef901a0081a77bfd8e845",
+			"branch": "master"
+		},
+		{
+			"importpath": "github.com/spf13/cobra",
+			"repository": "https://github.com/spf13/cobra",
+			"revision": "8b2293c74173adb0e12df6862c1ea36afac2401f",
+			"branch": "master"
+		},
+		{
+			"importpath": "github.com/spf13/pflag",
+			"repository": "https://github.com/spf13/pflag",
+			"revision": "08b1a584251b5b62f458943640fc8ebd4d50aaa5",
+			"branch": "master"
 		},
 		{
 			"importpath": "golang.org/x/net/html",
@@ -21,34 +68,6 @@
 			"revision": "dfe268fd2bb5c793f4c083803609fce9806c6f80",
 			"branch": "master",
 			"path": "/html"
-		},
-		{
-			"importpath": "github.com/codegangsta/cli",
-			"repository": "https://github.com/codegangsta/cli",
-			"revision": "616b730509ef3f11384d159cc52545639103ea86",
-			"branch": "master",
-			"path": ""
-		},
-		{
-			"importpath": "github.com/russross/gcfg",
-			"repository": "https://github.com/russross/gcfg",
-			"revision": "a61e4006af9f737e57ddeb5cb335d10b7e3cf208",
-			"branch": "master",
-			"path": ""
-		},
-		{
-			"importpath": "github.com/fatih/color",
-			"repository": "https://github.com/fatih/color",
-			"revision": "1b35f289c47d5c73c398cea8e006b7bcb6234a96",
-			"branch": "master",
-			"path": ""
-		},
-		{
-			"importpath": "github.com/shiena/ansicolor",
-			"repository": "https://github.com/shiena/ansicolor",
-			"revision": "23296fbcefa1c43b2151a2c65812b71b85cf9f9b",
-			"branch": "master",
-			"path": ""
 		}
 	]
 }

@@ -12,13 +12,14 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/codegangsta/cli"
+	"github.com/spf13/cobra"
 )
 
 const (
 	defaultHost  = "dorking.cs.dixie.edu"
 	cookiePrefix = "codegrinder_session="
 	rcFile       = ".codegrinderrc"
+	version      = "v0.1"
 )
 
 var Config struct {
@@ -28,60 +29,78 @@ var Config struct {
 
 func main() {
 	log.SetFlags(log.Ltime)
-	app := cli.NewApp()
-	app.Name = "grind"
-	app.Usage = "command-line interface to codegrinder"
-	app.Version = "0.0.1"
-	app.Authors = []cli.Author{
-		{Name: "Russ Ross", Email: "russ@russross.com"},
+
+	cmdGrind := &cobra.Command{
+		Use:   "grind",
+		Short: "command-line interface to codegrinder",
+		Long: "A command-line tool to access codegrinder\n" +
+			"by Russ Ross <russ@russross.com>",
 	}
-	app.Commands = []cli.Command{
-		{
-			Name:   "init",
-			Usage:  "connect to codegrinder server",
-			Action: CommandInit,
-		},
-		{
-			Name:   "list",
-			Usage:  "list all of your active assignments",
-			Action: CommandList,
-		},
-		{
-			Name:  "get",
-			Usage: "download an assignment to work on it locally",
-			Description: "   Give either the numeric ID (given at the start of each listing)\n" +
-				"   or the course/problem identifier (given in parentheses).\n\n" +
-				"   Use \"grind list\" to see a list of assignments available to you.\n\n" +
-				"   By default, the assignment will be stored in a directory matching the\n" +
-				"   course/problem name, but you can override this by supplying the directory\n" +
-				"   name as an additional argument.\n\n" +
-				"   Example: grind get CS-1400/cs1400-loops\n\n" +
-				"   Note: you must load an assignment through Canvas before you can access it.",
-			Action: CommandGet,
-		},
-		{
-			Name:   "save",
-			Usage:  "save your work to the server without additional action",
-			Action: CommandSave,
-		},
-		{
-			Name:   "grade",
-			Usage:  "save your work and submit it for grading",
-			Action: CommandGrade,
-		},
-		{
-			Name:   "create",
-			Usage:  "create a new problem (instructors only)",
-			Action: CommandCreate,
-			Flags: []cli.Flag{
-				cli.BoolFlag{Name: "update", Usage: "update an existing problem"},
-			},
+
+	cmdVersion := &cobra.Command{
+		Use:   "version",
+		Short: "print the version number of grind",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Println("grind " + version)
 		},
 	}
-	app.Run(os.Args)
+	cmdGrind.AddCommand(cmdVersion)
+
+	cmdInit := &cobra.Command{
+		Use:   "init",
+		Short: "connect to codegrinder server",
+		Run:   CommandInit,
+	}
+	cmdGrind.AddCommand(cmdInit)
+
+	cmdList := &cobra.Command{
+		Use:   "list",
+		Short: "list all of your active assignments",
+		Run:   CommandList,
+	}
+	cmdGrind.AddCommand(cmdList)
+
+	cmdGet := &cobra.Command{
+		Use:   "get",
+		Short: "download an assignment to work on it locally",
+		Long: "   Give either the numeric ID (given at the start of each listing)\n" +
+			"   or the course/problem identifier (given in parentheses).\n\n" +
+			"   Use \"grind list\" to see a list of assignments available to you.\n\n" +
+			"   By default, the assignment will be stored in a directory matching the\n" +
+			"   course/problem name, but you can override this by supplying the directory\n" +
+			"   name as an additional argument.\n\n" +
+			"   Example: grind get CS-1400/cs1400-loops\n\n" +
+			"   Note: you must load an assignment through Canvas before you can access it.",
+		Run: CommandGet,
+	}
+	cmdGrind.AddCommand(cmdGet)
+
+	cmdSave := &cobra.Command{
+		Use:   "save",
+		Short: "save your work to the server without additional action",
+		Run:   CommandSave,
+	}
+	cmdGrind.AddCommand(cmdSave)
+
+	cmdGrade := &cobra.Command{
+		Use:   "grade",
+		Short: "save your work and submit it for grading",
+		Run:   CommandGrade,
+	}
+	cmdGrind.AddCommand(cmdGrade)
+
+	cmdCreate := &cobra.Command{
+		Use:   "create",
+		Short: "create a new problem (instructors only)",
+		Run:   CommandCreate,
+	}
+	cmdCreate.Flags().BoolP("update", "u", false, "update an existing problem")
+	cmdGrind.AddCommand(cmdCreate)
+
+	cmdGrind.Execute()
 }
 
-func CommandInit(context *cli.Context) {
+func CommandInit(cmd *cobra.Command, args []string) {
 	fmt.Println(
 		`Please follow these steps:
 

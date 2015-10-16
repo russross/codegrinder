@@ -12,27 +12,27 @@ import (
 	"strings"
 	"time"
 
-	"github.com/codegangsta/cli"
 	"github.com/fatih/color"
 	"github.com/gorilla/websocket"
 	"github.com/russross/gcfg"
+	"github.com/spf13/cobra"
 )
 
 const ProblemConfigName string = "problem.cfg"
 
-func CommandCreate(context *cli.Context) {
+func CommandCreate(cmd *cobra.Command, args []string) {
 	mustLoadConfig()
 	now := time.Now()
 
 	// find the directory
 	d := ""
-	switch len(context.Args()) {
+	switch len(args) {
 	case 0:
 		d = "."
 	case 1:
-		d = context.Args().First()
+		d = args[0]
 	default:
-		cli.ShowSubcommandHelp(context)
+		cmd.Help()
 		return
 	}
 	dir, err := filepath.Abs(d)
@@ -101,13 +101,13 @@ func CommandCreate(context *cli.Context) {
 	switch len(existing) {
 	case 0:
 		// new problem
-		if context.Bool("update") {
+		if cmd.Flag("update").Value.String() == "true" {
 			log.Fatalf("you specified --update, but no problem with unique ID %q was found", problem.Unique)
 		}
 		log.Printf("this problem is new--no existing problem has the same unique ID")
 	case 1:
 		// update to existing problem
-		if !context.Bool("update") {
+		if cmd.Flag("update").Value.String() == "true" {
 			log.Fatalf("you did not specify --update, but a problem already exists with unique ID %q", problem.Unique)
 		}
 		log.Printf("unique ID is %s", problem.Unique)

@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/codegangsta/cli"
+	"github.com/spf13/cobra"
 )
 
-func CommandList(context *cli.Context) {
+func CommandList(cmd *cobra.Command, args []string) {
 	mustLoadConfig()
 
 	assignments := []*Assignment{}
