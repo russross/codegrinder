@@ -21,6 +21,8 @@ type User struct {
 	ImageURL       string    `json:"imageURL" meddler:"lti_image_url"`
 	CanvasLogin    string    `json:"canvasLogin" meddler:"canvas_login"`
 	CanvasID       int       `json:"canvasID" meddler:"canvas_id"`
+	Instructor     bool      `json:"instructor" meddler:"instructor"`
+	Admin          bool      `json:"admin" meddler:"admin"`
 	CreatedAt      time.Time `json:"createdAt" meddler:"created_at,localtime"`
 	UpdatedAt      time.Time `json:"updatedAt" meddler:"updated_at,localtime"`
 	LastSignedInAt time.Time `json:"lastSignedInAt" meddler:"last_signed_in_at,localtime"`
@@ -105,24 +107,16 @@ func (user *User) getInstructorCourses(db *sql.Tx) ([]int, error) {
 	}
 	courseIDs := []int{}
 	for _, elt := range assts {
-		for _, role := range strings.Split(elt.Roles, ",") {
-			if role == "Instructor" {
-				courseIDs = append(courseIDs, elt.CourseID)
-				break
-			}
+		if isInstructorRole(elt.Roles) {
+			courseIDs = append(courseIDs, elt.CourseID)
 		}
 	}
 	return courseIDs, nil
 }
 
-func (user *User) isInstructor(tx *sql.Tx) (bool, error) {
-	courses, err := user.getInstructorCourses(tx)
-	return len(courses) > 0, err
-}
-
-func (user *User) isAdministrator() bool {
-	for _, email := range Config.AdministratorEmails {
-		if email == user.Email {
+func isInstructorRole(roles string) bool {
+	for _, role := range strings.Split(roles, ",") {
+		if role == "Instructor" {
 			return true
 		}
 	}

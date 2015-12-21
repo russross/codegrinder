@@ -33,16 +33,39 @@ func getContainerID(msg string) string {
 	return groups[1]
 }
 
-func NewNanny(image, name string) (*Nanny, error) {
+func NewNanny(problemType *ProblemTypeDefinition, problem *Problem, name string) (*Nanny, error) {
 	// create a container
-	container, err := dockerClient.CreateContainer(docker.CreateContainerOptions{
-		Name: name,
-		Config: &docker.Config{
-			NetworkDisabled: true,
-			Cmd:             []string{"/bin/sh", "-c", "sleep infinity"},
-			Image:           image,
+	mem := problemType.MaxMemory * 1024 * 1024
+	config := &docker.Config{
+		Hostname:        name,
+		Memory:          int64(mem),
+		MemorySwap:      -1,
+		NetworkDisabled: true,
+		Cmd:             []string{"/bin/sh", "-c", "sleep infinity"},
+		Image:           problemType.Image,
+	}
+	hostConfig := &docker.HostConfig{
+		CapDrop: []string{
+			"NET_RAW",
+			"NET_BIND_SERVICE",
+			"AUDIT_READ",
+			"AUDIT_WRITE",
+			"DAC_OVERRIDE",
+			"SETFCAP",
+			"SETPCAP",
+			"SETGID",
+			"SETUID",
+			"MKNOD",
+			"CHOWN",
+			"FOWNER",
+			"FSETID",
+			"KILL",
+			"SYS_CHROOT",
 		},
-	})
+		Ulimits: []docker.ULimit{},
+	}
+
+	container, err := dockerClient.CreateContainer(docker.CreateContainerOptions{Name: name, Config: config, HostConfig: hostConfig})
 	if err != nil {
 		if apiError, ok := err.(*docker.Error); ok && apiError.Status == http.StatusConflict && getContainerID(apiError.Message) != "" {
 			// container already exists with that name--try killing it
@@ -56,14 +79,7 @@ func NewNanny(image, name string) (*Nanny, error) {
 			}
 
 			// try it one more time
-			container, err = dockerClient.CreateContainer(docker.CreateContainerOptions{
-				Name: name,
-				Config: &docker.Config{
-					NetworkDisabled: true,
-					Cmd:             []string{"/bin/sh", "-c", "sleep infinity"},
-					Image:           image,
-				},
-			})
+			container, err = dockerClient.CreateContainer(docker.CreateContainerOptions{Name: name, Config: config, HostConfig: hostConfig})
 		}
 		if err != nil {
 			logi.Printf("NewNanny->CreateContainer: %#v", err)

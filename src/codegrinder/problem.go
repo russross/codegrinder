@@ -95,7 +95,9 @@ func (problem *Problem) computeSignature(secret string) string {
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(encode(v)))
 	sum := mac.Sum(nil)
-	return base64.StdEncoding.EncodeToString(sum)
+	sig := base64.StdEncoding.EncodeToString(sum)
+	logi.Printf("signature: %s data: %s", sig, encode(v))
+	return sig
 }
 
 // filter out files with underscore prefix for non-instructors
@@ -270,7 +272,7 @@ func GetProblems(w http.ResponseWriter, r *http.Request, tx *sql.Tx, render rend
 
 	// get the problems
 	problems := []*Problem{}
-	fields := "id, name, unique_id, description, problem_type, confirmed, tags, options, created_at, updated_at, signature, signature_timestamp"
+	fields := "id, name, unique_id, description, problem_type, tags, options, confirmed, created_at, updated_at, signature"
 	if withSteps {
 		fields += ", steps"
 	}

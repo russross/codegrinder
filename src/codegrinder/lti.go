@@ -423,7 +423,7 @@ func getUpdateUser(tx *sql.Tx, form *LTIRequest, now time.Time) (*User, error) {
 		user.CanvasLogin != form.CanvasUserLoginID ||
 		user.CanvasID != form.CanvasUserID
 
-		// make any changes
+	// make any changes
 	user.Name = form.PersonNameFull
 	user.Email = form.PersonContactEmailPrimary
 	user.LtiID = form.UserID
@@ -526,6 +526,18 @@ func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Co
 	asst.ProblemID = problem.ID
 	asst.UserID = user.ID
 	asst.Roles = form.Roles
+
+	// first time we have seen this user reported as an instructor?
+	if !user.Instructor && isInstructorRole(asst.Roles) {
+		logi.Printf("user %d (%s) promoted to instructor", user.ID, user.Email)
+		user.Instructor = true
+		user.UpdatedAt = now
+		if err := meddler.Save(tx, "users", user); err != nil {
+			loge.Printf("db error saving user %d (%s): %v", user.ID, user.Email, err)
+			return nil, err
+		}
+	}
+
 	asst.Points = form.CanvasAssignmentPointsPossible
 	if form.PersonSourcedID != "" {
 		asst.GradeID = form.PersonSourcedID

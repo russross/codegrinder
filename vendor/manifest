@@ -21,6 +21,12 @@
 			"branch": "master"
 		},
 		{
+			"importpath": "github.com/fsouza/go-dockerclient",
+			"repository": "https://github.com/fsouza/go-dockerclient",
+			"revision": "4ebe9fc43840fefb355b61300580e34130d99f6e",
+			"branch": "master"
+		},
+		{
 			"importpath": "github.com/inconshreveable/mousetrap",
 			"repository": "https://github.com/inconshreveable/mousetrap",
 			"revision": "76626ae9c91c4f2a10f34cad8ce83ea42c93bb75",

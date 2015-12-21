@@ -107,7 +107,7 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 		log.Printf("this problem is new--no existing problem has the same unique ID")
 	case 1:
 		// update to existing problem
-		if cmd.Flag("update").Value.String() == "true" {
+		if cmd.Flag("update").Value.String() == "false" {
 			log.Fatalf("you did not specify --update, but a problem already exists with unique ID %q", problem.Unique)
 		}
 		log.Printf("unique ID is %s", problem.Unique)

@@ -145,7 +145,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	// launch a nanny process
 	nannyName := fmt.Sprintf("nanny-user-%d", commit.UserID)
 	logi.Printf("launching container for %s", nannyName)
-	n, err := NewNanny(problemType.Image, nannyName)
+	n, err := NewNanny(problemType, problem, nannyName)
 	if err != nil {
 		logAndTransmitErrorf("error creating nanny: %v", err)
 		return

@@ -27,25 +27,24 @@ import (
 // Config holds site-specific configuration data.
 // Contains a mix of Daycare and main server parameters.
 var Config struct {
-	ToolName            string   // LTI human readable name: "CodeGrinder"
-	ToolID              string   // LTI unique ID: "codegrinder"
-	ToolDescription     string   // LTI description: "Programming exercises with grading"
-	OAuthSharedSecret   string   // LTI authentication shared secret. Must match that given to Canvas course: "asdf..."
-	PublicURL           string   // Base URL for the site: "https://your.host.goes.here"
-	PublicWSURL         string   // Base URL for websockets: "wss://your.host.goes.here"
-	HTTPAddress         string   // Address to bind on for HTTP connections: ":80"
-	HTTPSAddress        string   // Address to bind on for HTTPS connections: ":443"
-	CertFile            string   // Full path of TLS certificate file: "/etc/codegrinder/hostname.crt"
-	KeyFile             string   // Full path of TLS key file: "/etc/codegrinder/hostname.key"
-	StaticDir           string   // Full path of directory holding static files to serve: "/home/foo/codegrinder/client"
-	SessionSecret       string   // Random string used to sign cookie sessions: "asdf..."
-	DaycareSecret       string   // Random string used to sign daycare requests: "asdf..."
-	PostgresHost        string   // Host parameter for Postgres: "/var/run/postgresql"
-	PostgresPort        string   // Port parameter for Postgres: "5432"
-	PostgresUsername    string   // Username parameter for Postgres: "codegrinder"
-	PostgresPassword    string   // Password parameter for Postgres: "super$trong"
-	PostgresDatabase    string   // Database parameter for Postgres: "codegrinder"
-	AdministratorEmails []string // list of email addresses of administrators: [ "foo@bar.com", "baz@goo.edu" ]
+	ToolName          string // LTI human readable name: "CodeGrinder"
+	ToolID            string // LTI unique ID: "codegrinder"
+	ToolDescription   string // LTI description: "Programming exercises with grading"
+	OAuthSharedSecret string // LTI authentication shared secret. Must match that given to Canvas course: "asdf..."
+	PublicURL         string // Base URL for the site: "https://your.host.goes.here"
+	PublicWSURL       string // Base URL for websockets: "wss://your.host.goes.here"
+	HTTPAddress       string // Address to bind on for HTTP connections: ":80"
+	HTTPSAddress      string // Address to bind on for HTTPS connections: ":443"
+	CertFile          string // Full path of TLS certificate file: "/etc/codegrinder/hostname.crt"
+	KeyFile           string // Full path of TLS key file: "/etc/codegrinder/hostname.key"
+	StaticDir         string // Full path of directory holding static files to serve: "/home/foo/codegrinder/client"
+	SessionSecret     string // Random string used to sign cookie sessions: "asdf..."
+	DaycareSecret     string // Random string used to sign daycare requests: "asdf..."
+	PostgresHost      string // Host parameter for Postgres: "/var/run/postgresql"
+	PostgresPort      string // Port parameter for Postgres: "5432"
+	PostgresUsername  string // Username parameter for Postgres: "codegrinder"
+	PostgresPassword  string // Password parameter for Postgres: "super$trong"
+	PostgresDatabase  string // Database parameter for Postgres: "codegrinder"
 }
 
 var problemTypes = make(map[string]*ProblemTypeDefinition)
@@ -166,13 +165,10 @@ func main() {
 
 		// martini service: require logged in user to be an instructor or administrator (requires withCurrentUser)
 		instructorOnly := func(w http.ResponseWriter, tx *sql.Tx, currentUser *User) {
-			if currentUser.isAdministrator() {
+			if currentUser.Admin {
 				return
 			}
-			if instructor, err := currentUser.isInstructor(tx); err != nil {
-				loggedHTTPErrorf(w, http.StatusInternalServerError, "db error checking if user %d (%s) is an instructor: %v", currentUser.ID, currentUser.Email, err)
-				return
-			} else if !instructor {
+			if !currentUser.Instructor {
 				loggedHTTPErrorf(w, http.StatusUnauthorized, "user %d (%s) is not an instructor", currentUser.ID, currentUser.Email)
 				return
 			}
@@ -180,7 +176,7 @@ func main() {
 
 		// martini service: require logged in user to be an administrator (requires withCurrentUser)
 		administratorOnly := func(w http.ResponseWriter, currentUser *User) {
-			if !currentUser.isAdministrator() {
+			if !currentUser.Admin {
 				loggedHTTPErrorf(w, http.StatusUnauthorized, "user %d (%s) is not an administrator", currentUser.ID, currentUser.Email)
 				return
 			}
