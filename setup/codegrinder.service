@@ -1,0 +1,11 @@
+[Unit]
+Description=Codegrinder main service
+Requires=postgresql.service
+After=postgresql.service
+
+[Service]
+Type=simple
+User=russ
+ExecStart=/home/russ/codegrinder/bin/codegrinder -config=/home/russ/codegrinder/run/config.json -secretary -daycare
+Restart=always
+RestartSec=5

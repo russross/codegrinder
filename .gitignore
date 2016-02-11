@@ -1,6 +1,5 @@
 bin
 pkg
-run
-*.swp
-config.json
+local
 sample
+*.swp
