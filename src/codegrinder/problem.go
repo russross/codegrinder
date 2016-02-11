@@ -96,7 +96,7 @@ func (problem *Problem) computeSignature(secret string) string {
 	mac.Write([]byte(encode(v)))
 	sum := mac.Sum(nil)
 	sig := base64.StdEncoding.EncodeToString(sum)
-	logi.Printf("signature: %s data: %s", sig, encode(v))
+	log.Printf("signature: %s data: %s", sig, encode(v))
 	return sig
 }
 
@@ -239,12 +239,12 @@ func (step *ProblemStep) filterIncoming() {
 		if (len(parts) < 2 || !directoryWhitelist[parts[0]]) && utf8.ValidString(contents) {
 			fixed = fixLineEndings(contents)
 			if fixed != contents {
-				logi.Printf("fixed line endings for %s", name)
+				log.Printf("fixed line endings for %s", name)
 			}
 		} else if utf8.ValidString(contents) {
 			fixed = fixNewLines(contents)
 			if fixed != contents {
-				logi.Printf("fixed newlines for %s", name)
+				log.Printf("fixed newlines for %s", name)
 			}
 		}
 		clean[name] = fixed
@@ -322,7 +322,7 @@ func GetProblem(w http.ResponseWriter, tx *sql.Tx, params martini.Params, render
 
 	// verify signature
 	if problem.computeSignature(Config.DaycareSecret) != problem.Signature {
-		loge.Printf("SIGNATURE MISMATCH: found %s but expected %s", problem.computeSignature(Config.DaycareSecret), problem.Signature)
+		log.Printf("SIGNATURE MISMATCH: found %s but expected %s", problem.computeSignature(Config.DaycareSecret), problem.Signature)
 	}
 	render.JSON(http.StatusOK, problem)
 }
@@ -626,7 +626,7 @@ func buildDescription(files map[string]string) (string, error) {
 	// parse the html
 	doc, err := html.Parse(strings.NewReader(justHTML))
 	if err != nil {
-		loge.Printf("Error parsing index.html: %v", err)
+		log.Printf("Error parsing index.html: %v", err)
 		return "", err
 	}
 	if doc == nil {
@@ -657,7 +657,7 @@ func buildDescription(files map[string]string) (string, error) {
 						}
 
 						// base64 encode the image
-						logi.Printf("encoding image %s as base64 data URI", a.Val)
+						log.Printf("encoding image %s as base64 data URI", a.Val)
 						used["_doc/"+a.Val] = true
 						s := base64.StdEncoding.EncodeToString([]byte(contents))
 						a.Val = fmt.Sprintf("data:%s;base64,%s", mime, s)
@@ -682,14 +682,14 @@ func buildDescription(files map[string]string) (string, error) {
 	// warn about unused files in _doc
 	for name, u := range used {
 		if !u {
-			logi.Printf("Warning: %s was not used in the description", name)
+			log.Printf("Warning: %s was not used in the description", name)
 		}
 	}
 
 	// re-render it
 	var buf bytes.Buffer
 	if err = html.Render(&buf, doc); err != nil {
-		loge.Printf("Error rendering HTML: %v", err)
+		log.Printf("Error rendering HTML: %v", err)
 		return "", err
 	}
 

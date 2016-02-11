@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/hmac"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -58,7 +59,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	defer socket.Close()
 	logAndTransmitErrorf := func(format string, args ...interface{}) {
 		msg := fmt.Sprintf(format, args...)
-		loge.Print(msg)
+		log.Print(msg)
 		res := &DaycareResponse{Error: msg}
 		if err := socket.WriteJSON(res); err != nil {
 			// what can we do? we already logged the error
@@ -144,7 +145,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 
 	// launch a nanny process
 	nannyName := fmt.Sprintf("nanny-user-%d", commit.UserID)
-	logi.Printf("launching container for %s", nannyName)
+	log.Printf("launching container for %s", nannyName)
 	n, err := NewNanny(problemType, problem, nannyName)
 	if err != nil {
 		logAndTransmitErrorf("error creating nanny: %v", err)

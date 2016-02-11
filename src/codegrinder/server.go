@@ -8,10 +8,8 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
-	"log/syslog"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -48,7 +46,6 @@ var Config struct {
 }
 
 var problemTypes = make(map[string]*ProblemTypeDefinition)
-var loge, logi, logd *log.Logger
 
 func main() {
 	// parse command line
@@ -57,8 +54,6 @@ func main() {
 	var secretary, daycare bool
 	flag.BoolVar(&secretary, "secretary", true, "Serve the secretary role")
 	flag.BoolVar(&daycare, "daycare", true, "Serve the daycare role")
-	var useSyslog bool
-	flag.BoolVar(&useSyslog, "usesyslog", false, "Send logs to syslog")
 	flag.Parse()
 
 	if !secretary && !daycare {
@@ -74,9 +69,6 @@ func main() {
 		}
 	}
 
-	// set up logging
-	setupLogging("codegrinder", useSyslog)
-
 	// set up martini
 	r := martini.NewRouter()
 	m := martini.New()
@@ -86,7 +78,6 @@ func main() {
 	m.MapTo(r, (*martini.Routes)(nil))
 	m.Action(r.Handle)
 
-	m.Map(logi)
 	m.Use(render.Renderer(render.Options{IndentJSON: true}))
 	m.Use(sessions.Sessions("codegrinder_session", sessions.NewCookieStore([]byte(Config.SessionSecret))))
 
@@ -118,7 +109,7 @@ func main() {
 				}
 			} else {
 				// rollback
-				logd.Printf("rolling back transaction")
+				log.Printf("rolling back transaction")
 				if err := tx.Rollback(); err != nil {
 					loggedHTTPErrorf(w, http.StatusInternalServerError, "db error rolling back transaction: %v", err)
 					return
@@ -244,10 +235,10 @@ func main() {
 		var err error
 		dockerClient, err = docker.NewVersionedClient("unix:///var/run/docker.sock", "1.18")
 		if err != nil {
-			loge.Fatalf("NewVersionedClient: %v", err)
+			log.Fatalf("NewVersionedClient: %v", err)
 		}
 		if err = dockerClient.Ping(); err != nil {
-			loge.Fatalf("Ping: %v", err)
+			log.Fatalf("Ping: %v", err)
 		}
 
 		// arguments are passed as query arguments named "arg"
@@ -255,7 +246,7 @@ func main() {
 	}
 
 	// start web server
-	logi.Printf("starting http -> https forwarder")
+	log.Printf("starting http -> https forwarder")
 	go http.ListenAndServe(Config.HTTPAddress, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// get the address of the client
 		addr := r.Header.Get("X-Real-IP")
@@ -277,40 +268,20 @@ func main() {
 			return
 		}
 		u.Path = r.URL.Path
-		logi.Printf("redirecting http request from %s to %s", addr, u.String())
+		log.Printf("redirecting http request from %s to %s", addr, u.String())
 		http.Redirect(w, r, u.String(), http.StatusMovedPermanently)
 	}))
 
-	logi.Printf("accepting https connections at %s", Config.HTTPSAddress)
+	log.Printf("accepting https connections at %s", Config.HTTPSAddress)
 	tls := &tls.Config{MinVersion: tls.VersionTLS10}
 	server := &http.Server{Addr: Config.HTTPSAddress, Handler: m, TLSConfig: tls}
 	if err := server.ListenAndServeTLS(Config.CertFile, Config.KeyFile); err != nil {
-		loge.Fatalf("ListenAndServeTLS: %v", err)
-	}
-}
-
-func setupLogging(tag string, useSyslog bool) {
-	if useSyslog {
-		f := func(priority syslog.Priority, prefix string, flags int) *log.Logger {
-			s, err := syslog.New(priority, tag)
-			if err != nil {
-				loge.Fatalf("error setting up logger: %v", err)
-			}
-			return log.New(s, prefix, flags)
-		}
-		loge = log.New(os.Stderr, "[e] ", 0)
-		loge = f(syslog.LOG_ERR, "[e] ", 0)
-		logi = f(syslog.LOG_INFO, "[i] ", 0)
-		logd = f(syslog.LOG_DEBUG, "[d] ", 0)
-	} else {
-		loge = log.New(os.Stderr, "[e] ", log.Ltime|log.Lmicroseconds)
-		logi = log.New(os.Stderr, "[i] ", log.Ltime|log.Lmicroseconds)
-		logd = log.New(os.Stderr, "[d] ", log.Ltime|log.Lmicroseconds)
+		log.Fatalf("ListenAndServeTLS: %v", err)
 	}
 }
 
 func setupDB(host, port, user, password, database string) *sql.DB {
-	logi.Printf("connecting to database at host=%s port=%s", host, port)
+	log.Printf("connecting to database at host=%s port=%s", host, port)
 	meddler.Default = meddler.PostgreSQL
 	parts := []string{"sslmode=disable"}
 	if host != "" {
@@ -333,9 +304,9 @@ func setupDB(host, port, user, password, database string) *sql.DB {
 	db, err := sql.Open("postgres", pg)
 	if err != nil {
 		delay := 5 * time.Second
-		loge.Printf("error opening database: %v", err)
+		log.Printf("error opening database: %v", err)
 		time.Sleep(delay)
-		loge.Fatalf("slept for %v", delay)
+		log.Fatalf("slept for %v", delay)
 	}
 	return db
 }

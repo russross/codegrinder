@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"runtime"
 	"strings"
@@ -11,7 +12,7 @@ import (
 func mustMarshal(elt interface{}) []byte {
 	raw, err := json.Marshal(elt)
 	if err != nil {
-		loge.Fatalf("json Marshal error for % #v", elt)
+		log.Fatalf("json Marshal error for % #v", elt)
 	}
 	return raw
 }
@@ -43,12 +44,12 @@ func fixNewLines(s string) string {
 
 func loggedHTTPErrorf(w http.ResponseWriter, status int, format string, params ...interface{}) {
 	msg := fmt.Sprintf(format, params...)
-	loge.Print(logPrefix() + msg)
+	log.Print(logPrefix() + msg)
 	http.Error(w, msg, status)
 }
 
 func loggedErrorf(f string, params ...interface{}) error {
-	loge.Print(logPrefix() + fmt.Sprintf(f, params...))
+	log.Print(logPrefix() + fmt.Sprintf(f, params...))
 	return fmt.Errorf(f, params...)
 }
 

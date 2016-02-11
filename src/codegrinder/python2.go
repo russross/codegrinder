@@ -134,7 +134,7 @@ func init() {
 }
 
 func python2UnittestGrade(n *Nanny, args []string, options []string, files map[string]string) {
-	logi.Printf("python2UnittestGrade")
+	log.Printf("python2UnittestGrade")
 
 	// put the files in the container
 	if err := n.PutFiles(files); err != nil {

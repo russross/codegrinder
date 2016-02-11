@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -144,14 +145,14 @@ func (commit *Commit) filterIncoming(whitelist map[string]bool) {
 			if len(filepath.SplitList(name)) == 1 {
 				clean[name] = fixLineEndings(contents)
 			} else {
-				logi.Printf("filtered out %s, which is in a subdirectory", name)
+				log.Printf("filtered out %s, which is in a subdirectory", name)
 			}
 		} else {
 			// only keep files on the whitelist
 			if whitelist[name] {
 				clean[name] = fixLineEndings(contents)
 			} else {
-				logi.Printf("filtered out %s, which is not on the problem step whitelist", name)
+				log.Printf("filtered out %s, which is not on the problem step whitelist", name)
 			}
 		}
 	}
@@ -196,12 +197,12 @@ func (commit *Commit) compress() {
 	}
 
 	if overflow > 0 {
-		logi.Printf("transcript compressed from %d to %d events, %d bytes discarded", len(commit.Transcript), len(out), overflow)
+		log.Printf("transcript compressed from %d to %d events, %d bytes discarded", len(commit.Transcript), len(out), overflow)
 	} else if len(commit.Transcript) != len(out) {
-		logi.Printf("transcript compressed from %d to %d events", len(commit.Transcript), len(out))
+		log.Printf("transcript compressed from %d to %d events", len(commit.Transcript), len(out))
 	}
 	if len(out) > transcriptEventCountLimit {
-		logi.Printf("transcript truncated from %d to %d events", len(out), transcriptEventCountLimit)
+		log.Printf("transcript truncated from %d to %d events", len(out), transcriptEventCountLimit)
 		out = out[:transcriptEventCountLimit]
 	}
 

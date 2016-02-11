@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"sort"
@@ -244,7 +245,7 @@ func computeOAuthSignature(method, urlString string, parameters url.Values, secr
 	// make sure scheme and host are lower case
 	u, err := url.Parse(urlString)
 	if err != nil {
-		loge.Printf("Error parsing URI: %v", err)
+		log.Printf("Error parsing URI: %v", err)
 		return ""
 	}
 	u.Scheme = strings.ToLower(u.Scheme)
@@ -397,7 +398,7 @@ func LtiProblems(w http.ResponseWriter, r *http.Request, tx *sql.Tx, form LTIReq
 			url.QueryEscape(form.LaunchPresentationReturnURL)),
 	}
 
-	logi.Printf("problem picker redirecting to %s", u.String())
+	log.Printf("problem picker redirecting to %s", u.String())
 	http.Redirect(w, r, u.String(), http.StatusSeeOther)
 }
 
@@ -406,10 +407,10 @@ func getUpdateUser(tx *sql.Tx, form *LTIRequest, now time.Time) (*User, error) {
 	user := new(User)
 	if err := meddler.QueryRow(tx, user, `SELECT * FROM users WHERE lti_id = $1`, form.UserID); err != nil {
 		if err != sql.ErrNoRows {
-			loge.Printf("db error loading user %s (%s): %v", form.UserID, form.PersonContactEmailPrimary, err)
+			log.Printf("db error loading user %s (%s): %v", form.UserID, form.PersonContactEmailPrimary, err)
 			return nil, err
 		}
-		logi.Printf("creating new user (%s)", form.PersonContactEmailPrimary)
+		log.Printf("creating new user (%s)", form.PersonContactEmailPrimary)
 		user.ID = 0
 		user.CreatedAt = now
 		user.UpdatedAt = now
@@ -432,14 +433,14 @@ func getUpdateUser(tx *sql.Tx, form *LTIRequest, now time.Time) (*User, error) {
 	user.CanvasID = form.CanvasUserID
 	if user.ID > 0 && changed {
 		// if something changed, note the update time
-		logi.Printf("user %d (%s) updated", user.ID, user.Email)
+		log.Printf("user %d (%s) updated", user.ID, user.Email)
 		user.UpdatedAt = now
 	}
 
 	// always save to note the last signed in time
 	user.LastSignedInAt = now
 	if err := meddler.Save(tx, "users", user); err != nil {
-		loge.Printf("db error updating user %s (%s): %v", user.LtiID, user.Email, err)
+		log.Printf("db error updating user %s (%s): %v", user.LtiID, user.Email, err)
 		return nil, err
 	}
 
@@ -451,10 +452,10 @@ func getUpdateCourse(tx *sql.Tx, form *LTIRequest, now time.Time) (*Course, erro
 	course := new(Course)
 	if err := meddler.QueryRow(tx, course, `SELECT * FROM courses WHERE lti_id = $1`, form.ContextID); err != nil {
 		if err != sql.ErrNoRows {
-			loge.Printf("db error loading course %s (%s): %v", form.ContextID, form.ContextTitle, err)
+			log.Printf("db error loading course %s (%s): %v", form.ContextID, form.ContextTitle, err)
 			return nil, err
 		}
-		logi.Printf("creating new course %s (%s)", form.ContextID, form.ContextTitle)
+		log.Printf("creating new course %s (%s)", form.ContextID, form.ContextTitle)
 		course.ID = 0
 		course.CreatedAt = now
 		course.UpdatedAt = now
@@ -474,11 +475,11 @@ func getUpdateCourse(tx *sql.Tx, form *LTIRequest, now time.Time) (*Course, erro
 	if course.ID < 1 || changed {
 		// if something changed, note the update time and save
 		if course.ID > 0 {
-			logi.Printf("course %d (%s) updated", course.ID, course.Name)
+			log.Printf("course %d (%s) updated", course.ID, course.Name)
 		}
 		course.UpdatedAt = now
 		if err := meddler.Save(tx, "courses", course); err != nil {
-			loge.Printf("db error saving course %s (%s): %v", course.LtiID, course.Name, err)
+			log.Printf("db error saving course %s (%s): %v", course.LtiID, course.Name, err)
 			return nil, err
 		}
 	}
@@ -493,11 +494,11 @@ func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Co
 		course.ID, problem.ID, user.ID)
 	if err != nil {
 		if err != sql.ErrNoRows {
-			loge.Printf("db error loading assignment for course %d, problem %d, user %d: %v", course.ID, problem.ID, user.ID, err)
+			log.Printf("db error loading assignment for course %d, problem %d, user %d: %v", course.ID, problem.ID, user.ID, err)
 			return nil, err
 		}
 
-		logi.Printf("creating new assignment for course %d (%s), problem %d (%s), user %d: %s (%s)",
+		log.Printf("creating new assignment for course %d (%s), problem %d (%s), user %d: %s (%s)",
 			course.ID, course.Name, problem.ID, problem.Name, user.ID, user.Name, user.Email)
 		asst.ID = 0
 		asst.CreatedAt = now
@@ -529,11 +530,11 @@ func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Co
 
 	// first time we have seen this user reported as an instructor?
 	if !user.Instructor && isInstructorRole(asst.Roles) {
-		logi.Printf("user %d (%s) promoted to instructor", user.ID, user.Email)
+		log.Printf("user %d (%s) promoted to instructor", user.ID, user.Email)
 		user.Instructor = true
 		user.UpdatedAt = now
 		if err := meddler.Save(tx, "users", user); err != nil {
-			loge.Printf("db error saving user %d (%s): %v", user.ID, user.Email, err)
+			log.Printf("db error saving user %d (%s): %v", user.ID, user.Email, err)
 			return nil, err
 		}
 	}
@@ -554,19 +555,19 @@ func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Co
 	if asst.ID < 1 || changed {
 		// if something changed, note the update time and save
 		if asst.ID > 0 {
-			logi.Printf("assignment %d (course %d (%s), problem %d (%s), user %d (%s) updated",
+			log.Printf("assignment %d (course %d (%s), problem %d (%s), user %d (%s) updated",
 				asst.ID, course.ID, course.Name, problem.ID, problem.Name, user.ID, user.Email)
 		}
 		asst.UpdatedAt = now
 		if err := meddler.Save(tx, "assignments", asst); err != nil {
-			loge.Printf("db error saving assignment for course %d, problem %d, user %d: %v", course.ID, problem.ID, user.ID, err)
-			loge.Printf("LtiID (resource_link_id) = %v, GradeID = %v", asst.LtiID, asst.GradeID)
+			log.Printf("db error saving assignment for course %d, problem %d, user %d: %v", course.ID, problem.ID, user.ID, err)
+			log.Printf("LtiID (resource_link_id) = %v, GradeID = %v", asst.LtiID, asst.GradeID)
 
 			// dump the request to the logs for debugging purposes
 			if raw, err := json.MarshalIndent(form, ">>>>", "    "); err == nil {
-				logi.Printf("LTI Request dump:")
+				log.Printf("LTI Request dump:")
 				for _, line := range strings.Split(string(raw), "\n") {
-					logi.Print(line)
+					log.Print(line)
 				}
 			}
 
@@ -583,18 +584,18 @@ func saveGrade(tx *sql.Tx, commit *Commit, asst *Assignment, user *User) error {
 	}
 
 	if asst.GradeID == "" {
-		logi.Printf("cannot post grade for assignment %d user %d because no grade ID is present", asst.ID, asst.UserID)
+		log.Printf("cannot post grade for assignment %d user %d because no grade ID is present", asst.ID, asst.UserID)
 		return nil
 	}
 	if asst.OutcomeURL == "" {
-		logi.Printf("cannot post grade for assignment %d user %d because no outcome URL is present", asst.ID, asst.UserID)
+		log.Printf("cannot post grade for assignment %d user %d because no outcome URL is present", asst.ID, asst.UserID)
 		return nil
 	}
 
 	// get the problem
 	problem := new(Problem)
 	if err := meddler.Load(tx, "problems", problem, int64(asst.ProblemID)); err != nil {
-		loge.Printf("db error getting problem %d: %v", asst.ProblemID, err)
+		log.Printf("db error getting problem %d: %v", asst.ProblemID, err)
 		return err
 	}
 
@@ -619,7 +620,7 @@ func saveGrade(tx *sql.Tx, commit *Commit, asst *Assignment, user *User) error {
 				}
 				partial := float64(passed) * step.ScoreWeight / float64(len(commit.ReportCard.Results))
 				score += partial
-				//logi.Printf("passed %d/%d on this step", passed, len(commit.ReportCard.Results))
+				//log.Printf("passed %d/%d on this step", passed, len(commit.ReportCard.Results))
 			}
 			foundCurrent = true
 		} else if !foundCurrent {
@@ -659,7 +660,7 @@ func saveGrade(tx *sql.Tx, commit *Commit, asst *Assignment, user *User) error {
 
 	raw, err := xml.MarshalIndent(report, "", "  ")
 	if err != nil {
-		loge.Printf("error rendering XML grade response: %v", err)
+		log.Printf("error rendering XML grade response: %v", err)
 		return err
 	}
 	result := fmt.Sprintf("%s%s\n", xml.Header, raw)
@@ -670,19 +671,19 @@ func saveGrade(tx *sql.Tx, commit *Commit, asst *Assignment, user *User) error {
 	// POST the grade
 	req, err := http.NewRequest("POST", outcomeURL, strings.NewReader(result))
 	if err != nil {
-		loge.Printf("error preparing grade request: %v", err)
+		log.Printf("error preparing grade request: %v", err)
 		return err
 	}
 	req.Header.Set("Authorization", auth)
 	req.Header.Set("Content-Type", "application/xml")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		loge.Printf("error sending grade request: %v", err)
+		log.Printf("error sending grade request: %v", err)
 		return err
 	}
 	resp.Body.Close()
 	if resp.StatusCode == http.StatusOK {
-		logi.Printf("grade of %0.4f posted for %s (%s)", grade, user.Name, user.Email)
+		log.Printf("grade of %0.4f posted for %s (%s)", grade, user.Name, user.Email)
 	} else {
 		return loggedErrorf("result status %d (%s) when posting grade for user %d", resp.StatusCode, resp.Status, asst.UserID)
 	}
