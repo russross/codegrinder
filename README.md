@@ -1,14 +1,12 @@
 Installation
 ============
 
-### Install kernel 4.0 from sid
-
-* enable memory and swap accounting in grub bootline
-
 ### Install postgres
+
+* Create a database and user, set up schema using setup/schema.sql
 
 ### Install Go
 
-### Install Docker
+* To build, run ./build.sh
 
-* add "-s overlay" in /lib/systemd/system/docker.service
+### Install Docker
