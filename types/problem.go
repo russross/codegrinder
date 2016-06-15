@@ -25,11 +25,12 @@ var BeginningOfTime = time.Date(2016, 1, 1, 0, 0, 0, 0, time.UTC)
 type ProblemType struct {
 	Name        string                        `json:"name"`
 	Image       string                        `json:"image"`
-	MaxCPU      int                           `json:"maxcpu"`
-	MaxFD       int                           `json:"maxfd"`
-	MaxFileSize int                           `json:"maxfilesize"`
-	MaxMemory   int                           `json:"maxmemory"`
-	MaxThreads  int                           `json:"maxthreads"`
+	MaxCPU      int                           `json:"maxCPU"`
+	MaxClock    int                           `json:"maxClock"`
+	MaxFD       int                           `json:"maxFD"`
+	MaxFileSize int                           `json:"maxFileSize"`
+	MaxMemory   int                           `json:"maxMemory"`
+	MaxThreads  int                           `json:"maxThreads"`
 	Actions     map[string]*ProblemTypeAction `json:"actions"`
 	Files       map[string]string             `json:"files,omitempty"`
 }
@@ -61,7 +62,7 @@ type Problem struct {
 // replace all subdirectory contents in the problem from earlier steps.
 type ProblemStep struct {
 	ProblemID    int64             `json:"problemID" meddler:"problem_id"`
-	Step         int64             `json:"step" meddler:"step"`
+	Step         int64             `json:"step" meddler:"step"` // note: one-based
 	Note         string            `json:"note" meddler:"note"`
 	Instructions string            `json:"instructions" meddler:"instructions"`
 	Weight       float64           `json:"weight" meddler:"weight"`

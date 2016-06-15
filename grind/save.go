@@ -10,10 +10,11 @@ import (
 	"strings"
 	"time"
 
+	. "github.com/russross/codegrinder/types"
 	"github.com/spf13/cobra"
 )
 
-const GrindAssignmentIDName = ".grind"
+const DotFile = ".grind"
 
 func CommandSave(cmd *cobra.Command, args []string) {
 	mustLoadConfig()
@@ -46,7 +47,7 @@ func gather(now time.Time, dir string) (*Problem, *Assignment, *Commit) {
 	// find the .grind file containing the commit
 	abs := false
 	for {
-		path := filepath.Join(dir, GrindAssignmentIDName)
+		path := filepath.Join(dir, DotFile)
 		if _, err := os.Stat(path); err != nil {
 			if os.IsNotExist(err) {
 				if !abs {
@@ -61,19 +62,19 @@ func gather(now time.Time, dir string) (*Problem, *Assignment, *Commit) {
 				old := dir
 				dir = filepath.Dir(dir)
 				if dir == old {
-					log.Fatalf("unable to find %s in %s or an ancestor directory", GrindAssignmentIDName, dir)
+					log.Fatalf("unable to find %s in %s or an ancestor directory", DotFile, dir)
 				}
-				log.Printf("could not find %s in %s, trying %s", GrindAssignmentIDName, old, dir)
+				log.Printf("could not find %s in %s, trying %s", DotFile, old, dir)
 				continue
 			}
 
-			log.Fatalf("error searching for %s in %s: %v", GrindAssignmentIDName, dir, err)
+			log.Fatalf("error searching for %s in %s: %v", DotFile, dir, err)
 		}
 		break
 	}
 
 	// read the .grind file
-	path := filepath.Join(dir, GrindAssignmentIDName)
+	path := filepath.Join(dir, DotFile)
 	contents, err := ioutil.ReadFile(path)
 	if err != nil {
 		log.Fatalf("error reading %s: %v", path, err)
@@ -124,7 +125,7 @@ func gather(now time.Time, dir string) (*Problem, *Assignment, *Commit) {
 		_, name := filepath.Split(path)
 
 		// skip our config file
-		if name == GrindAssignmentIDName {
+		if name == DotFile {
 			return nil
 		}
 
@@ -167,7 +168,7 @@ func gather(now time.Time, dir string) (*Problem, *Assignment, *Commit) {
 }
 
 func saveCommit(dir string, commit *Commit) {
-	path := filepath.Join(dir, GrindAssignmentIDName)
+	path := filepath.Join(dir, DotFile)
 	contents, err := json.MarshalIndent(commit, "", "    ")
 	if err != nil {
 		log.Fatalf("JSON error encoding commit: %v", err)

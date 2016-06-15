@@ -2,13 +2,6 @@ package main
 
 import . "github.com/russross/codegrinder/types"
 
-type ProblemBundle struct {
-	Problem      *Problem
-	ProblemSteps []*ProblemStep
-	Commits      []*Commit
-	Signature    string
-}
-
 // PostProblem handles a request to /v2/problems,
 // creating a new problem.
 // Confirmed must be false, and the problem must have a full set of passing commits signed by the daycare.
@@ -110,8 +103,8 @@ func saveProblemCommon(w http.ResponseWriter, tx *sql.Tx, problem *Problem, step
 			loggedHTTPErrorf(w, http.StatusBadRequest, "commit for step %d does not match this problem", i+1)
 			return
 		}
-		if commit.ProblemStepNumber != i {
-			loggedHTTPErrorf(w, http.StatusBadRequest, "commit for step %d says it is for step %d", i+1, commit.ProblemStepNumber+1)
+		if commit.Step != i {
+			loggedHTTPErrorf(w, http.StatusBadRequest, "commit for step %d says it is for step %d", i, commit.Step)
 			return
 		}
 

@@ -75,13 +75,11 @@ type Assignment struct {
 }
 
 // Commit defines an attempt at solving one step of a Problem.
-//
-// Note: Step is zero based. Always present to user using Step+1.
 type Commit struct {
 	ID           int64             `json:"id" meddler:"id,pk"`
 	AssignmentID int64             `json:"assignmentID" meddler:"assignment_id"`
 	ProblemID    int64             `json:"problemID" meddler:"problem_id"`
-	Step         int64             `json:"step" meddler:"step"`
+	Step         int64             `json:"step" meddler:"step"` // note: one-based
 	Action       string            `json:"action" meddler:"action,zeroisnull"`
 	Note         string            `json:"note" meddler:"note,zeroisnull"`
 	Files        map[string]string `json:"files" meddler:"files,json"`
@@ -146,7 +144,7 @@ func (commit *Commit) ComputeSignature(secret string) string {
 }
 
 func (commit *Commit) Normalize(now time.Time, whitelist map[string]bool) error {
-	// ID, AssignmentID, ProblemStepNumber, and UserID are all checked elsewhere
+	// ID, AssignmentID, Step, and UserID are all checked elsewhere
 	commit.Action = strings.TrimSpace(commit.Action)
 	commit.Note = strings.TrimSpace(commit.Note)
 	commit.FilterIncoming(whitelist)

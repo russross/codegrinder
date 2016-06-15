@@ -261,9 +261,12 @@ func main() {
 		r.Post("/v2/lti/problem_sets/:unique", binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblemSet)
 
 		// problem bundles--for problem creation only
-		//r.Post("/v2/problembundles/unconfirmed", auth, withTx, withCurrentUser, binding.Json(ProblemBundle{}), PostProblemBundleUnconfirmed)
-		//r.Post("/v2/problembundles/confirmed", auth, withTx, withCurrentUser, binding.Json(ProblemBundle{}), PostProblemBundleConfirmed)
-		//r.Put("/v2/problembundles/:problem_id", auth, withTx, withCurrentUser, binding.Json(ProblemBundle{}), PutProblemBundle)
+		r.Post("/v2/problem_bundles/unconfirmed", auth, withTx, withCurrentUser, binding.Json(ProblemBundle{}), PostProblemBundleUnconfirmed)
+		r.Post("/v2/problem_bundles/confirmed", auth, withTx, withCurrentUser, binding.Json(ProblemBundle{}), PostProblemBundleConfirmed)
+		r.Put("/v2/problem_bundles/:problem_id", auth, withTx, withCurrentUser, binding.Json(ProblemBundle{}), PutProblemBundle)
+
+		// problem set bundles--for problem set creation only
+		r.Post("/v2/problem_set_bundles", auth, withTx, withCurrentUser, binding.Json(ProblemSetBundle{}), PostProblemSetBundle)
 
 		// problem types
 		r.Get("/v2/problemtypes", auth, GetProblemTypes)
@@ -321,8 +324,7 @@ func main() {
 			log.Fatalf("Ping: %v", err)
 		}
 
-		// arguments are passed as query arguments named "arg"
-		//r.Get("/v2/sockets/:problem_type/:action", SocketProblemTypeAction)
+		r.Get("/v2/sockets/:problem_type/:action", SocketProblemTypeAction)
 	}
 
 	// start web server

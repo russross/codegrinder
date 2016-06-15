@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	. "github.com/russross/codegrinder/types"
 	"github.com/spf13/cobra"
 )
 

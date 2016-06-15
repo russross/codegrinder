@@ -506,12 +506,12 @@ func PostUserAssignmentCommit(w http.ResponseWriter, tx *sql.Tx, currentUser *Us
 	}
 
 	// validate commit
-	if commit.Step >= len(problem.Steps) {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "commit has step number %d, but there are only %d steps in the problem", commit.Step+1, len(problem.Steps))
+	if commit.Step > len(problem.Steps) {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "commit has step number %d, but there are only %d steps in the problem", commit.Step, len(problem.Steps))
 		return
 	}
 	whitelists := getStepWhitelists(problem)
-	if err = commit.normalize(now, whitelists[commit.Step]); err != nil {
+	if err = commit.normalize(now, whitelists[commit.Step-1]); err != nil {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "%v", err)
 		return
 	}

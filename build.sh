@@ -2,5 +2,8 @@
 
 set -e
 
-gb build
-sudo setcap cap_net_bind_service=+ep /home/russ/codegrinder/bin/codegrinder
+cd ~/src/github.com/russross/codegrinder/codegrinder
+go install
+cd ../grind
+go install
+sudo setcap cap_net_bind_service=+ep ~/bin/codegrinder

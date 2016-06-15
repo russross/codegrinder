@@ -14,6 +14,7 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/gorilla/websocket"
+	. "github.com/russross/codegrinder/types"
 	"github.com/russross/gcfg"
 	"github.com/spf13/cobra"
 )
@@ -63,15 +64,14 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 	// parse problem.cfg
 	cfg := struct {
 		Problem struct {
-			Type   string
-			Name   string
 			Unique string
-			Desc   string
+			Note   string
+			Type   string
 			Tag    []string
 			Option []string
 		}
 		Step map[string]*struct {
-			Name   string
+			Note   string
 			Weight float64
 		}
 	}{}
@@ -85,14 +85,18 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 
 	// create problem object
 	problem := &Problem{
-		Name:        cfg.Problem.Name,
 		Unique:      cfg.Problem.Unique,
-		Description: cfg.Problem.Desc,
+		Note:        cfg.Problem.Note,
 		ProblemType: cfg.Problem.Type,
 		Tags:        cfg.Problem.Tag,
 		Options:     cfg.Problem.Option,
 		CreatedAt:   now,
 		UpdatedAt:   now,
+	}
+
+	// start forming the problem bundle
+	unsigned := &ProblemBundle{
+		Problem: problem,
 	}
 
 	// check if this is an existing problem
@@ -104,6 +108,18 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 		if cmd.Flag("update").Value.String() == "true" {
 			log.Fatalf("you specified --update, but no problem with unique ID %q was found", problem.Unique)
 		}
+
+		// make sure the problem set with this unique name is free as well
+		existingSets := []*ProblemSet{}
+		mustGetObject("/problem_sets", map[string]string{"unique": problem.Unique}, &existingSets)
+		if len(existingSets) > 1 {
+			log.Fatalf("error: server found multiple problem sets with matching unique ID %q", problem.Unique)
+		}
+		if len(existingSets) != 0 {
+			log.Printf("problem set %d already exists with unique ID %q", existingSets[0].ID, existingSets[0].Unique)
+			log.Fatalf("  this would prevent creating a problem set containing just this problem with matching id")
+		}
+
 		log.Printf("this problem is new--no existing problem has the same unique ID")
 	case 1:
 		// update to existing problem
@@ -111,35 +127,37 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 			log.Fatalf("you did not specify --update, but a problem already exists with unique ID %q", problem.Unique)
 		}
 		log.Printf("unique ID is %s", problem.Unique)
-		log.Printf("  this is an update of problem %d (%q)", existing[0].ID, existing[0].Name)
+		log.Printf("  this is an update of problem %d (%q)", existing[0].ID, existing[0].Note)
 		problem.ID = existing[0].ID
 		problem.CreatedAt = existing[0].CreatedAt
 	default:
 		// server does not know what "unique" means
-		log.Fatalf("error: server found multiple problems with matching unique ID")
+		log.Fatalf("error: server found multiple problems with matching unique ID %q", problem.Unique)
 	}
 
 	// generate steps
 	whitelist := make(map[string]bool)
-	for i := 1; cfg.Step[strconv.Itoa(i)] != nil; i++ {
+	for i := int64(1); cfg.Step[strconv.FormatInt(i, 10)] != nil; i++ {
 		log.Printf("gathering step %d", i)
-		s := cfg.Step[strconv.Itoa(i)]
+		s := cfg.Step[strconv.FormatInt(i, 10)]
 		step := &ProblemStep{
-			Name:        s.Name,
-			ScoreWeight: s.Weight,
-			Files:       make(map[string]string),
+			Step:   i,
+			Note:   s.Note,
+			Weight: s.Weight,
+			Files:  make(map[string]string),
 		}
 		commit := &Commit{
-			ProblemStepNumber: i - 1,
-			Action:            "confirm",
-			Files:             make(map[string]string),
-			CreatedAt:         now,
-			UpdatedAt:         now,
+			Step:      i,
+			Action:    "confirm",
+			Note:      "author solution submitted via grind",
+			Files:     make(map[string]string),
+			CreatedAt: now,
+			UpdatedAt: now,
 		}
 
 		// read files
 		starter, solution, root := make(map[string]string), make(map[string]string), make(map[string]string)
-		stepdir := filepath.Join(dir, strconv.Itoa(i))
+		stepdir := filepath.Join(dir, strconv.FormatInt(i, 10))
 		err := filepath.Walk(stepdir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				log.Fatalf("walk error for %s: %v", path, err)
@@ -211,32 +229,35 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 			}
 		}
 
-		problem.Steps = append(problem.Steps, step)
-		problem.Commits = append(problem.Commits, commit)
+		unsigned.ProblemSteps = append(unsigned.ProblemSteps, step)
+		unsigned.Commits = append(unsigned.Commits, commit)
 		log.Printf("  found %d problem definition file%s and %d solution file%s", len(step.Files), plural(len(step.Files)), len(commit.Files), plural(len(commit.Files)))
 	}
 
-	if len(problem.Steps) != len(cfg.Step) {
-		log.Fatalf("expected to find %d step%s, but only found %d", len(cfg.Step), plural(len(cfg.Step)), len(problem.Steps))
+	if len(unsigned.ProblemSteps) != len(cfg.Step) {
+		log.Fatalf("expected to find %d step%s, but only found %d", len(cfg.Step), plural(len(cfg.Step)), len(unsigned.ProblemSteps))
 	}
 
 	// get the request validated and signed
-	signed := new(Problem)
-	mustPostObject("/problems/unconfirmed", nil, problem, signed)
+	signed := new(ProblemBundle)
+	mustPostObject("/problem_bundles/unconfirmed", nil, unsigned, signed)
 
 	// validate the commits one at a time
-	commitList := signed.Commits
-	signed.Commits = nil
-	var signedCommits []*Commit
-	for n, commit := range commitList {
+	for n := 0; n < len(signed.ProblemSteps); n++ {
 		log.Printf("validating solution for step %d", n+1)
-		signedCommit := mustConfirmCommit(signed, commit, nil)
+		unvalidated := &CommitBundle{
+			Problem:     signed.Problem,
+			ProblemStep: signed.ProblemSteps[n],
+			Commit:      signed.Commits[n],
+			Signature:   signed.Signatures[n],
+		}
+		validated := mustConfirmCommitBundle(unvalidated, nil)
 		log.Printf("  finished validating solution")
-		if signedCommit.ReportCard == nil || signedCommit.Score != 1.0 || !signedCommit.ReportCard.Passed {
-			log.Printf("  solution for step %d failed: %s", n+1, signedCommit.ReportCard.Message)
+		if validated.Commit.ReportCard == nil || validated.Commit.Score != 1.0 || !validated.Commit.ReportCard.Passed {
+			log.Printf("  solution for step %d failed: %s", n+1, validated.Commit.ReportCard.Note)
 
 			// play the transcript
-			for _, event := range signedCommit.Transcript {
+			for _, event := range validated.Commit.Transcript {
 				switch event.Event {
 				case "exec":
 					color.Cyan("$ %s\n", strings.Join(event.ExecCommand, " "))
@@ -254,39 +275,57 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 			}
 			log.Fatalf("please fix solution and try again")
 		}
-		signedCommits = append(signedCommits, signedCommit)
+		signed.Problem = validated.Problem
+		signed.ProblemSteps[n] = validated.ProblemStep
+		signed.Commits[n] = validated.Commit
+		signed.Signatures[n] = validated.Signature
 	}
-
-	signed.Commits = signedCommits
 
 	log.Printf("problem and solution confirmed successfully")
-	final := new(Problem)
-	if signed.ID == 0 {
-		mustPostObject("/problems", nil, signed, final)
+
+	// save the problem
+	final := new(ProblemBundle)
+	if signed.Problem.ID == 0 {
+		mustPostObject("/problem_bundles/confirmed", nil, signed, final)
 	} else {
-		mustPutObject(fmt.Sprintf("/problems/%d", signed.ID), nil, signed, final)
+		mustPutObject(fmt.Sprintf("/problem_bundles/%d", signed.Problem.ID), nil, signed, final)
 	}
 	log.Printf("problem saved and ready to use")
+
+	// create a problem set with just this problem and the same unique name
+	psBundle := &ProblemSetBundle{
+		ProblemSet: &ProblemSet{
+			Unique:    final.Problem.Unique,
+			Note:      "set for single problem " + final.Problem.Unique + "\n" + final.Problem.Note,
+			Tags:      final.Problem.Tags,
+			CreatedAt: now,
+			UpdatedAt: now,
+		},
+		ProblemIDs: []int64{final.Problem.ID},
+		Weights:    []float64{1.0},
+	}
+	finalPSBundle := new(ProblemSetBundle)
+	mustPostObject("/problem_set_bundles", nil, psBundle, finalPSBundle)
+	log.Printf("problem set created and ready to use for this problem")
 }
 
 type DaycareRequest struct {
-	Problem *Problem `json:"problem,omitempty"`
-	Commit  *Commit  `json:"commit,omitempty"`
-	Stdin   string   `json:"stdin,omitempty"`
+	CommitBundle *CommitBundle `json:"commit_bundle,omitempty"`
+	Stdin        string        `json:"stdin,omitempty"`
 }
 
 type DaycareResponse struct {
-	Commit *Commit       `json:"commit,omitempty"`
-	Event  *EventMessage `json:"event,omitempty"`
-	Error  string        `json:"error,omitempty"`
+	CommitBundle *CommitBundle `json:"commit_bundle,omitempty"`
+	Event        *EventMessage `json:"event,omitempty"`
+	Error        string        `json:"error,omitempty"`
 }
 
-func mustConfirmCommit(problem *Problem, commit *Commit, args []string) *Commit {
+func mustConfirmCommitBundle(bundle *CommitBundle, args []string) *CommitBundle {
 	verbose := false
 
 	// create a websocket connection to the server
 	headers := make(http.Header)
-	socket, resp, err := websocket.DefaultDialer.Dial("wss://"+Config.Host+"/api/v2/sockets/"+problem.ProblemType+"/"+commit.Action, headers)
+	socket, resp, err := websocket.DefaultDialer.Dial("wss://"+Config.Host+"/api/v2/sockets/"+bundle.Problem.ProblemType+"/"+bundle.Commit.Action, headers)
 	if err != nil {
 		log.Printf("websocket dial: %v", err)
 		if resp != nil && resp.Body != nil {
@@ -298,7 +337,7 @@ func mustConfirmCommit(problem *Problem, commit *Commit, args []string) *Commit 
 	defer socket.Close()
 
 	// form the initial request
-	req := &DaycareRequest{Problem: problem, Commit: commit}
+	req := &DaycareRequest{CommitBundle: bundle}
 	if err := socket.WriteJSON(req); err != nil {
 		log.Fatalf("error writing request message: %v", err)
 	}
@@ -310,9 +349,16 @@ func mustConfirmCommit(problem *Problem, commit *Commit, args []string) *Commit 
 			log.Fatalf("socket error reading event: %v", err)
 			break
 		}
-		if reply.Commit != nil {
-			return reply.Commit
-		} else if reply.Event != nil {
+
+		switch {
+		case reply.Error != "":
+			log.Printf("server returned an error:")
+			log.Fatalf("  %s", reply.Error)
+
+		case reply.CommitBundle != nil:
+			return reply.CommitBundle
+
+		case reply.Event != nil:
 			if verbose {
 				switch reply.Event.Event {
 				case "exec":
@@ -329,10 +375,8 @@ func mustConfirmCommit(problem *Problem, commit *Commit, args []string) *Commit 
 					color.Red("Error: %s\n", reply.Event.Error)
 				}
 			}
-		} else if reply.Error != "" {
-			log.Printf("server returned an error:")
-			log.Fatalf("  %s", reply.Error)
-		} else {
+
+		default:
 			log.Fatalf("unexpected reply from server")
 		}
 	}
