@@ -7,14 +7,11 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	. "github.com/russross/codegrinder/types"
 	"github.com/spf13/cobra"
 )
-
-const DotFile = ".grind"
 
 func CommandSave(cmd *cobra.Command, args []string) {
 	mustLoadConfig()
@@ -32,87 +29,56 @@ func CommandSave(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	_, _, commit := gather(now, dir)
+	problem, _, commit := gather(now, dir)
 	commit.Action = ""
 	commit.Comment = "saving from grind tool"
 
 	// send the commit to the server
 	signed := new(Commit)
-	mustPostObject(fmt.Sprintf("/users/me/assignments/%d/commits", commit.AssignmentID), nil, commit, signed)
-
-	saveCommit(dir, signed)
+	mustPostObject(fmt.Sprintf("/assignments/%d/commits", commit.AssignmentID), nil, commit, signed)
+	log.Printf("problem %s step %d saved", problem.Unique, commit.Step)
 }
 
-func gather(now time.Time, dir string) (*Problem, *Assignment, *Commit) {
-	// find the .grind file containing the commit
-	abs := false
-	for {
-		path := filepath.Join(dir, DotFile)
-		if _, err := os.Stat(path); err != nil {
-			if os.IsNotExist(err) {
-				if !abs {
-					abs = true
-					path, err := filepath.Abs(dir)
-					if err != nil {
-						log.Fatalf("error finding absolute path of %s: %v", dir, err)
-					}
-					dir = path
-				}
-				// try moving up a directory
-				old := dir
-				dir = filepath.Dir(dir)
-				if dir == old {
-					log.Fatalf("unable to find %s in %s or an ancestor directory", DotFile, dir)
-				}
-				log.Printf("could not find %s in %s, trying %s", DotFile, old, dir)
-				continue
-			}
-
-			log.Fatalf("error searching for %s in %s: %v", DotFile, dir, err)
-		}
-		break
-	}
-
-	// read the .grind file
-	path := filepath.Join(dir, DotFile)
-	contents, err := ioutil.ReadFile(path)
-	if err != nil {
-		log.Fatalf("error reading %s: %v", path, err)
-	}
-	commit := new(Commit)
-	if err := json.Unmarshal(contents, commit); err != nil {
-		log.Fatalf("error parsing commit from %s: %v", path, err)
-	}
+func gather(now time.Time, startDir string) (*Problem, *Assignment, *Commit) {
+	// find the .grind file containing the problem set info
+	dotfile, problemSetDir, problemDir := findDotFile(startDir)
 
 	// get the assignment
 	assignment := new(Assignment)
-	mustGetObject(fmt.Sprintf("/users/me/assignments/%d", commit.AssignmentID), nil, assignment)
+	mustGetObject(fmt.Sprintf("/assignments/%d", dotfile.AssignmentID), nil, assignment)
 
 	// get the problem
-	problem := new(Problem)
-	mustGetObject(fmt.Sprintf("/problems/%d", assignment.ProblemID), nil, problem)
-
-	// get the whitelist of files that can go in the commit
-	whitelist := map[string]bool{}
-	for n, step := range problem.Steps {
-		if n > commit.ProblemStepNumber {
-			break
+	unique := ""
+	if len(dotfile.Problems) == 1 {
+		// only one problem? files should be in dotfile directory
+		for u := range dotfile.Problems {
+			unique = u
 		}
-		for name := range step.Files {
-			if len(strings.Split(name, "/")) == 1 {
-				whitelist[name] = true
-			}
+		problemDir = problemSetDir
+	} else {
+		// use the subdirectory name to identify the problem
+		if child == "" {
+			log.Printf("you must identify the problem within this problem set")
+			log.Printf("  either run this from with the problem directory, or")
+			log.Fatalf("  identify it as a parameter in the command")
 		}
+		_, unique = filepath.Split(problemDir)
 	}
+	info := dotfile.Problems[unique]
+	if info == nil {
+		log.Fatalf("unable to recognize the problem based on the directory name of %q", unique)
+	}
+	problem := new(Problem)
+	mustGetObject(fmt.Sprintf("/problems/%d", info.ID), nil, problem)
 
 	// gather the commit files from the file system
 	files := make(map[string]string)
-	err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+	err = filepath.Walk(problemDir, func(path string, info os.FileInfo, err error) error {
 		// skip errors, directories, non-regular files
 		if err != nil {
 			return err
 		}
-		if path == dir {
+		if path == problemDir {
 			// descent into the main directory
 			return nil
 		}
@@ -125,11 +91,11 @@ func gather(now time.Time, dir string) (*Problem, *Assignment, *Commit) {
 		_, name := filepath.Split(path)
 
 		// skip our config file
-		if name == DotFile {
+		if name == perProblemSetDotFile {
 			return nil
 		}
 
-		if whitelist[name] {
+		if info.Whitelist[name] {
 			contents, err := ioutil.ReadFile(path)
 			if err != nil {
 				return err
@@ -154,27 +120,60 @@ func gather(now time.Time, dir string) (*Problem, *Assignment, *Commit) {
 	}
 
 	// form a commit object
-	commit.ID = 0
-	commit.Files = files
-	commit.Transcript = nil
-	commit.ReportCard = nil
-	commit.Score = 0
-	commit.CreatedAt = now
-	commit.UpdatedAt = now
-	commit.ProblemSignature = problem.Signature
-	commit.Signature = ""
+	commit := &Commit{
+		ID:           0,
+		AssignmentID: dotfile.AssignmentID,
+		ProblemID:    info.ID,
+		Step:         info.Step,
+		Files:        files,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
 
 	return problem, assignment, commit
 }
 
-func saveCommit(dir string, commit *Commit) {
-	path := filepath.Join(dir, DotFile)
-	contents, err := json.MarshalIndent(commit, "", "    ")
+func findDotFile(startDir string) (dotfile *DotFileInfo, problemSetDir, problemDir string) {
+	abs := false
+	problemSetDir, problemDir = startDir, ""
+	for {
+		path := filepath.Join(problemSetDir, perProblemSetDotFile)
+		if _, err := os.Stat(path); err != nil {
+			if os.IsNotExist(err) {
+				if !abs {
+					abs = true
+					path, err := filepath.Abs(problemSetDir)
+					if err != nil {
+						log.Fatalf("error finding absolute path of %s: %v", problemSetDir, err)
+					}
+					problemSetDir = path
+				}
+
+				// try moving up a directory
+				problemDir = problemSetDir
+				problemSetDir = filepath.Dir(problemSetDir)
+				if problemSetDir == problemDir {
+					log.Fatalf("unable to find %s in %s or an ancestor directory", perProblemSetDotFile, startDir)
+				}
+				log.Printf("could not find %s in %s, trying %s", perProblemSetDotFile, problemDir, problemSetDir)
+				continue
+			}
+
+			log.Fatalf("error searching for %s in %s: %v", perProblemSetDotFile, problemSetDir, err)
+		}
+		break
+	}
+
+	// read the .grind file
+	path := filepath.Join(problemSetDir, perProblemSetDotFile)
+	contents, err := ioutil.ReadFile(path)
 	if err != nil {
-		log.Fatalf("JSON error encoding commit: %v", err)
+		log.Fatalf("error reading %s: %v", path, err)
 	}
-	contents = append(contents, '\n')
-	if err := ioutil.WriteFile(path, contents, 0644); err != nil {
-		log.Fatalf("error saving file %q: %v", path, err)
+	dotfile = new(DotFileInfo)
+	if err := json.Unmarshal(contents, dotfile); err != nil {
+		log.Fatalf("error parsing %s: %v", path, err)
 	}
+
+	return dotfile, problemSetDir, problemDir
 }

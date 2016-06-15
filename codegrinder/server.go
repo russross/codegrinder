@@ -261,12 +261,12 @@ func main() {
 		r.Post("/v2/lti/problem_sets/:unique", binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblemSet)
 
 		// problem bundles--for problem creation only
-		r.Post("/v2/problem_bundles/unconfirmed", auth, withTx, withCurrentUser, binding.Json(ProblemBundle{}), PostProblemBundleUnconfirmed)
-		r.Post("/v2/problem_bundles/confirmed", auth, withTx, withCurrentUser, binding.Json(ProblemBundle{}), PostProblemBundleConfirmed)
-		r.Put("/v2/problem_bundles/:problem_id", auth, withTx, withCurrentUser, binding.Json(ProblemBundle{}), PutProblemBundle)
+		//r.Post("/v2/problem_bundles/unconfirmed", auth, withTx, withCurrentUser, binding.Json(ProblemBundle{}), PostProblemBundleUnconfirmed)
+		//r.Post("/v2/problem_bundles/confirmed", auth, withTx, withCurrentUser, binding.Json(ProblemBundle{}), PostProblemBundleConfirmed)
+		//r.Put("/v2/problem_bundles/:problem_id", auth, withTx, withCurrentUser, binding.Json(ProblemBundle{}), PutProblemBundle)
 
 		// problem set bundles--for problem set creation only
-		r.Post("/v2/problem_set_bundles", auth, withTx, withCurrentUser, binding.Json(ProblemSetBundle{}), PostProblemSetBundle)
+		//r.Post("/v2/problem_set_bundles", auth, withTx, withCurrentUser, binding.Json(ProblemSetBundle{}), PostProblemSetBundle)
 
 		// problem types
 		r.Get("/v2/problemtypes", auth, GetProblemTypes)
@@ -309,6 +309,7 @@ func main() {
 		// commits
 		//r.Get("/v2/assignments/:assignment_id/commits", auth, withTx, withCurrentUser, GetCommits)
 		//r.Get("/v2/commits/:commit_id", auth, withTx, withCurrentUser, GetCommit)
+		//r.Get("/v2/assignments/:assignment_id/commits/last", auth, withTx, withCurrentUser, GetAssignmentCommitLast)
 		//r.Delete("/v2/commits/:commit_id", auth, withTx, withCurrentUser, DeleteCommit)
 	}
 
@@ -324,7 +325,7 @@ func main() {
 			log.Fatalf("Ping: %v", err)
 		}
 
-		r.Get("/v2/sockets/:problem_type/:action", SocketProblemTypeAction)
+		//r.Get("/v2/sockets/:problem_type/:action", SocketProblemTypeAction)
 	}
 
 	// start web server

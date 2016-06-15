@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/fatih/color"
+	. "github.com/russross/codegrinder/types"
 	"github.com/spf13/cobra"
 )
 
@@ -31,23 +32,25 @@ func CommandGrade(cmd *cobra.Command, args []string) {
 
 	problem, _, commit := gather(now, dir)
 	commit.Action = "grade"
-	commit.Comment = "grading from grind tool"
+	commit.Note = "grading from grind tool"
+	bundle := &CommitBundle{Commit: commit}
 
-	// send the commit to the server
-	signed := new(Commit)
-	mustPostObject(fmt.Sprintf("/users/me/assignments/%d/commits", commit.AssignmentID), nil, commit, signed)
-	commit = signed
+	// send the commit bundle to the server
+	signed := new(CommitBundle)
+	mustPostObject(fmt.Sprintf("/assignments/%d/commit_bundles/unsigned", commit.AssignmentID), nil, bundle, signed)
+	bundle = signed
 
 	// TODO: get a daycare referral
 
 	// send it to the daycare for grading
-	log.Printf("submitting your work for grading")
-	commit = mustConfirmCommit(problem, commit, nil)
+	log.Printf("submitting %s step %d for grading", problem.Unique, commit.Step)
+	bundle = mustConfirmCommitBundle(bundle, nil)
+	commit = bundle.Commit
 	log.Printf("  finished grading")
 	if commit.ReportCard == nil || commit.Score != 1.0 || !commit.ReportCard.Passed {
-		log.Printf("  solution for step %d failed", commit.ProblemStepNumber+1)
+		log.Printf("  solution for step %d failed", commit.Step)
 		if commit.ReportCard != nil {
-			log.Printf("  ReportCard: %s", commit.ReportCard.Message)
+			log.Printf("  ReportCard: %s", commit.ReportCard.Note)
 		}
 
 		// play the transcript
@@ -70,15 +73,15 @@ func CommandGrade(cmd *cobra.Command, args []string) {
 	}
 
 	// submit the commit with report card
-	saved := new(Commit)
-	mustPostObject(fmt.Sprintf("/users/me/assignments/%d/commits", commit.AssignmentID), nil, commit, saved)
-	commit = saved
+	saved := new(CommitBundle)
+	mustPostObject(fmt.Sprintf("/assignments/%d/commit_bundles/signed", commit.AssignmentID), nil, bundle, saved)
+	bundle = saved
 
 	if commit.ReportCard != nil && commit.ReportCard.Passed && commit.Score == 1.0 {
-		log.Printf("step %d passed", commit.ProblemStepNumber+1)
+		log.Printf("step %d passed", commit.Step)
 
-		// advance to next step
-		if commit.ProblemStepNumber+1 < len(problem.Steps) {
+		// TODO: advance to next step
+		if commit.Step+1 < len(problem.Steps) {
 			log.Printf("moving to step %d", commit.ProblemStepNumber+2)
 			oldstep := problem.Steps[commit.ProblemStepNumber]
 			newstep := problem.Steps[commit.ProblemStepNumber+1]
@@ -117,6 +120,7 @@ func CommandGrade(cmd *cobra.Command, args []string) {
 			}
 
 			// update the commit object
+			// TODO: update the dotfile with the step number and whitelist changes
 			commit.ProblemStepNumber++
 			commit.Action = ""
 			commit.Comment = "advanced to next step by grind tool"
@@ -135,6 +139,4 @@ func CommandGrade(cmd *cobra.Command, args []string) {
 			log.Printf("you have completed all steps for this problem")
 		}
 	}
-
-	saveCommit(dir, commit)
 }

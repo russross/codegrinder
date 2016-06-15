@@ -77,24 +77,41 @@ func CommandGet(cmd *cobra.Command, args []string) {
 	mustGetObject(fmt.Sprintf("/problem_sets/%d/problems", assignment.ProblemSetID), nil, problemSetProblems)
 
 	// for each problem get the problem, the most recent commit (or create one), and the corresponding step
-	problems, commits, steps := make(map[string]*Problem), make(map[string]*Commit), make(map[string]*ProblemStep)
+	problems := make(map[string]*Problem)
+	commits := make(map[string]*Commit)
+	infos := make(map[string]*ProblemInfo)
+	steps := make(map[string]*ProblemStep)
 	for _, elt := range problemSetProblems {
-		problem, commit, step := new(Problem), new(Commit), new(ProblemStep)
+		problem, commit, info, step := new(Problem), new(Commit), new(ProblemInfo), new(ProblemStep)
 		mustGetObject(fmt.Sprintf("/problems/%d", elt.ProblemID), nil, problem)
 
-		// if there is no commit for this problem, create a blank one
-		if !getObject(fmt.Sprintf("/assignments/%d/commits/last", assignment.ID), nil, commit) {
-			commit.ID = 0
-			commit.AssignmentID = assignment.ID
-			commit.ProblemID = problem.ID
-			commit.Step = 1
-			commit.Note = "empty commit for new problem"
-			commit.Files = map[string]string{}
-			commit.CreatedAt = now
-			commit.UpdatedAt = now
+		if getObject(fmt.Sprintf("/assignments/%d/problems/%d/commits/last", assignment.ID, problem.ID), nil, commit) {
+			info.ID = problem.ID
+			info.Step = commit.Step
+			info.Whitelist = make(map[string]bool)
+
+			// assume whatever was saved last time is an accurate whitelist
+			for name := range commit.Files {
+				info.Whitelist[name] = true
+			}
+		} else {
+			// if there is no commit for this problem, we're starting from step one
+			commit = nil
+			info.ID = problem.ID
+			info.Step = 1
+			info.Whitelist = make(map[string]bool)
 		}
+
 		mustGetObject(fmt.Sprintf("/problems/%d/steps/%d", problem.ID, commit.Step), nil, step)
+		for name := range step.Files {
+			// starter files are added to the whitelist
+			dir, _ := filepath.Split(name)
+			if dir == "" {
+				info.Whitelist[name] = true
+			}
+		}
 		problems[problem.Unique] = problem
+		infos[problem.Unique] = info
 		commits[problem.Unique] = commit
 		steps[problem.Unique] = step
 	}
@@ -144,18 +161,24 @@ func CommandGet(cmd *cobra.Command, args []string) {
 		}
 
 		// commit files overwrite step files
-		for name, contents := range commit.Files {
-			path := filepath.Join(target, name)
-			log.Printf("writing commit file %s", name)
-			if err := ioutil.WriteFile(path, []byte(contents), 0644); err != nil {
-				log.Fatalf("error saving file %s: %v", path, err)
+		if commit != nil {
+			for name, contents := range commit.Files {
+				path := filepath.Join(target, name)
+				log.Printf("writing commit file %s", name)
+				if err := ioutil.WriteFile(path, []byte(contents), 0644); err != nil {
+					log.Fatalf("error saving file %s: %v", path, err)
+				}
 			}
 		}
 	}
-	path := filepath.Join(rootDir, DotFile)
-	contents, err := json.MarshalIndent(commits, "", "    ")
+	path := filepath.Join(rootDir, perProblemSetDotFile)
+	dotfile := &DotFileInfo{
+		AssignmentID: assignment.ID,
+		Problems:     infos,
+	}
+	contents, err := json.MarshalIndent(infos, "", "    ")
 	if err != nil {
-		log.Fatalf("JSON error marshalling commit: %v", err)
+		log.Fatalf("JSON error encoding commit list: %v", err)
 	}
 	contents = append(contents, '\n')
 	if err := ioutil.WriteFile(path, contents, 0644); err != nil {

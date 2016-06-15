@@ -11,10 +11,10 @@ func CommandList(cmd *cobra.Command, args []string) {
 	mustLoadConfig()
 
 	assignments := []*Assignment{}
-	mustGetObject("/users/me/assignments", nil, &assignments)
+	mustGetObject("/assignments", nil, &assignments)
 	if len(assignments) == 0 {
 		log.Printf("no assignments found")
-		log.Fatalf("you must start each assignment through Canvas before viewing it here")
+		log.Fatalf("you must start each assignment through Canvas before you can access it here")
 	}
 
 	var course *Course
@@ -32,9 +32,9 @@ func CommandList(cmd *cobra.Command, args []string) {
 		}
 
 		// fetch the problem
-		problem := new(Problem)
-		mustGetObject(fmt.Sprintf("/problems/%d", asst.ProblemID), nil, problem)
-		fmt.Printf("%d: %s (%s/%s)\n", asst.ID, asst.CanvasTitle, course.Label, problem.Unique)
+		problemSet := new(ProblemSet)
+		mustGetObject(fmt.Sprintf("/problem_sets/%d", asst.ProblemSetID), nil, problemSet)
+		fmt.Printf("%d: %s (%s/%s)\n", asst.ID, asst.CanvasTitle, course.Label, problemSet.Unique)
 	}
 }
 

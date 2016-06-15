@@ -17,15 +17,27 @@ import (
 )
 
 const (
-	defaultHost  = "dorking.cs.dixie.edu"
-	cookiePrefix = "codegrinder_session="
-	rcFile       = ".codegrinderrc"
-	version      = "v0.1"
+	defaultHost          = "dorking.cs.dixie.edu"
+	cookiePrefix         = "codegrinder_session="
+	version              = "v0.1"
+	perUserDotFile       = ".codegrinderrc"
+	perProblemSetDotFile = ".grind"
 )
 
 var Config struct {
 	Cookie string
 	Host   string
+}
+
+type DotFileInfo struct {
+	AssignmentID int64                   `json:"assignmentID"`
+	Problems     map[string]*ProblemInfo `json:"problems"`
+}
+
+type ProblemInfo struct {
+	ID        int64           `json:"id"`
+	Step      int64           `json:"step"`
+	Whitelist map[string]bool `json:"whitelist"`
 }
 
 func main() {
