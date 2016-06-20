@@ -29,9 +29,9 @@ func CommandSave(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	problem, _, commit := gather(now, dir)
+	problem, _, commit, _ := gather(now, dir)
 	commit.Action = ""
-	commit.Comment = "saving from grind tool"
+	commit.Note = "saving from grind tool"
 
 	// send the commit to the server
 	signed := new(Commit)
@@ -39,7 +39,7 @@ func CommandSave(cmd *cobra.Command, args []string) {
 	log.Printf("problem %s step %d saved", problem.Unique, commit.Step)
 }
 
-func gather(now time.Time, startDir string) (*Problem, *Assignment, *Commit) {
+func gather(now time.Time, startDir string) (*Problem, *Assignment, *Commit, *DotFileInfo) {
 	// find the .grind file containing the problem set info
 	dotfile, problemSetDir, problemDir := findDotFile(startDir)
 
@@ -57,7 +57,7 @@ func gather(now time.Time, startDir string) (*Problem, *Assignment, *Commit) {
 		problemDir = problemSetDir
 	} else {
 		// use the subdirectory name to identify the problem
-		if child == "" {
+		if problemDir == "" {
 			log.Printf("you must identify the problem within this problem set")
 			log.Printf("  either run this from with the problem directory, or")
 			log.Fatalf("  identify it as a parameter in the command")
@@ -73,7 +73,7 @@ func gather(now time.Time, startDir string) (*Problem, *Assignment, *Commit) {
 
 	// gather the commit files from the file system
 	files := make(map[string]string)
-	err = filepath.Walk(problemDir, func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(problemDir, func(path string, stat os.FileInfo, err error) error {
 		// skip errors, directories, non-regular files
 		if err != nil {
 			return err
@@ -82,10 +82,10 @@ func gather(now time.Time, startDir string) (*Problem, *Assignment, *Commit) {
 			// descent into the main directory
 			return nil
 		}
-		if info.IsDir() {
+		if stat.IsDir() {
 			return filepath.SkipDir
 		}
-		if !info.Mode().IsRegular() {
+		if !stat.Mode().IsRegular() {
 			return nil
 		}
 		_, name := filepath.Split(path)
@@ -109,9 +109,9 @@ func gather(now time.Time, startDir string) (*Problem, *Assignment, *Commit) {
 	if err != nil {
 		log.Fatalf("walk error: %v", err)
 	}
-	if len(files) != len(whitelist) {
+	if len(files) != len(info.Whitelist) {
 		log.Printf("did not find all the expected files")
-		for name := range whitelist {
+		for name := range info.Whitelist {
 			if _, ok := files[name]; !ok {
 				log.Printf("  %s not found", name)
 			}
@@ -130,7 +130,7 @@ func gather(now time.Time, startDir string) (*Problem, *Assignment, *Commit) {
 		UpdatedAt:    now,
 	}
 
-	return problem, assignment, commit
+	return problem, assignment, commit, dotfile
 }
 
 func findDotFile(startDir string) (dotfile *DotFileInfo, problemSetDir, problemDir string) {
@@ -174,6 +174,7 @@ func findDotFile(startDir string) (dotfile *DotFileInfo, problemSetDir, problemD
 	if err := json.Unmarshal(contents, dotfile); err != nil {
 		log.Fatalf("error parsing %s: %v", path, err)
 	}
+	dotfile.Path = path
 
 	return dotfile, problemSetDir, problemDir
 }

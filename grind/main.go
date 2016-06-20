@@ -32,6 +32,7 @@ var Config struct {
 type DotFileInfo struct {
 	AssignmentID int64                   `json:"assignmentID"`
 	Problems     map[string]*ProblemInfo `json:"problems"`
+	Path         string                  `json:"-"`
 }
 
 type ProblemInfo struct {
@@ -241,7 +242,7 @@ func mustLoadConfig() {
 	if home == "" {
 		log.Fatalf("Unable to locate home directory, giving up\n")
 	}
-	configFile := filepath.Join(home, rcFile)
+	configFile := filepath.Join(home, perUserDotFile)
 
 	if raw, err := ioutil.ReadFile(configFile); err != nil {
 		log.Fatalf("Unable to load config file; try running \"grind init\"\n")
@@ -261,7 +262,7 @@ func mustWriteConfig() {
 	if home == "" {
 		log.Fatalf("Unable to locate home directory, giving up\n")
 	}
-	configFile := filepath.Join(home, rcFile)
+	configFile := filepath.Join(home, perUserDotFile)
 
 	raw, err := json.MarshalIndent(&Config, "", "    ")
 	if err != nil {

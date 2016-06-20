@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	. "github.com/russross/codegrinder/types"
 	"github.com/spf13/cobra"
@@ -17,7 +16,6 @@ import (
 
 func CommandGet(cmd *cobra.Command, args []string) {
 	mustLoadConfig()
-	now := time.Now()
 
 	// parse parameters
 	name, rootDir := "", ""
@@ -77,7 +75,6 @@ func CommandGet(cmd *cobra.Command, args []string) {
 	mustGetObject(fmt.Sprintf("/problem_sets/%d/problems", assignment.ProblemSetID), nil, problemSetProblems)
 
 	// for each problem get the problem, the most recent commit (or create one), and the corresponding step
-	problems := make(map[string]*Problem)
 	commits := make(map[string]*Commit)
 	infos := make(map[string]*ProblemInfo)
 	steps := make(map[string]*ProblemStep)
@@ -110,7 +107,6 @@ func CommandGet(cmd *cobra.Command, args []string) {
 				info.Whitelist[name] = true
 			}
 		}
-		problems[problem.Unique] = problem
 		infos[problem.Unique] = info
 		commits[problem.Unique] = commit
 		steps[problem.Unique] = step
@@ -134,13 +130,13 @@ func CommandGet(cmd *cobra.Command, args []string) {
 		log.Fatalf("error creating directory %s: %v", rootDir, err)
 	}
 
-	for unique := range problems {
-		problem, commit, step := problems[unique], commits[unique], steps[unique]
+	for unique := range steps {
+		commit, step := commits[unique], steps[unique]
 
 		// create a directory for this problem
 		// exception: if there is only one problem in the set, use the main directory
 		target := rootDir
-		if len(problems) > 1 {
+		if len(steps) > 1 {
 			target = filepath.Join(rootDir, unique)
 			log.Printf("unpacking problem %s", unique)
 			if err := os.MkdirAll(target, 0755); err != nil {
@@ -171,17 +167,17 @@ func CommandGet(cmd *cobra.Command, args []string) {
 			}
 		}
 	}
-	path := filepath.Join(rootDir, perProblemSetDotFile)
 	dotfile := &DotFileInfo{
 		AssignmentID: assignment.ID,
 		Problems:     infos,
+		Path:         filepath.Join(rootDir, perProblemSetDotFile),
 	}
-	contents, err := json.MarshalIndent(infos, "", "    ")
+	contents, err := json.MarshalIndent(dotfile, "", "    ")
 	if err != nil {
-		log.Fatalf("JSON error encoding commit list: %v", err)
+		log.Fatalf("JSON error encoding %s: %v", dotfile.Path, err)
 	}
 	contents = append(contents, '\n')
-	if err := ioutil.WriteFile(path, contents, 0644); err != nil {
-		log.Fatalf("error saving file %s: %v", path, err)
+	if err := ioutil.WriteFile(dotfile.Path, contents, 0644); err != nil {
+		log.Fatalf("error saving file %s: %v", dotfile.Path, err)
 	}
 }
