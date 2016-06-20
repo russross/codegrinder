@@ -122,21 +122,7 @@ func (problem *Problem) Normalize(now time.Time, steps []*ProblemStep) error {
 		return fmt.Errorf("problem must have at least one step")
 	}
 	for n, step := range steps {
-		step.Step = int64(n) + 1
-		step.Note = strings.TrimSpace(step.Note)
-		if step.Note == "" {
-			return fmt.Errorf("missing note for step %d", n+1)
-		}
-		instructions, err := step.BuildInstructions()
-		if err != nil {
-			return fmt.Errorf("error building instructions for step %d: %v", n+1, err)
-		}
-		step.Instructions = instructions
-		if step.Weight <= 0.0 {
-			// default to 1.0
-			step.Weight = 1.0
-		}
-		step.Normalize()
+		step.Normalize(int64(n) + 1)
 	}
 
 	// sanity check timestamps
@@ -162,11 +148,11 @@ func (problem *Problem) ComputeSignature(secret string, steps []*ProblemStep) st
 	v["options"] = problem.Options
 	v.Add("createdAt", problem.CreatedAt.Round(time.Second).UTC().Format(time.RFC3339))
 	v.Add("updatedAt", problem.UpdatedAt.Round(time.Second).UTC().Format(time.RFC3339))
-	for n, step := range steps {
-		v.Add(fmt.Sprintf("step-%d-note", n+1), step.Note)
-		v.Add(fmt.Sprintf("step-%d-weight", n+1), strconv.FormatFloat(step.Weight, 'g', -1, 64))
+	for _, step := range steps {
+		v.Add(fmt.Sprintf("step-%d-note", step.Step), step.Note)
+		v.Add(fmt.Sprintf("step-%d-weight", step.Step), strconv.FormatFloat(step.Weight, 'g', -1, 64))
 		for name, contents := range step.Files {
-			v.Add(fmt.Sprintf("step-%d-file-%s", n+1, name), contents)
+			v.Add(fmt.Sprintf("step-%d-file-%s", step.Step, name), contents)
 		}
 	}
 
@@ -187,7 +173,21 @@ var ProblemStepDirectoryWhitelist = map[string]bool{
 }
 
 // fix line endings
-func (step *ProblemStep) Normalize() {
+func (step *ProblemStep) Normalize(n int64) error {
+	step.Step = n
+	step.Note = strings.TrimSpace(step.Note)
+	if step.Note == "" {
+		return fmt.Errorf("missing note for step %d", n+1)
+	}
+	instructions, err := step.BuildInstructions()
+	if err != nil {
+		return fmt.Errorf("error building instructions for step %d: %v", n+1, err)
+	}
+	step.Instructions = instructions
+	if step.Weight <= 0.0 {
+		// default to 1.0
+		step.Weight = 1.0
+	}
 	clean := make(map[string]string)
 	for name, contents := range step.Files {
 		parts := strings.Split(name, "/")
@@ -206,6 +206,7 @@ func (step *ProblemStep) Normalize() {
 		clean[name] = fixed
 	}
 	step.Files = clean
+	return nil
 }
 
 func (problem *Problem) GetStepWhitelists(steps []*ProblemStep) []map[string]bool {

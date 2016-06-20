@@ -7,15 +7,17 @@ type ProblemSetBundle struct {
 }
 
 type ProblemBundle struct {
-	Problem      *Problem       `json:"problem"`
-	ProblemSteps []*ProblemStep `json:"problemSteps"`
-	Commits      []*Commit      `json:"commits"`
-	Signatures   []string       `json:"signatures,omitempty"`
+	Problem          *Problem       `json:"problem"`
+	ProblemSteps     []*ProblemStep `json:"problemSteps"`
+	ProblemSignature string         `json:"problemSignature,omitempty"`
+	Commits          []*Commit      `json:"commits"`
+	CommitSignatures []string       `json:"commitSignatures,omitempty"`
 }
 
 type CommitBundle struct {
-	Problem     *Problem     `json:"problem"`
-	ProblemStep *ProblemStep `json:"problemStep"`
-	Commit      *Commit      `json:"commit"`
-	Signature   string       `json:"signature,omitempty"`
+	Problem          *Problem       `json:"problem"`
+	ProblemSteps     []*ProblemStep `json:"problemSteps"`
+	ProblemSignature string         `json:"problemSignature,omitempty"`
+	Commit           *Commit        `json:"commit"`
+	CommitSignature  string         `json:"commitSignature,omitempty"`
 }

@@ -359,7 +359,7 @@ func LtiProblemSet(w http.ResponseWriter, r *http.Request, tx *sql.Tx, form LTIR
 	}
 
 	// sign the user in
-	session.Set("user_id", user.ID)
+	session.Set("id", user.ID)
 
 	// redirect to the console
 	http.Redirect(w, r, fmt.Sprintf("/#/assignment/%d", asst.ID), http.StatusSeeOther)
@@ -385,7 +385,7 @@ func LtiProblemSets(w http.ResponseWriter, r *http.Request, tx *sql.Tx, form LTI
 	}
 
 	// sign the user in
-	session.Set("user_id", user.ID)
+	session.Set("id", user.ID)
 
 	u := &url.URL{
 		Path: "/",

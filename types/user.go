@@ -20,6 +20,7 @@ const (
 	TranscriptDataLimit       = 1e5
 	OpenCommitTimeout         = 20 * time.Minute
 	SignedCommitTimeout       = 15 * time.Minute
+	CookieName                = "codegrinder"
 )
 
 // Course represents a single instance of a course as defined by LTI.

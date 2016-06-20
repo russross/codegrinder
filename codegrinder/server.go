@@ -85,14 +85,16 @@ func main() {
 	m.Use(render.Renderer(render.Options{IndentJSON: true}))
 
 	store := sessions.NewCookieStore([]byte(Config.SessionSecret))
-	m.Use(sessions.Sessions("codegrinder_session", store))
+	m.Use(sessions.Sessions(CookieName, store))
 
 	// sessions expire June 30 and December 31
 	go func() {
 		for {
 			now := time.Now()
 			expires := time.Date(now.Year(), time.December, 31, 23, 59, 59, 0, time.Local)
-			if expires.Sub(now).Hours() > 365/2*24 {
+			if expires.Sub(now).Hours() < 14*24 {
+				expires = time.Date(now.Year()+1, time.June, 30, 23, 59, 59, 0, time.Local)
+			} else if expires.Sub(now).Hours() > (365/2+14)*24 {
 				expires = time.Date(now.Year(), time.June, 30, 23, 59, 59, 0, time.Local)
 			}
 			store.Options(sessions.Options{MaxAge: int(expires.Sub(now).Seconds())})
@@ -138,20 +140,20 @@ func main() {
 
 		// martini service: to require an active logged-in session
 		auth := func(w http.ResponseWriter, session sessions.Session) {
-			if userID := session.Get("user_id"); userID == nil {
-				loggedHTTPErrorf(w, http.StatusUnauthorized, "authentication: no user_id found in session")
+			if userID := session.Get("id"); userID == nil {
+				loggedHTTPErrorf(w, http.StatusUnauthorized, "authentication: no user ID found in session")
 				return
 			}
 		}
 
 		// martini service: include the current logged-in user (requires withTx and auth)
 		withCurrentUser := func(c martini.Context, w http.ResponseWriter, tx *sql.Tx, session sessions.Session) {
-			rawID := session.Get("user_id")
+			rawID := session.Get("id")
 			if rawID == nil {
 				loggedHTTPErrorf(w, http.StatusInternalServerError, "cannot find user ID in session")
 				return
 			}
-			userID, ok := rawID.(int)
+			userID, ok := rawID.(int64)
 			if !ok {
 				session.Clear()
 				loggedHTTPErrorf(w, http.StatusInternalServerError, "error extracting user ID from session")
@@ -160,7 +162,7 @@ func main() {
 
 			// load the user record
 			user := new(User)
-			if err := meddler.Load(tx, "users", user, int64(userID)); err != nil {
+			if err := meddler.Load(tx, "users", user, userID); err != nil {
 				if err == sql.ErrNoRows {
 					loggedHTTPErrorf(w, http.StatusUnauthorized, "user %d not found", userID)
 					return
@@ -261,7 +263,7 @@ func main() {
 		r.Post("/v2/lti/problem_sets/:unique", binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblemSet)
 
 		// problem bundles--for problem creation only
-		//r.Post("/v2/problem_bundles/unconfirmed", auth, withTx, withCurrentUser, binding.Json(ProblemBundle{}), PostProblemBundleUnconfirmed)
+		r.Post("/v2/problem_bundles/unconfirmed", auth, withTx, withCurrentUser, binding.Json(ProblemBundle{}), PostProblemBundleUnconfirmed)
 		//r.Post("/v2/problem_bundles/confirmed", auth, withTx, withCurrentUser, binding.Json(ProblemBundle{}), PostProblemBundleConfirmed)
 		//r.Put("/v2/problem_bundles/:problem_id", auth, withTx, withCurrentUser, binding.Json(ProblemBundle{}), PutProblemBundle)
 

@@ -246,10 +246,11 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 	for n := 0; n < len(signed.ProblemSteps); n++ {
 		log.Printf("validating solution for step %d", n+1)
 		unvalidated := &CommitBundle{
-			Problem:     signed.Problem,
-			ProblemStep: signed.ProblemSteps[n],
-			Commit:      signed.Commits[n],
-			Signature:   signed.Signatures[n],
+			Problem:          signed.Problem,
+			ProblemSteps:     signed.ProblemSteps,
+			ProblemSignature: signed.ProblemSignature,
+			Commit:           signed.Commits[n],
+			CommitSignature:  signed.CommitSignatures[n],
 		}
 		validated := mustConfirmCommitBundle(unvalidated, nil)
 		log.Printf("  finished validating solution")
@@ -276,9 +277,10 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 			log.Fatalf("please fix solution and try again")
 		}
 		signed.Problem = validated.Problem
-		signed.ProblemSteps[n] = validated.ProblemStep
+		signed.ProblemSteps = validated.ProblemSteps
+		signed.ProblemSignature = validated.ProblemSignature
 		signed.Commits[n] = validated.Commit
-		signed.Signatures[n] = validated.Signature
+		signed.CommitSignatures[n] = validated.CommitSignature
 	}
 
 	log.Printf("problem and solution confirmed successfully")
@@ -325,9 +327,10 @@ func mustConfirmCommitBundle(bundle *CommitBundle, args []string) *CommitBundle 
 
 	// create a websocket connection to the server
 	headers := make(http.Header)
-	socket, resp, err := websocket.DefaultDialer.Dial("wss://"+Config.Host+"/api/v2/sockets/"+bundle.Problem.ProblemType+"/"+bundle.Commit.Action, headers)
+	url := "wss://" + Config.Host + "/api/v2/sockets/" + bundle.Problem.ProblemType + "/" + bundle.Commit.Action
+	socket, resp, err := websocket.DefaultDialer.Dial(url, headers)
 	if err != nil {
-		log.Printf("websocket dial: %v", err)
+		log.Printf("error dialing %s: %v", url, err)
 		if resp != nil && resp.Body != nil {
 			io.Copy(os.Stderr, resp.Body)
 			resp.Body.Close()

@@ -18,15 +18,14 @@ import (
 
 const (
 	defaultHost          = "dorking.cs.dixie.edu"
-	cookiePrefix         = "codegrinder_session="
 	version              = "v0.1"
 	perUserDotFile       = ".codegrinderrc"
 	perProblemSetDotFile = ".grind"
 )
 
 var Config struct {
-	Cookie string
-	Host   string
+	Host   string `json:"host"`
+	Cookie string `json:"cookie"`
 }
 
 type DotFileInfo struct {
@@ -105,7 +104,7 @@ func main() {
 
 	cmdCreate := &cobra.Command{
 		Use:   "create",
-		Short: "create a new problem (instructors only)",
+		Short: "create a new problem (authors only)",
 		Run:   CommandCreate,
 	}
 	cmdCreate.Flags().BoolP("update", "u", false, "update an existing problem")
@@ -119,15 +118,11 @@ func CommandInit(cmd *cobra.Command, args []string) {
 		`Please follow these steps:
 
 1.  Use Canvas to load a CodeGrinder window
-
 2.  Open a new tab in your browser and copy this URL into the address bar:
 
-    https://` + defaultHost + `/api/v2/users/me/cookie
+    https://` + defaultHost + `/v2/users/me/cookie
 
-3.  The browser will display something of the form:
-
-    ` + cookiePrefix + `...
-
+3.  The browser will display something of the form: ` + CookieName + `=...
 4.  Copy that entire string to the clipboard and paste it below.
 
 Paste here: `)
@@ -140,8 +135,8 @@ Paste here: `)
 	if n != 1 {
 		log.Fatalf("failed to read the cookie you pasted; please try again\n")
 	}
-	if !strings.HasPrefix(cookie, cookiePrefix) {
-		log.Fatalf("the cookie must start with %s; perhaps you copied the wrong thing?\n", cookiePrefix)
+	if !strings.HasPrefix(cookie, CookieName+"=") {
+		log.Fatalf("the cookie must start with %s=; perhaps you copied the wrong thing?\n", CookieName)
 	}
 
 	// set up config
@@ -181,7 +176,8 @@ func doRequest(path string, params map[string]string, cookie string, method stri
 	if method != "GET" && method != "POST" && method != "PUT" && method != "DELETE" {
 		log.Panicf("doRequest only recognizes GET, POST, PUT, and DELETE methods")
 	}
-	req, err := http.NewRequest(method, fmt.Sprintf("https://%s/api/v2%s", Config.Host, path), nil)
+	url := fmt.Sprintf("https://%s/v2%s", Config.Host, path)
+	req, err := http.NewRequest(method, url, nil)
 	if err != nil {
 		log.Fatalf("error creating http request: %v\n", err)
 	}
@@ -218,7 +214,7 @@ func doRequest(path string, params map[string]string, cookie string, method stri
 		return false
 	}
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("unexpected status from %s: %s\n", Config.Host, resp.Status)
+		log.Printf("unexpected status from %s: %s\n", url, resp.Status)
 		io.Copy(os.Stderr, resp.Body)
 		log.Fatalf("giving up")
 	}

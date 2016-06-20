@@ -11,8 +11,10 @@ import (
 func CommandList(cmd *cobra.Command, args []string) {
 	mustLoadConfig()
 
+	user := new(User)
+	mustGetObject("/users/me", nil, user)
 	assignments := []*Assignment{}
-	mustGetObject("/assignments", nil, &assignments)
+	mustGetObject(fmt.Sprintf("/users/%d/assignments", user.ID), nil, &assignments)
 	if len(assignments) == 0 {
 		log.Printf("no assignments found")
 		log.Fatalf("you must start each assignment through Canvas before you can access it here")

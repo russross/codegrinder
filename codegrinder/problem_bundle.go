@@ -1,6 +1,14 @@
 package main
 
-//import . "github.com/russross/codegrinder/types"
+import (
+	"database/sql"
+	"net/http"
+	"time"
+
+	"github.com/martini-contrib/render"
+	. "github.com/russross/codegrinder/types"
+	"github.com/russross/meddler"
+)
 
 // PostProblem handles a request to /v2/problems,
 // creating a new problem.
@@ -145,57 +153,65 @@ func saveProblemCommon(w http.ResponseWriter, tx *sql.Tx, problem *Problem, step
 }
 */
 
-// PostProblemUnconfirmed handles a request to /v2/problems/unconfirmed,
+// PostProblemBundleUnconfirmed handles a request to /v2/problem_bundles/unconfirmed,
 // signing a new/updated problem that has not yet been tested on the daycare.
-/*
-func PostProblemUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser *User, problem Problem, render render.Render) {
+func PostProblemBundleUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser *User, bundle ProblemBundle, render render.Render) {
 	now := time.Now()
 
+	// basic sanity checks
+	if len(bundle.ProblemSteps) < 2 {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "problem must have at least one step")
+		return
+	}
+	if len(bundle.ProblemSteps) != len(bundle.Commits) {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "problem must have exactly one commit for each step")
+		return
+	}
+	if len(bundle.ProblemSignature) != 0 {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "unconfirmed bundle must not have problem signature")
+	}
+	if len(bundle.CommitSignatures) != 0 {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "unconfirmed bundle must not have commit signatures")
+	}
+
 	// clean up basic fields and do some checks
-	if err := problem.normalize(now); err != nil {
+	if err := bundle.Problem.Normalize(now, bundle.ProblemSteps); err != nil {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "%v", err)
 		return
 	}
 
-	// confirmed must be false
-	if problem.Confirmed {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "a problem must not claim to be confirmed when preparing it to be confirmed")
-		return
-	}
-
 	// if this is an update to an existing problem, we need to check that some things match
-	if problem.ID != 0 {
+	if bundle.Problem.ID != 0 {
 		old := new(Problem)
-		if err := meddler.Load(tx, "problems", old, int64(problem.ID)); err != nil {
+		if err := meddler.Load(tx, "problems", old, int64(bundle.Problem.ID)); err != nil {
 			if err == sql.ErrNoRows {
-				loggedHTTPErrorf(w, http.StatusNotFound, "request to update problem %d, but that problem does not exist", problem.ID)
+				loggedHTTPErrorf(w, http.StatusNotFound, "request to update problem %d, but that problem does not exist", bundle.Problem.ID)
 			} else {
 				loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 			}
 			return
 		}
 
-		if problem.Unique != old.Unique {
-			loggedHTTPErrorf(w, http.StatusBadRequest, "updating a problem cannot change its unique ID from %q to %q; create a new problem instead", old.Unique, problem.Unique)
+		if bundle.Problem.Unique != old.Unique {
+			loggedHTTPErrorf(w, http.StatusBadRequest, "updating a problem cannot change its unique ID from %q to %q; create a new problem instead", old.Unique, bundle.Problem.Unique)
 			return
 		}
-		if problem.ProblemType != old.ProblemType {
-			loggedHTTPErrorf(w, http.StatusBadRequest, "updating a problem cannot change its type from %q to %q; create a new problem instead", old.ProblemType, problem.ProblemType)
+		if bundle.Problem.ProblemType != old.ProblemType {
+			loggedHTTPErrorf(w, http.StatusBadRequest, "updating a problem cannot change its type from %q to %q; create a new problem instead", old.ProblemType, bundle.Problem.ProblemType)
 			return
 		}
-		if !problem.CreatedAt.Equal(old.CreatedAt) {
-			loggedHTTPErrorf(w, http.StatusBadRequest, "updating a problem cannot change its created time from %v to %v", old.CreatedAt, problem.CreatedAt)
+		if !bundle.Problem.CreatedAt.Equal(old.CreatedAt) {
+			loggedHTTPErrorf(w, http.StatusBadRequest, "updating a problem cannot change its created time from %v to %v", old.CreatedAt, bundle.Problem.CreatedAt)
 			return
 		}
 	} else {
-		// for new problems, set the timestamps to now
-		problem.CreatedAt = now
-		problem.UpdatedAt = now
+		// for new problems, set the created timestamp to now
+		bundle.Problem.CreatedAt = now
 	}
 
 	// make sure the unique ID is unique
 	conflict := new(Problem)
-	if err := meddler.QueryRow(tx, conflict, `SELECT * FROM problems WHERE unique_id = $1`, problem.Unique); err != nil {
+	if err := meddler.QueryRow(tx, conflict, `SELECT * FROM problems WHERE unique_id = $1`, bundle.Problem.Unique); err != nil {
 		if err == sql.ErrNoRows {
 			conflict.ID = 0
 		} else {
@@ -203,49 +219,44 @@ func PostProblemUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser *User
 			return
 		}
 	}
-	if conflict.ID != 0 && conflict.ID != problem.ID {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "unique ID %q is already in use by problem %d", problem.Unique, conflict.ID)
+	if conflict.ID != 0 && conflict.ID != bundle.Problem.ID {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "unique ID %q is already in use by problem %d", bundle.Problem.Unique, conflict.ID)
 		return
 	}
 
-	// timestamps
-	problem.UpdatedAt = now
+	// update the timestamp
+	bundle.Problem.UpdatedAt = now
 
 	// compute signature
-	problem.Signature = problem.computeSignature(Config.DaycareSecret)
+	bundle.ProblemSignature = bundle.Problem.ComputeSignature(Config.DaycareSecret, bundle.ProblemSteps)
 
 	// check the commits
-	if len(problem.Commits) != len(problem.Steps) {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "found %d commits for %d steps; must have the same number of commits as steps", len(problem.Commits), len(problem.Steps))
-		return
-	}
+	whitelists := bundle.Problem.GetStepWhitelists(bundle.ProblemSteps)
+	bundle.CommitSignatures = nil
 
-	whitelists := getStepWhitelists(&problem)
-
-	for n, commit := range problem.Commits {
+	for n, commit := range bundle.Commits {
 		commit.ID = 0
 		commit.AssignmentID = 0
-		if commit.ProblemStepNumber != n {
-			loggedHTTPErrorf(w, http.StatusBadRequest, "commit %d has ProblemStepNumber of %d", n, commit.ProblemStepNumber)
-			return
-		}
-		commit.UserID = currentUser.ID
+		commit.ProblemID = bundle.Problem.ID
+		commit.Step = int64(n) + 1
 		if commit.Action != "confirm" {
 			loggedHTTPErrorf(w, http.StatusBadRequest, "commit %d has action %q, expected %q", n, commit.Action, "confirm")
 			return
 		}
-		if err := commit.normalize(now, whitelists[n]); err != nil {
+		commit.Transcript = []*EventMessage{}
+		commit.ReportCard = nil
+		commit.Score = 0.0
+		commit.CreatedAt = now
+		commit.UpdatedAt = now
+		if err := commit.Normalize(now, whitelists[n]); err != nil {
 			loggedHTTPErrorf(w, http.StatusBadRequest, "commit %d: %v", n, err)
 			return
 		}
 
 		// set timestamps and compute signature
-		commit.CreatedAt = now
-		commit.UpdatedAt = now
-		commit.ProblemSignature = problem.Signature
-		commit.Signature = commit.computeSignature(Config.DaycareSecret)
+		sig := commit.ComputeSignature(Config.DaycareSecret)
+		bundle.CommitSignatures = append(bundle.CommitSignatures, sig)
 	}
 
-	render.JSON(http.StatusOK, &problem)
+	render.JSON(http.StatusOK, &bundle)
 }
-*/

@@ -179,7 +179,7 @@ func DeleteUser(w http.ResponseWriter, tx *sql.Tx, params martini.Params) {
 func UserCookie(w http.ResponseWriter, r *http.Request) {
 	cookie := r.Header.Get("Cookie")
 	for _, field := range strings.Fields(cookie) {
-		if strings.HasPrefix(field, "codegrinder_session=") {
+		if strings.HasPrefix(field, CookieName+"=") {
 			fmt.Fprintf(w, "%s", field)
 		}
 	}
