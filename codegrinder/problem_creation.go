@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"log"
 	"net/http"
 	"time"
@@ -138,8 +139,14 @@ func saveProblemBundleCommon(w http.ResponseWriter, tx *sql.Tx, bundle *ProblemB
 	for _, step := range steps {
 		step.ProblemID = problem.ID
 		if isUpdate {
-			// TODO: no primary key, so meddler doesn't know what to do
-			if err := meddler.Update(tx, "problem_steps", step); err != nil {
+			// meddler does not understand updating rows without a single integer primary key
+			raw, err := json.Marshal(step.Files)
+			if err != nil {
+				loggedHTTPErrorf(w, http.StatusInternalServerError, "json error: %v", err)
+				return
+			}
+			if _, err = tx.Exec(`UPDATE problem_steps SET note=$1,instructions=$2,weight=$3,files=$4 WHERE problem_id=$5 AND step=$6`,
+				step.Note, step.Instructions, step.Weight, raw, step.ProblemID, step.Step); err != nil {
 				loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 				return
 			}

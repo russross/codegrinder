@@ -298,23 +298,27 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 	}
 	log.Printf("problem %q saved and ready to use", final.Problem.Unique)
 
-	time.Sleep(time.Second)
+	if signed.Problem.ID == 0 {
+		// create a matching problem set
+		// pause for a bit since the database seems to need to catch up
+		time.Sleep(time.Second)
 
-	// create a problem set with just this problem and the same unique name
-	psBundle := &ProblemSetBundle{
-		ProblemSet: &ProblemSet{
-			Unique:    final.Problem.Unique,
-			Note:      "set for single problem " + final.Problem.Unique + "\n" + final.Problem.Note,
-			Tags:      final.Problem.Tags,
-			CreatedAt: now,
-			UpdatedAt: now,
-		},
-		ProblemIDs: []int64{final.Problem.ID},
-		Weights:    []float64{1.0},
+		// create a problem set with just this problem and the same unique name
+		psBundle := &ProblemSetBundle{
+			ProblemSet: &ProblemSet{
+				Unique:    final.Problem.Unique,
+				Note:      "set for single problem " + final.Problem.Unique + "\n" + final.Problem.Note,
+				Tags:      final.Problem.Tags,
+				CreatedAt: now,
+				UpdatedAt: now,
+			},
+			ProblemIDs: []int64{final.Problem.ID},
+			Weights:    []float64{1.0},
+		}
+		finalPSBundle := new(ProblemSetBundle)
+		mustPostObject("/problem_set_bundles", nil, psBundle, finalPSBundle)
+		log.Printf("problem set %q created and ready to use for this problem", finalPSBundle.ProblemSet.Unique)
 	}
-	finalPSBundle := new(ProblemSetBundle)
-	mustPostObject("/problem_set_bundles", nil, psBundle, finalPSBundle)
-	log.Printf("problem set %q created and ready to use for this problem", finalPSBundle.ProblemSet.Unique)
 }
 
 func mustConfirmCommitBundle(userID int64, bundle *CommitBundle, args []string) *CommitBundle {
