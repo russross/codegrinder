@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -72,6 +73,9 @@ func main() {
 	} else if err := json.Unmarshal(raw, &Config); err != nil {
 		log.Fatalf("failed to parse config file: %v", err)
 	}
+	//Config.OAuthSharedSecret = unBase64(Config.OAuthSharedSecret)
+	Config.SessionSecret = unBase64(Config.SessionSecret)
+	Config.DaycareSecret = unBase64(Config.DaycareSecret)
 
 	// set up martini
 	r := martini.NewRouter()
@@ -264,55 +268,58 @@ func main() {
 
 		// problem bundles--for problem creation only
 		r.Post("/v2/problem_bundles/unconfirmed", auth, withTx, withCurrentUser, binding.Json(ProblemBundle{}), PostProblemBundleUnconfirmed)
-		//r.Post("/v2/problem_bundles/confirmed", auth, withTx, withCurrentUser, binding.Json(ProblemBundle{}), PostProblemBundleConfirmed)
-		//r.Put("/v2/problem_bundles/:problem_id", auth, withTx, withCurrentUser, binding.Json(ProblemBundle{}), PutProblemBundle)
+		r.Post("/v2/problem_bundles/confirmed", auth, withTx, withCurrentUser, binding.Json(ProblemBundle{}), PostProblemBundleConfirmed)
+		r.Put("/v2/problem_bundles/:problem_id", auth, withTx, withCurrentUser, binding.Json(ProblemBundle{}), PutProblemBundle)
 
 		// problem set bundles--for problem set creation only
-		//r.Post("/v2/problem_set_bundles", auth, withTx, withCurrentUser, binding.Json(ProblemSetBundle{}), PostProblemSetBundle)
+		r.Post("/v2/problem_set_bundles", auth, withTx, withCurrentUser, binding.Json(ProblemSetBundle{}), PostProblemSetBundle)
 
 		// problem types
-		r.Get("/v2/problemtypes", auth, GetProblemTypes)
-		r.Get("/v2/problemtypes/:name", auth, GetProblemType)
+		r.Get("/v2/problem_types", auth, GetProblemTypes)
+		r.Get("/v2/problem_types/:name", auth, GetProblemType)
 
 		// problems
 		r.Get("/v2/problems", auth, withTx, withCurrentUser, GetProblems)
 		r.Get("/v2/problems/:problem_id", auth, withTx, GetProblem)
-		r.Get("/v2/problems/:problem_id/steps", auth, withTx, GetProblemSteps)
+		//r.Get("/v2/problems/:problem_id/steps", auth, withTx, GetProblemSteps)
 		r.Get("/v2/problems/:problem_id/steps/:step", auth, withTx, GetProblemStep)
-		r.Delete("/v2/problems/:problem_id", auth, withTx, withCurrentUser, DeleteProblem)
+		//r.Delete("/v2/problems/:problem_id", auth, withTx, withCurrentUser, DeleteProblem)
 
 		// problem sets
 		r.Get("/v2/problem_sets", auth, withTx, withCurrentUser, GetProblemSets)
 		r.Get("/v2/problem_sets/:problem_set_id", auth, withTx, GetProblemSet)
 		r.Get("/v2/problem_sets/:problem_set_id/problems", auth, withTx, GetProblemSetProblems)
-		r.Delete("/v2/problem_sets/:problem_set_id", auth, withTx, withCurrentUser, DeleteProblemSet)
+		//r.Delete("/v2/problem_sets/:problem_set_id", auth, withTx, withCurrentUser, DeleteProblemSet)
 
 		// users
-		r.Get("/v2/users", auth, withTx, withCurrentUser, GetUsers)
+		//r.Get("/v2/users", auth, withTx, withCurrentUser, GetUsers)
 		r.Get("/v2/users/me", auth, withTx, withCurrentUser, GetUserMe)
-		r.Get("/v2/users/me/cookie", auth, UserCookie)
-		r.Get("/v2/users/:user_id", auth, withTx, withCurrentUser, GetUser)
-		r.Get("/v2/courses/:course_id/users", auth, withTx, withCurrentUser, GetCourseUsers)
-		r.Delete("/v2/users/:user_id", auth, withTx, withCurrentUser, DeleteUser)
+		//r.Get("/v2/users/me/cookie", auth, UserCookie)
+		//r.Get("/v2/users/:user_id", auth, withTx, withCurrentUser, GetUser)
+		//r.Get("/v2/courses/:course_id/users", auth, withTx, withCurrentUser, GetCourseUsers)
+		//r.Delete("/v2/users/:user_id", auth, withTx, withCurrentUser, DeleteUser)
 
 		// courses
-		r.Get("/v2/courses", auth, withTx, withCurrentUser, GetCourses)
+		//r.Get("/v2/courses", auth, withTx, withCurrentUser, GetCourses)
 		r.Get("/v2/courses/:course_id", auth, withTx, GetCourse)
 		//r.Get("/v2/users/:user_id/courses", auth, withTx, withCurrentUser, GetUserCourses)
-		r.Delete("/v2/courses/:course_id", auth, withTx, withCurrentUser, DeleteCourse)
+		//r.Delete("/v2/courses/:course_id", auth, withTx, withCurrentUser, DeleteCourse)
 
 		// assignments
 		r.Get("/v2/users/:user_id/assignments", auth, withTx, withCurrentUser, GetUserAssignments)
 		//r.Get("/v2/courses/:course_id/assignments", auth, withTx, withCurrentUser, GetCourseAssignments)
 		//r.Get("/v2/courses/:course_id/users/:user_id/assignments", auth, withTx, withCurrentUser, GetCourseUserAssignments)
 		r.Get("/v2/assignments/:assignment_id", auth, withTx, withCurrentUser, GetAssignment)
-		r.Delete("/v2/assignments/:assignment_id", auth, withTx, withCurrentUser, DeleteAssignment)
+		//r.Delete("/v2/assignments/:assignment_id", auth, withTx, withCurrentUser, DeleteAssignment)
 
 		// commits
 		//r.Get("/v2/assignments/:assignment_id/commits", auth, withTx, withCurrentUser, GetCommits)
 		//r.Get("/v2/commits/:commit_id", auth, withTx, withCurrentUser, GetCommit)
 		//r.Get("/v2/assignments/:assignment_id/commits/last", auth, withTx, withCurrentUser, GetAssignmentCommitLast)
 		//r.Delete("/v2/commits/:commit_id", auth, withTx, withCurrentUser, DeleteCommit)
+
+		// commit bundles
+		r.Post("/v2/commit_bundles/unsigned", auth, withTx, withCurrentUser, PostCommitBundlesUnsigned)
 	}
 
 	// set up daycare role
@@ -327,7 +334,7 @@ func main() {
 			log.Fatalf("Ping: %v", err)
 		}
 
-		//r.Get("/v2/sockets/:problem_type/:action", SocketProblemTypeAction)
+		r.Get("/v2/sockets/:problem_type/:action", SocketProblemTypeAction)
 	}
 
 	// start web server
@@ -583,4 +590,11 @@ func dump(elt interface{}) {
 		panic("JSON encoding error in dump: " + err.Error())
 	}
 	fmt.Printf("%s\n", raw)
+}
+
+func unBase64(s string) string {
+	if raw, err := base64.StdEncoding.DecodeString(s); err == nil {
+		return string(raw)
+	}
+	return s
 }

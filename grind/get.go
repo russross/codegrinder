@@ -72,7 +72,7 @@ func CommandGet(cmd *cobra.Command, args []string) {
 
 	// get the list of problems in the problem set
 	problemSetProblems := []*ProblemSetProblem{}
-	mustGetObject(fmt.Sprintf("/problem_sets/%d/problems", assignment.ProblemSetID), nil, problemSetProblems)
+	mustGetObject(fmt.Sprintf("/problem_sets/%d/problems", assignment.ProblemSetID), nil, &problemSetProblems)
 
 	// for each problem get the problem, the most recent commit (or create one), and the corresponding step
 	commits := make(map[string]*Commit)
@@ -99,7 +99,7 @@ func CommandGet(cmd *cobra.Command, args []string) {
 			info.Whitelist = make(map[string]bool)
 		}
 
-		mustGetObject(fmt.Sprintf("/problems/%d/steps/%d", problem.ID, commit.Step), nil, step)
+		mustGetObject(fmt.Sprintf("/problems/%d/steps/%d", problem.ID, info.Step), nil, step)
 		for name := range step.Files {
 			// starter files are added to the whitelist
 			dir, _ := filepath.Split(name)

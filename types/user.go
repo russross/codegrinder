@@ -59,7 +59,7 @@ type Assignment struct {
 	UserID             int64              `json:"userID" meddler:"user_id"`
 	Roles              string             `json:"roles" meddler:"roles"`
 	Instructor         bool               `json:"instructor" meddler:"instructor"`
-	ProblemScores      map[string]float64 `json:"problem_scores" meddler:"problem_scores"`
+	ProblemScores      map[string]float64 `json:"problem_scores" meddler:"problem_scores,json"`
 	Score              float64            `json:"score" meddler:"score,zeroisnull"`
 	GradeID            string             `json:"-" meddler:"grade_id,zeroisnull"`
 	LtiID              string             `json:"-" meddler:"lti_id"`
@@ -102,7 +102,7 @@ func (asst *Assignment) IsInstructorRole() bool {
 	return false
 }
 
-func (commit *Commit) ComputeSignature(secret string) string {
+func (commit *Commit) ComputeSignature(secret string, problemSignature string) string {
 	v := make(url.Values)
 
 	// gather all relevant fields
@@ -134,8 +134,9 @@ func (commit *Commit) ComputeSignature(secret string) string {
 		}
 	}
 	v.Add("score", strconv.FormatFloat(commit.Score, 'g', -1, 64))
-	v.Add("createdAt", commit.CreatedAt.Round(time.Second).UTC().Format(time.RFC3339))
-	v.Add("updatedAt", commit.UpdatedAt.Round(time.Second).UTC().Format(time.RFC3339))
+	v.Add("created_at", commit.CreatedAt.Round(time.Second).UTC().Format(time.RFC3339))
+	v.Add("updated_at", commit.UpdatedAt.Round(time.Second).UTC().Format(time.RFC3339))
+	v.Add("problem_signature", problemSignature)
 
 	// compute signature
 	mac := hmac.New(sha256.New, []byte(secret))

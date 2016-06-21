@@ -188,7 +188,7 @@ func UserCookie(w http.ResponseWriter, r *http.Request) {
 // getInstructorCourses returns a list of IDs of courses for which this
 // user is an instructor according to LTI roles.
 func getInstructorCourses(tx *sql.Tx, user *User) ([]int64, error) {
-	rows, err := tx.Query(`SELECT DISTINCT course_id FROM assignments WHERE user_id = $1 AND instructor ORDER BY updated_at DESC LIMIT 50`, user.ID)
+	rows, err := tx.Query(`SELECT DISTINCT course_id FROM assignments WHERE user_id = $1 AND instructor LIMIT 100`, user.ID)
 	if err != nil {
 		return nil, loggedErrorf("db error: %v", err)
 	}
@@ -259,7 +259,6 @@ func GetAssignment(w http.ResponseWriter, tx *sql.Tx, currentUser *User, params 
 		// 2) the user is an instructor for that course
 		instructorCourses, err := getInstructorCourses(tx, currentUser)
 		if err != nil {
-			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 			return
 		}
 		if len(instructorCourses) == 0 {

@@ -15,8 +15,8 @@ import (
 const workingDir = "/home/student"
 
 func init() {
-	problemTypes["python2unittest"] = &ProblemType{
-		Name:        "python2unittest",
+	problemTypes["python27unittest"] = &ProblemType{
+		Name:        "python27unittest",
 		Image:       "codegrinder/python2",
 		MaxCPU:      10,
 		MaxFD:       10,

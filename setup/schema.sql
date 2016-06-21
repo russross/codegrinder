@@ -1,15 +1,15 @@
 CREATE TYPE problem_types AS ENUM (
-	'python27inout',
-	'python27unittest',
-	'cppgtest',
-	'cppinout',
-	'gotest',
-	'nand2tetrishardware',
-	'nand2tetrisassembly',
-	'nasmgtest',
-	'ocamlounit',
-	'prologunittest',
-	'standardmlunittest'
+    'python27inout',
+    'python27unittest',
+    'cppgtest',
+    'cppinout',
+    'gotest',
+    'nand2tetrishardware',
+    'nand2tetrisassembly',
+    'nasmgtest',
+    'ocamlounit',
+    'prologunittest',
+    'standardmlunittest'
 );
 
 CREATE TABLE problems (
@@ -30,7 +30,7 @@ CREATE TABLE problem_steps (
     problem_id              bigint NOT NULL,
     step                    bigint NOT NULL,
     note                    text NOT NULL,
-	instructions			text NOT NULL,
+    instructions            text NOT NULL,
     weight                  double precision NOT NULL,
     files                   jsonb NOT NULL,
 
@@ -101,8 +101,8 @@ CREATE TABLE assignments (
     problem_set_id          bigint NOT NULL,
     user_id                 bigint NOT NULL,
     roles                   text NOT NULL,
-	instructor				boolean NOT NULL,
-	problem_scores			jsonb NOT NULL,
+    instructor              boolean NOT NULL,
+    problem_scores          jsonb NOT NULL,
     score                   double precision,
     grade_id                text,
     lti_id                  text NOT NULL,

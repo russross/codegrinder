@@ -134,7 +134,7 @@ func GetProblemStep(w http.ResponseWriter, tx *sql.Tx, params martini.Params, re
 	}
 
 	problemStep := new(ProblemStep)
-	if err := meddler.QueryRow(tx, "problem_steps", `SELECT * FROM problem_steps WHERE problem_id = $1 AND step = $2`, problemID, step); err != nil {
+	if err := meddler.QueryRow(tx, problemStep, `SELECT * FROM problem_steps WHERE problem_id = $1 AND step = $2 LIMIT 1`, problemID, step); err != nil {
 		loggedHTTPDBNotFoundError(w, err)
 		return
 	}
@@ -142,7 +142,7 @@ func GetProblemStep(w http.ResponseWriter, tx *sql.Tx, params martini.Params, re
 	render.JSON(http.StatusOK, problemStep)
 }
 
-// GetProblemSet handles a request to /v2/problemsets/:problem_set_id,
+// GetProblemSet handles a request to /v2/problem_sets/:problem_set_id,
 // returning a single problem set.
 func GetProblemSet(w http.ResponseWriter, tx *sql.Tx, params martini.Params, render render.Render) {
 	problemSetID, err := parseID(w, "problem_set_id", params["problem_set_id"])
@@ -159,7 +159,7 @@ func GetProblemSet(w http.ResponseWriter, tx *sql.Tx, params martini.Params, ren
 	render.JSON(http.StatusOK, problemSet)
 }
 
-// GetProblemSets handles a request to /v2/problemsets,
+// GetProblemSets handles a request to /v2/problem_sets,
 // returning a list of all problem sets.
 //
 // If parameter unique=<...> present, results will be filtered by matching Unique field.
@@ -210,7 +210,7 @@ func GetProblemSetProblems(w http.ResponseWriter, r *http.Request, tx *sql.Tx, p
 	render.JSON(http.StatusOK, problemSetProblems)
 }
 
-// DeleteProblemSet handles request to /v2/problemsets/:problem_set_id,
+// DeleteProblemSet handles request to /v2/problem_sets/:problem_set_id,
 // deleting the given problem set.
 // Note: this deletes all assignments and commits related to the problem set.
 func DeleteProblemSet(w http.ResponseWriter, tx *sql.Tx, params martini.Params, render render.Render) {

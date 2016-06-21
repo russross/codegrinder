@@ -242,11 +242,9 @@ func mustLoadConfig() {
 
 	if raw, err := ioutil.ReadFile(configFile); err != nil {
 		log.Fatalf("Unable to load config file; try running \"grind init\"\n")
-	} else {
-		if err := json.Unmarshal(raw, &Config); err != nil {
-			log.Printf("failed to parse %s: %v", configFile, err)
-			log.Fatalf("you may wish to try deleting the file and running \"grind init\" again\n")
-		}
+	} else if err := json.Unmarshal(raw, &Config); err != nil {
+		log.Printf("failed to parse %s: %v", configFile, err)
+		log.Fatalf("you may wish to try deleting the file and running \"grind init\" again\n")
 	}
 }
 

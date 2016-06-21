@@ -66,7 +66,7 @@ type ProblemStep struct {
 	Note         string            `json:"note" meddler:"note"`
 	Instructions string            `json:"instructions" meddler:"instructions"`
 	Weight       float64           `json:"weight" meddler:"weight"`
-	Files        map[string]string `json:"files" meddler:"files"`
+	Files        map[string]string `json:"files" meddler:"files,json"`
 }
 
 type ProblemSet struct {
@@ -81,7 +81,7 @@ type ProblemSet struct {
 type ProblemSetProblem struct {
 	ProblemSetID int64   `json:"problemSetID" meddler:"problem_set_id"`
 	ProblemID    int64   `json:"problemID" meddler:"problem_id"`
-	Weight       float64 `json:"weight", meddler:"weight"`
+	Weight       float64 `json:"weight" meddler:"weight"`
 }
 
 func (problem *Problem) Normalize(now time.Time, steps []*ProblemStep) error {
@@ -129,7 +129,7 @@ func (problem *Problem) Normalize(now time.Time, steps []*ProblemStep) error {
 	if problem.CreatedAt.Before(BeginningOfTime) || problem.CreatedAt.After(now) {
 		return fmt.Errorf("problem CreatedAt time of %v is invalid", problem.CreatedAt)
 	}
-	if problem.UpdatedAt.Before(BeginningOfTime) || problem.UpdatedAt.After(now) {
+	if problem.UpdatedAt.Before(problem.CreatedAt) || problem.UpdatedAt.After(now) {
 		return fmt.Errorf("problem UpdatedAt time of %v is invalid", problem.UpdatedAt)
 	}
 
@@ -161,7 +161,7 @@ func (problem *Problem) ComputeSignature(secret string, steps []*ProblemStep) st
 	mac.Write([]byte(encode(v)))
 	sum := mac.Sum(nil)
 	sig := base64.StdEncoding.EncodeToString(sum)
-	log.Printf("signature: %s data: %s", sig, encode(v))
+	//log.Printf("signature: %s data: %s", sig, encode(v))
 	return sig
 }
 
@@ -341,6 +341,40 @@ func (step *ProblemStep) BuildInstructions() (string, error) {
 	}
 
 	return buf.String(), nil
+}
+
+func (set *ProblemSet) Normalize(now time.Time) error {
+	// make sure the unique ID is valid
+	set.Unique = strings.TrimSpace(set.Unique)
+	if set.Unique == "" {
+		return fmt.Errorf("unique ID cannot be empty")
+	}
+	if url.QueryEscape(set.Unique) != set.Unique {
+		return fmt.Errorf("unique ID must be URL friendly: %s is escaped as %s",
+			set.Unique, url.QueryEscape(set.Unique))
+	}
+
+	// make sure the note is valid
+	set.Note = strings.TrimSpace(set.Note)
+	if set.Note == "" {
+		return fmt.Errorf("note cannot be empty")
+	}
+
+	// check tags
+	for i, tag := range set.Tags {
+		set.Tags[i] = strings.TrimSpace(tag)
+	}
+	sort.Strings(set.Tags)
+
+	// sanity check timestamps
+	if set.CreatedAt.Before(BeginningOfTime) || set.CreatedAt.After(now) {
+		return fmt.Errorf("problem set CreatedAt time of %v is invalid", set.CreatedAt)
+	}
+	if set.UpdatedAt.Before(set.CreatedAt) || set.UpdatedAt.After(now) {
+		return fmt.Errorf("problem set UpdatedAt time of %v is invalid", set.UpdatedAt)
+	}
+
+	return nil
 }
 
 func fixLineEndings(s string) string {

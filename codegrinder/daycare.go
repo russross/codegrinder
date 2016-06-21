@@ -11,36 +11,17 @@ import (
 	"time"
 
 	"github.com/fsouza/go-dockerclient"
+	"github.com/go-martini/martini"
+	"github.com/gorilla/websocket"
 	. "github.com/russross/codegrinder/types"
 )
 
 var dockerClient *docker.Client
 
-// MaxDaycareRequestAge is the maximum age of a daycare-signed commit to be saved.
-// Any commit older than this will be rejected.
-const MaxDaycareRequestAge = 15 * time.Minute
-
-// DaycareRequest represents a single request from a client to the daycare.
-// These objects are streamed across a websockets connection.
-type DaycareRequest struct {
-	Problem *Problem `json:"problem,omitempty"`
-	Commit  *Commit  `json:"commit,omitempty"`
-	Stdin   string   `json:"stdin,omitempty"`
-}
-
-// DaycareResponse represents a single response from the daycare back to a client.
-// These objects are streamed across a websockets connection.
-type DaycareResponse struct {
-	Commit *Commit       `json:"commit,omitempty"`
-	Event  *EventMessage `json:"event,omitempty"`
-	Error  string        `json:"error,omitempty"`
-}
-
-/*
 // SocketProblemTypeAction handles a request to /sockets/:problem_type/:action
 // It expects a websocket connection, which will receive a series of DaycareRequest objects
 // and will respond with DaycareResponse objects, though not in a one-to-one fashion.
-// The first DaycareRequest must have the Problem and Commit fields present. Future requests
+// The first DaycareRequest must have the CommitBundle field present. Future requests
 // should only have Stdin present.
 func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params martini.Params) {
 	now := time.Now()
@@ -78,79 +59,85 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		logAndTransmitErrorf("error reading first request message: %v", err)
 		return
 	}
-	if req.Problem == nil {
-		logAndTransmitErrorf("first request message must include the problem")
-		return
-	}
-	problem := req.Problem
-	if req.Commit == nil {
-		logAndTransmitErrorf("first request message must include the commit")
-		return
-	}
-	commit := req.Commit
 
-	if problem.Signature == "" {
-		logAndTransmitErrorf("problem must be signed")
+	// sanity check
+	if req.CommitBundle == nil {
+		logAndTransmitErrorf("first request message must include the commit bundle")
 		return
 	}
-	problemSig := problem.computeSignature(Config.DaycareSecret)
-	if !hmac.Equal([]byte(problem.Signature), []byte(problemSig)) {
-		logAndTransmitErrorf("problem signature mismatch: found %s but expected %s", problem.Signature, problemSig)
+	if req.CommitBundle.Problem == nil {
+		logAndTransmitErrorf("commit bundle must include the problem")
+		return
+	}
+	if len(req.CommitBundle.ProblemSteps) == 0 {
+		logAndTransmitErrorf("commit bundle must include the problem steps")
+		return
+	}
+	if len(req.CommitBundle.ProblemSignature) == 0 {
+		logAndTransmitErrorf("commit bundle must include the problem signature")
+		return
+	}
+	if req.CommitBundle.Commit == nil {
+		logAndTransmitErrorf("commit bundle must include the commit")
+		return
+	}
+	if len(req.CommitBundle.CommitSignature) == 0 {
+		logAndTransmitErrorf("commit bundle must include the commit signature")
 		return
 	}
 
-	// check commit signature
-	if commit.ProblemSignature != problemSig {
-		logAndTransmitErrorf("commit says problem signature is %s, but it is actually %s", commit.ProblemSignature, problemSig)
+	// check signatures
+	problem, steps := req.CommitBundle.Problem, req.CommitBundle.ProblemSteps
+	problemSig := problem.ComputeSignature(Config.DaycareSecret, steps)
+	if req.CommitBundle.ProblemSignature != problemSig {
+		logAndTransmitErrorf("problem signature mismatch: found %s but expected %s", req.CommitBundle.ProblemSignature, problemSig)
 		return
 	}
+	commit := req.CommitBundle.Commit
+	commitSig := commit.ComputeSignature(Config.DaycareSecret, problemSig)
+	if req.CommitBundle.CommitSignature != commitSig {
+		logAndTransmitErrorf("commit signature mismatch: found %s but expected %s", req.CommitBundle.CommitSignature, commitSig)
+		return
+	}
+	req.CommitBundle.CommitSignature = ""
+
+	// commit must be recent
 	age := time.Since(commit.UpdatedAt)
 	if age < 0 {
+		// be forgiving of clock skew
 		age = -age
 	}
 	if age > MaxDaycareRequestAge {
 		logAndTransmitErrorf("commit signature is %v off, cannot be more than %v", age, MaxDaycareRequestAge)
 		return
 	}
-	if commit.Signature == "" {
-		logAndTransmitErrorf("commit must be signed")
-		return
-	}
 	if commit.Action != params["action"] {
 		logAndTransmitErrorf("commit says action is %s, but request says %s", commit.Action, params["action"])
 		return
 	}
-	commitSig := commit.computeSignature(Config.DaycareSecret)
-	if !hmac.Equal([]byte(commit.Signature), []byte(commitSig)) {
-		logAndTransmitErrorf("commit signature mismatch: found %s but expected %s", commit.Signature, commitSig)
+
+	// find the problem step
+	if commit.Step < 1 || commit.Step > int64(len(steps)) {
+		logAndTransmitErrorf("commit refers to step number %d, but there are %d steps in the problem", commit.Step, len(steps))
+		return
+	}
+	step := steps[commit.Step-1]
+	if step.Step != commit.Step {
+		logAndTransmitErrorf("step number %d in the problem thinks it is step number %d", commit.Step, step.Step)
 		return
 	}
 
-	// prepare the problem step
-	if commit.ProblemStepNumber < 0 || commit.ProblemStepNumber >= len(problem.Steps) {
-		logAndTransmitErrorf("commit refers to step number that does not exist: %d", commit.ProblemStepNumber)
-		return
-	}
-
-	// collect the files from the problem step
-	step := problem.Steps[commit.ProblemStepNumber]
+	// collect the files from the problem step and overlay the files from the commit
 	files := make(map[string]string)
 	for name, contents := range step.Files {
 		files[name] = contents
-	}
-
-	// add the files from the commit
-	whitelists := getStepWhitelists(problem)
-	if err := commit.normalize(now, whitelists[commit.ProblemStepNumber]); err != nil {
-		logAndTransmitErrorf("error in commit: %v", err)
-		return
 	}
 	for name, contents := range commit.Files {
 		files[name] = contents
 	}
 
 	// launch a nanny process
-	nannyName := fmt.Sprintf("nanny-user-%d", commit.UserID)
+	nannyName := fmt.Sprintf("nanny-user-%d", req.UserID)
 	log.Printf("launching container for %s", nannyName)
 	n, err := NewNanny(problemType, problem, nannyName)
 	if err != nil {
@@ -179,7 +166,12 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 
 	// grade the problem
 	r.ParseForm()
-	action.handler(n, r.Form["args"], problem.Options, files)
+	handler, ok := action.Handler.(nannyHandler)
+	if ok {
+		handler(n, r.Form["args"], problem.Options, files)
+	} else {
+		logAndTransmitErrorf("handler for action %s is of wrong type", commit.Action)
+	}
 	commit.ReportCard = n.ReportCard
 	//dump(commit.ReportCard)
 
@@ -193,7 +185,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	<-finished
 
 	// send the final commit back to the client
-	commit.compress()
+	commit.Compress()
 
 	// compute the score for this step on a scale of 0.0 to 1.0
 	if commit.ReportCard.Passed {
@@ -213,15 +205,14 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		commit.Score = float64(passed) / float64(len(commit.ReportCard.Results))
 	}
 	commit.UpdatedAt = now
-	commit.Signature = commit.computeSignature(Config.DaycareSecret)
+	req.CommitBundle.CommitSignature = commit.ComputeSignature(Config.DaycareSecret, req.CommitBundle.ProblemSignature)
 
-	res := &DaycareResponse{Commit: commit}
+	res := &DaycareResponse{CommitBundle: req.CommitBundle}
 	if err := socket.WriteJSON(res); err != nil {
 		logAndTransmitErrorf("error writing final commit JSON: %v", err)
 		return
 	}
 }
-*/
 
 type Nanny struct {
 	Start      time.Time

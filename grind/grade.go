@@ -42,9 +42,13 @@ func CommandGrade(cmd *cobra.Command, args []string) {
 
 	// TODO: get a daycare referral
 
+	// get the user ID
+	user := new(User)
+	mustGetObject("/users/me", nil, user)
+
 	// send it to the daycare for grading
 	log.Printf("submitting %s step %d for grading", problem.Unique, commit.Step)
-	graded := mustConfirmCommitBundle(signed, nil)
+	graded := mustConfirmCommitBundle(user.ID, signed, nil)
 
 	// save the commit with report card
 	saved := new(CommitBundle)

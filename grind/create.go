@@ -238,6 +238,10 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 		log.Fatalf("expected to find %d step%s, but only found %d", len(cfg.Step), plural(len(cfg.Step)), len(unsigned.ProblemSteps))
 	}
 
+	// get user ID
+	user := new(User)
+	mustGetObject("/users/me", nil, user)
+
 	// get the request validated and signed
 	signed := new(ProblemBundle)
 	mustPostObject("/problem_bundles/unconfirmed", nil, unsigned, signed)
@@ -252,7 +256,7 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 			Commit:           signed.Commits[n],
 			CommitSignature:  signed.CommitSignatures[n],
 		}
-		validated := mustConfirmCommitBundle(unvalidated, nil)
+		validated := mustConfirmCommitBundle(user.ID, unvalidated, nil)
 		log.Printf("  finished validating solution")
 		if validated.Commit.ReportCard == nil || validated.Commit.Score != 1.0 || !validated.Commit.ReportCard.Passed {
 			log.Printf("  solution for step %d failed: %s", n+1, validated.Commit.ReportCard.Note)
@@ -292,7 +296,9 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 	} else {
 		mustPutObject(fmt.Sprintf("/problem_bundles/%d", signed.Problem.ID), nil, signed, final)
 	}
-	log.Printf("problem saved and ready to use")
+	log.Printf("problem %q saved and ready to use", final.Problem.Unique)
+
+	time.Sleep(time.Second)
 
 	// create a problem set with just this problem and the same unique name
 	psBundle := &ProblemSetBundle{
@@ -308,26 +314,15 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 	}
 	finalPSBundle := new(ProblemSetBundle)
 	mustPostObject("/problem_set_bundles", nil, psBundle, finalPSBundle)
-	log.Printf("problem set created and ready to use for this problem")
+	log.Printf("problem set %q created and ready to use for this problem", finalPSBundle.ProblemSet.Unique)
 }
 
-type DaycareRequest struct {
-	CommitBundle *CommitBundle `json:"commit_bundle,omitempty"`
-	Stdin        string        `json:"stdin,omitempty"`
-}
-
-type DaycareResponse struct {
-	CommitBundle *CommitBundle `json:"commit_bundle,omitempty"`
-	Event        *EventMessage `json:"event,omitempty"`
-	Error        string        `json:"error,omitempty"`
-}
-
-func mustConfirmCommitBundle(bundle *CommitBundle, args []string) *CommitBundle {
+func mustConfirmCommitBundle(userID int64, bundle *CommitBundle, args []string) *CommitBundle {
 	verbose := false
 
 	// create a websocket connection to the server
 	headers := make(http.Header)
-	url := "wss://" + Config.Host + "/api/v2/sockets/" + bundle.Problem.ProblemType + "/" + bundle.Commit.Action
+	url := "wss://" + Config.Host + "/v2/sockets/" + bundle.Problem.ProblemType + "/" + bundle.Commit.Action
 	socket, resp, err := websocket.DefaultDialer.Dial(url, headers)
 	if err != nil {
 		log.Printf("error dialing %s: %v", url, err)
@@ -340,7 +335,7 @@ func mustConfirmCommitBundle(bundle *CommitBundle, args []string) *CommitBundle 
 	defer socket.Close()
 
 	// form the initial request
-	req := &DaycareRequest{CommitBundle: bundle}
+	req := &DaycareRequest{UserID: userID, CommitBundle: bundle}
 	if err := socket.WriteJSON(req); err != nil {
 		log.Fatalf("error writing request message: %v", err)
 	}
