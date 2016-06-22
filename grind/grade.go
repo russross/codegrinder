@@ -38,7 +38,7 @@ func CommandGrade(cmd *cobra.Command, args []string) {
 
 	// send the commit bundle to the server
 	signed := new(CommitBundle)
-	mustPostObject(fmt.Sprintf("/assignments/%d/commit_bundles/unsigned", commit.AssignmentID), nil, unsigned, signed)
+	mustPostObject("/commit_bundles/unsigned", nil, unsigned, signed)
 
 	// TODO: get a daycare referral
 
@@ -51,8 +51,12 @@ func CommandGrade(cmd *cobra.Command, args []string) {
 	graded := mustConfirmCommitBundle(user.ID, signed, nil)
 
 	// save the commit with report card
+	toSave := &CommitBundle{
+		Commit:          graded.Commit,
+		CommitSignature: graded.CommitSignature,
+	}
 	saved := new(CommitBundle)
-	mustPostObject(fmt.Sprintf("/assignments/%d/commit_bundles/signed", commit.AssignmentID), nil, graded, saved)
+	mustPostObject("/commit_bundles/signed", nil, toSave, saved)
 	commit = saved.Commit
 
 	if commit.ReportCard != nil && commit.ReportCard.Passed && commit.Score == 1.0 {

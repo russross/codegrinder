@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-martini/martini"
 	"github.com/martini-contrib/render"
@@ -478,103 +479,157 @@ func DeleteUserAssignmentCommit(w http.ResponseWriter, tx *sql.Tx, params martin
 	}
 }
 
-/*
-// PostUserAssignmentCommit handles requests to /v2/users/me/assignments/:assignment_id/commits,
-// adding a new commit (or updating the most recent one) for the given assignment for the current user.
-func PostUserAssignmentCommit(w http.ResponseWriter, tx *sql.Tx, currentUser *User, params martini.Params, commit Commit, render render.Render) {
+// PostCommitBundlesUnsigned handles requests to /v2/commit_bundles/unsigned,
+// saving a new commit (or updating the most recent one), gathering the problem data,
+// signing everything, and returning it in a form ready to send to the daycare.
+func PostCommitBundlesUnsigned(w http.ResponseWriter, tx *sql.Tx, currentUser *User, bundle CommitBundle, render render.Render) {
 	now := time.Now()
 
-	assignmentID, err := strconv.Atoi(params["assignment_id"])
-	if err != nil {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "error parsing assignment_id from URL: %v", err)
+	if bundle.Commit == nil {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must include a commit object")
 		return
 	}
+	if len(bundle.CommitSignature) != 0 {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must not include commit signature")
+		return
+	}
+	bundle.Commit.Transcript = []*EventMessage{}
+	bundle.Commit.ReportCard = nil
+	bundle.Commit.Score = 0.0
+	bundle.Commit.CreatedAt = now
+	bundle.Commit.UpdatedAt = now
+	saveCommitBundleCommon(now, w, tx, currentUser, bundle, render)
+}
+
+// PostCommitBundlesSigned handles requests to /v2/commit_bundles/signed,
+// saving a new commit (or updating the most recent one), gathering the problem data,
+// verifying signatures, and posting a grade (if appropriate).
+func PostCommitBundlesSigned(w http.ResponseWriter, tx *sql.Tx, currentUser *User, bundle CommitBundle, render render.Render) {
+	now := time.Now()
+
+	if bundle.Commit == nil {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must include a commit object")
+		return
+	}
+	if len(bundle.CommitSignature) == 0 {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must include commit signature")
+		return
+	}
+	saveCommitBundleCommon(now, w, tx, currentUser, bundle, render)
+}
+
+func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, currentUser *User, bundle CommitBundle, render render.Render) {
+	if bundle.Problem != nil {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must not include a problem object")
+		return
+	}
+	if len(bundle.ProblemSteps) != 0 {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must not include problem step objects")
+		return
+	}
+	if len(bundle.ProblemSignature) != 0 {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must not include problem signature")
+		return
+	}
+	commit := bundle.Commit
 
 	// get the assignment and make sure it is for this user
 	assignment := new(Assignment)
-	if err = meddler.QueryRow(tx, assignment, `SELECT * FROM assignments WHERE id = $1 AND user_id = $2`, assignmentID, currentUser.ID); err != nil {
+	if err := meddler.QueryRow(tx, assignment, `SELECT * FROM assignments WHERE id = $1 AND user_id = $2`, commit.AssignmentID, currentUser.ID); err != nil {
 		loggedHTTPDBNotFoundError(w, err)
 		return
 	}
 
 	// get the problem
 	problem := new(Problem)
-	if err = meddler.QueryRow(tx, problem, `SELECT problems.* FROM problems JOIN assignments ON problems.ID = assignments.problem_id WHERE assignments.id = $1 LIMIT 1`, assignmentID); err != nil {
+	if err := meddler.QueryRow(tx, problem, `SELECT * FROM problems WHERE id = $1`, commit.ProblemID); err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
+		return
+	}
+	steps := []*ProblemStep{}
+	if err := meddler.QueryAll(tx, &steps, `SELECT * FROM problem_steps WHERE problem_id = $1 ORDER BY step`, commit.ProblemID); err != nil {
+		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
+		return
+	}
+	if len(steps) == 0 {
+		loggedHTTPErrorf(w, http.StatusInternalServerError, "no steps found for problem %s (%d)", problem.Unique, problem.ID)
 		return
 	}
 
 	// validate commit
-	if commit.Step > len(problem.Steps) {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "commit has step number %d, but there are only %d steps in the problem", commit.Step, len(problem.Steps))
+	if commit.Step > int64(len(steps)) {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "commit has step number %d, but there are only %d steps in the problem", commit.Step, len(steps))
 		return
 	}
-	whitelists := getStepWhitelists(problem)
-	if err = commit.normalize(now, whitelists[commit.Step-1]); err != nil {
+	whitelists := problem.GetStepWhitelists(steps)
+	if err := commit.Normalize(now, whitelists[commit.Step-1]); err != nil {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "%v", err)
 		return
 	}
 
-	// is this a signed commit from the daycare?
-	if commit.Action != "" && commit.Signature != "" && commit.ReportCard != nil && len(commit.Transcript) > 0 {
-		// validate the signature
-		if commit.ProblemSignature != problem.Signature {
-			loggedHTTPErrorf(w, http.StatusBadRequest, "problem signature for this commit does not match the current problem signature; please update the problem and re-run the test")
+	// update an existing commit?
+	openCommit := new(Commit)
+	if err := meddler.QueryRow(tx, openCommit, `SELECT * FROM commits WHERE assignment_id = $1 AND problem_id = $2 AND step = $3 AND action IS NULL AND updated_at > $4 LIMIT 1`, commit.AssignmentID, commit.ProblemID, commit.Step, now.Add(-OpenCommitTimeout)); err != nil {
+		if err == sql.ErrNoRows {
+			commit.ID = 0
+		} else {
+			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
+			return
+		}
+	} else {
+		commit.ID = openCommit.ID
+		commit.CreatedAt = openCommit.CreatedAt
+	}
+
+	// sign the problem and the commit
+	problemSig := problem.ComputeSignature(Config.DaycareSecret, steps)
+	commitSig := commit.ComputeSignature(Config.DaycareSecret, problemSig)
+
+	// verify signature
+	if bundle.CommitSignature != "" {
+		if bundle.CommitSignature != commitSig {
+			loggedHTTPErrorf(w, http.StatusBadRequest, "found commit signature of %s, but expected %s", bundle.CommitSignature, commitSig)
 			return
 		}
 		age := now.Sub(commit.UpdatedAt)
 		if age < 0 {
 			age = -age
 		}
-		if age > signedCommitTimeout {
+		if age > SignedCommitTimeout {
 			loggedHTTPErrorf(w, http.StatusBadRequest, "commit signature has expired")
 			return
 		}
-		if commit.computeSignature(Config.DaycareSecret) != commit.Signature {
-			loggedHTTPErrorf(w, http.StatusBadRequest, "commit signature is incorrect")
-			return
-		}
+	}
 
-		// post grade to LMS using LTI
-		if err := saveGrade(tx, &commit, assignment, currentUser); err != nil {
+	// save the commit
+	action := commit.Action
+	if bundle.CommitSignature == "" {
+		// if unsigned, save it without the action
+		commit.Action = ""
+	}
+	if err := meddler.Save(tx, "commits", commit); err != nil {
+		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
+		return
+	}
+	commit.Action = action
+
+	// recompute the signature as the ID may have changed when saving
+	commitSig = commit.ComputeSignature(Config.DaycareSecret, problemSig)
+	signed := &CommitBundle{
+		Problem:          problem,
+		ProblemSteps:     steps,
+		ProblemSignature: problemSig,
+		Commit:           commit,
+		CommitSignature:  commitSig,
+	}
+
+	// post grade to LMS using LTI
+	if signed.Commit.ReportCard != nil {
+		if err := saveGrade(tx, commit, assignment, currentUser); err != nil {
 			loggedHTTPErrorf(w, http.StatusInternalServerError, "error posting grade back to LMS: %v", err)
 			return
 		}
 	}
 
-	openCommit := new(Commit)
-	if err = meddler.QueryRow(tx, openCommit, `SELECT * FROM commits WHERE assignment_id = $1 AND problem_step_number = $2 AND action IS NULL AND updated_at > $3 LIMIT 1`, assignmentID, commit.ProblemStepNumber, now.Add(-openCommitTimeout)); err != nil {
-		if err == sql.ErrNoRows {
-			openCommit = nil
-		} else {
-			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-			return
-		}
-	}
-
-	// update an existing commit?
-	if openCommit != nil {
-		commit.ID = openCommit.ID
-		commit.CreatedAt = openCommit.CreatedAt
-	} else {
-		commit.ID = 0
-		commit.CreatedAt = now
-	}
-	commit.AssignmentID = assignmentID
-	commit.UserID = currentUser.ID
-	commit.UpdatedAt = now
-
-	if err := meddler.Save(tx, "commits", &commit); err != nil {
-		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-		return
-	}
-
-	// sign the commit for execution
-	if commit.Action != "" && commit.Signature == "" && commit.ReportCard == nil && len(commit.Transcript) == 0 {
-		commit.ProblemSignature = problem.Signature
-		commit.Signature = commit.computeSignature(Config.DaycareSecret)
-	}
-
-	render.JSON(http.StatusOK, &commit)
+	render.JSON(http.StatusOK, &signed)
 }
-*/

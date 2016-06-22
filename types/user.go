@@ -18,7 +18,7 @@ import (
 const (
 	TranscriptEventCountLimit = 500
 	TranscriptDataLimit       = 1e5
-	OpenCommitTimeout         = 20 * time.Minute
+	OpenCommitTimeout         = 6 * time.Hour
 	SignedCommitTimeout       = 15 * time.Minute
 	CookieName                = "codegrinder"
 )
@@ -142,7 +142,9 @@ func (commit *Commit) ComputeSignature(secret string, problemSignature string) s
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(encode(v)))
 	sum := mac.Sum(nil)
-	return base64.StdEncoding.EncodeToString(sum)
+	sig := base64.StdEncoding.EncodeToString(sum)
+	//log.Printf("commit signature: %s data: %s", sig, encode(v))
+	return sig
 }
 
 func (commit *Commit) Normalize(now time.Time, whitelist map[string]bool) error {

@@ -319,7 +319,8 @@ func main() {
 		//r.Delete("/v2/commits/:commit_id", auth, withTx, withCurrentUser, DeleteCommit)
 
 		// commit bundles
-		//r.Post("/v2/commit_bundles/unsigned", auth, withTx, withCurrentUser, PostCommitBundlesUnsigned)
+		r.Post("/v2/commit_bundles/unsigned", auth, withTx, withCurrentUser, binding.Json(CommitBundle{}), PostCommitBundlesUnsigned)
+		r.Post("/v2/commit_bundles/signed", auth, withTx, withCurrentUser, binding.Json(CommitBundle{}), PostCommitBundlesSigned)
 	}
 
 	// set up daycare role

@@ -161,7 +161,7 @@ func (problem *Problem) ComputeSignature(secret string, steps []*ProblemStep) st
 	mac.Write([]byte(encode(v)))
 	sum := mac.Sum(nil)
 	sig := base64.StdEncoding.EncodeToString(sum)
-	//log.Printf("signature: %s data: %s", sig, encode(v))
+	//log.Printf("problem signature: %s data: %s", sig, encode(v))
 	return sig
 }
 
