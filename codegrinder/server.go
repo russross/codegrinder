@@ -179,87 +179,24 @@ func main() {
 			c.Map(user)
 		}
 
-		// 		// martini service: require logged in user to be an author or administrator (requires withCurrentUser)
-		// 		authorOnly := func(w http.ResponseWriter, tx *sql.Tx, currentUser *User) {
-		// 			if currentUser.Admin {
-		// 				return
-		// 			}
-		// 			if !currentUser.Author {
-		// 				loggedHTTPErrorf(w, http.StatusUnauthorized, "user %d (%s) is not an author", currentUser.ID, currentUser.Email)
-		// 				return
-		// 			}
-		// 		}
-		//
-		// 		// martini service: require logged in user to be an instructor for a specific course or an administrator (requires withCurrentUser)
-		// 		instructorForCourseOnly := func(courseFieldName string) func(w http.ResponseWriter, tx *sql.Tx, currentUser *User, params martini.Params) {
-		// 			return func(w http.ResponseWriter, tx *sql.Tx, currentUser *User, params martini.Params) {
-		// 				courseID, err := parseID(w, courseFieldName, params[courseFieldName])
-		// 				if err != nil {
-		// 					return
-		// 				}
-		// 				if currentUser.Admin {
-		// 					return
-		// 				}
-		// 				courses, err := currentUser.getInstructorCourses(tx)
-		// 				if err != nil {
-		// 					loggedHTTPErrorf(w, http.StatusInternalServerError, "error checking user credentials: %v", err)
-		// 					return
-		// 				}
-		// 				if !int64Contains(courses, courseID) {
-		// 					loggedHTTPErrorf(w, http.StatusUnauthorized, "user %d (%s) is not an instructor for course %d", currentUser.ID, currentUser.Email, courseID)
-		// 				}
-		// 			}
-		// 		}
-		//
-		// 		// martini service: require logged in user to be the requested user or an instructor for a course that user is in or an administrator (requires withCurrentUser)
-		// 		instructorForUserOnly := func(userFieldName string) func(w http.ResponseWriter, tx *sql.Tx, currentUser *User, params martini.Params) {
-		// 			return func(w http.ResponseWriter, tx *sql.Tx, currentUser *User, params martini.Params) {
-		// 				userID, err := parseID(w, userFieldName, params[userFieldName])
-		// 				if err != nil {
-		// 					return
-		// 				}
-		// 				if currentUser.Admin {
-		// 					return
-		// 				}
-		// 				if currentUser.ID == userID {
-		// 					return
-		// 				}
-		// 				courses, err := currentUser.getInstructorCourses(tx)
-		// 				if err != nil {
-		// 					loggedHTTPErrorf(w, http.StatusInternalServerError, "error checking user credentials: %v", err)
-		// 					return
-		// 				}
-		// 				if len(courses) == 0 {
-		// 					loggedHTTPErrorf(w, http.StatusUnauthorized, "user %d (%s) is not an instructor for any course", currentUser.ID, currentUser.Email)
-		// 					return
-		// 				}
-		//
-		// 				courseList := ""
-		// 				for _, elt := range courses {
-		// 					if len(courseList) > 0 {
-		// 						courseList += ","
-		// 					}
-		// 					courseList += strconv.FormatInt(elt, 10)
-		// 				}
-		//
-		// 				var matches int64
-		// 				if err := tx.QueryRow(`SELECT COUNT(1) FROM assignments WHERE user_id = $1 AND course_id in (`+courseList+`)`, userID).Scan(&matches); err != nil {
-		// 					loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-		// 					return
-		// 				}
-		// 				if matches == 0 {
-		// 					loggedHTTPErrorf(w, http.StatusUnauthorized, "user %d (%s) is not an instructor for a course for user %d", currentUser.ID, currentUser.Email, userID)
-		// 				}
-		// 			}
-		// 		}
-		//
-		// 		// martini service: require logged in user to be an administrator (requires withCurrentUser)
-		// 		administratorOnly := func(w http.ResponseWriter, currentUser *User) {
-		// 			if !currentUser.Admin {
-		// 				loggedHTTPErrorf(w, http.StatusUnauthorized, "user %d (%s) is not an administrator", currentUser.ID, currentUser.Email)
-		// 				return
-		// 			}
-		// 		}
+		// martini service: require logged in user to be an administrator (requires withCurrentUser)
+		administratorOnly := func(w http.ResponseWriter, currentUser *User) {
+			if !currentUser.Admin {
+				loggedHTTPErrorf(w, http.StatusUnauthorized, "user %d (%s) is not an administrator", currentUser.ID, currentUser.Email)
+				return
+			}
+		}
+
+		// martini service: require logged in user to be an author or administrator (requires withCurrentUser)
+		authorOnly := func(w http.ResponseWriter, tx *sql.Tx, currentUser *User) {
+			if currentUser.Admin {
+				return
+			}
+			if !currentUser.Author {
+				loggedHTTPErrorf(w, http.StatusUnauthorized, "user %d (%s) is not an author", currentUser.ID, currentUser.Name)
+				return
+			}
+		}
 
 		// LTI
 		r.Get("/v2/lti/config.xml", GetConfigXML)
@@ -267,29 +204,29 @@ func main() {
 		r.Post("/v2/lti/problem_sets/:unique", binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblemSet)
 
 		// problem bundles--for problem creation only
-		r.Post("/v2/problem_bundles/unconfirmed", auth, withTx, withCurrentUser, binding.Json(ProblemBundle{}), PostProblemBundleUnconfirmed)
-		r.Post("/v2/problem_bundles/confirmed", auth, withTx, withCurrentUser, binding.Json(ProblemBundle{}), PostProblemBundleConfirmed)
-		r.Put("/v2/problem_bundles/:problem_id", auth, withTx, withCurrentUser, binding.Json(ProblemBundle{}), PutProblemBundle)
+		r.Post("/v2/problem_bundles/unconfirmed", auth, withTx, withCurrentUser, authorOnly, binding.Json(ProblemBundle{}), PostProblemBundleUnconfirmed)
+		r.Post("/v2/problem_bundles/confirmed", auth, withTx, withCurrentUser, authorOnly, binding.Json(ProblemBundle{}), PostProblemBundleConfirmed)
+		r.Put("/v2/problem_bundles/:problem_id", auth, withTx, withCurrentUser, authorOnly, binding.Json(ProblemBundle{}), PutProblemBundle)
 
 		// problem set bundles--for problem set creation only
-		r.Post("/v2/problem_set_bundles", auth, withTx, withCurrentUser, binding.Json(ProblemSetBundle{}), PostProblemSetBundle)
+		r.Post("/v2/problem_set_bundles", auth, withTx, withCurrentUser, authorOnly, binding.Json(ProblemSetBundle{}), PostProblemSetBundle)
 
 		// problem types
 		r.Get("/v2/problem_types", auth, GetProblemTypes)
 		r.Get("/v2/problem_types/:name", auth, GetProblemType)
 
 		// problems
-		r.Get("/v2/problems", auth, withTx, withCurrentUser, GetProblems)
-		r.Get("/v2/problems/:problem_id", auth, withTx, GetProblem)
-		//r.Get("/v2/problems/:problem_id/steps", auth, withTx, GetProblemSteps)
-		r.Get("/v2/problems/:problem_id/steps/:step", auth, withTx, GetProblemStep)
-		//r.Delete("/v2/problems/:problem_id", auth, withTx, withCurrentUser, DeleteProblem)
+		r.Get("/v2/problems", auth, withTx, withCurrentUser, authorOnly, GetProblems)
+		r.Get("/v2/problems/:problem_id", auth, withTx, withCurrentUser, GetProblem)
+		r.Get("/v2/problems/:problem_id/steps", auth, withTx, withCurrentUser, GetProblemSteps)
+		r.Get("/v2/problems/:problem_id/steps/:step", auth, withTx, withCurrentUser, GetProblemStep)
+		r.Delete("/v2/problems/:problem_id", auth, withTx, withCurrentUser, administratorOnly, DeleteProblem)
 
 		// problem sets
-		r.Get("/v2/problem_sets", auth, withTx, withCurrentUser, GetProblemSets)
-		r.Get("/v2/problem_sets/:problem_set_id", auth, withTx, GetProblemSet)
-		r.Get("/v2/problem_sets/:problem_set_id/problems", auth, withTx, GetProblemSetProblems)
-		//r.Delete("/v2/problem_sets/:problem_set_id", auth, withTx, withCurrentUser, DeleteProblemSet)
+		r.Get("/v2/problem_sets", auth, withTx, withCurrentUser, authorOnly, GetProblemSets)
+		r.Get("/v2/problem_sets/:problem_set_id", auth, withTx, withCurrentUser, GetProblemSet)
+		r.Get("/v2/problem_sets/:problem_set_id/problems", auth, withTx, withCurrentUser, GetProblemSetProblems)
+		r.Delete("/v2/problem_sets/:problem_set_id", auth, withTx, withCurrentUser, administratorOnly, DeleteProblemSet)
 
 		// users
 		//r.Get("/v2/users", auth, withTx, withCurrentUser, GetUsers)
@@ -598,4 +535,16 @@ func unBase64(s string) string {
 		return string(raw)
 	}
 	return s
+}
+
+func assignedProblem(tx *sql.Tx, user *User, problemID int64) (bool, error) {
+	var count int
+	if err := tx.QueryRow(`SELECT COUNT(1) FROM assignments `+
+		`JOIN problem_sets ON assignments.problem_set_id = problem_sets.id `+
+		`JOIN problem_set_problems ON problem_sets.id = problem_set_problems.problem_set_id `+
+		`JOIN problems ON problem_set_problems.problem_id = problems.id `+
+		`WHERE assignments.user_id = $1`, user.ID).Scan(&count); err != nil {
+		return false, fmt.Errorf("db error: %v", err)
+	}
+	return count > 0, nil
 }

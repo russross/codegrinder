@@ -72,6 +72,8 @@ func gather(now time.Time, startDir string) (*Problem, *Assignment, *Commit, *Do
 	problem := new(Problem)
 	mustGetObject(fmt.Sprintf("/problems/%d", info.ID), nil, problem)
 
+	// TODO: get the problem step and verify local files match
+
 	// gather the commit files from the file system
 	files := make(map[string]string)
 	err := filepath.Walk(problemDir, func(path string, stat os.FileInfo, err error) error {

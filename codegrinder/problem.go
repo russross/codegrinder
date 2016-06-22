@@ -67,14 +67,22 @@ func GetProblems(w http.ResponseWriter, r *http.Request, tx *sql.Tx, render rend
 
 // GetProblem handles a request to /v2/problems/:problem_id,
 // returning a single problem.
-func GetProblem(w http.ResponseWriter, tx *sql.Tx, params martini.Params, render render.Render) {
+func GetProblem(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
 	problemID, err := parseID(w, "problem_id", params["problem_id"])
 	if err != nil {
 		return
 	}
 
 	problem := new(Problem)
-	if err := meddler.Load(tx, "problems", problem, problemID); err != nil {
+
+	if currentUser.Admin || currentUser.Author {
+		err = meddler.Load(tx, "problems", problem, problemID)
+	} else {
+		err = meddler.QueryRow(tx, problem, `SELECT * FROM problems WHERE id = $1 AND `+
+			`problems.id IN ((SELECT problem_id FROM user_problems WHERE user_id = $2) UNION (SELECT problem_id FROM instructor_problems WHERE instructor_id = $3))`, problemID, currentUser.ID, currentUser.ID)
+	}
+
+	if err != nil {
 		loggedHTTPDBNotFoundError(w, err)
 		return
 	}
@@ -101,14 +109,24 @@ func DeleteProblem(w http.ResponseWriter, tx *sql.Tx, params martini.Params, ren
 
 // GetProblemSteps handles a request to /v2/problems/:problem_id/steps,
 // returning a list of all steps for a problem.
-func GetProblemSteps(w http.ResponseWriter, r *http.Request, tx *sql.Tx, params martini.Params, render render.Render) {
+func GetProblemSteps(w http.ResponseWriter, r *http.Request, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
 	problemID, err := parseID(w, "problem_id", params["problem_id"])
 	if err != nil {
 		return
 	}
 
 	problemSteps := []*ProblemStep{}
-	if err := meddler.QueryAll(tx, &problemSteps, `SELECT * FROM problem_steps WHERE problem_id = $1 ORDER BY step`, problemID); err != nil {
+
+	if currentUser.Admin || currentUser.Author {
+		err = meddler.QueryAll(tx, &problemSteps, `SELECT * FROM problem_steps WHERE problem_id = $1 ORDER BY step`, problemID)
+
+	} else {
+		err = meddler.QueryAll(tx, &problemSteps, `SELECT * FROM problem_steps WHERE problem_id = $1 AND problem_id IN `+
+			`((SELECT problem_id FROM user_problems WHERE user_id = $2) UNION (SELECT problem_id FROM instructor_problems WHERE instructor_id = $3)) `+
+			`ORDER BY step`, problemID, currentUser.ID, currentUser.ID)
+	}
+
+	if err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
 	}
@@ -123,7 +141,7 @@ func GetProblemSteps(w http.ResponseWriter, r *http.Request, tx *sql.Tx, params 
 
 // GetProblemStep handles a request to /v2/problems/:problem_id/steps/:step,
 // returning a single problem step.
-func GetProblemStep(w http.ResponseWriter, tx *sql.Tx, params martini.Params, render render.Render) {
+func GetProblemStep(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
 	problemID, err := parseID(w, "problem_id", params["problem_id"])
 	if err != nil {
 		return
@@ -134,29 +152,21 @@ func GetProblemStep(w http.ResponseWriter, tx *sql.Tx, params martini.Params, re
 	}
 
 	problemStep := new(ProblemStep)
-	if err := meddler.QueryRow(tx, problemStep, `SELECT * FROM problem_steps WHERE problem_id = $1 AND step = $2 LIMIT 1`, problemID, step); err != nil {
+
+	if currentUser.Admin || currentUser.Author {
+		err = meddler.QueryRow(tx, problemStep, `SELECT * FROM problem_steps WHERE problem_id = $1 AND step = $2 LIMIT 1`, problemID, step)
+	} else {
+		err = meddler.QueryRow(tx, problemStep, `SELECT * FROM problem_steps WHERE problem_id = $1 AND step = $2 AND problem_id IN `+
+			`((SELECT problem_id FROM user_problems WHERE user_id = $2) UNION (SELECT problem_id FROM instructor_problems WHERE instructor_id = $3)) `+
+			`LIMIT 1`, problemID, step, currentUser.ID, currentUser.ID)
+	}
+
+	if err != nil {
 		loggedHTTPDBNotFoundError(w, err)
 		return
 	}
 
 	render.JSON(http.StatusOK, problemStep)
-}
-
-// GetProblemSet handles a request to /v2/problem_sets/:problem_set_id,
-// returning a single problem set.
-func GetProblemSet(w http.ResponseWriter, tx *sql.Tx, params martini.Params, render render.Render) {
-	problemSetID, err := parseID(w, "problem_set_id", params["problem_set_id"])
-	if err != nil {
-		return
-	}
-
-	problemSet := new(ProblemSet)
-	if err := meddler.Load(tx, "problem_sets", problemSet, problemSetID); err != nil {
-		loggedHTTPDBNotFoundError(w, err)
-		return
-	}
-
-	render.JSON(http.StatusOK, problemSet)
 }
 
 // GetProblemSets handles a request to /v2/problem_sets,
@@ -188,16 +198,51 @@ func GetProblemSets(w http.ResponseWriter, r *http.Request, tx *sql.Tx, render r
 	render.JSON(http.StatusOK, problemSets)
 }
 
+// GetProblemSet handles a request to /v2/problem_sets/:problem_set_id,
+// returning a single problem set.
+func GetProblemSet(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
+	problemSetID, err := parseID(w, "problem_set_id", params["problem_set_id"])
+	if err != nil {
+		return
+	}
+
+	problemSet := new(ProblemSet)
+
+	if currentUser.Admin || currentUser.Author {
+		err = meddler.Load(tx, "problem_sets", problemSet, problemSetID)
+	} else {
+		err = meddler.QueryRow(tx, problemSet, `SELECT * FROM problem_sets WHERE id = $1 AND `+
+			`problem_sets.id IN ((SELECT problem_set_id FROM user_problem_sets WHERE user_id = $2) UNION (SELECT problem_set_id FROM instructor_problem_sets WHERE instructor_id = $3))`, problemSetID, currentUser.ID, currentUser.ID)
+	}
+
+	if err != nil {
+		loggedHTTPDBNotFoundError(w, err)
+		return
+	}
+
+	render.JSON(http.StatusOK, problemSet)
+}
+
 // GetProblemSetProblems handles a request to /v2/problem_sets/:problem_set_id/problems,
 // returning a list of all problems set problems for a given problem set.
-func GetProblemSetProblems(w http.ResponseWriter, r *http.Request, tx *sql.Tx, params martini.Params, render render.Render) {
+func GetProblemSetProblems(w http.ResponseWriter, r *http.Request, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
 	problemSetID, err := parseID(w, "problem_set_id", params["problem_set_id"])
 	if err != nil {
 		return
 	}
 
 	problemSetProblems := []*ProblemSetProblem{}
-	if err = meddler.QueryAll(tx, &problemSetProblems, `SELECT * FROM problem_set_problems WHERE problem_set_id = $1 ORDER BY problem_id`, problemSetID); err != nil {
+
+	if currentUser.Admin || currentUser.Author {
+		err = meddler.QueryAll(tx, &problemSetProblems, `SELECT * FROM problem_set_problems WHERE problem_set_id = $1 ORDER BY problem_id`, problemSetID)
+	} else {
+		err = meddler.QueryAll(tx, &problemSetProblems, `SELECT * FROM problem_set_problems WHERE problem_set_id = $1 AND problem_set_id IN `+
+			`((SELECT problem_set_id FROM user_problem_sets WHERE user_id = $2) UNION (SELECT problem_set_id FROM instructor_problem_sets WHERE instructor_id = $3)) `+
+
+			`ORDER BY problem_id`, problemSetID, currentUser.ID, currentUser.ID)
+	}
+
+	if err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
 	}
