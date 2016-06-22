@@ -32,10 +32,11 @@ func CommandSave(cmd *cobra.Command, args []string) {
 	problem, _, commit, _ := gather(now, dir)
 	commit.Action = ""
 	commit.Note = "saving from grind tool"
+	unsigned := &CommitBundle{Commit: commit}
 
 	// send the commit to the server
-	signed := new(Commit)
-	mustPostObject(fmt.Sprintf("/assignments/%d/commits", commit.AssignmentID), nil, commit, signed)
+	signed := new(CommitBundle)
+	mustPostObject("/commit_bundles/unsigned", nil, unsigned, signed)
 	log.Printf("problem %s step %d saved", problem.Unique, commit.Step)
 }
 
