@@ -216,14 +216,14 @@ func main() {
 		r.Get("/v2/problem_types/:name", auth, GetProblemType)
 
 		// problems
-		r.Get("/v2/problems", auth, withTx, withCurrentUser, authorOnly, GetProblems)
+		r.Get("/v2/problems", auth, withTx, withCurrentUser, GetProblems)
 		r.Get("/v2/problems/:problem_id", auth, withTx, withCurrentUser, GetProblem)
 		r.Get("/v2/problems/:problem_id/steps", auth, withTx, withCurrentUser, GetProblemSteps)
 		r.Get("/v2/problems/:problem_id/steps/:step", auth, withTx, withCurrentUser, GetProblemStep)
 		r.Delete("/v2/problems/:problem_id", auth, withTx, withCurrentUser, administratorOnly, DeleteProblem)
 
 		// problem sets
-		r.Get("/v2/problem_sets", auth, withTx, withCurrentUser, authorOnly, GetProblemSets)
+		r.Get("/v2/problem_sets", auth, withTx, withCurrentUser, GetProblemSets)
 		r.Get("/v2/problem_sets/:problem_set_id", auth, withTx, withCurrentUser, GetProblemSet)
 		r.Get("/v2/problem_sets/:problem_set_id/problems", auth, withTx, withCurrentUser, GetProblemSetProblems)
 		r.Delete("/v2/problem_sets/:problem_set_id", auth, withTx, withCurrentUser, administratorOnly, DeleteProblemSet)

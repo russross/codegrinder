@@ -145,34 +145,34 @@ CREATE TABLE commits (
 );
 
 CREATE VIEW user_problem_sets AS
-    SELECT DISTINCT assignments.user_id, problem_sets.id AS problem_set_id FROM
-    assignments JOIN problem_sets ON assignments.problem_set_id = problem_sets.id;
-
-CREATE VIEW user_problems AS
-    SELECT DISTINCT assignments.user_id, problem_set_problems.problem_id AS problem_id FROM
-    assignments JOIN problem_sets ON assignments.problem_set_id = problem_sets.id
-    JOIN problem_set_problems ON problem_sets.id = problem_set_problems.problem_set_id;
-
-CREATE VIEW instructor_problem_sets AS
-    SELECT DISTINCT instructors.id AS instructor_id, assignments.problem_set_id AS problem_set_id FROM
+    (SELECT DISTINCT assignments.user_id, problem_sets.id AS problem_set_id FROM
+    assignments JOIN problem_sets ON assignments.problem_set_id = problem_sets.id)
+    UNION
+    (SELECT DISTINCT instructors.id AS user_id, assignments.problem_set_id AS problem_set_id FROM
     users AS instructors JOIN assignments AS instructors_assignments ON instructors.id = instructors_assignments.user_id
     JOIN courses ON instructors_assignments.course_id = courses.id
     JOIN assignments ON courses.id = assignments.id
-    WHERE instructors_assignments.instructor;
+    WHERE instructors_assignments.instructor);
 
-CREATE VIEW instructor_problems AS
-    SELECT DISTINCT instructors.id AS instructor_id, problem_set_problems.problem_id AS problem_id FROM
+CREATE VIEW user_problems AS
+    (SELECT DISTINCT assignments.user_id, problem_set_problems.problem_id FROM
+    assignments JOIN problem_sets ON assignments.problem_set_id = problem_sets.id
+    JOIN problem_set_problems ON problem_sets.id = problem_set_problems.problem_set_id)
+    UNION
+    (SELECT DISTINCT instructors.id AS user_id, problem_set_problems.problem_id FROM
     users AS instructors JOIN assignments AS instructors_assignments ON instructors.id = instructors_assignments.user_id
     JOIN courses ON instructors_assignments.course_id = courses.id
     JOIN assignments ON courses.id = assignments.id
     JOIN problem_sets ON assignments.problem_set_id = problem_sets.id
     JOIN problem_set_problems ON problem_sets.id = problem_set_problems.problem_id
-    WHERE instructors_assignments.instructor;
+    WHERE instructors_assignments.instructor);
 
-CREATE VIEW instructor_users AS
-    SELECT DISTINCT instructors.id AS instructor_id, users.id AS user_id FROM
+CREATE VIEW user_users AS
+    (SELECT DISTINCT instructors.id AS user_id, users.id AS other_user_id FROM
     users AS instructors JOIN assignments AS instructors_assignments ON instructors.id = instructors_assignments.user_id
     JOIN courses ON instructors_assignments.course_id = courses.id
     JOIN assignments ON courses.id = assignments.id
     JOIN users ON assignments.user_id = users.id
-    WHERE instructors_assignments.instructor;
+    WHERE instructors_assignments.instructor)
+    UNION
+    (SELECT id as user_id, id AS other_user_id FROM users);
