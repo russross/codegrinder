@@ -16,7 +16,7 @@ import (
 )
 
 func CommandGrade(cmd *cobra.Command, args []string) {
-	mustLoadConfig()
+	mustLoadConfig(cmd)
 	now := time.Now()
 
 	// find the directory

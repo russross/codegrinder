@@ -15,7 +15,7 @@ import (
 )
 
 func CommandGet(cmd *cobra.Command, args []string) {
-	mustLoadConfig()
+	mustLoadConfig(cmd)
 
 	// parse parameters
 	name, rootDir := "", ""

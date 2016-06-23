@@ -12,20 +12,22 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/blang/semver"
 	. "github.com/russross/codegrinder/types"
 	"github.com/spf13/cobra"
 )
 
 const (
 	defaultHost          = "dorking.cs.dixie.edu"
-	version              = "v0.1"
 	perUserDotFile       = ".codegrinderrc"
 	perProblemSetDotFile = ".grind"
 )
 
 var Config struct {
-	Host   string `json:"host"`
-	Cookie string `json:"cookie"`
+	Host       string `json:"host"`
+	Cookie     string `json:"cookie"`
+	restReport bool
+	restDump   bool
 }
 
 type DotFileInfo struct {
@@ -45,16 +47,18 @@ func main() {
 
 	cmdGrind := &cobra.Command{
 		Use:   "grind",
-		Short: "command-line interface to codegrinder",
-		Long: "A command-line tool to access codegrinder\n" +
+		Short: "Command-line interface to CodeGrinder",
+		Long: "A command-line tool to access CodeGrinder\n" +
 			"by Russ Ross <russ@russross.com>",
 	}
+	cmdGrind.PersistentFlags().BoolP("rest-report", "", false, "report REST requests to the console")
+	cmdGrind.PersistentFlags().BoolP("rest-dump", "", false, "dump REST request and response data")
 
 	cmdVersion := &cobra.Command{
 		Use:   "version",
 		Short: "print the version number of grind",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("grind " + version)
+			fmt.Println("grind " + CurrentVersion.Version)
 		},
 	}
 	cmdGrind.AddCommand(cmdVersion)
@@ -143,6 +147,9 @@ Paste here: `)
 	Config.Cookie = cookie
 	Config.Host = defaultHost
 
+	// see if they need an upgrade
+	checkVersion()
+
 	// try it out by fetching a user record
 	user := new(User)
 	mustGetObject("/users/me", nil, user)
@@ -154,22 +161,22 @@ Paste here: `)
 }
 
 func mustGetObject(path string, params map[string]string, download interface{}) {
-	doRequest(path, params, Config.Cookie, "GET", nil, download, false)
+	doRequest(path, params, "GET", nil, download, false)
 }
 
 func getObject(path string, params map[string]string, download interface{}) bool {
-	return doRequest(path, params, Config.Cookie, "GET", nil, download, true)
+	return doRequest(path, params, "GET", nil, download, true)
 }
 
 func mustPostObject(path string, params map[string]string, upload interface{}, download interface{}) {
-	doRequest(path, params, Config.Cookie, "POST", upload, download, false)
+	doRequest(path, params, "POST", upload, download, false)
 }
 
 func mustPutObject(path string, params map[string]string, upload interface{}, download interface{}) {
-	doRequest(path, params, Config.Cookie, "PUT", upload, download, false)
+	doRequest(path, params, "PUT", upload, download, false)
 }
 
-func doRequest(path string, params map[string]string, cookie string, method string, upload interface{}, download interface{}, notfoundokay bool) bool {
+func doRequest(path string, params map[string]string, method string, upload interface{}, download interface{}, notfoundokay bool) bool {
 	if !strings.HasPrefix(path, "/") {
 		log.Panicf("doRequest path must start with /")
 	}
@@ -191,18 +198,26 @@ func doRequest(path string, params map[string]string, cookie string, method stri
 		req.URL.RawQuery = values.Encode()
 	}
 
+	if Config.restReport {
+		log.Printf("%s %s", method, req.URL)
+	}
+
 	// set the headers
 	req.Header["Accept"] = []string{"application/json"}
-	req.Header["Cookie"] = []string{cookie}
+	req.Header["Cookie"] = []string{Config.Cookie}
 
 	// upload the payload if any
 	if upload != nil && (method == "POST" || method == "PUT") {
 		req.Header["Content-Type"] = []string{"application/json"}
 		payload, err := json.MarshalIndent(upload, "", "    ")
 		if err != nil {
-			log.Fatalf("mustPostObject: JSON error encoding object to upload: %v", err)
+			log.Fatalf("doRequest: JSON error encoding object to upload: %v", err)
 		}
 		req.Body = ioutil.NopCloser(bytes.NewReader(payload))
+
+		if Config.restDump {
+			log.Printf("Request data: %s", payload)
+		}
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -225,12 +240,21 @@ func doRequest(path string, params map[string]string, cookie string, method stri
 		if err := decoder.Decode(download); err != nil {
 			log.Fatalf("failed to parse result object from server: %v\n", err)
 		}
+
+		if Config.restDump {
+			raw, err := json.MarshalIndent(download, "", "    ")
+			if err != nil {
+				log.Fatalf("doRequest: JSON error encoding downloaded object: %v", err)
+			}
+			log.Printf("Response data: %s", raw)
+		}
+
 		return true
 	}
 	return false
 }
 
-func mustLoadConfig() {
+func mustLoadConfig(cmd *cobra.Command) {
 	home := os.Getenv("HOME")
 	if home == "" {
 		home = os.Getenv("USERPROFILE")
@@ -246,6 +270,15 @@ func mustLoadConfig() {
 		log.Printf("failed to parse %s: %v", configFile, err)
 		log.Fatalf("you may wish to try deleting the file and running \"grind init\" again\n")
 	}
+	if cmd.Flag("rest-report").Value.String() == "true" {
+		Config.restReport = true
+	}
+	if cmd.Flag("rest-dump").Value.String() == "true" {
+		Config.restReport = true
+		Config.restDump = true
+	}
+
+	checkVersion()
 }
 
 func mustWriteConfig() {
@@ -274,4 +307,20 @@ func plural(n int) string {
 		return ""
 	}
 	return "s"
+}
+
+func checkVersion() {
+	server := new(Version)
+	mustGetObject("/version", nil, server)
+	grindCurrent := semver.MustParse(CurrentVersion.Version)
+	grindRequired := semver.MustParse(server.GrindVersionRequired)
+	if grindRequired.GT(grindCurrent) {
+		log.Printf("this is grind version %s, but the server requires %s or higher", CurrentVersion.Version, server.GrindVersionRequired)
+		log.Fatalf("  you must upgrade to continue")
+	}
+	grindRecommended := semver.MustParse(server.GrindVersionRecommended)
+	if grindRecommended.GT(grindCurrent) {
+		log.Printf("this is grind version %s, but the server recommends %s or higher", CurrentVersion.Version, server.GrindVersionRecommended)
+		log.Printf("  please upgrade as soon as possible")
+	}
 }

@@ -9,7 +9,7 @@ import (
 )
 
 func CommandList(cmd *cobra.Command, args []string) {
-	mustLoadConfig()
+	mustLoadConfig(cmd)
 
 	user := new(User)
 	mustGetObject("/users/me", nil, user)

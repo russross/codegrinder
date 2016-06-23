@@ -198,6 +198,11 @@ func main() {
 			}
 		}
 
+		// version
+		r.Get("/v2/version", func(w http.ResponseWriter, render render.Render) {
+			render.JSON(http.StatusOK, &CurrentVersion)
+		})
+
 		// LTI
 		r.Get("/v2/lti/config.xml", GetConfigXML)
 		r.Post("/v2/lti/problem_sets", binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblemSets)
@@ -228,19 +233,19 @@ func main() {
 		r.Get("/v2/problem_sets/:problem_set_id/problems", auth, withTx, withCurrentUser, GetProblemSetProblems)
 		r.Delete("/v2/problem_sets/:problem_set_id", auth, withTx, withCurrentUser, administratorOnly, DeleteProblemSet)
 
+		// courses
+		r.Get("/v2/courses", auth, withTx, withCurrentUser, GetCourses)
+		r.Get("/v2/courses/:course_id", auth, withTx, withCurrentUser, GetCourse)
+		//r.Get("/v2/users/:user_id/courses", auth, withTx, withCurrentUser, GetUserCourses)
+		r.Delete("/v2/courses/:course_id", auth, withTx, withCurrentUser, administratorOnly, DeleteCourse)
+
 		// users
 		//r.Get("/v2/users", auth, withTx, withCurrentUser, GetUsers)
 		r.Get("/v2/users/me", auth, withTx, withCurrentUser, GetUserMe)
-		//r.Get("/v2/users/me/cookie", auth, UserCookie)
+		r.Get("/v2/users/me/cookie", auth, UserCookie)
 		//r.Get("/v2/users/:user_id", auth, withTx, withCurrentUser, GetUser)
 		//r.Get("/v2/courses/:course_id/users", auth, withTx, withCurrentUser, GetCourseUsers)
 		//r.Delete("/v2/users/:user_id", auth, withTx, withCurrentUser, DeleteUser)
-
-		// courses
-		//r.Get("/v2/courses", auth, withTx, withCurrentUser, GetCourses)
-		r.Get("/v2/courses/:course_id", auth, withTx, GetCourse)
-		//r.Get("/v2/users/:user_id/courses", auth, withTx, withCurrentUser, GetUserCourses)
-		//r.Delete("/v2/courses/:course_id", auth, withTx, withCurrentUser, DeleteCourse)
 
 		// assignments
 		r.Get("/v2/users/:user_id/assignments", auth, withTx, withCurrentUser, GetUserAssignments)

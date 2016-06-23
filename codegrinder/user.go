@@ -19,7 +19,7 @@ import (
 //
 // If parameter lti_label=<...> present, results will be filtered by matching lti_label field.
 // If parameter name=<...> present, results will be filtered by case-insensitive substring matching on name field.
-func GetCourses(w http.ResponseWriter, r *http.Request, tx *sql.Tx, render render.Render) {
+func GetCourses(w http.ResponseWriter, r *http.Request, tx *sql.Tx, currentUser *User, render render.Render) {
 	where := ""
 	args := []interface{}{}
 
@@ -32,7 +32,18 @@ func GetCourses(w http.ResponseWriter, r *http.Request, tx *sql.Tx, render rende
 	}
 
 	courses := []*Course{}
-	if err := meddler.QueryAll(tx, &courses, `SELECT * FROM courses`+where+` ORDER BY lti_label`, args...); err != nil {
+	var err error
+
+	if currentUser.Admin {
+		err = meddler.QueryAll(tx, &courses, `SELECT * FROM courses`+where+` ORDER BY lti_label`, args...)
+	} else {
+		where, args = addWhereEq(where, args, "assignments.user_id", currentUser.ID)
+		err = meddler.QueryAll(tx, &courses, `SELECT DISTINCT courses.* `+
+			`FROM courses JOIN assignments ON courses.id = assignments.course_id`+
+			where+` ORDER BY lti_label`, args...)
+	}
+
+	if err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
 	}
@@ -41,14 +52,24 @@ func GetCourses(w http.ResponseWriter, r *http.Request, tx *sql.Tx, render rende
 
 // GetCourse handles /v2/courses/:course_id requests,
 // returning a single course.
-func GetCourse(w http.ResponseWriter, tx *sql.Tx, params martini.Params, render render.Render) {
+func GetCourse(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
 	courseID, err := parseID(w, "course_id", params["course_id"])
 	if err != nil {
 		return
 	}
 
 	course := new(Course)
-	if err := meddler.Load(tx, "courses", course, courseID); err != nil {
+
+	if currentUser.Admin {
+		err = meddler.Load(tx, "courses", course, courseID)
+	} else {
+		err = meddler.QueryRow(tx, course, `SELECT courses.* `+
+			`FROM courses JOIN assignments ON courses.id = assignments.course_id `+
+			`WHERE assignments.user_id = $1 AND assignments.course_id = $2`,
+			currentUser.ID, courseID)
+	}
+
+	if err != nil {
 		loggedHTTPDBNotFoundError(w, err)
 		return
 	}

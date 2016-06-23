@@ -22,7 +22,7 @@ import (
 const ProblemConfigName string = "problem.cfg"
 
 func CommandCreate(cmd *cobra.Command, args []string) {
-	mustLoadConfig()
+	mustLoadConfig(cmd)
 	now := time.Now()
 
 	// find the directory
@@ -106,7 +106,7 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 	case 0:
 		// new problem
 		if cmd.Flag("update").Value.String() == "true" {
-			log.Fatalf("you specified --update, but no problem with unique ID %q was found", problem.Unique)
+			log.Fatalf("you specified --update, but no existing problem with unique ID %q was found", problem.Unique)
 		}
 
 		// make sure the problem set with this unique name is free as well

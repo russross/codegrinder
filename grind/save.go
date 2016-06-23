@@ -14,7 +14,7 @@ import (
 )
 
 func CommandSave(cmd *cobra.Command, args []string) {
-	mustLoadConfig()
+	mustLoadConfig(cmd)
 	now := time.Now()
 
 	// find the directory
