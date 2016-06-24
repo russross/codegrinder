@@ -367,14 +367,6 @@ func addWhereLike(where string, args []interface{}, label string, value string) 
 	return where, args
 }
 
-func mustMarshal(elt interface{}) []byte {
-	raw, err := json.Marshal(elt)
-	if err != nil {
-		log.Fatalf("json Marshal error for % #v", elt)
-	}
-	return raw
-}
-
 func loggedHTTPDBNotFoundError(w http.ResponseWriter, err error) {
 	msg := "not found"
 	status := http.StatusNotFound
@@ -525,12 +517,16 @@ func writeDiffHTML(out *bytes.Buffer, from, to, header string) {
 	out.WriteString("</pre>")
 }
 
-func dump(elt interface{}) {
-	raw, err := json.MarshalIndent(elt, "", "    ")
+func mustMarshal(elt interface{}) []byte {
+	raw, err := json.Marshal(elt)
 	if err != nil {
-		panic("JSON encoding error in dump: " + err.Error())
+		log.Fatalf("json Marshal error for % #v", elt)
 	}
-	fmt.Printf("%s\n", raw)
+	return raw
+}
+
+func dump(elt interface{}) {
+	fmt.Printf("%s\n", mustMarshal(elt))
 }
 
 func unBase64(s string) string {
@@ -538,16 +534,4 @@ func unBase64(s string) string {
 		return string(raw)
 	}
 	return s
-}
-
-func assignedProblem(tx *sql.Tx, user *User, problemID int64) (bool, error) {
-	var count int
-	if err := tx.QueryRow(`SELECT COUNT(1) FROM assignments `+
-		`JOIN problem_sets ON assignments.problem_set_id = problem_sets.id `+
-		`JOIN problem_set_problems ON problem_sets.id = problem_set_problems.problem_set_id `+
-		`JOIN problems ON problem_set_problems.problem_id = problems.id `+
-		`WHERE assignments.user_id = $1`, user.ID).Scan(&count); err != nil {
-		return false, fmt.Errorf("db error: %v", err)
-	}
-	return count > 0, nil
 }
