@@ -241,7 +241,7 @@ func main() {
 		// users
 		r.Get("/v2/users", auth, withTx, withCurrentUser, GetUsers)
 		r.Get("/v2/users/me", auth, withTx, withCurrentUser, GetUserMe)
-		r.Get("/v2/users/me/cookie", auth, UserCookie)
+		r.Get("/v2/users/me/cookie", auth, GetUserMeCookie)
 		r.Get("/v2/users/:user_id", auth, withTx, withCurrentUser, GetUser)
 		r.Get("/v2/courses/:course_id/users", auth, withTx, withCurrentUser, GetCourseUsers)
 		r.Delete("/v2/users/:user_id", auth, withTx, withCurrentUser, administratorOnly, DeleteUser)

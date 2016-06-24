@@ -154,9 +154,9 @@ func GetUserMe(w http.ResponseWriter, tx *sql.Tx, currentUser *User, render rend
 	render.JSON(http.StatusOK, currentUser)
 }
 
-// GetUsersMeCookie handlers /v2/users/me/cookie requests,
+// GetUserMeCookie handlers /v2/users/me/cookie requests,
 // returning the cookie for the current user session.
-func GetUsersMeCookie(w http.ResponseWriter, r *http.Request) {
+func GetUserMeCookie(w http.ResponseWriter, r *http.Request) {
 	cookie := r.Header.Get("Cookie")
 	for _, field := range strings.Fields(cookie) {
 		if strings.HasPrefix(field, CookieName+"=") {
@@ -178,7 +178,7 @@ func GetUser(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUs
 	if currentUser.Admin {
 		err = meddler.Load(tx, "users", user, int64(userID))
 	} else {
-		err = meddler.QueryRow(tx, &users, `SELECT users.* `+
+		err = meddler.QueryRow(tx, &user, `SELECT users.* `+
 			`FROM users JOIN user_users ON users.id = user_users.other_user_id `+
 			`WHERE user_users.user_id = $1 AND user_users.other_user_id = $2`,
 			currentUser.ID, userID)
@@ -212,7 +212,7 @@ func GetCourseUsers(w http.ResponseWriter, tx *sql.Tx, params martini.Params, cu
 			`JOIN user_users ON assignments.user_id = user_users.other_user_id `+
 			`WHERE assignments.course_id = $1 AND user_users.user_id = $2 `+
 			`ORDER BY users.id`,
-			courseID, currentUser.OD)
+			courseID, currentUser.ID)
 	}
 
 	if err != nil {
@@ -374,7 +374,7 @@ func GetAssignmentProblemCommits(w http.ResponseWriter, tx *sql.Tx, params marti
 		err = meddler.QueryAll(tx, &commits, `SELECT commits.* `+
 			`FROM commits JOIN user_assignments ON commits.assignment_id = user_assignments.assignment_id `+
 			`WHERE commits.assignment_id = $1 AND user_assignments.user_id = $2 `+
-			`ORDER BY commits.updated_at`)
+			`ORDER BY commits.updated_at`, problemID)
 	}
 
 	if err != nil {
