@@ -50,29 +50,29 @@ type User struct {
 	LastSignedInAt time.Time `json:"lastSignedInAt" meddler:"last_signed_in_at,localtime"`
 }
 
-// Assignment represents a single instance of a problem for a student in a course.
-// Many commits (attempts to solve the problem) are linked to an assignment.
+// Assignment represents a single instance of a problem set for a student in a course.
+// Many commits (attempts to solve a step of a problem in the set) are linked to an assignment.
 type Assignment struct {
-	ID                 int64              `json:"id" meddler:"id,pk"`
-	CourseID           int64              `json:"courseID" meddler:"course_id"`
-	ProblemSetID       int64              `json:"problemSetID" meddler:"problem_set_id"`
-	UserID             int64              `json:"userID" meddler:"user_id"`
-	Roles              string             `json:"roles" meddler:"roles"`
-	Instructor         bool               `json:"instructor" meddler:"instructor"`
-	ProblemScores      map[string]float64 `json:"problem_scores" meddler:"problem_scores,json"`
-	Score              float64            `json:"score" meddler:"score,zeroisnull"`
-	GradeID            string             `json:"-" meddler:"grade_id,zeroisnull"`
-	LtiID              string             `json:"-" meddler:"lti_id"`
-	CanvasTitle        string             `json:"canvasTitle" meddler:"canvas_title"`
-	CanvasID           int64              `json:"canvasID" meddler:"canvas_id"`
-	CanvasAPIDomain    string             `json:"canvasAPIDomain" meddler:"canvas_api_domain"`
-	OutcomeURL         string             `json:"-" meddler:"outcome_url"`
-	OutcomeExtURL      string             `json:"-" meddler:"outcome_ext_url"`
-	OutcomeExtAccepted string             `json:"-" meddler:"outcome_ext_accepted"`
-	FinishedURL        string             `json:"finishedURL" meddler:"finished_url"`
-	ConsumerKey        string             `json:"-" meddler:"consumer_key"`
-	CreatedAt          time.Time          `json:"createdAt" meddler:"created_at,localtime"`
-	UpdatedAt          time.Time          `json:"updatedAt" meddler:"updated_at,localtime"`
+	ID                 int64                `json:"id" meddler:"id,pk"`
+	CourseID           int64                `json:"courseID" meddler:"course_id"`
+	ProblemSetID       int64                `json:"problemSetID" meddler:"problem_set_id"`
+	UserID             int64                `json:"userID" meddler:"user_id"`
+	Roles              string               `json:"roles" meddler:"roles"`
+	Instructor         bool                 `json:"instructor" meddler:"instructor"`
+	RawScores          map[string][]float64 `json:"raw_scores" meddler:"raw_scores,json"`
+	Score              float64              `json:"score" meddler:"score,zeroisnull"`
+	GradeID            string               `json:"-" meddler:"grade_id,zeroisnull"`
+	LtiID              string               `json:"-" meddler:"lti_id"`
+	CanvasTitle        string               `json:"canvasTitle" meddler:"canvas_title"`
+	CanvasID           int64                `json:"canvasID" meddler:"canvas_id"`
+	CanvasAPIDomain    string               `json:"canvasAPIDomain" meddler:"canvas_api_domain"`
+	OutcomeURL         string               `json:"-" meddler:"outcome_url"`
+	OutcomeExtURL      string               `json:"-" meddler:"outcome_ext_url"`
+	OutcomeExtAccepted string               `json:"-" meddler:"outcome_ext_accepted"`
+	FinishedURL        string               `json:"finishedURL" meddler:"finished_url"`
+	ConsumerKey        string               `json:"-" meddler:"consumer_key"`
+	CreatedAt          time.Time            `json:"createdAt" meddler:"created_at,localtime"`
+	UpdatedAt          time.Time            `json:"updatedAt" meddler:"updated_at,localtime"`
 }
 
 // Commit defines an attempt at solving one step of a Problem.

@@ -236,28 +236,26 @@ func main() {
 		// courses
 		r.Get("/v2/courses", auth, withTx, withCurrentUser, GetCourses)
 		r.Get("/v2/courses/:course_id", auth, withTx, withCurrentUser, GetCourse)
-		//r.Get("/v2/users/:user_id/courses", auth, withTx, withCurrentUser, GetUserCourses)
 		r.Delete("/v2/courses/:course_id", auth, withTx, withCurrentUser, administratorOnly, DeleteCourse)
 
 		// users
-		//r.Get("/v2/users", auth, withTx, withCurrentUser, GetUsers)
+		r.Get("/v2/users", auth, withTx, withCurrentUser, GetUsers)
 		r.Get("/v2/users/me", auth, withTx, withCurrentUser, GetUserMe)
 		r.Get("/v2/users/me/cookie", auth, UserCookie)
-		//r.Get("/v2/users/:user_id", auth, withTx, withCurrentUser, GetUser)
-		//r.Get("/v2/courses/:course_id/users", auth, withTx, withCurrentUser, GetCourseUsers)
-		//r.Delete("/v2/users/:user_id", auth, withTx, withCurrentUser, DeleteUser)
+		r.Get("/v2/users/:user_id", auth, withTx, withCurrentUser, GetUser)
+		r.Get("/v2/courses/:course_id/users", auth, withTx, withCurrentUser, GetCourseUsers)
+		r.Delete("/v2/users/:user_id", auth, withTx, withCurrentUser, administratorOnly, DeleteUser)
 
 		// assignments
 		r.Get("/v2/users/:user_id/assignments", auth, withTx, withCurrentUser, GetUserAssignments)
-		//r.Get("/v2/courses/:course_id/assignments", auth, withTx, withCurrentUser, GetCourseAssignments)
-		//r.Get("/v2/courses/:course_id/users/:user_id/assignments", auth, withTx, withCurrentUser, GetCourseUserAssignments)
+		r.Get("/v2/courses/:course_id/users/:user_id/assignments", auth, withTx, withCurrentUser, GetCourseUserAssignments)
 		r.Get("/v2/assignments/:assignment_id", auth, withTx, withCurrentUser, GetAssignment)
-		//r.Delete("/v2/assignments/:assignment_id", auth, withTx, withCurrentUser, DeleteAssignment)
+		r.Delete("/v2/assignments/:assignment_id", auth, withTx, withCurrentUser, administratorOnly, DeleteAssignment)
 
 		// commits
-		//r.Get("/v2/assignments/:assignment_id/commits", auth, withTx, withCurrentUser, GetCommits)
+		//r.Get("/v2/assignments/:assignment_id/problems/:problem_id/steps/:step/commits", auth, withTx, withCurrentUser, GetAssignmentProblemCommits)
+		//r.Get("/v2/assignments/:assignment_id/problems/:problem_id/steps/:step/commits/last", auth, withTx, withCurrentUser, GetAssignmentProblemCommitLast)
 		//r.Get("/v2/commits/:commit_id", auth, withTx, withCurrentUser, GetCommit)
-		//r.Get("/v2/assignments/:assignment_id/commits/last", auth, withTx, withCurrentUser, GetAssignmentCommitLast)
 		//r.Delete("/v2/commits/:commit_id", auth, withTx, withCurrentUser, DeleteCommit)
 
 		// commit bundles

@@ -102,7 +102,7 @@ CREATE TABLE assignments (
     user_id                 bigint NOT NULL,
     roles                   text NOT NULL,
     instructor              boolean NOT NULL,
-    problem_scores          jsonb NOT NULL,
+    raw_scores              jsonb NOT NULL,
     score                   double precision,
     grade_id                text,
     lti_id                  text NOT NULL,
@@ -176,3 +176,12 @@ CREATE VIEW user_users AS
     WHERE instructors_assignments.instructor)
     UNION
     (SELECT id as user_id, id AS other_user_id FROM users);
+
+CREATE VIEW user_assignments AS
+    (SELECT DISTINCT instructors.id AS user_id, assignments.id AS assignment_id FROM
+    users AS instructors JOIN assignments AS instructors_assignments ON instructors.id = instructors_assignments.user_id
+    JOIN courses ON instructors_assignments.course_id = courses.id
+    JOIN assignments ON courses.id = assignments.id
+    WHERE instructors_assignments.instructor)
+    UNION
+	(SELECT user_id, id as assignment_id FROM assignments);
