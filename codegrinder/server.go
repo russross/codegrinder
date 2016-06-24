@@ -253,10 +253,9 @@ func main() {
 		r.Delete("/v2/assignments/:assignment_id", auth, withTx, withCurrentUser, administratorOnly, DeleteAssignment)
 
 		// commits
-		//r.Get("/v2/assignments/:assignment_id/problems/:problem_id/steps/:step/commits", auth, withTx, withCurrentUser, GetAssignmentProblemCommits)
-		//r.Get("/v2/assignments/:assignment_id/problems/:problem_id/steps/:step/commits/last", auth, withTx, withCurrentUser, GetAssignmentProblemCommitLast)
-		//r.Get("/v2/commits/:commit_id", auth, withTx, withCurrentUser, GetCommit)
-		//r.Delete("/v2/commits/:commit_id", auth, withTx, withCurrentUser, DeleteCommit)
+		r.Get("/v2/assignments/:assignment_id/problems/:problem_id/commits/last", auth, withTx, withCurrentUser, GetAssignmentProblemCommitLast)
+		r.Get("/v2/assignments/:assignment_id/problems/:problem_id/steps/:step/commits/last", auth, withTx, withCurrentUser, GetAssignmentProblemStepCommitLast)
+		r.Delete("/v2/commits/:commit_id", auth, withTx, withCurrentUser, administratorOnly, DeleteCommit)
 
 		// commit bundles
 		r.Post("/v2/commit_bundles/unsigned", auth, withTx, withCurrentUser, binding.Json(CommitBundle{}), PostCommitBundlesUnsigned)

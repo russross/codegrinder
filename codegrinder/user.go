@@ -353,9 +353,9 @@ func DeleteAssignment(w http.ResponseWriter, tx *sql.Tx, params martini.Params) 
 	}
 }
 
-// GetAssignmentProblemCommits handles requests to /v2/assignments/:assignment_id/problems/:problem_id/commits,
-// returning a list of commits for the given problem in the given assignment.
-func GetAssignmentProblemCommits(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
+// GetAssignmentProblemCommitLast handles requests to /v2/assignments/:assignment_id/problems/:problem_id/commits/last,
+// returning the most recent commit of the highest-numbered step for the given problem of the given assignment.
+func GetAssignmentProblemCommitLast(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
 	assignmentID, err := parseID(w, "assignment_id", params["assignment_id"])
 	if err != nil {
 		return
@@ -365,125 +365,71 @@ func GetAssignmentProblemCommits(w http.ResponseWriter, tx *sql.Tx, params marti
 		return
 	}
 
-	commits := []*Commit{}
+	commit := new(Commit)
 
 	if currentUser.Admin {
-		err = meddler.QueryAll(tx, &commits, `SELECT * FROM commits WHERE assignment_id = $1 ORDER BY created_at`,
-			assignmentID)
+		err = meddler.QueryRow(tx, commit, `SELECT * FROM commits WHERE assignment_id = $1 AND problem_id = $2 ORDER BY step DESC, created_at DESC LIMIT 1`,
+			assignmentID, problemID)
 	} else {
-		err = meddler.QueryAll(tx, &commits, `SELECT commits.* `+
+		err = meddler.QueryRow(tx, commit, `SELECT commits.* `+
 			`FROM commits JOIN user_assignments ON commits.assignment_id = user_assignments.assignment_id `+
-			`WHERE commits.assignment_id = $1 AND user_assignments.user_id = $2 `+
-			`ORDER BY commits.updated_at`, problemID)
+			`WHERE commits.assignment_id = $1 AND problem_id = $2 AND user_assignments.user_id = $3 `+
+			`ORDER BY step DESC, created_at DESC LIMIT 1`, assignmentID, problemID, currentUser.ID)
 	}
 
 	if err != nil {
-		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-		return
-	}
-	if len(commits) == 0 {
-		loggedHTTPErrorf(w, http.StatusNotFound, "not found")
+		loggedHTTPDBNotFoundError(w, err)
 		return
 	}
 
-	render.JSON(http.StatusOK, commits)
+	render.JSON(http.StatusOK, commit)
 }
 
-// GetUserAssignmentCommitLast handles requests to /v2/users/:user_id/assignments/:assignment_id/commits/last,
-// returning the most recent commit for the given assignment for the given user.
-func GetUserAssignmentCommitLast(w http.ResponseWriter, tx *sql.Tx, params martini.Params, render render.Render) {
-	userID, err := strconv.Atoi(params["user_id"])
+// GetUserAssignmentProblemStepCommitLast handles requests to /v2/assignments/:assignment_id/problems/:problem_id/steps/:step/commits/last,
+// returning the most recent commit for the given step of the given problem of the given assignment.
+func GetAssignmentProblemStepCommitLast(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
+	assignmentID, err := parseID(w, "assignment_id", params["assignment_id"])
 	if err != nil {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "error parsing assignment_id from URL: %v", err)
 		return
 	}
-
-	assignmentID, err := strconv.Atoi(params["assignment_id"])
+	problemID, err := parseID(w, "problem_id", params["problem_id"])
 	if err != nil {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "error parsing assignment_id from URL: %v", err)
+		return
+	}
+	step, err := parseID(w, "step", params["step"])
+	if err != nil {
 		return
 	}
 
 	commit := new(Commit)
-	if err := meddler.QueryRow(tx, commit, `SELECT * FROM commits WHERE user_id = $1 AND assignment_id = $2 ORDER BY created_at DESC LIMIT 1`, userID, assignmentID); err != nil {
+
+	if currentUser.Admin {
+		err = meddler.QueryRow(tx, commit, `SELECT * FROM commits WHERE assignment_id = $1 AND problem_id = $2 AND step = $3 ORDER BY created_at DESC LIMIT 1`, assignmentID, problemID, step)
+	} else {
+		err = meddler.QueryRow(tx, commit, `SELECT commits.* `+
+			`FROM commits JOIN user_assignments ON commits.assignment_id = user_assignments.assignment_id `+
+			`WHERE commits.assignment_id = $1 AND problem_id = $2 AND step = $3 AND user_assignments.user_id = $4 `+
+			`ORDER BY created_at DESC LIMIT 1`,
+			assignmentID, problemID, step, currentUser.ID)
+	}
+
+	if err != nil {
 		loggedHTTPDBNotFoundError(w, err)
 		return
 	}
+
 	render.JSON(http.StatusOK, commit)
 }
 
-// GetUserAssignmentCommit handles requests to /v2/users/me/assignments/:assignment_id/commits/:commit_id,
-// returning the given commit for the given assignment for the given user.
-func GetUserAssignmentCommit(w http.ResponseWriter, tx *sql.Tx, params martini.Params, render render.Render) {
-	userID, err := strconv.Atoi(params["user_id"])
+// DeleteCommit handles requests to /v2/commits/:commit_id,
+// deleting the given commit.
+func DeleteCommit(w http.ResponseWriter, tx *sql.Tx, params martini.Params) {
+	commitID, err := parseID(w, "commit_id", params["commit_id"])
 	if err != nil {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "error parsing assignment_id from URL: %v", err)
 		return
 	}
 
-	assignmentID, err := strconv.Atoi(params["assignment_id"])
-	if err != nil {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "error parsing assignment_id from URL: %v", err)
-		return
-	}
-
-	commitID, err := strconv.Atoi(params["commit_id"])
-	if err != nil {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "error parsing commit_id from URL: %v", err)
-		return
-	}
-
-	commit := new(Commit)
-	if err := meddler.QueryRow(tx, commit, `SELECT * FROM commits WHERE id = $1 AND user_id = $2 AND assignment_id = $3`, commitID, userID, assignmentID); err != nil {
-		loggedHTTPDBNotFoundError(w, err)
-		return
-	}
-	render.JSON(http.StatusOK, commit)
-}
-
-// DeleteUserAssignmentCommits handles requests to /v2/users/:user_id/assignments/:assignment_id/commits,
-// deleting all commits for the given assignment for the given user.
-func DeleteUserAssignmentCommits(w http.ResponseWriter, tx *sql.Tx, params martini.Params) {
-	userID, err := strconv.Atoi(params["user_id"])
-	if err != nil {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "error parsing assignment_id from URL: %v", err)
-		return
-	}
-
-	assignmentID, err := strconv.Atoi(params["assignment_id"])
-	if err != nil {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "error parsing assignment_id from URL: %v", err)
-		return
-	}
-
-	if _, err := tx.Exec(`DELETE FROM commits WHERE user_id = $1 AND assignment_id = $2`, userID, assignmentID); err != nil {
-		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-		return
-	}
-}
-
-// DeleteUserAssignmentCommit handles requests to /v2/users/:user_id/assignments/:assignment_id/commits/:commit_id,
-// deleting the given commits for the given assignment for the given user.
-func DeleteUserAssignmentCommit(w http.ResponseWriter, tx *sql.Tx, params martini.Params) {
-	userID, err := strconv.Atoi(params["user_id"])
-	if err != nil {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "error parsing assignment_id from URL: %v", err)
-		return
-	}
-
-	assignmentID, err := strconv.Atoi(params["assignment_id"])
-	if err != nil {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "error parsing assignment_id from URL: %v", err)
-		return
-	}
-
-	commitID, err := strconv.Atoi(params["commit_id"])
-	if err != nil {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "error parsing commit_id from URL: %v", err)
-		return
-	}
-
-	if _, err = tx.Exec(`DELETE FROM commits WHERE id = $1 AND user_id = $2 AND assignment_id = $3`, commitID, userID, assignmentID); err != nil {
+	if _, err = tx.Exec(`DELETE FROM commits WHERE id = $1`, commitID); err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
 	}

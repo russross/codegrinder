@@ -77,10 +77,12 @@ func CommandGet(cmd *cobra.Command, args []string) {
 	// for each problem get the problem, the most recent commit (or create one), and the corresponding step
 	commits := make(map[string]*Commit)
 	infos := make(map[string]*ProblemInfo)
+	problems := make(map[string]*Problem)
 	steps := make(map[string]*ProblemStep)
 	for _, elt := range problemSetProblems {
 		problem, commit, info, step := new(Problem), new(Commit), new(ProblemInfo), new(ProblemStep)
 		mustGetObject(fmt.Sprintf("/problems/%d", elt.ProblemID), nil, problem)
+		problems[problem.Unique] = problem
 
 		if getObject(fmt.Sprintf("/assignments/%d/problems/%d/commits/last", assignment.ID, problem.ID), nil, commit) {
 			info.ID = problem.ID
@@ -131,7 +133,7 @@ func CommandGet(cmd *cobra.Command, args []string) {
 	}
 
 	for unique := range steps {
-		commit, step := commits[unique], steps[unique]
+		commit, problem, step := commits[unique], problems[unique], steps[unique]
 
 		// create a directory for this problem
 		// exception: if there is only one problem in the set, use the main directory
@@ -164,6 +166,11 @@ func CommandGet(cmd *cobra.Command, args []string) {
 				if err := ioutil.WriteFile(path, []byte(contents), 0644); err != nil {
 					log.Fatalf("error saving file %s: %v", path, err)
 				}
+			}
+
+			// does this commit indicate the step was finished and needs to advance?
+			if commit.ReportCard != nil && commit.ReportCard.Passed && commit.Score == 1.0 {
+				nextStep(target, infos[unique], problem, commit)
 			}
 		}
 	}

@@ -60,60 +60,16 @@ func CommandGrade(cmd *cobra.Command, args []string) {
 	commit = saved.Commit
 
 	if commit.ReportCard != nil && commit.ReportCard.Passed && commit.Score == 1.0 {
-		log.Printf("step %d passed", commit.Step)
-
-		// advance to the next step
-		oldStep, newStep := new(ProblemStep), new(ProblemStep)
-		if !getObject(fmt.Sprintf("/problems/%d/steps/%d", problem.ID, commit.Step+1), nil, newStep) {
-			log.Printf("you have completed all steps for this problem")
-			return
-		}
-		mustGetObject(fmt.Sprintf("/problems/%d/steps/%d", problem.ID, commit.Step), nil, oldStep)
-		log.Printf("moving to step %d", newStep.Step)
-
-		// delete all the files from the old step
-		for name := range oldStep.Files {
-			if len(strings.Split(name, "/")) == 1 {
-				continue
+		if nextStep(dir, dotfile.Problems[problem.Unique], problem, commit) {
+			// save the updated dotfile with whitelist updates and new step number
+			contents, err := json.MarshalIndent(dotfile, "", "    ")
+			if err != nil {
+				log.Fatalf("JSON error encoding %s: %v", dotfile.Path, err)
 			}
-			path := filepath.Join(dir, name)
-			log.Printf("deleting %s from old step", path)
-			if err := os.Remove(path); err != nil {
-				log.Fatalf("error deleting %s: %v", path, err)
+			contents = append(contents, '\n')
+			if err := ioutil.WriteFile(dotfile.Path, contents, 0644); err != nil {
+				log.Fatalf("error saving file %s: %v", dotfile.Path, err)
 			}
-			dirpath := filepath.Dir(path)
-			if err := os.Remove(dirpath); err != nil {
-				// do nothing; the directory probably has other files left
-			}
-		}
-
-		// write files from new step and update the whitelist
-		info := dotfile.Problems[problem.Unique]
-		for name, contents := range newStep.Files {
-			path := filepath.Join(dir, name)
-			log.Printf("writing %s from new step", path)
-			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-				log.Fatalf("error creating directory %s: %v", filepath.Dir(path), err)
-			}
-			if err := ioutil.WriteFile(path, []byte(contents), 0644); err != nil {
-				log.Fatalf("error saving file %s: %v", path, err)
-			}
-
-			// add the file to the whitelist as well if it is in the root directory
-			if len(strings.Split(name, "/")) == 1 {
-				info.Whitelist[name] = true
-			}
-		}
-
-		// save the updated dotfile with whitelist updates and new step number
-		info.Step++
-		contents, err := json.MarshalIndent(dotfile, "", "    ")
-		if err != nil {
-			log.Fatalf("JSON error encoding %s: %v", dotfile.Path, err)
-		}
-		contents = append(contents, '\n')
-		if err := ioutil.WriteFile(dotfile.Path, contents, 0644); err != nil {
-			log.Fatalf("error saving file %s: %v", dotfile.Path, err)
 		}
 	} else {
 		// solution failed
@@ -140,4 +96,53 @@ func CommandGrade(cmd *cobra.Command, args []string) {
 			}
 		}
 	}
+}
+
+func nextStep(dir string, info *ProblemInfo, problem *Problem, commit *Commit) bool {
+	log.Printf("step %d passed", commit.Step)
+
+	// advance to the next step
+	oldStep, newStep := new(ProblemStep), new(ProblemStep)
+	if !getObject(fmt.Sprintf("/problems/%d/steps/%d", problem.ID, commit.Step+1), nil, newStep) {
+		log.Printf("you have completed all steps for this problem")
+		return false
+	}
+	mustGetObject(fmt.Sprintf("/problems/%d/steps/%d", problem.ID, commit.Step), nil, oldStep)
+	log.Printf("moving to step %d", newStep.Step)
+
+	// delete all the files from the old step
+	for name := range oldStep.Files {
+		if len(strings.Split(name, "/")) == 1 {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		log.Printf("deleting %s from old step", path)
+		if err := os.Remove(path); err != nil {
+			log.Fatalf("error deleting %s: %v", path, err)
+		}
+		dirpath := filepath.Dir(path)
+		if err := os.Remove(dirpath); err != nil {
+			// do nothing; the directory probably has other files left
+		}
+	}
+
+	// write files from new step and update the whitelist
+	for name, contents := range newStep.Files {
+		path := filepath.Join(dir, name)
+		log.Printf("writing %s from new step", path)
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			log.Fatalf("error creating directory %s: %v", filepath.Dir(path), err)
+		}
+		if err := ioutil.WriteFile(path, []byte(contents), 0644); err != nil {
+			log.Fatalf("error saving file %s: %v", path, err)
+		}
+
+		// add the file to the whitelist as well if it is in the root directory
+		if len(strings.Split(name, "/")) == 1 {
+			info.Whitelist[name] = true
+		}
+	}
+
+	info.Step++
+	return true
 }

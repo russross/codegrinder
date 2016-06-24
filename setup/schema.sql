@@ -143,6 +143,7 @@ CREATE TABLE commits (
     FOREIGN KEY (assignment_id) REFERENCES assignments (id) ON DELETE CASCADE,
     FOREIGN KEY (problem_id, step) REFERENCES problem_steps (problem_id, step) ON DELETE CASCADE
 );
+CREATE UNIQUE INDEX commits_unique_assignment_problem_step ON commits (assignment_id, problem_id, step);
 
 CREATE VIEW user_problem_sets AS
     (SELECT DISTINCT assignments.user_id, problem_sets.id AS problem_set_id FROM
