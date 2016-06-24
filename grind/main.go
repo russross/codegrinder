@@ -24,10 +24,10 @@ const (
 )
 
 var Config struct {
-	Host       string `json:"host"`
-	Cookie     string `json:"cookie"`
-	restReport bool
-	restDump   bool
+	Host      string `json:"host"`
+	Cookie    string `json:"cookie"`
+	apiReport bool
+	apiDump   bool
 }
 
 type DotFileInfo struct {
@@ -51,8 +51,8 @@ func main() {
 		Long: "A command-line tool to access CodeGrinder\n" +
 			"by Russ Ross <russ@russross.com>",
 	}
-	cmdGrind.PersistentFlags().BoolP("rest-report", "", false, "report REST requests to the console")
-	cmdGrind.PersistentFlags().BoolP("rest-dump", "", false, "dump REST request and response data")
+	cmdGrind.PersistentFlags().BoolP("api", "", false, "report all API requests")
+	cmdGrind.PersistentFlags().BoolP("api-dump", "", false, "dump API request and response data")
 
 	cmdVersion := &cobra.Command{
 		Use:   "version",
@@ -198,7 +198,7 @@ func doRequest(path string, params map[string]string, method string, upload inte
 		req.URL.RawQuery = values.Encode()
 	}
 
-	if Config.restReport {
+	if Config.apiReport {
 		log.Printf("%s %s", method, req.URL)
 	}
 
@@ -215,7 +215,7 @@ func doRequest(path string, params map[string]string, method string, upload inte
 		}
 		req.Body = ioutil.NopCloser(bytes.NewReader(payload))
 
-		if Config.restDump {
+		if Config.apiDump {
 			log.Printf("Request data: %s", payload)
 		}
 	}
@@ -241,7 +241,7 @@ func doRequest(path string, params map[string]string, method string, upload inte
 			log.Fatalf("failed to parse result object from server: %v\n", err)
 		}
 
-		if Config.restDump {
+		if Config.apiDump {
 			raw, err := json.MarshalIndent(download, "", "    ")
 			if err != nil {
 				log.Fatalf("doRequest: JSON error encoding downloaded object: %v", err)
@@ -270,12 +270,12 @@ func mustLoadConfig(cmd *cobra.Command) {
 		log.Printf("failed to parse %s: %v", configFile, err)
 		log.Fatalf("you may wish to try deleting the file and running \"grind init\" again\n")
 	}
-	if cmd.Flag("rest-report").Value.String() == "true" {
-		Config.restReport = true
+	if cmd.Flag("api").Value.String() == "true" {
+		Config.apiReport = true
 	}
-	if cmd.Flag("rest-dump").Value.String() == "true" {
-		Config.restReport = true
-		Config.restDump = true
+	if cmd.Flag("api-dump").Value.String() == "true" {
+		Config.apiReport = true
+		Config.apiDump = true
 	}
 
 	checkVersion()

@@ -136,3 +136,20 @@ func (elt *ReportCard) AddPassedResult(name, details string) *ReportCardResult {
 	elt.Results = append(elt.Results, r)
 	return r
 }
+
+func (elt *ReportCard) ComputeScore() float64 {
+	if len(elt.Results) == 0 {
+		return 0.0
+	}
+	passed := 0
+	for _, result := range elt.Results {
+		if result.Outcome == "passed" {
+			passed++
+		}
+	}
+	score := float64(passed) / float64(len(elt.Results))
+	if !elt.Passed && score >= 1.0 {
+		score = float64(passed) / float64(len(elt.Results)+1)
+	}
+	return score
+}

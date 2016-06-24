@@ -333,7 +333,7 @@ func LtiProblemSet(w http.ResponseWriter, r *http.Request, tx *sql.Tx, form LTIR
 	// load the problem set
 	problemSet := new(ProblemSet)
 	if err := meddler.QueryRow(tx, problemSet, `SELECT * FROM problem_sets WHERE unique_id = $1`, unique); err != nil {
-		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
+		loggedHTTPDBNotFoundError(w, err)
 		return
 	}
 
@@ -497,6 +497,7 @@ func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Co
 		log.Printf("creating new assignment for course %d (%s), problem set %d (%s), user %d: %s (%s)",
 			course.ID, course.Name, problemSet.ID, problemSet.Note, user.ID, user.Name, user.Email)
 		asst.ID = 0
+		asst.RawScores = map[string][]float64{}
 		asst.CreatedAt = now
 		asst.UpdatedAt = now
 	}
@@ -581,71 +582,14 @@ func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Co
 	return asst, nil
 }
 
-func saveGrade(tx *sql.Tx, commit *Commit, asst *Assignment, user *User) error {
-	if commit.ReportCard == nil {
-		return nil
-	}
-
+func saveGrade(tx *sql.Tx, asst *Assignment, user *User) error {
 	if asst.GradeID == "" {
-		log.Printf("cannot post grade for assignment %d user %d because no grade ID is present", asst.ID, asst.UserID)
+		log.Printf("cannot post grade for assignment %d user %d (%s) because no grade ID is present", asst.ID, asst.UserID, user.Name)
 		return nil
 	}
 	if asst.OutcomeURL == "" {
-		log.Printf("cannot post grade for assignment %d user %d because no outcome URL is present", asst.ID, asst.UserID)
+		log.Printf("cannot post grade for assignment %d user %d (%s) because no outcome URL is present", asst.ID, asst.UserID, user.Name)
 		return nil
-	}
-	return nil
-}
-
-/*
-
-	// get all problems in the set
-	var problems []*Problem
-	if err := meddler.QueryAll(tx, &problems,
-		`SELECT problems.* FROM problems INNER JOIN problem_set_problems `+
-			`ON problems.ID = problem_set_problems.problem_id `+
-			`WHERE problem_set_problems.problem_set_id = $1`, asst.ProblemSetID); err != nil {
-		return loggedErrorf("db error getting problems for problem set %d: %v", asst.ProblemSetID, err)
-	}
-
-	totalSetWeight := 0.0
-
-	// assign a grade: all previous steps get full credit, this one gets partial credit, future steps get none
-	score, possible := 0.0, 0.0
-	foundCurrent := false
-	for n, step := range problem.Steps {
-		possible += step.ScoreWeight
-		if n == commit.ProblemStepNumber {
-			if commit.ReportCard.Passed {
-				// award full credit for this step
-				score += step.ScoreWeight
-			} else if len(commit.ReportCard.Results) == 0 {
-				// no results? that's a fail...
-			} else {
-				// compute partial credit for this step
-				passed := 0
-				for _, elt := range commit.ReportCard.Results {
-					if elt.Outcome == "passed" {
-						passed++
-					}
-				}
-				partial := float64(passed) * step.ScoreWeight / float64(len(commit.ReportCard.Results))
-				score += partial
-				//log.Printf("passed %d/%d on this step", passed, len(commit.ReportCard.Results))
-			}
-			foundCurrent = true
-		} else if !foundCurrent {
-			// award full credit for completed steps
-			score += step.ScoreWeight
-		} else {
-			// no credit for future steps
-		}
-	}
-
-	// compute the weighted grade
-	grade := 0.0
-	if possible > 0.0 {
-		grade = score / possible
 	}
 
 	// report back using lti
@@ -666,7 +610,7 @@ func saveGrade(tx *sql.Tx, commit *Commit, asst *Assignment, user *User) error {
 		URL:       gradeURL,
 		Text:      gradeText,
 		Language:  "en",
-		Score:     fmt.Sprintf("%0.4f", grade),
+		Score:     fmt.Sprintf("%0.5f", asst.Score),
 	}
 
 	raw, err := xml.MarshalIndent(report, "", "  ")
@@ -694,11 +638,10 @@ func saveGrade(tx *sql.Tx, commit *Commit, asst *Assignment, user *User) error {
 	}
 	resp.Body.Close()
 	if resp.StatusCode == http.StatusOK {
-		log.Printf("grade of %0.4f posted for %s (%s)", grade, user.Name, user.Email)
+		log.Printf("grade of %0.5f posted for %s (%s)", asst.Score, user.Name, user.Email)
 	} else {
 		return loggedErrorf("result status %d (%s) when posting grade for user %d", resp.StatusCode, resp.Status, asst.UserID)
 	}
 
 	return nil
 }
-*/

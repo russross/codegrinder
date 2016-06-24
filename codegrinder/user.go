@@ -566,6 +566,18 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 		return
 	}
 
+	// reject commit if a previous step remains incomplete
+	if assignment.RawScores == nil {
+		assignment.RawScores = map[string][]float64{}
+	}
+	scores := assignment.RawScores[problem.Unique]
+	for i := 0; i < int(commit.Step)-1; i++ {
+		if i >= len(scores) || scores[i] != 1.0 {
+			loggedHTTPErrorf(w, http.StatusBadRequest, "commit is for step %d, but user has not passed step %d", commit.Step, i+1)
+			return
+		}
+	}
+
 	// validate commit
 	if commit.Step > int64(len(steps)) {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "commit has step number %d, but there are only %d steps in the problem", commit.Step, len(steps))
@@ -577,9 +589,10 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 		return
 	}
 
-	// update an existing commit?
+	// update an existing commit if it exists
+	// note: this used to include AND action IS NULL AND updated_at > now.Add(-OpenCommitTimeout)
 	openCommit := new(Commit)
-	if err := meddler.QueryRow(tx, openCommit, `SELECT * FROM commits WHERE assignment_id = $1 AND problem_id = $2 AND step = $3 AND action IS NULL AND updated_at > $4 LIMIT 1`, commit.AssignmentID, commit.ProblemID, commit.Step, now.Add(-OpenCommitTimeout)); err != nil {
+	if err := meddler.QueryRow(tx, openCommit, `SELECT * FROM commits WHERE assignment_id = $1 AND problem_id = $2 AND step = $3 LIMIT 1`, commit.AssignmentID, commit.ProblemID, commit.Step); err != nil {
 		if err == sql.ErrNoRows {
 			commit.ID = 0
 		} else {
@@ -633,13 +646,85 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 		CommitSignature:  commitSig,
 	}
 
-	// post grade to LMS using LTI
+	// save the grade update
 	if signed.Commit.ReportCard != nil {
-		if err := saveGrade(tx, commit, assignment, currentUser); err != nil {
+		// save the raw score for this problem step
+		scores := assignment.RawScores[problem.Unique]
+		for int(signed.Commit.Step) > len(scores) {
+			scores = append(scores, 0.0)
+		}
+		scores[signed.Commit.Step-1] = signed.Commit.ReportCard.ComputeScore()
+		assignment.RawScores[problem.Unique] = scores
+
+		// get the weight of each step in the problem and problem in the set
+		weights := []*StepWeights{}
+		if err := meddler.QueryAll(tx, &weights, `SELECT problems.unique_id, problem_set_problems.weight AS problem_weight, problem_steps.step, problem_steps.weight AS step_weight `+
+			`FROM problem_set_problems JOIN problems ON problem_set_problems.problem_id = problems.id `+
+			`JOIN problem_steps ON problem_steps.problem_id = problems.id `+
+			`WHERE problem_set_problems.problem_set_id = $1 `+
+			`ORDER BY unique_id, step`, assignment.ProblemSetID); err != nil {
+			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
+			return
+		}
+		if len(weights) == 0 {
+			loggedHTTPErrorf(w, http.StatusInternalServerError, "no problem step weights found, unable to compute score")
+			return
+		}
+		problemWeights := make(map[string]float64)
+		stepWeights := make(map[string][]float64)
+		for _, elt := range weights {
+			problemWeights[elt.Unique] = elt.ProblemWeight
+			stepWeights[elt.Unique] = append(stepWeights[elt.Unique], elt.StepWeight)
+			if len(stepWeights[elt.Unique]) != int(elt.Step) {
+				loggedHTTPErrorf(w, http.StatusInternalServerError, "step weights do not line up when computing score")
+				return
+			}
+		}
+
+		// compute an overall score
+		setWeightTotal, setScore := 0.0, 0.0
+		for unique, problemWeight := range problemWeights {
+			setWeightTotal += problemWeight
+			scores := assignment.RawScores[unique]
+			problemWeightTotal, problemScore := 0.0, 0.0
+			for i, stepWeight := range stepWeights[unique] {
+				problemWeightTotal += stepWeight
+				if i < len(scores) {
+					problemScore += scores[i] * stepWeight
+				}
+			}
+			if problemWeightTotal == 0.0 {
+				loggedHTTPErrorf(w, http.StatusInternalServerError, "problem %s has no weight", unique)
+				return
+			}
+			problemScore /= problemWeightTotal
+			setScore += problemScore * problemWeight
+		}
+		if setWeightTotal == 0.0 {
+			loggedHTTPErrorf(w, http.StatusInternalServerError, "problem set has no weight")
+			return
+		}
+		assignment.Score = setScore / setWeightTotal
+
+		// save the updates to the assignment
+		assignment.UpdatedAt = now
+		if err := meddler.Save(tx, "assignments", assignment); err != nil {
+			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
+			return
+		}
+		// post grade to LMS using LTI
+		if err := saveGrade(tx, assignment, currentUser); err != nil {
 			loggedHTTPErrorf(w, http.StatusInternalServerError, "error posting grade back to LMS: %v", err)
 			return
 		}
 	}
 
 	render.JSON(http.StatusOK, &signed)
+}
+
+type StepWeights struct {
+	Unique        string  `meddler:"unique_id"`
+	ProblemWeight float64 `meddler:"problem_weight"`
+	Step          int64   `meddler:"step"`
+	StepWeight    float64 `meddler:"step_weight"`
 }
