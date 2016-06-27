@@ -1,0 +1,295 @@
+{
+	"comment": "",
+	"ignore": "test",
+	"package": [
+		{
+			"checksumSHA1": "htjvdG/znrHmFYRQBqA2vHrJsF4=",
+			"path": "github.com/Sirupsen/logrus",
+			"revision": "f3cfb454f4c209e6668c95216c4744b8fddb2356",
+			"revisionTime": "2016-06-01T11:32:10Z"
+		},
+		{
+			"checksumSHA1": "l9snk/Go4UwEHTrjBZi6G3Tz2ME=",
+			"path": "github.com/blang/semver",
+			"revision": "e64c75d1c910cd81c8caa1f2cc2c6409dd65af81",
+			"revisionTime": "2016-06-16T22:19:14Z"
+		},
+		{
+			"checksumSHA1": "mXuhmsoWRrMxD3j836MtLNirGiM=",
+			"path": "github.com/boj/redistore",
+			"revision": "fc113767cd6b051980f260d6dbe84b2740c46ab0",
+			"revisionTime": "2016-01-28T11:33:10Z"
+		},
+		{
+			"checksumSHA1": "fcfxNsCuheCrubAAl6zWgimCnLY=",
+			"path": "github.com/codegangsta/inject",
+			"revision": "33e0aa1cb7c019ccc3fbe049a8262a6403d30504",
+			"revisionTime": "2015-01-14T23:56:00Z"
+		},
+		{
+			"checksumSHA1": "Vn60086xCfe2Q4+mbWh/UbKBwUc=",
+			"path": "github.com/docker/docker/opts",
+			"revision": "8eb1d89c1755150fef42799f284866ebe604b7dc",
+			"revisionTime": "2016-06-13T16:29:46Z"
+		},
+		{
+			"checksumSHA1": "Q0Uj34RQw/eaPr9KWLM4WukBIYE=",
+			"path": "github.com/docker/docker/pkg/archive",
+			"revision": "8eb1d89c1755150fef42799f284866ebe604b7dc",
+			"revisionTime": "2016-06-13T16:29:46Z"
+		},
+		{
+			"checksumSHA1": "EONnM7E8xCzJCAbX1rhayK6knwM=",
+			"path": "github.com/docker/docker/pkg/fileutils",
+			"revision": "8eb1d89c1755150fef42799f284866ebe604b7dc",
+			"revisionTime": "2016-06-13T16:29:46Z"
+		},
+		{
+			"checksumSHA1": "p6Ud4Yf1ywWy20YxXF1RU4yhTio=",
+			"path": "github.com/docker/docker/pkg/homedir",
+			"revision": "8eb1d89c1755150fef42799f284866ebe604b7dc",
+			"revisionTime": "2016-06-13T16:29:46Z"
+		},
+		{
+			"checksumSHA1": "iP5slJJPRZUm0rfdII8OiATAACA=",
+			"path": "github.com/docker/docker/pkg/idtools",
+			"revision": "8eb1d89c1755150fef42799f284866ebe604b7dc",
+			"revisionTime": "2016-06-13T16:29:46Z"
+		},
+		{
+			"checksumSHA1": "qZRYSh0QLpvPC6Z83CwG59kSi8k=",
+			"path": "github.com/docker/docker/pkg/ioutils",
+			"revision": "8eb1d89c1755150fef42799f284866ebe604b7dc",
+			"revisionTime": "2016-06-13T16:29:46Z"
+		},
+		{
+			"checksumSHA1": "ndnAFCfsGC3upNQ6jAEwzxcurww=",
+			"path": "github.com/docker/docker/pkg/longpath",
+			"revision": "8eb1d89c1755150fef42799f284866ebe604b7dc",
+			"revisionTime": "2016-06-13T16:29:46Z"
+		},
+		{
+			"checksumSHA1": "rArZ5mYIe9I1L5PRQOJu8BwafFw=",
+			"path": "github.com/docker/docker/pkg/pools",
+			"revision": "8eb1d89c1755150fef42799f284866ebe604b7dc",
+			"revisionTime": "2016-06-13T16:29:46Z"
+		},
+		{
+			"checksumSHA1": "txf3EORYff4hO6PEvwBm2lyh1MU=",
+			"path": "github.com/docker/docker/pkg/promise",
+			"revision": "8eb1d89c1755150fef42799f284866ebe604b7dc",
+			"revisionTime": "2016-06-13T16:29:46Z"
+		},
+		{
+			"checksumSHA1": "YDYbS5U2mDwfcOUJ6M09cP6Bubg=",
+			"path": "github.com/docker/docker/pkg/stdcopy",
+			"revision": "8eb1d89c1755150fef42799f284866ebe604b7dc",
+			"revisionTime": "2016-06-13T16:29:46Z"
+		},
+		{
+			"checksumSHA1": "Eh3iu/9RzHzNY4vHHPKaZISAgBo=",
+			"path": "github.com/docker/docker/pkg/system",
+			"revision": "8eb1d89c1755150fef42799f284866ebe604b7dc",
+			"revisionTime": "2016-06-13T16:29:46Z"
+		},
+		{
+			"checksumSHA1": "HbqQOZa0qqtYp9AHhQCjOiFLdFc=",
+			"path": "github.com/docker/go-units",
+			"revision": "09dda9d4b0d748c57c14048906d3d094a58ec0c9",
+			"revisionTime": "2016-05-24T16:34:22Z"
+		},
+		{
+			"checksumSHA1": "gkRIq2AsG0e/ngNfqW+IF/zr9o8=",
+			"path": "github.com/fatih/color",
+			"revision": "87d4004f2ab62d0d255e0a38f1680aa534549fe3",
+			"revisionTime": "2016-06-10T11:06:02Z"
+		},
+		{
+			"checksumSHA1": "1gLLX9RmMeBaF2V/ls2DIWQj1OA=",
+			"path": "github.com/fsouza/go-dockerclient",
+			"revision": "9df1f25d542e79d7909ef321b5c13c5d34ea7f1d",
+			"revisionTime": "2016-06-02T03:20:46Z"
+		},
+		{
+			"checksumSHA1": "2UmMbNHc8FBr98mJFN1k8ISOIHk=",
+			"path": "github.com/garyburd/redigo/internal",
+			"revision": "b8dc90050f24c1a73a52f107f3f575be67b21b7c",
+			"revisionTime": "2016-05-25T16:57:06Z"
+		},
+		{
+			"checksumSHA1": "507OiSqTxfGCje7xDT5eq9CCaNQ=",
+			"path": "github.com/garyburd/redigo/redis",
+			"revision": "b8dc90050f24c1a73a52f107f3f575be67b21b7c",
+			"revisionTime": "2016-05-25T16:57:06Z"
+		},
+		{
+			"checksumSHA1": "s8LkYBuPyrsEKfafm/01pzM/hYI=",
+			"path": "github.com/go-martini/martini",
+			"revision": "0c6ad5903d2bf9337762caa9c357247279c230c3",
+			"revisionTime": "2016-04-30T15:43:47Z"
+		},
+		{
+			"checksumSHA1": "iIUYZyoanCQQTUaWsu8b+iOSPt4=",
+			"path": "github.com/gorilla/context",
+			"revision": "aed02d124ae4a0e94fea4541c8effd05bf0c8296",
+			"revisionTime": "2016-05-25T20:33:19Z"
+		},
+		{
+			"checksumSHA1": "nZoAsxDHOA8fLilA56HKvezLqNU=",
+			"path": "github.com/gorilla/securecookie",
+			"revision": "ff356348f74133a59d3e93aa24b5b4551b6fe90d",
+			"revisionTime": "2016-05-25T20:33:48Z"
+		},
+		{
+			"checksumSHA1": "oSx9IYMY+lnnX3op2Pnh376tIe4=",
+			"path": "github.com/gorilla/sessions",
+			"revision": "56ba4b0a11da87516629a57408a5f7e4c8ea7b0b",
+			"revisionTime": "2016-06-04T16:54:08Z"
+		},
+		{
+			"checksumSHA1": "dyGQP5AipmInoTQmnqvbFmUORpk=",
+			"path": "github.com/gorilla/websocket",
+			"revision": "a68708917c6a4f06314ab4e52493cc61359c9d42",
+			"revisionTime": "2016-06-06T23:20:22Z"
+		},
+		{
+			"checksumSHA1": "Uzyon2091lmwacNsl1hCytjhHtg=",
+			"path": "github.com/hashicorp/go-cleanhttp",
+			"revision": "ad28ea4487f05916463e2423a55166280e8254b5",
+			"revisionTime": "2016-04-07T17:41:26Z"
+		},
+		{
+			"checksumSHA1": "84hbcb5NWMIW9jQf51+2uaNj/eY=",
+			"path": "github.com/lib/pq",
+			"revision": "ee1442bda7bd1b6a84e913bdb421cb1874ec629d",
+			"revisionTime": "2016-05-10T22:24:21Z"
+		},
+		{
+			"checksumSHA1": "xppHi82MLqVx1eyQmbhTesAEjx8=",
+			"path": "github.com/lib/pq/oid",
+			"revision": "ee1442bda7bd1b6a84e913bdb421cb1874ec629d",
+			"revisionTime": "2016-05-10T22:24:21Z"
+		},
+		{
+			"checksumSHA1": "Xc/FHteEFS2qRfYnDuEl3AkyJF4=",
+			"path": "github.com/martini-contrib/binding",
+			"revision": "8aaceec3b52c275477f32c95ea5c6e8ccaba04c5",
+			"revisionTime": "2015-04-29T23:30:13Z"
+		},
+		{
+			"checksumSHA1": "WMoHBLFJLLvhzbnatHIY+SgrrFI=",
+			"path": "github.com/martini-contrib/render",
+			"revision": "ec18f8345a1181146728238980606fb1d6f40e8c",
+			"revisionTime": "2015-07-07T14:21:08Z"
+		},
+		{
+			"checksumSHA1": "5X9gKYDcjO/gqmaZBlWVUu8S35E=",
+			"path": "github.com/martini-contrib/sessions",
+			"revision": "fa13114fbcf036dff8185d728651d85fcef772db",
+			"revisionTime": "2014-06-30T23:17:22Z"
+		},
+		{
+			"checksumSHA1": "6wAWOVRtaH7hX48hmw9o7noyy5Q=",
+			"path": "github.com/mattn/go-colorable",
+			"revision": "9056b7a9f2d1f2d96498d6d146acd1f9d5ed3d59",
+			"revisionTime": "2016-06-02T15:08:27Z"
+		},
+		{
+			"checksumSHA1": "NkbetqlpWBi3gP08JDneC+axTKw=",
+			"path": "github.com/mattn/go-isatty",
+			"revision": "56b76bdf51f7708750eac80fa38b952bb9f32639",
+			"revisionTime": "2015-12-11T00:06:21Z"
+		},
+		{
+			"checksumSHA1": "3AoPMXlmVq2+iWMpsdJZkcUKHB8=",
+			"path": "github.com/opencontainers/runc/libcontainer/user",
+			"revision": "8fbe19e0201569321a7398aee39158ae12793ced",
+			"revisionTime": "2016-06-13T13:24:42Z"
+		},
+		{
+			"checksumSHA1": "uG/irJIgifYdc+HC1kF6Gwgn7kU=",
+			"path": "github.com/oxtoacart/bpool",
+			"revision": "4e1c5567d7c2dd59fa4c7c83d34c2f3528b025d6",
+			"revisionTime": "2015-07-12T13:31:11Z"
+		},
+		{
+			"checksumSHA1": "b65j8iurSMG0nedIgJiv71D4Ehc=",
+			"path": "github.com/russross/blackfriday",
+			"revision": "1d6b8e9301e720b08a8938b8c25c018285885438",
+			"revisionTime": "2016-05-31T11:12:24Z"
+		},
+		{
+			"checksumSHA1": "MBX1+pSq2W7FLvTf8elLdv1O4XI=",
+			"path": "github.com/russross/gcfg",
+			"revision": "a61e4006af9f737e57ddeb5cb335d10b7e3cf208",
+			"revisionTime": "2015-06-19T22:38:34Z"
+		},
+		{
+			"checksumSHA1": "6BcohZXld8o0cmWk7rsEwRU5MDU=",
+			"path": "github.com/russross/gcfg/scanner",
+			"revision": "a61e4006af9f737e57ddeb5cb335d10b7e3cf208",
+			"revisionTime": "2015-06-19T22:38:34Z"
+		},
+		{
+			"checksumSHA1": "pYKqyNHG76RaZwf7icNTPZ6lu18=",
+			"path": "github.com/russross/gcfg/token",
+			"revision": "a61e4006af9f737e57ddeb5cb335d10b7e3cf208",
+			"revisionTime": "2015-06-19T22:38:34Z"
+		},
+		{
+			"checksumSHA1": "V65+K2VoU/P2Pi25JWoFUPpECDo=",
+			"path": "github.com/russross/gcfg/types",
+			"revision": "a61e4006af9f737e57ddeb5cb335d10b7e3cf208",
+			"revisionTime": "2015-06-19T22:38:34Z"
+		},
+		{
+			"checksumSHA1": "8T6S2BULujaIanLkxD1iw5rklBY=",
+			"path": "github.com/russross/meddler",
+			"revision": "f742b0f9424f3bfaffe189e921d734608929e84f",
+			"revisionTime": "2015-05-13T15:34:18Z"
+		},
+		{
+			"checksumSHA1": "5SsK4Rr15FZgGP4zDjmKWHyKwp8=",
+			"path": "github.com/sergi/go-diff/diffmatchpatch",
+			"revision": "ec7fdbb58eb3e300c8595ad5ac74a5aa50019cc7",
+			"revisionTime": "2015-10-21T19:14:53Z"
+		},
+		{
+			"checksumSHA1": "XXTR/ftEYSqQn4+Y7wNfiJJmq9U=",
+			"path": "github.com/shurcooL/sanitized_anchor_name",
+			"revision": "10ef21a441db47d8b13ebcc5fd2310f636973c77",
+			"revisionTime": "2015-10-28T00:19:15Z"
+		},
+		{
+			"checksumSHA1": "sB9JgRY0ch4NpG/oUOrR1fnpMqE=",
+			"path": "github.com/spf13/cobra",
+			"revision": "1238ba19d24b0b9ceee2094e1cb31947d45c3e86",
+			"revisionTime": "2016-06-07T12:43:46Z"
+		},
+		{
+			"checksumSHA1": "45OZzM/Hyc8mwjG2zn38n6bKZws=",
+			"path": "github.com/spf13/pflag",
+			"revision": "367864438f1b1a3c7db4da06a2f55b144e6784e0",
+			"revisionTime": "2016-06-10T19:09:02Z"
+		},
+		{
+			"checksumSHA1": "9jjO5GjLa0XF/nfWihF02RoH4qc=",
+			"path": "golang.org/x/net/context",
+			"revision": "3f122ce3dbbe488b7e6a8bdb26f41edec852a40b",
+			"revisionTime": "2016-06-09T04:57:12Z"
+		},
+		{
+			"checksumSHA1": "vqc3a+oTUGX8PmD0TS+qQ7gmN8I=",
+			"path": "golang.org/x/net/html",
+			"revision": "3f122ce3dbbe488b7e6a8bdb26f41edec852a40b",
+			"revisionTime": "2016-06-09T04:57:12Z"
+		},
+		{
+			"checksumSHA1": "00eQaGynDYrv3tL+C7l9xH0IDZg=",
+			"path": "golang.org/x/net/html/atom",
+			"revision": "3f122ce3dbbe488b7e6a8bdb26f41edec852a40b",
+			"revisionTime": "2016-06-09T04:57:12Z"
+		}
+	],
+	"rootPath": "github.com/russross/codegrinder"
+}
