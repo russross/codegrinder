@@ -185,4 +185,4 @@ CREATE VIEW user_assignments AS
     JOIN assignments ON courses.id = assignments.id
     WHERE instructors_assignments.instructor)
     UNION
-	(SELECT user_id, id as assignment_id FROM assignments);
+    (SELECT user_id, id as assignment_id FROM assignments);

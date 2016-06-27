@@ -6,6 +6,6 @@ After=postgresql.service
 [Service]
 Type=simple
 User=russ
-ExecStart=/home/russ/bin/codegrinder -config=/home/russ/src/github.com/russross/codegrinder/local/config.json -ta -daycare
+ExecStart=/usr/local/bin/codegrinder -config=/etc/codegrinder/config.json -ta -daycare
 Restart=always
 RestartSec=5

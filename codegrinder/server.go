@@ -95,10 +95,17 @@ func main() {
 	go func() {
 		for {
 			now := time.Now()
+
+			// expire at the end of the calendar year
 			expires := time.Date(now.Year(), time.December, 31, 23, 59, 59, 0, time.Local)
+
 			if expires.Sub(now).Hours() < 14*24 {
+				// are we within 2 weeks of the end of the year? probably prepping for spring,
+				// so expire next June 30 instead
 				expires = time.Date(now.Year()+1, time.June, 30, 23, 59, 59, 0, time.Local)
 			} else if expires.Sub(now).Hours() > (365/2+14)*24 {
+				// is it still more than 2 weeks before June 30? probably in spring semester,
+				// so expire this June 30 instead
 				expires = time.Date(now.Year(), time.June, 30, 23, 59, 59, 0, time.Local)
 			}
 			store.Options(sessions.Options{MaxAge: int(expires.Sub(now).Seconds())})
@@ -108,6 +115,17 @@ func main() {
 
 	// set up TA role
 	if ta {
+		// make sure relevant secrets are included in config file
+		if Config.OAuthSharedSecret == "" {
+			log.Fatalf("cannot run TA role with no OAuthSharedSecret in the config file")
+		}
+		if Config.SessionSecret == "" {
+			log.Fatalf("cannot run TA role with no SessionSecret in the config file")
+		}
+		if Config.DaycareSecret == "" {
+			log.Fatalf("cannot run with no DaycareSecret in the config file")
+		}
+
 		// set up the database
 		db := setupDB(Config.PostgresHost, Config.PostgresPort, Config.PostgresUsername, Config.PostgresPassword, Config.PostgresDatabase)
 
@@ -264,6 +282,11 @@ func main() {
 
 	// set up daycare role
 	if daycare {
+		// make sure relevant secrets are included in config file
+		if Config.DaycareSecret == "" {
+			log.Fatalf("cannot run with no DaycareSecret in the config file")
+		}
+
 		// attach to docker and try a ping
 		var err error
 		dockerClient, err = docker.NewVersionedClient("unix:///var/run/docker.sock", "1.18")
