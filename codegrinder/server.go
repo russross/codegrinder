@@ -57,7 +57,7 @@ var problemTypes = make(map[string]*ProblemType)
 func main() {
 	// parse command line
 	var configFile string
-	flag.StringVar(&configFile, "config", "config.json", "Name of the config file")
+	flag.StringVar(&configFile, "config", "/etc/codegrinder/config.json", "Path to the config file")
 	var ta, daycare bool
 	flag.BoolVar(&ta, "ta", true, "Serve the TA role")
 	flag.BoolVar(&daycare, "daycare", true, "Serve the daycare role")
