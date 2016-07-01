@@ -13,6 +13,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"runtime"
 	"strconv"
 	"strings"
@@ -27,29 +28,28 @@ import (
 	. "github.com/russross/codegrinder/types"
 	"github.com/russross/meddler"
 	"github.com/sergi/go-diff/diffmatchpatch"
+	"rsc.io/letsencrypt"
 )
 
 // Config holds site-specific configuration data.
 // Contains a mix of Daycare and main server parameters.
 var Config struct {
-	ToolName          string // LTI human readable name: "CodeGrinder"
-	ToolID            string // LTI unique ID: "codegrinder"
-	ToolDescription   string // LTI description: "Programming exercises with grading"
-	OAuthSharedSecret string // LTI authentication shared secret. Must match that given to Canvas course: "asdf..."
-	PublicURL         string // Base URL for the site: "https://your.host.goes.here"
-	PublicWSURL       string // Base URL for websockets: "wss://your.host.goes.here"
-	HTTPAddress       string // Address to bind on for HTTP connections: ":80"
-	HTTPSAddress      string // Address to bind on for HTTPS connections: ":443"
-	CertFile          string // Full path of TLS certificate file: "/etc/codegrinder/hostname.crt"
-	KeyFile           string // Full path of TLS key file: "/etc/codegrinder/hostname.key"
-	StaticDir         string // Full path of directory holding static files to serve: "/home/foo/codegrinder/client"
-	SessionSecret     string // Random string used to sign cookie sessions: "asdf..."
-	DaycareSecret     string // Random string used to sign daycare requests: "asdf..."
-	PostgresHost      string // Host parameter for Postgres: "/var/run/postgresql"
-	PostgresPort      string // Port parameter for Postgres: "5432"
-	PostgresUsername  string // Username parameter for Postgres: "codegrinder"
-	PostgresPassword  string // Password parameter for Postgres: "super$trong"
-	PostgresDatabase  string // Database parameter for Postgres: "codegrinder"
+	Hostname         string // Hostname for the site: "your.host.goes.here"
+	LetsEncryptEmail string // Email address to register TLS certificates: "foo@bar.com"
+	LTISecret        string // LTI authentication shared secret. Must match that given to Canvas course: "asdf..."
+	SessionSecret    string // Random string used to sign cookie sessions: "asdf..."
+	DaycareSecret    string // Random string used to sign daycare requests: "asdf..."
+	StaticDir        string // Full path of directory holding static files to serve: "/home/foo/codegrinder/client"
+
+	ToolName         string // LTI human readable name: "CodeGrinder"
+	ToolID           string // LTI unique ID: "codegrinder"
+	ToolDescription  string // LTI description: "Programming exercises with grading"
+	LetsEncryptCache string // Full path of LetsEncrypt cache file: "/etc/codegrinder/letsencrypt.cache"
+	PostgresHost     string // Host parameter for Postgres: "/var/run/postgresql"
+	PostgresPort     string // Port parameter for Postgres: "5432"
+	PostgresUsername string // Username parameter for Postgres: "codegrinder"
+	PostgresPassword string // Password parameter for Postgres: "super$trong"
+	PostgresDatabase string // Database parameter for Postgres: "codegrinder"
 }
 
 var problemTypes = make(map[string]*ProblemType)
@@ -67,13 +67,23 @@ func main() {
 		log.Fatalf("must run at least one role (ta/daycare)")
 	}
 
-	// load config
+	// set config defaults
+	Config.ToolName = "CodeGrinder"
+	Config.ToolID = "codegrinder"
+	Config.ToolDescription = "Programming exercises with grading"
+	Config.LetsEncryptCache = "/etc/codegrinder/letsencrypt.cache"
+	Config.PostgresHost = "/var/run/postgresql"
+	Config.PostgresPort = "5432"
+	Config.PostgresUsername = os.Getenv("USER")
+	Config.PostgresPassword = ""
+	Config.PostgresDatabase = os.Getenv("USER")
+
+	// load config file
 	if raw, err := ioutil.ReadFile(configFile); err != nil {
 		log.Fatalf("failed to load config file %q: %v", configFile, err)
 	} else if err := json.Unmarshal(raw, &Config); err != nil {
 		log.Fatalf("failed to parse config file: %v", err)
 	}
-	//Config.OAuthSharedSecret = unBase64(Config.OAuthSharedSecret)
 	Config.SessionSecret = unBase64(Config.SessionSecret)
 	Config.DaycareSecret = unBase64(Config.DaycareSecret)
 
@@ -116,8 +126,8 @@ func main() {
 	// set up TA role
 	if ta {
 		// make sure relevant secrets are included in config file
-		if Config.OAuthSharedSecret == "" {
-			log.Fatalf("cannot run TA role with no OAuthSharedSecret in the config file")
+		if Config.LTISecret == "" {
+			log.Fatalf("cannot run TA role with no LTISecret in the config file")
 		}
 		if Config.SessionSecret == "" {
 			log.Fatalf("cannot run TA role with no SessionSecret in the config file")
@@ -302,7 +312,7 @@ func main() {
 
 	// start web server
 	log.Printf("starting http -> https forwarder")
-	go http.ListenAndServe(Config.HTTPAddress, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	go http.ListenAndServe(":http", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// get the address of the client
 		addr := r.Header.Get("X-Real-IP")
 		if addr == "" {
@@ -313,24 +323,37 @@ func main() {
 		}
 
 		// make sure the request is for the right host name
-		u, err := url.Parse(Config.PublicURL)
-		if err != nil {
-			loggedHTTPErrorf(w, http.StatusInternalServerError, "error parsing config.PublicURL: %v", err)
-			return
-		}
-		if u.Host != r.Host {
+		if Config.Hostname != r.Host {
 			loggedHTTPErrorf(w, http.StatusNotFound, "http request to invalid host: %s", r.Host)
 			return
 		}
-		u.Path = r.URL.Path
+		var u url.URL = *r.URL
+		u.Scheme = "https"
 		log.Printf("redirecting http request from %s to %s", addr, u.String())
 		http.Redirect(w, r, u.String(), http.StatusMovedPermanently)
 	}))
 
-	log.Printf("accepting https connections at %s", Config.HTTPSAddress)
-	tls := &tls.Config{MinVersion: tls.VersionTLS10}
-	server := &http.Server{Addr: Config.HTTPSAddress, Handler: m, TLSConfig: tls}
-	if err := server.ListenAndServeTLS(Config.CertFile, Config.KeyFile); err != nil {
+	log.Printf("accepting https connections")
+	lem := letsencrypt.Manager{}
+	if err := lem.CacheFile(Config.LetsEncryptCache); err != nil {
+		log.Fatalf("Setting up LetsEncrypt: %v", err)
+	}
+	lem.SetHosts([]string{Config.Hostname})
+	if !lem.Registered() {
+		if err := lem.Register(Config.LetsEncryptEmail, nil); err != nil {
+			log.Fatalf("Registering with LetsEncrypt: %v", err)
+		}
+	}
+
+	server := &http.Server{
+		Addr:    ":https",
+		Handler: m,
+		TLSConfig: &tls.Config{
+			MinVersion:     tls.VersionTLS10,
+			GetCertificate: lem.GetCertificate,
+		},
+	}
+	if err := server.ListenAndServeTLS("", ""); err != nil {
 		log.Fatalf("ListenAndServeTLS: %v", err)
 	}
 }

@@ -7,7 +7,7 @@ cd $GOPATH/src/github.com/russross/codegrinder/codegrinder
 go install
 
 echo installing codegrinder server
-sudo cp $GOPATH/bin/codegrinder /usr/local/bin/
+sudo mv $GOPATH/bin/codegrinder /usr/local/bin/
 sudo setcap cap_net_bind_service=+ep /usr/local/bin/codegrinder
 
 echo building grind tool

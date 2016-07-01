@@ -145,13 +145,13 @@ func GetConfigXML(w http.ResponseWriter) {
 			Extensions: []LTIConfigExtension{
 				LTIConfigExtension{Name: "tool_id", Value: Config.ToolID},
 				LTIConfigExtension{Name: "privacy_level", Value: "public"},
-				LTIConfigExtension{Name: "domain", Value: Config.PublicURL[len("https://"):]},
+				LTIConfigExtension{Name: "domain", Value: Config.Hostname},
 			},
 			Options: []LTIConfigOptions{
 				LTIConfigOptions{
 					Name: "resource_selection",
 					Options: []LTIConfigExtension{
-						LTIConfigExtension{Name: "url", Value: Config.PublicURL + "/v2/lti/problem_sets"},
+						LTIConfigExtension{Name: "url", Value: "https://" + Config.Hostname + "/v2/lti/problem_sets"},
 						LTIConfigExtension{Name: "text", Value: Config.ToolName},
 						LTIConfigExtension{Name: "selection_width", Value: "320"},
 						LTIConfigExtension{Name: "selection_height", Value: "640"},
@@ -195,7 +195,7 @@ func signXMLRequest(consumerKey, method, targetURL, content, secret string) stri
 
 	// form the Authorization header
 	var buf bytes.Buffer
-	buf.WriteString(fmt.Sprintf(`OAuth realm="%s"`, escape(Config.PublicURL)))
+	buf.WriteString(fmt.Sprintf(`OAuth realm="%s"`, escape("https://"+Config.Hostname)))
 	for key, val := range v {
 		buf.WriteString(fmt.Sprintf(`,%s="%s"`, key, escape(val[0])))
 	}
@@ -231,7 +231,7 @@ func checkOAuthSignature(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// compute the signature
-	sig := computeOAuthSignature(r.Method, getMyURL(r, true).String(), r.Form, Config.OAuthSharedSecret)
+	sig := computeOAuthSignature(r.Method, getMyURL(r, true).String(), r.Form, Config.LTISecret)
 
 	// verify it
 	if sig != expected {
@@ -621,7 +621,7 @@ func saveGrade(tx *sql.Tx, asst *Assignment, user *User) error {
 	result := fmt.Sprintf("%s%s\n", xml.Header, raw)
 
 	// sign the request
-	auth := signXMLRequest(asst.ConsumerKey, "POST", outcomeURL, result, Config.OAuthSharedSecret)
+	auth := signXMLRequest(asst.ConsumerKey, "POST", outcomeURL, result, Config.LTISecret)
 
 	// POST the grade
 	req, err := http.NewRequest("POST", outcomeURL, strings.NewReader(result))
