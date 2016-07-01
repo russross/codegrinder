@@ -119,8 +119,8 @@ func main() {
 				// so expire this June 30 instead
 				expires = time.Date(now.Year(), time.June, 30, 23, 59, 59, 0, time.Local)
 			}
-			store.Options(sessions.Options{MaxAge: int(expires.Sub(now).Seconds())})
-			time.Sleep(time.Minute)
+			store.Options(sessions.Options{Path: "/", Secure: true, MaxAge: int(expires.Sub(now).Seconds())})
+			time.Sleep(11 * time.Minute)
 		}
 	}()
 
