@@ -73,7 +73,7 @@ func main() {
 	Config.ToolDescription = "Programming exercises with grading"
 	Config.LetsEncryptCache = "/etc/codegrinder/letsencrypt.cache"
 	Config.PostgresHost = "/var/run/postgresql"
-	Config.PostgresPort = "5432"
+	Config.PostgresPort = ""
 	Config.PostgresUsername = os.Getenv("USER")
 	Config.PostgresPassword = ""
 	Config.PostgresDatabase = os.Getenv("USER")
@@ -90,6 +90,7 @@ func main() {
 	// set up martini
 	r := martini.NewRouter()
 	m := martini.New()
+	m.Logger(log.New(os.Stderr, "", log.LstdFlags))
 	m.Use(martini.Logger())
 	m.Use(martini.Recovery())
 	m.Use(martini.Static(Config.StaticDir, martini.StaticOptions{SkipLogging: true}))
@@ -310,7 +311,7 @@ func main() {
 		r.Get("/v2/sockets/:problem_type/:action", SocketProblemTypeAction)
 	}
 
-	// start web server
+	// start redirecting http calls to https
 	log.Printf("starting http -> https forwarder")
 	go http.ListenAndServe(":http", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// get the address of the client
@@ -329,22 +330,26 @@ func main() {
 		}
 		var u url.URL = *r.URL
 		u.Scheme = "https"
+		u.Host = Config.Hostname
 		log.Printf("redirecting http request from %s to %s", addr, u.String())
 		http.Redirect(w, r, u.String(), http.StatusMovedPermanently)
 	}))
 
-	log.Printf("accepting https connections")
+	// set up letsencrypt
 	lem := letsencrypt.Manager{}
 	if err := lem.CacheFile(Config.LetsEncryptCache); err != nil {
 		log.Fatalf("Setting up LetsEncrypt: %v", err)
 	}
 	lem.SetHosts([]string{Config.Hostname})
 	if !lem.Registered() {
+		log.Printf("registering with letsencrypt")
 		if err := lem.Register(Config.LetsEncryptEmail, nil); err != nil {
 			log.Fatalf("Registering with LetsEncrypt: %v", err)
 		}
 	}
 
+	// start the https server
+	log.Printf("accepting https connections")
 	server := &http.Server{
 		Addr:    ":https",
 		Handler: m,
@@ -359,7 +364,11 @@ func main() {
 }
 
 func setupDB(host, port, user, password, database string) *sql.DB {
-	log.Printf("connecting to database at host=%s port=%s", host, port)
+	if port == "" {
+		log.Printf("connecting to database at %s", host)
+	} else {
+		log.Printf("connecting to database at %s:%s", host, port)
+	}
 	meddler.Default = meddler.PostgreSQL
 	parts := []string{"sslmode=disable"}
 	if host != "" {
