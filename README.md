@@ -22,7 +22,7 @@ This repository currently hosts two tools:
     which can run as part of the same service, or can be hosted on
     separate servers.
 
-    a.  The TA service: this manages bookkeeping and runs on top of
+    1.  The TA service: this manages bookkeeping and runs on top of
         PostgreSQL. It interfaces with an LMS by acting as an LTI
         tool provider. An LMS such as Canvas hosts an assignment
         page, and directs students to the TA service complete with
@@ -30,7 +30,7 @@ This repository currently hosts two tools:
         the problem set that was assigned. The TA then acts as an
         API server for basic bookkeeping tasks.
 
-    b.  The daycare service: this runs student code with
+    2.  The daycare service: this runs student code with
         problem-specific unit tests in Docker containers, streams
         the results back to the client in real time, and returns a
         report card with the results.
