@@ -22,7 +22,7 @@ This repository currently hosts two tools:
     which can run as part of the same service, or can be hosted on
     separate servers.
 
-    a)  The TA service: this manages bookkeeping and runs on top of
+    a.  The TA service: this manages bookkeeping and runs on top of
         PostgreSQL. It interfaces with an LMS by acting as an LTI
         tool provider. An LMS such as Canvas hosts an assignment
         page, and directs students to the TA service complete with
@@ -30,7 +30,7 @@ This repository currently hosts two tools:
         the problem set that was assigned. The TA then acts as an
         API server for basic bookkeeping tasks.
 
-    b)  The daycare service: this runs student code with
+    b.  The daycare service: this runs student code with
         problem-specific unit tests in Docker containers, streams
         the results back to the client in real time, and returns a
         report card with the results.
@@ -69,7 +69,11 @@ run. It should NOT be run as root.
 Install PostgreSQL version 9.4 or higher. Run psql as the postgres
 user (the default admin user for PostgreSQL) and create the user and
 database for CodeGrinder. Substitute your username wherever you see
-`username` below. From the `postgres=#` prompt:
+`username` below.
+
+    sudo -u postgres psql
+
+From the `postgres=#` prompt:
 
     create user username;
     create database username;
