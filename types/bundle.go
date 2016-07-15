@@ -12,6 +12,7 @@ type ProblemBundle struct {
 	Problem          *Problem       `json:"problem"`
 	ProblemSteps     []*ProblemStep `json:"problemSteps"`
 	ProblemSignature string         `json:"problemSignature,omitempty"`
+	Hostname         string         `json:"hostname"`
 	Commits          []*Commit      `json:"commits"`
 	CommitSignatures []string       `json:"commitSignatures,omitempty"`
 }
@@ -20,6 +21,7 @@ type CommitBundle struct {
 	Problem          *Problem       `json:"problem"`
 	ProblemSteps     []*ProblemStep `json:"problemSteps"`
 	ProblemSignature string         `json:"problemSignature,omitempty"`
+	Hostname         string         `json:"hostname,omitempty"`
 	Commit           *Commit        `json:"commit"`
 	CommitSignature  string         `json:"commitSignature,omitempty"`
 }

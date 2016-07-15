@@ -113,7 +113,7 @@ func saveProblemBundleCommon(w http.ResponseWriter, tx *sql.Tx, bundle *ProblemB
 	}
 	for i, commit := range bundle.Commits {
 		// check the commit signature
-		csig := commit.ComputeSignature(Config.DaycareSecret, bundle.ProblemSignature)
+		csig := commit.ComputeSignature(Config.DaycareSecret, bundle.ProblemSignature, bundle.Hostname)
 		if csig != bundle.CommitSignatures[i] {
 			loggedHTTPErrorf(w, http.StatusBadRequest, "commit for step %d has a bad signature", commit.Step)
 			return
@@ -182,9 +182,15 @@ func PostProblemBundleUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser
 	}
 	if len(bundle.ProblemSignature) != 0 {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "unconfirmed bundle must not have problem signature")
+		return
 	}
 	if len(bundle.CommitSignatures) != 0 {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "unconfirmed bundle must not have commit signatures")
+		return
+	}
+	if len(bundle.Hostname) != 0 {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "unconfirmed bundle must not have daycare hostname")
+		return
 	}
 
 	// clean up basic fields and do some checks
@@ -192,6 +198,9 @@ func PostProblemBundleUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser
 		loggedHTTPErrorf(w, http.StatusBadRequest, "%v", err)
 		return
 	}
+
+	// assign a daycare host: TODO
+	bundle.Hostname = Config.Hostname
 
 	// if this is an update to an existing problem, we need to check that some things match
 	if bundle.Problem.ID != 0 {
@@ -267,7 +276,7 @@ func PostProblemBundleUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser
 		}
 
 		// set timestamps and compute signature
-		sig := commit.ComputeSignature(Config.DaycareSecret, bundle.ProblemSignature)
+		sig := commit.ComputeSignature(Config.DaycareSecret, bundle.ProblemSignature, bundle.Hostname)
 		bundle.CommitSignatures = append(bundle.CommitSignatures, sig)
 	}
 

@@ -253,6 +253,7 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 			Problem:          signed.Problem,
 			ProblemSteps:     signed.ProblemSteps,
 			ProblemSignature: signed.ProblemSignature,
+			Hostname:         signed.Hostname,
 			Commit:           signed.Commits[n],
 			CommitSignature:  signed.CommitSignatures[n],
 		}
@@ -326,7 +327,7 @@ func mustConfirmCommitBundle(userID int64, bundle *CommitBundle, args []string) 
 
 	// create a websocket connection to the server
 	headers := make(http.Header)
-	url := "wss://" + Config.Host + "/v2/sockets/" + bundle.Problem.ProblemType + "/" + bundle.Commit.Action
+	url := "wss://" + bundle.Hostname + "/v2/sockets/" + bundle.Problem.ProblemType + "/" + bundle.Commit.Action
 	socket, resp, err := websocket.DefaultDialer.Dial(url, headers)
 	if err != nil {
 		log.Printf("error dialing %s: %v", url, err)

@@ -85,6 +85,10 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		logAndTransmitErrorf("commit bundle must include the commit signature")
 		return
 	}
+	if len(req.CommitBundle.Hostname) == 0 {
+		logAndTransmitErrorf("commit bundle must include the daycare host name")
+		return
+	}
 
 	// check signatures
 	problem, steps := req.CommitBundle.Problem, req.CommitBundle.ProblemSteps
@@ -94,12 +98,18 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		return
 	}
 	commit := req.CommitBundle.Commit
-	commitSig := commit.ComputeSignature(Config.DaycareSecret, problemSig)
+	commitSig := commit.ComputeSignature(Config.DaycareSecret, problemSig, req.CommitBundle.Hostname)
 	if req.CommitBundle.CommitSignature != commitSig {
 		logAndTransmitErrorf("commit signature mismatch: found %s but expected %s", req.CommitBundle.CommitSignature, commitSig)
 		return
 	}
 	req.CommitBundle.CommitSignature = ""
+
+	// host must match
+	if req.CommitBundle.Hostname != Config.Hostname {
+		logAndTransmitErrorf("commit is signed for host %s, this is %s", req.CommitBundle.Hostname, Config.Hostname)
+		return
+	}
 
 	// commit must be recent
 	age := time.Since(commit.UpdatedAt)
@@ -205,7 +215,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		commit.Score = float64(passed) / float64(len(commit.ReportCard.Results))
 	}
 	commit.UpdatedAt = now
-	req.CommitBundle.CommitSignature = commit.ComputeSignature(Config.DaycareSecret, req.CommitBundle.ProblemSignature)
+	req.CommitBundle.CommitSignature = commit.ComputeSignature(Config.DaycareSecret, req.CommitBundle.ProblemSignature, req.CommitBundle.Hostname)
 
 	res := &DaycareResponse{CommitBundle: req.CommitBundle}
 	if err := socket.WriteJSON(res); err != nil {

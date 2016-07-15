@@ -18,7 +18,6 @@ import (
 )
 
 const (
-	defaultHost          = "dorking.cs.dixie.edu"
 	perUserDotFile       = ".codegrinderrc"
 	perProblemSetDotFile = ".grind"
 )
@@ -66,7 +65,11 @@ func main() {
 	cmdInit := &cobra.Command{
 		Use:   "init",
 		Short: "connect to codegrinder server",
-		Run:   CommandInit,
+		Long: "   Give the hostname of your CodeGrinder installation\n" +
+			"   and this will walk you through the process of setting up\n" +
+			"   your environment.\n\n" +
+			"   You should normally only need to do this once per semester.",
+		Run: CommandInit,
 	}
 	cmdGrind.AddCommand(cmdInit)
 
@@ -118,13 +121,18 @@ func main() {
 }
 
 func CommandInit(cmd *cobra.Command, args []string) {
+	if len(args) != 1 {
+		log.Fatalf("you must specify the CodeGrinder hostname")
+	}
+	hostname := args[0]
+
 	fmt.Println(
 		`Please follow these steps:
 
 1.  Use Canvas to load a CodeGrinder window
 2.  Open a new tab in your browser and copy this URL into the address bar:
 
-    https://` + defaultHost + `/v2/users/me/cookie
+    https://` + hostname + `/v2/users/me/cookie
 
 3.  The browser will display something of the form: ` + CookieName + `=...
 4.  Copy that entire string to the clipboard and paste it below.
@@ -145,7 +153,7 @@ Paste here: `)
 
 	// set up config
 	Config.Cookie = cookie
-	Config.Host = defaultHost
+	Config.Host = hostname
 
 	// see if they need an upgrade
 	checkVersion()
