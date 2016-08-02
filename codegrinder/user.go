@@ -497,6 +497,10 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must include daycare hostname")
 		return
 	}
+	if bundle.UserID != currentUser.ID {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must include user's ID")
+		return
+	}
 	commit := bundle.Commit
 
 	// get the assignment and make sure it is for this user
@@ -562,7 +566,7 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 
 	// sign the problem and the commit
 	problemSig := problem.ComputeSignature(Config.DaycareSecret, steps)
-	commitSig := commit.ComputeSignature(Config.DaycareSecret, problemSig, bundle.Hostname)
+	commitSig := commit.ComputeSignature(Config.DaycareSecret, problemSig, bundle.Hostname, bundle.UserID)
 
 	// verify signature
 	if bundle.CommitSignature != "" {
@@ -593,12 +597,13 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 	commit.Action = action
 
 	// recompute the signature as the ID may have changed when saving
-	commitSig = commit.ComputeSignature(Config.DaycareSecret, problemSig, bundle.Hostname)
+	commitSig = commit.ComputeSignature(Config.DaycareSecret, problemSig, bundle.Hostname, bundle.UserID)
 	signed := &CommitBundle{
 		Problem:          problem,
 		ProblemSteps:     steps,
 		ProblemSignature: problemSig,
 		Hostname:         bundle.Hostname,
+		UserID:           bundle.UserID,
 		Commit:           commit,
 		CommitSignature:  commitSig,
 	}

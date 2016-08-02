@@ -25,12 +25,12 @@ var BeginningOfTime = time.Date(2016, 1, 1, 0, 0, 0, 0, time.UTC)
 type ProblemType struct {
 	Name        string                        `json:"name"`
 	Image       string                        `json:"image"`
-	MaxCPU      int                           `json:"maxCPU"`
-	MaxClock    int                           `json:"maxClock"`
-	MaxFD       int                           `json:"maxFD"`
-	MaxFileSize int                           `json:"maxFileSize"`
-	MaxMemory   int                           `json:"maxMemory"`
-	MaxThreads  int                           `json:"maxThreads"`
+	MaxCPU      int64                         `json:"maxCPU"`
+	MaxClock    int64                         `json:"maxClock"`
+	MaxFD       int64                         `json:"maxFD"`
+	MaxFileSize int64                         `json:"maxFileSize"`
+	MaxMemory   int64                         `json:"maxMemory"`
+	MaxThreads  int64                         `json:"maxThreads"`
 	Actions     map[string]*ProblemTypeAction `json:"actions"`
 	Files       map[string]string             `json:"files,omitempty"`
 }

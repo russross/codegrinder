@@ -3,6 +3,6 @@ MAINTAINER russ@russross.com
 
 RUN pip install autopep8
 
-RUN useradd -m -u 10000 -U student
-USER student
+RUN mkdir /home/student && chmod 777 /home/student
+USER 2000
 WORKDIR /home/student

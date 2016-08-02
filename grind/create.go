@@ -241,6 +241,7 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 	// get user ID
 	user := new(User)
 	mustGetObject("/users/me", nil, user)
+	unsigned.UserID = user.ID
 
 	// get the request validated and signed
 	signed := new(ProblemBundle)
@@ -254,6 +255,7 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 			ProblemSteps:     signed.ProblemSteps,
 			ProblemSignature: signed.ProblemSignature,
 			Hostname:         signed.Hostname,
+			UserID:           signed.UserID,
 			Commit:           signed.Commits[n],
 			CommitSignature:  signed.CommitSignatures[n],
 		}
@@ -340,7 +342,7 @@ func mustConfirmCommitBundle(userID int64, bundle *CommitBundle, args []string) 
 	defer socket.Close()
 
 	// form the initial request
-	req := &DaycareRequest{UserID: userID, CommitBundle: bundle}
+	req := &DaycareRequest{CommitBundle: bundle}
 	if err := socket.WriteJSON(req); err != nil {
 		log.Fatalf("error writing request message: %v", err)
 	}

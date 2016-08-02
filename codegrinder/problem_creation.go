@@ -16,7 +16,7 @@ import (
 // PostProblemBundleConfirmed handles a request to /v2/problem_bundles/confirmed,
 // creating a new problem.
 // The bundle must have a full set of passing commits signed by the daycare.
-func PostProblemBundleConfirmed(w http.ResponseWriter, tx *sql.Tx, bundle ProblemBundle, render render.Render) {
+func PostProblemBundleConfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser *User, bundle ProblemBundle, render render.Render) {
 	if bundle.Problem == nil {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must contain a problem")
 		return
@@ -26,7 +26,7 @@ func PostProblemBundleConfirmed(w http.ResponseWriter, tx *sql.Tx, bundle Proble
 		return
 	}
 
-	saveProblemBundleCommon(w, tx, &bundle, render)
+	saveProblemBundleCommon(w, tx, currentUser, &bundle, render)
 }
 
 // PutProblemBundle handles a request to /v2/problem_bundles/:problem_id,
@@ -34,7 +34,7 @@ func PostProblemBundleConfirmed(w http.ResponseWriter, tx *sql.Tx, bundle Proble
 // The bundle must have a full set of passing commits signed by the daycare.
 // If any assignments exist that refer to this problem, then the updates cannot change the number
 // of steps in the problem.
-func PutProblemBundle(w http.ResponseWriter, tx *sql.Tx, params martini.Params, bundle ProblemBundle, render render.Render) {
+func PutProblemBundle(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, bundle ProblemBundle, render render.Render) {
 	if bundle.Problem == nil {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must contain a problem")
 		return
@@ -80,10 +80,10 @@ func PutProblemBundle(w http.ResponseWriter, tx *sql.Tx, params martini.Params, 
 		}
 	}
 
-	saveProblemBundleCommon(w, tx, &bundle, render)
+	saveProblemBundleCommon(w, tx, currentUser, &bundle, render)
 }
 
-func saveProblemBundleCommon(w http.ResponseWriter, tx *sql.Tx, bundle *ProblemBundle, render render.Render) {
+func saveProblemBundleCommon(w http.ResponseWriter, tx *sql.Tx, currentUser *User, bundle *ProblemBundle, render render.Render) {
 	now := time.Now()
 
 	// clean up basic fields and do some checks
@@ -111,9 +111,13 @@ func saveProblemBundleCommon(w http.ResponseWriter, tx *sql.Tx, bundle *ProblemB
 		loggedHTTPErrorf(w, http.StatusBadRequest, "problem must have exactly one commit signature for each commit")
 		return
 	}
+	if bundle.UserID != currentUser.ID {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "user ID in problem bundle must match current user ID")
+		return
+	}
 	for i, commit := range bundle.Commits {
 		// check the commit signature
-		csig := commit.ComputeSignature(Config.DaycareSecret, bundle.ProblemSignature, bundle.Hostname)
+		csig := commit.ComputeSignature(Config.DaycareSecret, bundle.ProblemSignature, bundle.Hostname, bundle.UserID)
 		if csig != bundle.CommitSignatures[i] {
 			loggedHTTPErrorf(w, http.StatusBadRequest, "commit for step %d has a bad signature", commit.Step)
 			return
@@ -190,6 +194,10 @@ func PostProblemBundleUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser
 	}
 	if len(bundle.Hostname) != 0 {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "unconfirmed bundle must not have daycare hostname")
+		return
+	}
+	if bundle.UserID != currentUser.ID {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "user ID in problem bundle must match current user ID")
 		return
 	}
 
@@ -276,7 +284,7 @@ func PostProblemBundleUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser
 		}
 
 		// set timestamps and compute signature
-		sig := commit.ComputeSignature(Config.DaycareSecret, bundle.ProblemSignature, bundle.Hostname)
+		sig := commit.ComputeSignature(Config.DaycareSecret, bundle.ProblemSignature, bundle.Hostname, bundle.UserID)
 		bundle.CommitSignatures = append(bundle.CommitSignatures, sig)
 	}
 

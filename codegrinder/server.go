@@ -300,7 +300,7 @@ func main() {
 
 		// attach to docker and try a ping
 		var err error
-		dockerClient, err = docker.NewVersionedClient("unix:///var/run/docker.sock", "1.18")
+		dockerClient, err = docker.NewVersionedClient("unix:///var/run/docker.sock", "1.24")
 		if err != nil {
 			log.Fatalf("NewVersionedClient: %v", err)
 		}

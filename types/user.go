@@ -102,7 +102,7 @@ func (asst *Assignment) IsInstructorRole() bool {
 	return false
 }
 
-func (commit *Commit) ComputeSignature(secret, problemSignature, daycareHost string) string {
+func (commit *Commit) ComputeSignature(secret, problemSignature, daycareHost string, userID int64) string {
 	v := make(url.Values)
 
 	// gather all relevant fields
@@ -138,6 +138,7 @@ func (commit *Commit) ComputeSignature(secret, problemSignature, daycareHost str
 	v.Add("updated_at", commit.UpdatedAt.Round(time.Second).UTC().Format(time.RFC3339))
 	v.Add("problem_signature", problemSignature)
 	v.Add("daycare_host", daycareHost)
+	v.Add("user_id", strconv.FormatInt(userID, 10))
 
 	// compute signature
 	mac := hmac.New(sha256.New, []byte(secret))

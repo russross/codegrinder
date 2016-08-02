@@ -13,6 +13,7 @@ type ProblemBundle struct {
 	ProblemSteps     []*ProblemStep `json:"problemSteps"`
 	ProblemSignature string         `json:"problemSignature,omitempty"`
 	Hostname         string         `json:"hostname"`
+	UserID           int64          `json:"userID"`
 	Commits          []*Commit      `json:"commits"`
 	CommitSignatures []string       `json:"commitSignatures,omitempty"`
 }
@@ -22,6 +23,7 @@ type CommitBundle struct {
 	ProblemSteps     []*ProblemStep `json:"problemSteps"`
 	ProblemSignature string         `json:"problemSignature,omitempty"`
 	Hostname         string         `json:"hostname,omitempty"`
+	UserID           int64          `json:"userID"`
 	Commit           *Commit        `json:"commit"`
 	CommitSignature  string         `json:"commitSignature,omitempty"`
 }
@@ -33,7 +35,6 @@ const MaxDaycareRequestAge = 15 * time.Minute
 // DaycareRequest represents a single request from a client to the daycare.
 // These objects are streamed across a websockets connection.
 type DaycareRequest struct {
-	UserID       int64         `json:"userID,omitempty"`
 	CommitBundle *CommitBundle `json:"commitBundle,omitempty"`
 	Stdin        string        `json:"stdin,omitempty"`
 }

@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"regexp"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/fsouza/go-dockerclient"
@@ -89,6 +92,10 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		logAndTransmitErrorf("commit bundle must include the daycare host name")
 		return
 	}
+	if req.CommitBundle.UserID < 1 {
+		logAndTransmitErrorf("commit bundle must include the user's ID")
+		return
+	}
 
 	// check signatures
 	problem, steps := req.CommitBundle.Problem, req.CommitBundle.ProblemSteps
@@ -98,7 +105,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		return
 	}
 	commit := req.CommitBundle.Commit
-	commitSig := commit.ComputeSignature(Config.DaycareSecret, problemSig, req.CommitBundle.Hostname)
+	commitSig := commit.ComputeSignature(Config.DaycareSecret, problemSig, req.CommitBundle.Hostname, req.CommitBundle.UserID)
 	if req.CommitBundle.CommitSignature != commitSig {
 		logAndTransmitErrorf("commit signature mismatch: found %s but expected %s", req.CommitBundle.CommitSignature, commitSig)
 		return
@@ -147,7 +154,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	}
 
 	// launch a nanny process
-	nannyName := fmt.Sprintf("nanny-user-%d", req.UserID)
+	nannyName := fmt.Sprintf("nanny-user-%d", req.CommitBundle.UserID)
 	log.Printf("launching container for %s", nannyName)
 	n, err := NewNanny(problemType, problem, nannyName)
 	if err != nil {
@@ -215,7 +222,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		commit.Score = float64(passed) / float64(len(commit.ReportCard.Results))
 	}
 	commit.UpdatedAt = now
-	req.CommitBundle.CommitSignature = commit.ComputeSignature(Config.DaycareSecret, req.CommitBundle.ProblemSignature, req.CommitBundle.Hostname)
+	req.CommitBundle.CommitSignature = commit.ComputeSignature(Config.DaycareSecret, req.CommitBundle.ProblemSignature, req.CommitBundle.Hostname, req.CommitBundle.UserID)
 
 	res := &DaycareResponse{CommitBundle: req.CommitBundle}
 	if err := socket.WriteJSON(res); err != nil {
@@ -227,6 +234,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 type Nanny struct {
 	Start      time.Time
 	Container  *docker.Container
+	UID        int64
 	ReportCard *ReportCard
 	Input      chan string
 	Events     chan *EventMessage
@@ -248,13 +256,20 @@ func getContainerID(msg string) string {
 func NewNanny(problemType *ProblemType, problem *Problem, name string) (*Nanny, error) {
 	// create a container
 	mem := problemType.MaxMemory * 1024 * 1024
+	disk := problemType.MaxFileSize * 1024 * 1024
+	uid, err := allocUID()
+	if err != nil {
+		return nil, err
+	}
+
 	config := &docker.Config{
 		Hostname:        name,
+		User:            uidgid(uid),
 		Memory:          int64(mem),
 		MemorySwap:      -1,
-		NetworkDisabled: true,
-		Cmd:             []string{"/bin/sh", "-c", "sleep infinity"},
+		Cmd:             []string{"/bin/sleep", strconv.FormatInt(problemType.MaxClock, 10) + "s"},
 		Image:           problemType.Image,
+		NetworkDisabled: true,
 	}
 	hostConfig := &docker.HostConfig{
 		CapDrop: []string{
@@ -274,19 +289,31 @@ func NewNanny(problemType *ProblemType, problem *Problem, name string) (*Nanny, 
 			"KILL",
 			"SYS_CHROOT",
 		},
-		Ulimits: []docker.ULimit{},
+		PidsLimit: problemType.MaxThreads,
+		Ulimits: []docker.ULimit{
+			{Name: "core", Soft: 0, Hard: 0},
+			{Name: "cpu", Soft: problemType.MaxCPU, Hard: problemType.MaxCPU},
+			{Name: "data", Soft: mem, Hard: mem},
+			{Name: "fsize", Soft: disk, Hard: disk},
+			{Name: "memlock", Soft: 0, Hard: 0},
+			{Name: "nofile", Soft: problemType.MaxFD, Hard: problemType.MaxFD},
+			{Name: "nproc", Soft: problemType.MaxThreads, Hard: problemType.MaxThreads},
+			{Name: "stack", Soft: mem, Hard: mem},
+		},
 	}
 
 	container, err := dockerClient.CreateContainer(docker.CreateContainerOptions{Name: name, Config: config, HostConfig: hostConfig})
 	if err != nil {
-		if apiError, ok := err.(*docker.Error); ok && apiError.Status == http.StatusConflict && getContainerID(apiError.Message) != "" {
+		if err == docker.ErrContainerAlreadyExists {
 			// container already exists with that name--try killing it
+			log.Printf("NewNanny->CreateContainer killing existing container with same name %s", name)
 			err2 := dockerClient.RemoveContainer(docker.RemoveContainerOptions{
-				ID:    getContainerID(apiError.Message),
+				ID:    name,
 				Force: true,
 			})
 			if err2 != nil {
 				log.Printf("NewNanny->StartContainer error killing existing container: %v", err2)
+				releaseUID(uid)
 				return nil, err2
 			}
 
@@ -294,7 +321,8 @@ func NewNanny(problemType *ProblemType, problem *Problem, name string) (*Nanny, 
 			container, err = dockerClient.CreateContainer(docker.CreateContainerOptions{Name: name, Config: config, HostConfig: hostConfig})
 		}
 		if err != nil {
-			log.Printf("NewNanny->CreateContainer: %#v", err)
+			log.Printf("NewNanny->CreateContainer: %v", err)
+			releaseUID(uid)
 			return nil, err
 		}
 	}
@@ -303,6 +331,7 @@ func NewNanny(problemType *ProblemType, problem *Problem, name string) (*Nanny, 
 	err = dockerClient.StartContainer(container.ID, nil)
 	if err != nil {
 		log.Printf("NewNanny->StartContainer: %v", err)
+		releaseUID(uid)
 		err2 := dockerClient.RemoveContainer(docker.RemoveContainerOptions{
 			ID:    container.ID,
 			Force: true,
@@ -316,6 +345,7 @@ func NewNanny(problemType *ProblemType, problem *Problem, name string) (*Nanny, 
 	return &Nanny{
 		Start:      time.Now(),
 		Container:  container,
+		UID:        uid,
 		ReportCard: NewReportCard(),
 		Input:      make(chan string),
 		Events:     make(chan *EventMessage),
@@ -329,6 +359,7 @@ func (n *Nanny) Shutdown() error {
 		ID:    n.Container.ID,
 		Force: true,
 	})
+	releaseUID(n.UID)
 	if err != nil {
 		log.Printf("Nanny.Shutdown: %v", err)
 		return err
@@ -384,6 +415,7 @@ func (n *Nanny) PutFiles(files map[string]string) error {
 		Tty:          false,
 		Cmd:          []string{"/bin/tar", "xf", "-"},
 		Container:    n.Container.ID,
+		User:         uidgid(n.UID),
 	})
 	if err != nil {
 		log.Printf("PutFiles: creating exec command: %v", err)
@@ -426,6 +458,7 @@ func (n *Nanny) GetFiles(filenames []string) (map[string]string, error) {
 		Tty:          false,
 		Cmd:          append([]string{"/bin/tar", "cf", "-"}, filenames...),
 		Container:    n.Container.ID,
+		User:         uidgid(n.UID),
 	})
 	if err != nil {
 		log.Printf("GetFiles: creating exec command: %v", err)
@@ -550,6 +583,7 @@ func (n *Nanny) ExecNonInteractive(cmd []string) (stdout, stderr, script *bytes.
 		Tty:          false,
 		Cmd:          cmd,
 		Container:    n.Container.ID,
+		User:         uidgid(n.UID),
 	})
 	if err != nil {
 		log.Printf("Nanny.ExecNonInteractive->docker.CreateExec: %v", err)
@@ -590,4 +624,34 @@ func (n *Nanny) ExecNonInteractive(cmd []string) (stdout, stderr, script *bytes.
 		}
 	}
 	return &out.stdout, &out.stderr, &out.script, inspect.ExitCode, nil
+}
+
+var uidsInUse map[int64]bool = make(map[int64]bool)
+var uidsMutex sync.Mutex
+
+func allocUID() (int64, error) {
+	uidsMutex.Lock()
+	defer uidsMutex.Unlock()
+	if len(uidsInUse) > 1000 {
+		err := fmt.Errorf("more than 1000 UIDs in use, cannot create more nanny containers")
+		log.Printf("%v", err)
+		return 0, err
+	}
+	for {
+		uid := rand.Int63n(1000) + 10000
+		if !uidsInUse[uid] {
+			uidsInUse[uid] = true
+			return uid, nil
+		}
+	}
+}
+
+func releaseUID(uid int64) {
+	uidsMutex.Lock()
+	defer uidsMutex.Unlock()
+	delete(uidsInUse, uid)
+}
+
+func uidgid(uid int64) string {
+	return fmt.Sprintf("%d:%d", uid, uid)
 }

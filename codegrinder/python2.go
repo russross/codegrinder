@@ -19,6 +19,7 @@ func init() {
 		Name:        "python27unittest",
 		Image:       "codegrinder/python2",
 		MaxCPU:      10,
+		MaxClock:    60,
 		MaxFD:       10,
 		MaxFileSize: 10,
 		MaxMemory:   32,

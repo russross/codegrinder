@@ -31,18 +31,21 @@ func CommandGrade(cmd *cobra.Command, args []string) {
 		return
 	}
 
+	// get the user ID
+	user := new(User)
+	mustGetObject("/users/me", nil, user)
+
 	problem, _, commit, dotfile := gather(now, dir)
 	commit.Action = "grade"
 	commit.Note = "grading from grind tool"
-	unsigned := &CommitBundle{Commit: commit}
+	unsigned := &CommitBundle{
+		UserID: user.ID,
+		Commit: commit,
+	}
 
 	// send the commit bundle to the server
 	signed := new(CommitBundle)
 	mustPostObject("/commit_bundles/unsigned", nil, unsigned, signed)
-
-	// get the user ID
-	user := new(User)
-	mustGetObject("/users/me", nil, user)
 
 	// send it to the daycare for grading
 	log.Printf("submitting %s step %d to %s for grading", problem.Unique, commit.Step, signed.Hostname)
@@ -51,6 +54,7 @@ func CommandGrade(cmd *cobra.Command, args []string) {
 	// save the commit with report card
 	toSave := &CommitBundle{
 		Hostname:        graded.Hostname,
+		UserID:          graded.UserID,
 		Commit:          graded.Commit,
 		CommitSignature: graded.CommitSignature,
 	}
