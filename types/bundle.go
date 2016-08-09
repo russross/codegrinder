@@ -37,6 +37,7 @@ const MaxDaycareRequestAge = 15 * time.Minute
 type DaycareRequest struct {
 	CommitBundle *CommitBundle `json:"commitBundle,omitempty"`
 	Stdin        string        `json:"stdin,omitempty"`
+	CloseStdin   bool          `json:"closeStdin,omitempty"`
 }
 
 // DaycareResponse represents a single response from the daycare back to a client.

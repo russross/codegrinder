@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -46,7 +47,10 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		loggedHTTPErrorf(w, http.StatusBadRequest, "websocket error: %v", err)
 		return
 	}
-	defer socket.Close()
+	defer func() {
+		socket.WriteControl(websocket.CloseMessage, nil, time.Now().Add(5*time.Second))
+		socket.Close()
+	}()
 	logAndTransmitErrorf := func(format string, args ...interface{}) {
 		msg := fmt.Sprintf(format, args...)
 		log.Print(msg)
@@ -158,39 +162,77 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	log.Printf("launching container for %s", nannyName)
 	n, err := NewNanny(problemType, problem, nannyName)
 	if err != nil {
-		logAndTransmitErrorf("error creating nanny: %v", err)
+		logAndTransmitErrorf("error creating container: %v", err)
 		return
 	}
 
-	// start a listener
-	finished := make(chan struct{})
+	rw := newReadWriteBuffer()
+
+	// relay stdin events from socket to the container through rw
+	stdinListenerClosed := make(chan struct{})
+	go func() {
+		for {
+			if err := socket.ReadJSON(req); err != nil {
+				log.Printf("websocket read error: %v", err)
+				break
+			}
+			if req.CommitBundle != nil {
+				logAndTransmitErrorf("unexpected commit bundle received from client; quitting")
+				break
+			}
+			if len(req.Stdin) > 0 {
+				if _, err := rw.Write([]byte(req.Stdin)); err != nil {
+					break
+				}
+			}
+			if req.CloseStdin {
+				rw.MarkEOF()
+			}
+		}
+		rw.Close()
+		stdinListenerClosed <- struct{}{}
+	}()
+
+	// relay container events to the socket
+	eventListenerClosed := make(chan struct{})
 	go func() {
 		for event := range n.Events {
 			// record the event
 			commit.Transcript = append(commit.Transcript, event)
 
-			// feed event back to client
 			switch event.Event {
 			case "exec", "exit", "stdin", "stdout", "stderr", "stdinclosed", "error":
 				res := &DaycareResponse{Event: event}
 				if err := socket.WriteJSON(res); err != nil {
-					logAndTransmitErrorf("error writing event JSON: %v", err)
+					if strings.Contains(err.Error(), "use of closed network connection") {
+						// websocket closed
+					} else {
+						logAndTransmitErrorf("error writing event JSON: %v", err)
+					}
+
+					break
 				}
+
+			default:
+				// ignore other event types
+			}
+			if event.Event == "shutdown" {
+				break
 			}
 		}
-		finished <- struct{}{}
+		rw.Close()
+		eventListenerClosed <- struct{}{}
 	}()
 
 	// grade the problem
 	r.ParseForm()
 	handler, ok := action.Handler.(nannyHandler)
 	if ok {
-		handler(n, r.Form["args"], problem.Options, files)
+		handler(n, r.Form["args"], problem.Options, files, rw)
 	} else {
 		logAndTransmitErrorf("handler for action %s is of wrong type", commit.Action)
 	}
 	commit.ReportCard = n.ReportCard
-	//dump(commit.ReportCard)
 
 	// shutdown the nanny
 	if err := n.Shutdown(); err != nil {
@@ -199,7 +241,8 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 
 	// wait for listener to finish
 	close(n.Events)
-	<-finished
+	<-eventListenerClosed
+	<-stdinListenerClosed
 
 	// send the final commit back to the client
 	commit.Compress()
@@ -241,7 +284,7 @@ type Nanny struct {
 	Transcript []*EventMessage
 }
 
-type nannyHandler func(*Nanny, []string, []string, map[string]string)
+type nannyHandler func(nanny *Nanny, args []string, options []string, files map[string]string, stdin io.Reader)
 
 var getContainerIDRE = regexp.MustCompile(`The name .* is already in use by container (.*)\. You have to delete \(or rename\) that container to be able to reuse that name`)
 
@@ -383,13 +426,13 @@ func (n *Nanny) PutFiles(files map[string]string) error {
 		header := &tar.Header{
 			Name:       name,
 			Mode:       0644,
-			Uid:        10000,
-			Gid:        10000,
+			Uid:        int(n.UID),
+			Gid:        int(n.UID),
 			Size:       int64(len(contents)),
 			ModTime:    now,
 			Typeflag:   tar.TypeReg,
-			Uname:      "student",
-			Gname:      "student",
+			Uname:      strconv.FormatInt(n.UID, 10),
+			Gname:      strconv.FormatInt(n.UID, 10),
 			AccessTime: now,
 			ChangeTime: now,
 		}
@@ -567,7 +610,7 @@ func (out *execStderr) Write(data []byte) (n int, err error) {
 	return n, err
 }
 
-func (n *Nanny) ExecNonInteractive(cmd []string) (stdout, stderr, script *bytes.Buffer, status int, err error) {
+func (n *Nanny) ExecNonInteractive(cmd []string, stdin io.Reader) (stdout, stderr, script *bytes.Buffer, status int, err error) {
 	// log the event
 	n.Events <- &EventMessage{
 		Time:        time.Now(),
@@ -598,7 +641,7 @@ func (n *Nanny) ExecNonInteractive(cmd []string) (stdout, stderr, script *bytes.
 	err = dockerClient.StartExec(exec.ID, docker.StartExecOptions{
 		Detach:       false,
 		Tty:          false,
-		InputStream:  nil,
+		InputStream:  stdin,
 		OutputStream: (*execStdout)(&out),
 		ErrorStream:  (*execStderr)(&out),
 		RawTerminal:  false,
@@ -654,4 +697,75 @@ func releaseUID(uid int64) {
 
 func uidgid(uid int64) string {
 	return fmt.Sprintf("%d:%d", uid, uid)
+}
+
+type readWritebuffer struct {
+	lock     sync.Mutex
+	notEmpty sync.Cond
+	notFull  sync.Cond
+	buf      bytes.Buffer
+	eof      bool
+	closed   bool
+}
+
+const maxReadWriteBufferLen int = 1e6
+
+func newReadWriteBuffer() *readWritebuffer {
+	rw := new(readWritebuffer)
+	rw.notEmpty.L = &rw.lock
+	rw.notFull.L = &rw.lock
+	return rw
+}
+
+func (rw *readWritebuffer) Read(p []byte) (n int, err error) {
+	rw.lock.Lock()
+	defer rw.lock.Unlock()
+	if rw.closed {
+		return 0, io.EOF
+	}
+	for rw.buf.Len() == 0 {
+		if rw.eof {
+			return 0, io.EOF
+		}
+		rw.notEmpty.Wait()
+		if rw.closed {
+			return 0, io.EOF
+		}
+	}
+	rw.notFull.Broadcast()
+	return rw.buf.Read(p)
+}
+
+func (rw *readWritebuffer) Write(p []byte) (n int, err error) {
+	rw.lock.Lock()
+	defer rw.lock.Unlock()
+	if rw.closed || rw.eof {
+		return 0, io.EOF
+	}
+	for rw.buf.Len()+len(p) > maxReadWriteBufferLen {
+		rw.notFull.Wait()
+		if rw.closed || rw.eof {
+			return 0, io.EOF
+		}
+	}
+	rw.notEmpty.Broadcast()
+	return rw.buf.Write(p)
+}
+
+func (rw *readWritebuffer) MarkEOF() {
+	rw.lock.Lock()
+	defer rw.lock.Unlock()
+	rw.eof = true
+	rw.notEmpty.Broadcast()
+	rw.notFull.Broadcast()
+}
+
+func (rw *readWritebuffer) Close() {
+	rw.lock.Lock()
+	defer rw.lock.Unlock()
+	rw.eof = true
+	rw.closed = true
+	rw.buf.Reset()
+	rw.notEmpty.Broadcast()
+	rw.notFull.Broadcast()
 }

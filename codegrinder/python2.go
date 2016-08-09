@@ -138,7 +138,7 @@ func init() {
 	}
 }
 
-func python2UnittestGrade(n *Nanny, args []string, options []string, files map[string]string) {
+func python2UnittestGrade(n *Nanny, args []string, options []string, files map[string]string, stdin io.Reader) {
 	log.Printf("python2UnittestGrade")
 
 	// put the files in the container
@@ -147,9 +147,10 @@ func python2UnittestGrade(n *Nanny, args []string, options []string, files map[s
 		return
 	}
 
-	// launch the unit test runner
+	// launch the unit test runner (discard stdin)
 	_, stderr, _, status, err := n.ExecNonInteractive(
-		[]string{"python", "-m", "unittest", "discover", "-vbs", "tests"})
+		[]string{"python", "-m", "unittest", "discover", "-vbs", "tests"},
+		nil)
 	if err != nil {
 		n.ReportCard.LogAndFailf("exec error: %v", err)
 		return
