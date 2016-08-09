@@ -165,19 +165,20 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		logAndTransmitErrorf("error creating container: %v", err)
 		return
 	}
-
 	rw := newReadWriteBuffer()
 
 	// relay stdin events from socket to the container through rw
-	stdinListenerClosed := make(chan struct{})
 	go func() {
+		broken := false
 		for {
 			if err := socket.ReadJSON(req); err != nil {
 				log.Printf("websocket read error: %v", err)
+				broken = true
 				break
 			}
 			if req.CommitBundle != nil {
 				logAndTransmitErrorf("unexpected commit bundle received from client; quitting")
+				broken = true
 				break
 			}
 			if len(req.Stdin) > 0 {
@@ -190,7 +191,14 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 			}
 		}
 		rw.Close()
-		stdinListenerClosed <- struct{}{}
+
+		// if the connection closed on the client side, kill the container
+		if broken {
+			if err := n.Shutdown("broken websocket"); err != nil {
+				log.Printf("error shutting down container: %v", err)
+			}
+		}
+		log.Printf("stdin listener closed")
 	}()
 
 	// relay container events to the socket
@@ -221,6 +229,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 			}
 		}
 		rw.Close()
+		log.Printf("event listener closed")
 		eventListenerClosed <- struct{}{}
 	}()
 
@@ -235,14 +244,13 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	commit.ReportCard = n.ReportCard
 
 	// shutdown the nanny
-	if err := n.Shutdown(); err != nil {
+	if err := n.Shutdown("action finished"); err != nil {
 		logAndTransmitErrorf("nanny shutdown error: %v", err)
 	}
 
 	// wait for listener to finish
 	close(n.Events)
 	<-eventListenerClosed
-	<-stdinListenerClosed
 
 	// send the final commit back to the client
 	commit.Compress()
@@ -275,6 +283,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 }
 
 type Nanny struct {
+	Name       string
 	Start      time.Time
 	Container  *docker.Container
 	UID        int64
@@ -282,6 +291,7 @@ type Nanny struct {
 	Input      chan string
 	Events     chan *EventMessage
 	Transcript []*EventMessage
+	Closed     bool
 }
 
 type nannyHandler func(nanny *Nanny, args []string, options []string, files map[string]string, stdin io.Reader)
@@ -349,13 +359,13 @@ func NewNanny(problemType *ProblemType, problem *Problem, name string) (*Nanny, 
 	if err != nil {
 		if err == docker.ErrContainerAlreadyExists {
 			// container already exists with that name--try killing it
-			log.Printf("NewNanny->CreateContainer killing existing container with same name %s", name)
+			log.Printf("killing existing container with same name %s", name)
 			err2 := dockerClient.RemoveContainer(docker.RemoveContainerOptions{
 				ID:    name,
 				Force: true,
 			})
 			if err2 != nil {
-				log.Printf("NewNanny->StartContainer error killing existing container: %v", err2)
+				log.Printf("error killing existing container with same name: %v", err2)
 				releaseUID(uid)
 				return nil, err2
 			}
@@ -364,7 +374,7 @@ func NewNanny(problemType *ProblemType, problem *Problem, name string) (*Nanny, 
 			container, err = dockerClient.CreateContainer(docker.CreateContainerOptions{Name: name, Config: config, HostConfig: hostConfig})
 		}
 		if err != nil {
-			log.Printf("NewNanny->CreateContainer: %v", err)
+			log.Printf("CreateContainer: %v", err)
 			releaseUID(uid)
 			return nil, err
 		}
@@ -373,19 +383,20 @@ func NewNanny(problemType *ProblemType, problem *Problem, name string) (*Nanny, 
 	// start it
 	err = dockerClient.StartContainer(container.ID, nil)
 	if err != nil {
-		log.Printf("NewNanny->StartContainer: %v", err)
+		log.Printf("StartContainer: %v", err)
 		releaseUID(uid)
 		err2 := dockerClient.RemoveContainer(docker.RemoveContainerOptions{
 			ID:    container.ID,
 			Force: true,
 		})
 		if err2 != nil {
-			log.Printf("NewNanny->StartContainer error killing container: %v", err2)
+			log.Printf("RemoveContainer: %v", err2)
 		}
 		return nil, err
 	}
 
 	return &Nanny{
+		Name:       name,
 		Start:      time.Now(),
 		Container:  container,
 		UID:        uid,
@@ -396,8 +407,14 @@ func NewNanny(problemType *ProblemType, problem *Problem, name string) (*Nanny, 
 	}, nil
 }
 
-func (n *Nanny) Shutdown() error {
+func (n *Nanny) Shutdown(msg string) error {
+	if n.Closed {
+		return nil
+	}
+	n.Closed = true
+
 	// shut down the container
+	log.Printf("shutting down %s: %s", n.Name, msg)
 	err := dockerClient.RemoveContainer(docker.RemoveContainerOptions{
 		ID:    n.Container.ID,
 		Force: true,
@@ -629,7 +646,7 @@ func (n *Nanny) ExecNonInteractive(cmd []string, stdin io.Reader) (stdout, stder
 		User:         uidgid(n.UID),
 	})
 	if err != nil {
-		log.Printf("Nanny.ExecNonInteractive->docker.CreateExec: %v", err)
+		log.Printf("CreateExec: %v", err)
 		return nil, nil, nil, -1, err
 	}
 
@@ -647,18 +664,18 @@ func (n *Nanny) ExecNonInteractive(cmd []string, stdin io.Reader) (stdout, stder
 		RawTerminal:  false,
 	})
 	if err != nil {
-		log.Printf("Nanny.ExecNonInteractive->docker.StartExec: %v", err)
+		log.Printf("StartExec: %v", err)
 		return nil, nil, nil, -1, err
 	}
 
 	// inspect
 	inspect, err := dockerClient.InspectExec(exec.ID)
 	if err != nil {
-		log.Printf("Nanny.ExecNonInteractive->docker.InspectExec: %v", err)
+		log.Printf("InspectExec: %v", err)
 		return nil, nil, nil, -1, err
 	}
 	if inspect.Running {
-		log.Printf("Nanny.ExecNonInteractive: process still running")
+		log.Printf("ExecNonInteractive: process still running")
 	} else {
 		n.Events <- &EventMessage{
 			Time:       time.Now(),
