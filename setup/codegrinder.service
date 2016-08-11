@@ -2,6 +2,8 @@
 Description=Codegrinder main service
 Requires=postgresql.service
 After=postgresql.service
+Requires=docker.service
+After=docker.service
 
 [Service]
 Type=simple

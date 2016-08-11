@@ -72,8 +72,8 @@ func main() {
 	var configFile string
 	flag.StringVar(&configFile, "config", "/etc/codegrinder/config.json", "Path to the config file")
 	var ta, daycare bool
-	flag.BoolVar(&ta, "ta", true, "Serve the TA role")
-	flag.BoolVar(&daycare, "daycare", true, "Serve the daycare role")
+	flag.BoolVar(&ta, "ta", false, "Serve the TA role")
+	flag.BoolVar(&daycare, "daycare", false, "Serve the daycare role")
 	flag.Parse()
 
 	if !ta && !daycare {
