@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -453,8 +454,8 @@ func PostCommitBundlesUnsigned(w http.ResponseWriter, tx *sql.Tx, currentUser *U
 		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must not include daycare hostname")
 		return
 	}
-	// assign a daycare host: TODO
-	bundle.Hostname = Config.Hostname
+
+	bundle.Hostname = ""
 	bundle.Commit.Transcript = []*EventMessage{}
 	bundle.Commit.ReportCard = nil
 	bundle.Commit.Score = 0.0
@@ -493,7 +494,7 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must not include problem signature")
 		return
 	}
-	if len(bundle.Hostname) == 0 {
+	if len(bundle.CommitSignature) != 0 && len(bundle.Hostname) == 0 {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must include daycare hostname")
 		return
 	}
@@ -595,6 +596,16 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 		return
 	}
 	commit.Action = action
+
+	// assign a daycare host if needed
+	if bundle.Hostname == "" {
+		host, err := daycareRegistrations.Assign(problem.ProblemType)
+		if err != nil {
+			log.Printf("error assigning a daycare for this commit: %v", err)
+		} else {
+			bundle.Hostname = host
+		}
+	}
 
 	// recompute the signature as the ID may have changed when saving
 	commitSig = commit.ComputeSignature(Config.DaycareSecret, problemSig, bundle.Hostname, bundle.UserID)

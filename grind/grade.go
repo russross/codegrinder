@@ -48,6 +48,9 @@ func CommandGrade(cmd *cobra.Command, args []string) {
 	mustPostObject("/commit_bundles/unsigned", nil, unsigned, signed)
 
 	// send it to the daycare for grading
+	if signed.Hostname == "" {
+		log.Fatalf("server was unable to find a suitable daycare, unable to grade")
+	}
 	log.Printf("submitting %s step %d to %s for grading", problem.Unique, commit.Step, signed.Hostname)
 	graded := mustConfirmCommitBundle(user.ID, signed, nil)
 

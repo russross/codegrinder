@@ -7,7 +7,7 @@ type Version struct {
 }
 
 var CurrentVersion = Version{
-	Version:                 "1.9.0",
-	GrindVersionRequired:    "1.9.0",
-	GrindVersionRecommended: "1.9.0",
+	Version:                 "1.9.1",
+	GrindVersionRequired:    "1.9.1",
+	GrindVersionRecommended: "1.9.1",
 }

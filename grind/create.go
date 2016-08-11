@@ -247,6 +247,10 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 	signed := new(ProblemBundle)
 	mustPostObject("/problem_bundles/unconfirmed", nil, unsigned, signed)
 
+	if signed.Hostname == "" {
+		log.Fatalf("server was unable to find a suitable daycare, unable to validate")
+	}
+
 	// validate the commits one at a time
 	for n := 0; n < len(signed.ProblemSteps); n++ {
 		log.Printf("validating solution for step %d", n+1)
