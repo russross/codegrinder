@@ -92,10 +92,10 @@ func asCompileAndLink(n *Nanny, files map[string]string) {
 	var sourceFiles, testFiles []string
 	for path := range files {
 		dir, file := filepath.Split(path)
-		if dir == "" && filepath.Ext(file) == "s" {
+		if dir == "" && filepath.Ext(file) == ".s" {
 			sourceFiles = append(sourceFiles, path)
 		}
-		if dir == "tests/" && filepath.Ext(file) == "cpp" {
+		if dir == "tests/" && filepath.Ext(file) == ".cpp" {
 			testFiles = append(testFiles, path)
 		}
 	}
