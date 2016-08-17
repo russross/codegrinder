@@ -50,7 +50,7 @@ var Config struct {
 
 	// daycare-only required parameters
 	MainHostname string   // Hostname for the TA: "your.host.goes.here". Defaults to Hostname
-	Capacity     float64  // Relative capacity of this daycare for containers: 1.0
+	Capacity     int      // Relative capacity of this daycare for containers: 1
 	ProblemTypes []string // List of problem types this daycare host supports: [ "python27unittest", "gotest", ... ]
 
 	// ta-only parameters where the default is usually sufficient
@@ -341,7 +341,7 @@ func main() {
 		if len(Config.ProblemTypes) == 0 {
 			log.Fatalf("cannot run Daycare role with no ProblemTypes in the config file")
 		}
-		if Config.Capacity <= 0.0 {
+		if Config.Capacity <= 0 {
 			log.Fatalf("Daycare capacity must be greater than zero")
 		}
 
@@ -734,20 +734,20 @@ func (m DaycareRegistrations) Insert(reg *DaycareRegistration) error {
 
 func (m DaycareRegistrations) Assign(problemType string) (string, error) {
 	// gather the total weights of all of the eligible daycare hosts
-	totalWeight := 0.0
+	totalWeight := 0
 	for _, elt := range m {
 		n := sort.SearchStrings(elt.ProblemTypes, problemType)
 		if n < len(elt.ProblemTypes) && elt.ProblemTypes[n] == problemType {
 			totalWeight += elt.Capacity
 		}
 	}
-	if totalWeight == 0.0 {
+	if totalWeight == 0 {
 		return "", fmt.Errorf("no eligible daycare found")
 	}
 
 	// pick a random point in pool of weights
-	point := rand.Float64() * totalWeight
-	skippedWeight := 0.0
+	point := rand.Intn(totalWeight)
+	skippedWeight := 0
 	for host, elt := range m {
 		n := sort.SearchStrings(elt.ProblemTypes, problemType)
 		if n < len(elt.ProblemTypes) && elt.ProblemTypes[n] == problemType {
@@ -757,13 +757,13 @@ func (m DaycareRegistrations) Assign(problemType string) (string, error) {
 			return host, nil
 		}
 	}
-	return "", fmt.Errorf("failed to find daycare, please try again")
+	return "", fmt.Errorf("failed to find daycare, please report this error")
 }
 
 type DaycareRegistration struct {
 	Hostname     string    `json:"hostname"`
 	ProblemTypes []string  `json:"problemTypes"`
-	Capacity     float64   `json:"capacity"`
+	Capacity     int       `json:"capacity"`
 	Time         time.Time `json:"time"`
 	Version      string    `json:"version,omitempty"`
 	Signature    string    `json:"signature,omitempty"`
@@ -778,7 +778,7 @@ func (reg *DaycareRegistration) ComputeSignature(secret string) string {
 	for n, elt := range reg.ProblemTypes {
 		v.Add(fmt.Sprintf("problemType-%d", n), elt)
 	}
-	v.Add("capacity", strconv.FormatFloat(reg.Capacity, 'g', -1, 64))
+	v.Add("capacity", strconv.Itoa(reg.Capacity))
 	v.Add("time", reg.Time.Round(time.Second).UTC().Format(time.RFC3339))
 	v.Add("version", reg.Version)
 
