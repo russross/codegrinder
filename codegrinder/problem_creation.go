@@ -176,7 +176,7 @@ func PostProblemBundleUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser
 	now := time.Now()
 
 	// basic sanity checks
-	if len(bundle.ProblemSteps) < 2 {
+	if len(bundle.ProblemSteps) == 0 {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "problem must have at least one step")
 		return
 	}
@@ -206,9 +206,6 @@ func PostProblemBundleUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser
 		loggedHTTPErrorf(w, http.StatusBadRequest, "%v", err)
 		return
 	}
-
-	// assign a daycare host: TODO
-	bundle.Hostname = Config.Hostname
 
 	// if this is an update to an existing problem, we need to check that some things match
 	if bundle.Problem.ID != 0 {
@@ -260,6 +257,15 @@ func PostProblemBundleUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser
 	// compute signature
 	bundle.ProblemSignature = bundle.Problem.ComputeSignature(Config.DaycareSecret, bundle.ProblemSteps)
 
+	// assign a daycare host
+	host, err := daycareRegistrations.Assign(bundle.Problem.ProblemType)
+	if err != nil {
+		loggedHTTPErrorf(w, http.StatusInternalServerError,
+			"failed to find daycare for problem type %s: %v", bundle.Problem.ProblemType, err)
+		return
+	}
+	bundle.Hostname = host
+
 	// check the commits
 	whitelists := bundle.Problem.GetStepWhitelists(bundle.ProblemSteps)
 	bundle.CommitSignatures = nil
@@ -269,8 +275,8 @@ func PostProblemBundleUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser
 		commit.AssignmentID = 0
 		commit.ProblemID = bundle.Problem.ID
 		commit.Step = int64(n) + 1
-		if commit.Action != "confirm" {
-			loggedHTTPErrorf(w, http.StatusBadRequest, "commit %d has action %q, expected %q", n, commit.Action, "confirm")
+		if commit.Action != "grade" {
+			loggedHTTPErrorf(w, http.StatusBadRequest, "commit %d has action %q, expected %q", n, commit.Action, "grade")
 			return
 		}
 		commit.Transcript = []*EventMessage{}

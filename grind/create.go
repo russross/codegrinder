@@ -148,7 +148,7 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 		}
 		commit := &Commit{
 			Step:      i,
-			Action:    "confirm",
+			Action:    "grade",
 			Note:      "author solution submitted via grind",
 			Files:     make(map[string]string),
 			CreatedAt: now,

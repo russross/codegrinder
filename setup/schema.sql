@@ -9,7 +9,8 @@ CREATE TYPE problem_types AS ENUM (
     'nasmgtest',
     'ocamlounit',
     'prologunittest',
-    'standardmlunittest'
+    'standardmlunittest',
+    'armv6asm'
 );
 
 CREATE TABLE problems (
