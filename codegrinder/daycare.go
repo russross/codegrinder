@@ -294,7 +294,7 @@ type Nanny struct {
 	Closed     bool
 }
 
-type nannyHandler func(nanny *Nanny, args []string, options []string, files map[string]string, stdin io.Reader)
+type nannyHandler func(nanny *Nanny, args, options []string, files map[string]string, stdin io.Reader)
 
 var getContainerIDRE = regexp.MustCompile(`The name .* is already in use by container (.*)\. You have to delete \(or rename\) that container to be able to reuse that name`)
 
@@ -646,7 +646,6 @@ func (n *Nanny) ExecNonInteractive(cmd []string, stdin io.Reader) (stdout, stder
 		User:         uidgid(n.UID),
 	})
 	if err != nil {
-		log.Printf("CreateExec: %v", err)
 		return nil, nil, nil, -1, err
 	}
 
@@ -664,25 +663,24 @@ func (n *Nanny) ExecNonInteractive(cmd []string, stdin io.Reader) (stdout, stder
 		RawTerminal:  false,
 	})
 	if err != nil {
-		log.Printf("StartExec: %v", err)
 		return nil, nil, nil, -1, err
 	}
 
 	// inspect
 	inspect, err := dockerClient.InspectExec(exec.ID)
 	if err != nil {
-		log.Printf("InspectExec: %v", err)
 		return nil, nil, nil, -1, err
 	}
 	if inspect.Running {
-		log.Printf("ExecNonInteractive: process still running")
-	} else {
-		n.Events <- &EventMessage{
-			Time:       time.Now(),
-			Event:      "exit",
-			ExitStatus: fmt.Sprintf("exit status %d", inspect.ExitCode),
-		}
+		return nil, nil, nil, -1, fmt.Errorf("ExecNonInteractive: process still running")
 	}
+
+	n.Events <- &EventMessage{
+		Time:       time.Now(),
+		Event:      "exit",
+		ExitStatus: fmt.Sprintf("exit status %d", inspect.ExitCode),
+	}
+
 	return &out.stdout, &out.stderr, &out.script, inspect.ExitCode, nil
 }
 

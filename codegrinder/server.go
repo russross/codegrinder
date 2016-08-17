@@ -389,7 +389,7 @@ func main() {
 				res, err := http.DefaultClient.Do(req)
 				if err != nil {
 					if !failed {
-						log.Printf("error connecting to register daycare: %v", url, err)
+						log.Printf("error connecting to register daycare: %v", err)
 					}
 					failed = true
 					succeeded = false
