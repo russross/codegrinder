@@ -133,7 +133,7 @@ func GetProblemSteps(w http.ResponseWriter, r *http.Request, tx *sql.Tx, params 
 
 	} else {
 		err = meddler.QueryAll(tx, &problemSteps, `SELECT problem_steps.* `+
-			`FROM problem_steps JOIN user_problems ON problem_steps.problem_id = user_problems.user_id `+
+			`FROM problem_steps JOIN user_problems ON problem_steps.problem_id = user_problems.problem_id `+
 			`WHERE user_problems.user_id = $1 AND user_problems.problem_id = $2 `+
 			`ORDER BY step`,
 			currentUser.ID, problemID)
@@ -263,7 +263,7 @@ func GetProblemSetProblems(w http.ResponseWriter, r *http.Request, tx *sql.Tx, p
 	} else {
 		err = meddler.QueryAll(tx, &problemSetProblems, `SELECT problem_set_problems.* `+
 			`FROM problem_set_problems JOIN user_problem_sets ON problem_set_problems.problem_set_id = user_problem_sets.problem_set_id `+
-			`WHERE problem_set_problems.user_id = $1 AND problem_set_problems.problem_set_id = $2 `+
+			`WHERE user_problem_sets.user_id = $1 AND problem_set_problems.problem_set_id = $2 `+
 			`ORDER BY problem_id`, currentUser.ID, problemSetID)
 	}
 
