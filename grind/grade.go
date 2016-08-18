@@ -52,7 +52,7 @@ func CommandGrade(cmd *cobra.Command, args []string) {
 		log.Fatalf("server was unable to find a suitable daycare, unable to grade")
 	}
 	log.Printf("submitting %s step %d to %s for grading", problem.Unique, commit.Step, signed.Hostname)
-	graded := mustConfirmCommitBundle(user.ID, signed, nil)
+	graded := mustConfirmCommitBundle(signed, nil)
 
 	// save the commit with report card
 	toSave := &CommitBundle{

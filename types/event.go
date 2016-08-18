@@ -48,7 +48,7 @@ type EventMessage struct {
 	Time        time.Time         `json:"time"`
 	Event       string            `json:"event"`
 	ExecCommand []string          `json:"execcommand,omitempty"`
-	ExitStatus  string            `json:"exitstatus,omitempty"`
+	ExitStatus  int               `json:"exitstatus,omitempty"`
 	StreamData  string            `json:"streamdata,omitempty"`
 	Error       string            `json:"error,omitempty"`
 	ReportCard  *ReportCard       `json:"reportcard,omitempty"`
@@ -60,7 +60,7 @@ func (e *EventMessage) String() string {
 	case "exec":
 		return fmt.Sprintf("event: exec %s", strings.Join(e.ExecCommand, " "))
 	case "exit":
-		return fmt.Sprintf("event: exit %s", e.ExitStatus)
+		return fmt.Sprintf("event: exit %d", e.ExitStatus)
 	case "stdin", "stdout", "stderr":
 		return fmt.Sprintf("event: %s %q", e.Event, e.StreamData)
 	case "stdinclosed":

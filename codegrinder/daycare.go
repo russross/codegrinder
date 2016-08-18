@@ -678,7 +678,7 @@ func (n *Nanny) ExecNonInteractive(cmd []string, stdin io.Reader) (stdout, stder
 	n.Events <- &EventMessage{
 		Time:       time.Now(),
 		Event:      "exit",
-		ExitStatus: fmt.Sprintf("exit status %d", inspect.ExitCode),
+		ExitStatus: inspect.ExitCode,
 	}
 
 	return &out.stdout, &out.stderr, &out.script, inspect.ExitCode, nil

@@ -263,7 +263,7 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 			Commit:           signed.Commits[n],
 			CommitSignature:  signed.CommitSignatures[n],
 		}
-		validated := mustConfirmCommitBundle(user.ID, unvalidated, nil)
+		validated := mustConfirmCommitBundle(unvalidated, nil)
 		log.Printf("  finished validating solution")
 		if validated.Commit.ReportCard == nil || validated.Commit.Score != 1.0 || !validated.Commit.ReportCard.Passed {
 			log.Printf("  solution for step %d failed: %s", n+1, validated.Commit.ReportCard.Note)
@@ -328,7 +328,7 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 	}
 }
 
-func mustConfirmCommitBundle(userID int64, bundle *CommitBundle, args []string) *CommitBundle {
+func mustConfirmCommitBundle(bundle *CommitBundle, args []string) *CommitBundle {
 	verbose := false
 
 	// create a websocket connection to the server

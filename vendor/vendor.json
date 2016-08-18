@@ -201,10 +201,22 @@
 			"revisionTime": "2015-12-11T00:06:21Z"
 		},
 		{
+			"checksumSHA1": "DdH3xAkzAWJ4B/LGYJyCeRsly2I=",
+			"path": "github.com/mattn/go-runewidth",
+			"revision": "d6bea18f789704b5f83375793155289da36a3c7f",
+			"revisionTime": "2016-03-15T04:07:12Z"
+		},
+		{
 			"checksumSHA1": "Y89CHl2URaBbobeyCOr4kzbLwYE=",
 			"path": "github.com/miekg/dns",
 			"revision": "5d001d020961ae1c184f9f8152fdc73810481677",
 			"revisionTime": "2016-06-14T16:21:01Z"
+		},
+		{
+			"checksumSHA1": "bcgbmZhNRsfsLgd8obtn7yIey6I=",
+			"path": "github.com/nsf/termbox-go",
+			"revision": "e8f6d27f72a2f2bb598eb3579afd5ea364ef67f7",
+			"revisionTime": "2016-08-08T04:50:38Z"
 		},
 		{
 			"checksumSHA1": "3AoPMXlmVq2+iWMpsdJZkcUKHB8=",
