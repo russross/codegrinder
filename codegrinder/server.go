@@ -363,7 +363,7 @@ func main() {
 				// it we are also the TA, give the server a chance to start listening
 				time.Sleep(2 * time.Second)
 			}
-			succeeded, failed := false, false
+			status := ""
 
 			for {
 				reg := DaycareRegistration{
@@ -388,25 +388,22 @@ func main() {
 				req.Header.Add("Content-Type", "application/json")
 				res, err := http.DefaultClient.Do(req)
 				if err != nil {
-					if !failed {
+					if status != "failed" {
 						log.Printf("error connecting to register daycare: %v", err)
 					}
-					failed = true
-					succeeded = false
+					status = "failed"
 				} else {
 					res.Body.Close()
 					if res.StatusCode == http.StatusOK {
-						if !succeeded {
+						if status != "succeeded" {
 							log.Printf("registered with %s", url)
 						}
-						succeeded = true
-						failed = false
+						status = "succeeded"
 					} else {
-						if !failed {
+						if status != "failed" {
 							log.Printf("unexpected status from %s: %v", url, res.Status)
 						}
-						failed = true
-						succeeded = false
+						status = "failed"
 					}
 				}
 				time.Sleep(time.Minute)
