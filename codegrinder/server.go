@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fsouza/go-dockerclient"
@@ -690,19 +691,33 @@ func unBase64(s string) string {
 	return s
 }
 
-type DaycareRegistrations map[string]*DaycareRegistration
+type daycares struct {
+	sync.Mutex
+	daycares map[string]*DaycareRegistration
+}
 
-var daycareRegistrations = make(DaycareRegistrations)
+var daycareRegistrations daycares
 
-func (m DaycareRegistrations) Expire() {
-	for host, elt := range m {
+func init() {
+	daycareRegistrations.daycares = make(map[string]*DaycareRegistration)
+}
+
+func (m *daycares) Expire() {
+	m.Lock()
+	defer m.Unlock()
+
+	for host, elt := range m.daycares {
 		if time.Since(elt.Time) > 2*time.Minute {
-			delete(m, host)
+			log.Printf("daycare registration for %s has expired", host)
+			delete(m.daycares, host)
 		}
 	}
 }
 
-func (m DaycareRegistrations) Insert(reg *DaycareRegistration) error {
+func (m *daycares) Insert(reg *DaycareRegistration) error {
+	m.Lock()
+	defer m.Unlock()
+
 	// check the signature
 	sig := reg.ComputeSignature(Config.DaycareSecret)
 	if sig != reg.Signature {
@@ -724,15 +739,21 @@ func (m DaycareRegistrations) Insert(reg *DaycareRegistration) error {
 	reg.Time = time.Now()
 	reg.Version = ""
 	reg.Signature = ""
-	m[reg.Hostname] = reg
+	if m.daycares[reg.Hostname] == nil {
+		log.Printf("daycare registration for %s added", reg.Hostname)
+	}
+	m.daycares[reg.Hostname] = reg
 
 	return nil
 }
 
-func (m DaycareRegistrations) Assign(problemType string) (string, error) {
+func (m *daycares) Assign(problemType string) (string, error) {
+	m.Lock()
+	defer m.Unlock()
+
 	// gather the total weights of all of the eligible daycare hosts
 	totalWeight := 0
-	for _, elt := range m {
+	for _, elt := range m.daycares {
 		n := sort.SearchStrings(elt.ProblemTypes, problemType)
 		if n < len(elt.ProblemTypes) && elt.ProblemTypes[n] == problemType {
 			totalWeight += elt.Capacity
@@ -745,7 +766,7 @@ func (m DaycareRegistrations) Assign(problemType string) (string, error) {
 	// pick a random point in pool of weights
 	point := rand.Intn(totalWeight)
 	skippedWeight := 0
-	for host, elt := range m {
+	for host, elt := range m.daycares {
 		n := sort.SearchStrings(elt.ProblemTypes, problemType)
 		if n < len(elt.ProblemTypes) && elt.ProblemTypes[n] == problemType {
 			skippedWeight += elt.Capacity
