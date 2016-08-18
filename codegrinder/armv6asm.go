@@ -237,6 +237,12 @@ func asShell(n *Nanny, args, options []string, files map[string]string, stdin io
 func asGdb(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
 	log.Printf("arm as gdb")
 
+	// put the files in the container
+	if err := n.PutFiles(files); err != nil {
+		n.ReportCard.LogAndFailf("PutFiles error: %v", err)
+		return
+	}
+
 	// gather list of *.s files
 	var sourceFiles []string
 	for path := range files {
