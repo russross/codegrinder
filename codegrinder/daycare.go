@@ -680,7 +680,7 @@ func (n *Nanny) Exec(cmd []string, stdin io.Reader, useTTY bool) (stdout, stderr
 	n.Events <- &EventMessage{
 		Time:       time.Now(),
 		Event:      "exit",
-		ExitStatus: fmt.Sprintf("exit status %d", inspect.ExitCode),
+		ExitStatus: inspect.ExitCode,
 	}
 
 	return &out.stdout, &out.stderr, &out.script, inspect.ExitCode, nil

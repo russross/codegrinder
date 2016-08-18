@@ -117,6 +117,13 @@ func main() {
 	cmdCreate.Flags().BoolP("update", "u", false, "update an existing problem")
 	cmdGrind.AddCommand(cmdCreate)
 
+	cmdInteract := &cobra.Command{
+		Use:   "shell",
+		Short: "launch a shell",
+		Run:   CommandInteract,
+	}
+	cmdGrind.AddCommand(cmdInteract)
+
 	cmdGrind.Execute()
 }
 
