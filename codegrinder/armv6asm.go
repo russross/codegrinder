@@ -25,16 +25,25 @@ func init() {
 		MaxThreads:  20,
 		Actions: map[string]*ProblemTypeAction{
 			"grade": &ProblemTypeAction{
-				Action:  "grade",
-				Button:  "Grade",
-				Message: "Grading‥",
-				Handler: nannyHandler(asGTestGrade),
+				Action:      "grade",
+				Button:      "Grade",
+				Message:     "Grading‥",
+				Interactive: false,
+				Handler:     nannyHandler(asGTestGrade),
+			},
+			"gdb": &ProblemTypeAction{
+				Action:      "gdb",
+				Button:      "Debug",
+				Message:     "Running gdb‥",
+				Interactive: true,
+				Handler:     nannyHandler(asGdb),
 			},
 			"shell": &ProblemTypeAction{
-				Action:  "shell",
-				Button:  "Ad hoc",
-				Message: "Running shell‥",
-				Handler: nannyHandler(asShell),
+				Action:      "shell",
+				Button:      "Ad hoc",
+				Message:     "Running shell‥",
+				Interactive: true,
+				Handler:     nannyHandler(asShell),
 			},
 		},
 	}
@@ -77,7 +86,7 @@ type GTestFailure struct {
 }
 
 func asGTestGrade(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
-	log.Printf("as gTest grade")
+	log.Printf("arm as gTest grade")
 
 	// put the files in the container
 	if err := n.PutFiles(files); err != nil {
@@ -105,6 +114,14 @@ func asCompileAndLink(n *Nanny, files map[string]string) {
 		if dir == "tests/" && filepath.Ext(file) == ".cpp" {
 			testFiles = append(testFiles, path)
 		}
+	}
+	if len(sourceFiles) == 0 {
+		n.ReportCard.LogAndFailf("no source files found")
+		return
+	}
+	if len(testFiles) == 0 {
+		n.ReportCard.LogAndFailf("no test files found")
+		return
 	}
 
 	// assemble source files
@@ -204,15 +221,75 @@ func gTestAOutCommon(n *Nanny, files map[string]string, stdin io.Reader) {
 }
 
 func asShell(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
-	log.Printf("as shell")
+	log.Printf("arm bash shell")
 
-	_, _, _, status, err := n.Exec([]string{"/bin/sh"}, stdin, true)
+	_, _, _, status, err := n.Exec([]string{"/bin/bash"}, stdin, true)
 	if err != nil {
 		n.ReportCard.LogAndFailf("error running bash: %v", err)
 		return
 	}
 	if status != 0 {
 		n.ReportCard.LogAndFailf("bash exited with status %d", status)
+		return
+	}
+}
+
+func asGdb(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
+	log.Printf("arm as gdb")
+
+	// gather list of *.s files
+	var sourceFiles []string
+	for path := range files {
+		dir, file := filepath.Split(path)
+		if dir == "" && filepath.Ext(file) == ".s" {
+			sourceFiles = append(sourceFiles, path)
+		}
+	}
+	if len(sourceFiles) == 0 {
+		n.ReportCard.LogAndFailf("no source files found")
+		return
+	}
+
+	// assemble source files
+	objectFiles := []string{}
+	for _, src := range sourceFiles {
+		out := src[:len(src)-len(".s")] + ".o"
+		objectFiles = append(objectFiles, out)
+		cmd := []string{"as", "-g", "-march=armv6zk", "-mcpu=arm1176jzf-s", "-mfloat-abi=hard", "-mfpu=vfp", src, "-o", out}
+
+		// launch the assembler (ignore stdin)
+		_, _, _, status, err := n.Exec(cmd, nil, false)
+		if err != nil {
+			n.ReportCard.LogAndFailf("as exec error: %v", err)
+			return
+		}
+		if status != 0 {
+			n.ReportCard.LogAndFailf("as failed on %s with exit code %d", src, status)
+			return
+		}
+	}
+
+	// link
+	cmd := []string{"ld"}
+	cmd = append(cmd, objectFiles...)
+	_, _, _, status, err := n.Exec(cmd, nil, false)
+	if err != nil {
+		n.ReportCard.LogAndFailf("ld exec error: %v", err)
+		return
+	}
+	if status != 0 {
+		n.ReportCard.LogAndFailf("ld failed with exit code %d", status)
+		return
+	}
+
+	// run gdb
+	_, _, _, status, err = n.Exec([]string{"gdb", "a.out"}, stdin, true)
+	if err != nil {
+		n.ReportCard.LogAndFailf("error running gdb: %v", err)
+		return
+	}
+	if status != 0 {
+		n.ReportCard.LogAndFailf("gdb exited with status %d", status)
 		return
 	}
 }
