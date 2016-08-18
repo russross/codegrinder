@@ -280,33 +280,35 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	close(n.Events)
 	<-eventListenerClosed
 
-	// send the final commit back to the client
-	commit.Compress()
+	if commit.Action == "grade" {
+		// send the final commit back to the client
+		commit.Compress()
 
-	// compute the score for this step on a scale of 0.0 to 1.0
-	if commit.ReportCard.Passed {
-		// award full credit for this step
-		commit.Score = 1.0
-	} else if len(commit.ReportCard.Results) == 0 {
-		// no results? fail...
-		commit.Score = 0.0
-	} else {
-		// compute partial credit for this step
-		passed := 0
-		for _, elt := range commit.ReportCard.Results {
-			if elt.Outcome == "passed" {
-				passed++
+		// compute the score for this step on a scale of 0.0 to 1.0
+		if commit.ReportCard.Passed {
+			// award full credit for this step
+			commit.Score = 1.0
+		} else if len(commit.ReportCard.Results) == 0 {
+			// no results? fail...
+			commit.Score = 0.0
+		} else {
+			// compute partial credit for this step
+			passed := 0
+			for _, elt := range commit.ReportCard.Results {
+				if elt.Outcome == "passed" {
+					passed++
+				}
 			}
+			commit.Score = float64(passed) / float64(len(commit.ReportCard.Results))
 		}
-		commit.Score = float64(passed) / float64(len(commit.ReportCard.Results))
-	}
-	commit.UpdatedAt = now
-	req.CommitBundle.CommitSignature = commit.ComputeSignature(Config.DaycareSecret, req.CommitBundle.ProblemSignature, req.CommitBundle.Hostname, req.CommitBundle.UserID)
+		commit.UpdatedAt = now
+		req.CommitBundle.CommitSignature = commit.ComputeSignature(Config.DaycareSecret, req.CommitBundle.ProblemSignature, req.CommitBundle.Hostname, req.CommitBundle.UserID)
 
-	res := &DaycareResponse{CommitBundle: req.CommitBundle}
-	if err := socket.WriteJSON(res); err != nil {
-		logAndTransmitErrorf("error writing final commit JSON: %v", err)
-		return
+		res := &DaycareResponse{CommitBundle: req.CommitBundle}
+		if err := socket.WriteJSON(res); err != nil {
+			logAndTransmitErrorf("error writing final commit JSON: %v", err)
+			return
+		}
 	}
 }
 
