@@ -101,6 +101,32 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		return
 	}
 
+	// gather any args
+	sizex, sizey := 0, 0
+	r.ParseForm()
+	args := []string{}
+	for key, vals := range r.Form {
+		// we handle termsize here, so pick it out and do not pass it on
+		if key == "termsize" && len(vals) == 1 {
+			parts := strings.Split(vals[0], ",")
+			if len(parts) == 2 {
+				x, err1 := strconv.Atoi(parts[0])
+				y, err2 := strconv.Atoi(parts[1])
+				if err1 == nil && err2 == nil && x > 0 && y > 0 {
+					sizex = x
+					sizey = y
+					continue
+				}
+			}
+		}
+		if len(vals) == 1 {
+			args = append(args, key+"="+vals[0])
+		}
+	}
+	if len(args) > 0 {
+		log.Printf("args: %v", args)
+	}
+
 	// check signatures
 	problem, steps := req.CommitBundle.Problem, req.CommitBundle.ProblemSteps
 	problemSig := problem.ComputeSignature(Config.DaycareSecret, steps)
@@ -160,7 +186,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	// launch a nanny process
 	nannyName := fmt.Sprintf("nanny-%d", req.CommitBundle.UserID)
 	log.Printf("launching container for %s", nannyName)
-	n, err := NewNanny(problemType, problem, action.Interactive, nannyName)
+	n, err := NewNanny(problemType, problem, action.Interactive, sizex, sizey, nannyName)
 	if err != nil {
 		logAndTransmitErrorf("error creating container: %v", err)
 		return
@@ -198,7 +224,11 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		for {
 			msg := new(DaycareRequest)
 			if err := socket.ReadJSON(msg); err != nil {
-				log.Printf("websocket read error: %v", err)
+				if strings.Contains(err.Error(), "use of closed network connection") || strings.Contains(err.Error(), "close 1005") {
+					// websocket closed
+				} else {
+					log.Printf("websocket read error: %v", err)
+				}
 				broken = true
 				break
 			}
@@ -238,12 +268,15 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 
 			switch event.Event {
 			case "exec", "exit", "stdin", "stdout", "stderr", "stdinclosed", "error":
+				if event.Event == "exec" {
+					log.Printf("%s", event)
+				}
 				res := &DaycareResponse{Event: event}
 				if err := socket.WriteJSON(res); err != nil {
 					if strings.Contains(err.Error(), "use of closed network connection") {
 						// websocket closed
 					} else {
-						logAndTransmitErrorf("error writing event JSON: %v", err)
+						logAndTransmitErrorf("websocket write error: %v", err)
 					}
 
 					break
@@ -257,22 +290,10 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 			}
 		}
 		rw.Close()
-		log.Printf("event listener closed")
 		eventListenerClosed <- struct{}{}
 	}()
 
 	// run the problem-type specific handler
-	r.ParseForm()
-	args := []string{}
-	for key, vals := range r.Form {
-		if len(vals) >= 1 {
-			args = append(args, key+"="+vals[0])
-		}
-	}
-
-	if len(args) > 0 {
-		log.Printf("args: %v", args)
-	}
 	handler, ok := action.Handler.(nannyHandler)
 	if ok {
 		handler(n, args, problem.Options, files, rw)
@@ -320,6 +341,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 			return
 		}
 	}
+	log.Printf("handler for %s finished", nannyName)
 }
 
 type Nanny struct {
@@ -347,7 +369,7 @@ func getContainerID(msg string) string {
 	return groups[1]
 }
 
-func NewNanny(problemType *ProblemType, problem *Problem, interactive bool, name string) (*Nanny, error) {
+func NewNanny(problemType *ProblemType, problem *Problem, interactive bool, sizex, sizey int, name string) (*Nanny, error) {
 	// create a container
 	mem := problemType.MaxMemory * 1024 * 1024
 	disk := problemType.MaxFileSize * 1024 * 1024
@@ -369,6 +391,9 @@ func NewNanny(problemType *ProblemType, problem *Problem, interactive bool, name
 		Env:             []string{"USER=student", "TERM=vt100"},
 		Image:           problemType.Image,
 		NetworkDisabled: true,
+	}
+	if sizex > 0 && sizey > 0 {
+		config.Env = append(config.Env, fmt.Sprintf("COLUMNS=%d", sizex), fmt.Sprintf("LINES=%d", sizey))
 	}
 	hostConfig := &docker.HostConfig{
 		CapDrop: []string{
@@ -693,6 +718,19 @@ func (n *Nanny) Exec(cmd []string, stdin io.Reader, useTTY bool) (stdout, stderr
 	})
 	if err != nil {
 		return nil, nil, nil, -1, err
+	}
+
+	// resize the TTY
+	// warning: this is pretty ugly
+	if useTTY && n.SizeX > 0 && n.SizeY > 0 {
+		go func() {
+			time.Sleep(time.Second)
+			if err := dockerClient.ResizeExecTTY(exec.ID, n.SizeY, n.SizeX); err != nil {
+				log.Printf("error setting TTY size: %v", err)
+				return
+			}
+			log.Printf("set TTY size to %d×%d", n.SizeX, n.SizeY)
+		}()
 	}
 
 	// gather output

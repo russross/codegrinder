@@ -90,7 +90,6 @@ func runInteractiveSession(bundle *CommitBundle, args []string) {
 	// get the terminal size
 	sizex, sizey := termbox.Size()
 	if sizex > 0 && sizey > 0 {
-		log.Printf("terminal size is %d×%d", sizex, sizey)
 		vals := url.Values{}
 		vals.Set("termsize", fmt.Sprintf("%d,%d", sizex, sizey))
 		endpoint.RawQuery = vals.Encode()
