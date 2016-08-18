@@ -117,12 +117,17 @@ func main() {
 	cmdCreate.Flags().BoolP("update", "u", false, "update an existing problem")
 	cmdGrind.AddCommand(cmdCreate)
 
-	cmdInteract := &cobra.Command{
-		Use:   "shell",
-		Short: "launch a shell",
-		Run:   CommandInteract,
+	cmdAction := &cobra.Command{
+		Use:   "action",
+		Short: "launch a problem-type specific action",
+		Long: "   Give the name of the action to be performed. Your code\n" +
+			"   will be uploaded and the action will be initiated, and then you\n" +
+			"   can interact with the server if appropriate for the action\n\n" +
+			"   Example: grind action debug\n\n" +
+			"   Note: this has the side effect of saving your code.",
+		Run: CommandAction,
 	}
-	cmdGrind.AddCommand(cmdInteract)
+	cmdGrind.AddCommand(cmdAction)
 
 	cmdGrind.Execute()
 }

@@ -16,17 +16,24 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func CommandInteract(cmd *cobra.Command, args []string) {
+func CommandAction(cmd *cobra.Command, args []string) {
 	mustLoadConfig(cmd)
 	now := time.Now()
 
 	// find the directory
 	dir := ""
+	action := ""
 	switch len(args) {
 	case 0:
+		cmd.Help()
+		return
 		dir = "."
 	case 1:
-		dir = args[0]
+		action = args[0]
+		dir = "."
+	case 2:
+		action = args[0]
+		dir = args[1]
 	default:
 		cmd.Help()
 		return
@@ -37,11 +44,18 @@ func CommandInteract(cmd *cobra.Command, args []string) {
 	mustGetObject("/users/me", nil, user)
 
 	problem, _, commit, _ := gather(now, dir)
-	commit.Action = "shell"
-	commit.Note = "shell session from grind tool"
+	commit.Action = action
+	commit.Note = "grind tool session for action " + action
 	unsigned := &CommitBundle{
 		UserID: user.ID,
 		Commit: commit,
+	}
+
+	// get the problem type
+	problemType := new(ProblemType)
+	mustGetObject(fmt.Sprintf("/problem_types/%s", problem.ProblemType), nil, problemType)
+	if _, exists := problemType.Actions[action]; !exists {
+		log.Fatalf("the %s problem type does not have action %q", problem.ProblemType, action)
 	}
 
 	// send the commit bundle to the server
@@ -79,59 +93,59 @@ func runInteractiveSession(bundle *CommitBundle, args []string) {
 		return
 	}
 
-	/*
-		// start watching the keyboard
-		go func() {
-			scanner := bufio.NewScanner(os.Stdin)
-			for scanner.Scan() {
-				stdinReq := &DaycareRequest{Stdin: scanner.Text() + "\n"}
-				dumpOutgoing(stdinReq)
-				if err := socket.WriteJSON(stdinReq); err != nil {
-					log.Fatalf("error writing stdin request message: %v", err)
-				}
-			}
-			if err := scanner.Err(); err != nil {
-				log.Fatalf("error reading stdin: %v", err)
-			}
-			closeReq := &DaycareRequest{CloseStdin: true}
-			dumpOutgoing(closeReq)
-			if err := socket.WriteJSON(closeReq); err != nil {
-				log.Fatalf("error writing stdin EOF request message: %v", err)
-			}
-		}()
-	*/
-
 	// start watching the keyboard
 	if err := termbox.Init(); err != nil {
 		log.Printf("initializing keyboard: %v", err)
 		return
 	}
 	defer termbox.Close()
-	termbox.SetCursor(1, 1)
+
+	// show the cursor
+	fmt.Print("\033[?25h")
+
 	go func() {
 		for {
-			key := byte(0)
+			key := []byte{}
 			switch event := termbox.PollEvent(); event.Type {
 			case termbox.EventKey:
 				if event.Key > 0 && event.Key <= termbox.KeyBackspace2 {
-					key = byte(event.Key)
+					key = append(key, byte(event.Key))
 				} else if event.Ch != 0 {
-					key = byte(event.Ch)
+					key = append(key, byte(event.Ch))
 				} else {
+					// interpret some special keys using VT100 escape sequences
 					switch event.Key {
-					case termbox.KeyArrowLeft:
-						key = byte(termbox.KeyCtrlB)
+					case termbox.KeyArrowUp:
+						key = append(key, '\033', '[', 'A')
+					case termbox.KeyArrowDown:
+						key = append(key, '\033', '[', 'B')
 					case termbox.KeyArrowRight:
-						key = byte(termbox.KeyCtrlF)
+						key = append(key, '\033', '[', 'C')
+					case termbox.KeyArrowLeft:
+						key = append(key, '\033', '[', 'D')
+					case termbox.KeyInsert:
+						key = append(key, '\033', '[', '2', '~')
+					case termbox.KeyDelete:
+						key = append(key, '\033', '[', '3', '~')
+					case termbox.KeyHome:
+						key = append(key, '\033', '[', 'H')
+					case termbox.KeyEnd:
+						key = append(key, '\033', '[', 'F')
+					case termbox.KeyPgup:
+						key = append(key, '\033', '[', '5', '~')
+					case termbox.KeyPgdn:
+						key = append(key, '\033', '[', '6', '~')
 					}
 				}
-				if key > 0 {
-					stdinReq := &DaycareRequest{Stdin: string([]byte{key})}
+				if len(key) > 0 {
+					stdinReq := &DaycareRequest{Stdin: string(key)}
 					dumpOutgoing(stdinReq)
 					if err := socket.WriteJSON(stdinReq); err != nil {
 						log.Printf("error writing stdin request message: %v", err)
 						return
 					}
+				} else {
+					log.Printf("unimplemented input event %v", event)
 				}
 
 			case termbox.EventError:
