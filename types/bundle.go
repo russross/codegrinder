@@ -35,9 +35,10 @@ const MaxDaycareRequestAge = 15 * time.Minute
 // DaycareRequest represents a single request from a client to the daycare.
 // These objects are streamed across a websockets connection.
 type DaycareRequest struct {
-	CommitBundle *CommitBundle `json:"commitBundle,omitempty"`
-	Stdin        string        `json:"stdin,omitempty"`
-	CloseStdin   bool          `json:"closeStdin,omitempty"`
+	CommitBundle   *CommitBundle `json:"commitBundle,omitempty"`
+	Stdin          string        `json:"stdin,omitempty"`
+	CloseStdin     bool          `json:"closeStdin,omitempty"`
+	ResizeTerminal []int         `json:"resizeTerminal,omitempty"`
 }
 
 // DaycareResponse represents a single response from the daycare back to a client.

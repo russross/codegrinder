@@ -100,7 +100,17 @@ func runInteractiveSession(bundle *CommitBundle, args []string) {
 	}
 	defer termbox.Close()
 
-	// show the cursor
+	// get the terminal size
+	sizex, sizey := termbox.Size()
+	log.Printf("terminal size is %dχ%d", sizex, sizey)
+	resize := &DaycareRequest{ResizeTerminal: []int{sizex, sizex}}
+	dumpOutgoing(req)
+	if err := socket.WriteJSON(req); err != nil {
+		log.Printf("error writing resize message: %v", err)
+		return
+	}
+
+	// vt100 escape code to show the cursor
 	fmt.Print("\033[?25h")
 
 	go func() {
@@ -184,15 +194,17 @@ func runInteractiveSession(bundle *CommitBundle, args []string) {
 		case reply.Event != nil:
 			switch reply.Event.Event {
 			case "exec":
-				fmt.Printf("$ %s\n", strings.Join(reply.Event.ExecCommand, " "))
+				fmt.Printf("student$ %s\n", strings.Join(reply.Event.ExecCommand, " "))
 			case "stdin":
 				fmt.Printf("%s", reply.Event.StreamData)
 			case "stdout":
 				fmt.Printf("%s", reply.Event.StreamData)
 			case "stderr":
-				fmt.Printf("%s", reply.Event.StreamData)
+				fmt.Fprintf(os.Stderr, "%s", reply.Event.StreamData)
 			case "exit":
-				fmt.Printf("exit status %d\n", reply.Event.ExitStatus)
+				if reply.Event.ExitStatus != 0 {
+					fmt.Printf("exit status %d\n", reply.Event.ExitStatus)
+				}
 			case "error":
 				fmt.Printf("Error: %s\n", reply.Event.Error)
 			}
