@@ -158,14 +158,39 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	}
 
 	// launch a nanny process
-	nannyName := fmt.Sprintf("nanny-user-%d", req.CommitBundle.UserID)
+	nannyName := fmt.Sprintf("nanny-%d", req.CommitBundle.UserID)
 	log.Printf("launching container for %s", nannyName)
-	n, err := NewNanny(problemType, problem, nannyName)
+	n, err := NewNanny(problemType, problem, action.Interactive, nannyName)
 	if err != nil {
 		logAndTransmitErrorf("error creating container: %v", err)
 		return
 	}
 	rw := newReadWriteBuffer()
+
+	// watch for timeouts
+	alive := make(chan bool)
+	go func() {
+		duration := time.Duration(problemType.MaxTimeout) * time.Second
+		t := time.NewTimer(duration)
+
+		for alive != nil {
+			select {
+			case keepGoing := <-alive:
+				if !t.Stop() {
+					<-t.C
+				}
+				if keepGoing {
+					t.Reset(duration)
+				} else {
+					alive = nil
+				}
+			case <-t.C:
+				if err := n.Shutdown("timeout"); err != nil {
+					log.Printf("error shutting down container: %v", err)
+				}
+			}
+		}
+	}()
 
 	// relay stdin events from socket to the container through rw
 	go func() {
@@ -186,12 +211,14 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 				if _, err := rw.Write([]byte(msg.Stdin)); err != nil {
 					break
 				}
+				alive <- true
 			}
 			if msg.CloseStdin {
 				rw.MarkEOF()
 			}
 		}
 		rw.Close()
+		alive <- false
 
 		// if the connection closed on the client side, kill the container
 		if broken {
@@ -307,7 +334,7 @@ func getContainerID(msg string) string {
 	return groups[1]
 }
 
-func NewNanny(problemType *ProblemType, problem *Problem, name string) (*Nanny, error) {
+func NewNanny(problemType *ProblemType, problem *Problem, interactive bool, name string) (*Nanny, error) {
 	// create a container
 	mem := problemType.MaxMemory * 1024 * 1024
 	disk := problemType.MaxFileSize * 1024 * 1024
@@ -316,13 +343,17 @@ func NewNanny(problemType *ProblemType, problem *Problem, name string) (*Nanny, 
 		return nil, err
 	}
 
+	timeLimit := problemType.MaxCPU * 2
+	if interactive {
+		timeLimit = problemType.MaxSession
+	}
 	config := &docker.Config{
 		Hostname:        name,
 		User:            uidgid(uid),
 		Memory:          int64(mem),
 		MemorySwap:      -1,
-		Cmd:             []string{"/bin/sleep", strconv.FormatInt(problemType.MaxClock, 10) + "s"},
-		Env:             []string{"USER=student", "TERM=vt100", `PS1=\W\\$ `},
+		Cmd:             []string{"/bin/sleep", strconv.FormatInt(timeLimit, 10) + "s"},
+		Env:             []string{"USER=student", "TERM=vt100"},
 		Image:           problemType.Image,
 		NetworkDisabled: true,
 	}

@@ -26,7 +26,8 @@ type ProblemType struct {
 	Name        string                        `json:"name"`
 	Image       string                        `json:"image"`
 	MaxCPU      int64                         `json:"maxCPU"`
-	MaxClock    int64                         `json:"maxClock"`
+	MaxSession  int64                         `json:"maxSession"`
+	MaxTimeout  int64                         `json:"maxTimeout"`
 	MaxFD       int64                         `json:"maxFD"`
 	MaxFileSize int64                         `json:"maxFileSize"`
 	MaxMemory   int64                         `json:"maxMemory"`
@@ -38,11 +39,12 @@ type ProblemType struct {
 // ProblemTypeAction defines the label, button, UI classes, and handler for a
 // single problem type action.
 type ProblemTypeAction struct {
-	Action  string `json:"action,omitempty"`
-	Button  string `json:"button,omitempty"`
-	Message string `json:"message,omitempty"`
-	Class   string `json:"className,omitempty"`
-	Handler interface{}
+	Action      string `json:"action,omitempty"`
+	Button      string `json:"button,omitempty"`
+	Message     string `json:"message,omitempty"`
+	Class       string `json:"className,omitempty"`
+	Interactive bool   `json:"interactive,omitempty"`
+	Handler     interface{}
 }
 
 type Problem struct {
