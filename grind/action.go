@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -93,8 +92,7 @@ func runInteractiveSession(bundle *CommitBundle, args []string) {
 	if sizex > 0 && sizey > 0 {
 		log.Printf("terminal size is %d×%d", sizex, sizey)
 		vals := url.Values{}
-		vals.Set("sizex", strconv.Itoa(sizex))
-		vals.Set("sizey", strconv.Itoa(sizey))
+		vals.Set("termsize", fmt.Sprintf("%d,%d", sizex, sizey))
 		endpoint.RawQuery = vals.Encode()
 	}
 

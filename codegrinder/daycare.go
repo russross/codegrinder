@@ -263,9 +263,19 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 
 	// run the problem-type specific handler
 	r.ParseForm()
+	args := []string{}
+	for key, vals := range r.Form {
+		if len(vals) >= 1 {
+			args = append(args, key+"="+vals[0])
+		}
+	}
+
+	if len(args) > 0 {
+		log.Printf("args: %v", args)
+	}
 	handler, ok := action.Handler.(nannyHandler)
 	if ok {
-		handler(n, r.Form["args"], problem.Options, files, rw)
+		handler(n, args, problem.Options, files, rw)
 	} else {
 		logAndTransmitErrorf("handler for action %s is of wrong type", commit.Action)
 	}
