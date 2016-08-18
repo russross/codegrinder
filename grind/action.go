@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	termbox "github.com/nsf/termbox-go"
 	. "github.com/russross/codegrinder/types"
+	termbox "github.com/russross/termbox-go"
 	"github.com/spf13/cobra"
 )
 
@@ -161,41 +161,12 @@ func runInteractiveSession(bundle *CommitBundle, args []string) {
 		}
 	}()
 
-	/*
-		// start watching the keyboard
-		go func() {
-			oldState, err := terminal.MakeRaw(0)
-			if err != nil {
-				log.Fatalf("putting terminal into raw mode: %v", err)
-			}
-			defer terminal.Restore(0, oldState)
-
-			term := terminal.NewTerminal(os.Stdin, "")
-			for {
-				line, err := term.ReadLine()
-				if err != nil {
-					terminal.Restore(0, oldState)
-					log.Fatalf("error reading line: %v", err)
-				}
-				stdinReq := &DaycareRequest{Stdin: line + "\n"}
-				dumpOutgoing(stdinReq)
-				if err := socket.WriteJSON(stdinReq); err != nil {
-					log.Fatalf("error writing stdin request message: %v", err)
-				}
-			}
-			closeReq := &DaycareRequest{CloseStdin: true}
-			dumpOutgoing(closeReq)
-			if err := socket.WriteJSON(closeReq); err != nil {
-				log.Fatalf("error writing stdin EOF request message: %v", err)
-			}
-		}()
-	*/
-
 	// start listening for events
 	for {
 		reply := new(DaycareResponse)
 		if err := socket.ReadJSON(reply); err != nil {
-			log.Printf("socket error reading event: %v", err)
+			//log.Printf("socket error reading event: %v", err)
+			log.Printf("session closed by server")
 			return
 		}
 		dumpIncoming(reply)
@@ -231,8 +202,6 @@ func runInteractiveSession(bundle *CommitBundle, args []string) {
 			return
 		}
 	}
-
-	log.Printf("no commit returned from server")
 }
 
 func dumpOutgoing(msg interface{}) {

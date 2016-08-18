@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fatih/color"
 	"github.com/gorilla/websocket"
 	. "github.com/russross/codegrinder/types"
 	"github.com/russross/gcfg"
@@ -272,17 +271,17 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 			for _, event := range validated.Commit.Transcript {
 				switch event.Event {
 				case "exec":
-					color.Cyan("$ %s\n", strings.Join(event.ExecCommand, " "))
+					fmt.Printf("$ %s\n", strings.Join(event.ExecCommand, " "))
 				case "stdin":
-					color.Yellow("%s", event.StreamData)
+					fmt.Printf("%s", event.StreamData)
 				case "stdout":
-					color.White("%s", event.StreamData)
+					fmt.Printf("%s", event.StreamData)
 				case "stderr":
-					color.Red("%s", event.StreamData)
+					fmt.Printf("%s", event.StreamData)
 				case "exit":
-					color.Cyan("%s\n", event.ExitStatus)
+					fmt.Printf("%s\n", event.ExitStatus)
 				case "error":
-					color.Red("Error: %s\n", event.Error)
+					fmt.Printf("Error: %s\n", event.Error)
 				}
 			}
 			log.Fatalf("please fix solution and try again")
@@ -371,17 +370,17 @@ func mustConfirmCommitBundle(bundle *CommitBundle, args []string) *CommitBundle 
 			if verbose {
 				switch reply.Event.Event {
 				case "exec":
-					color.Cyan("$ %s\n", strings.Join(reply.Event.ExecCommand, " "))
+					fmt.Printf("$ %s\n", strings.Join(reply.Event.ExecCommand, " "))
 				case "stdin":
-					color.Yellow("%s", reply.Event.StreamData)
+					fmt.Printf("%s", reply.Event.StreamData)
 				case "stdout":
-					color.White("%s", reply.Event.StreamData)
+					fmt.Printf("%s", reply.Event.StreamData)
 				case "stderr":
-					color.Red("%s", reply.Event.StreamData)
+					fmt.Printf("%s", reply.Event.StreamData)
 				case "exit":
-					color.Cyan("exit: %s\n", reply.Event.ExitStatus)
+					fmt.Printf("exit: %s\n", reply.Event.ExitStatus)
 				case "error":
-					color.Red("Error: %s\n", reply.Event.Error)
+					fmt.Printf("Error: %s\n", reply.Event.Error)
 				}
 			}
 

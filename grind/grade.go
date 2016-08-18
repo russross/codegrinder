@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fatih/color"
 	. "github.com/russross/codegrinder/types"
 	"github.com/spf13/cobra"
 )
@@ -88,17 +87,17 @@ func CommandGrade(cmd *cobra.Command, args []string) {
 		for _, event := range commit.Transcript {
 			switch event.Event {
 			case "exec":
-				color.Cyan("$ %s\n", strings.Join(event.ExecCommand, " "))
+				fmt.Printf("$ %s\n", strings.Join(event.ExecCommand, " "))
 			case "stdin":
-				color.Yellow("%s", event.StreamData)
+				fmt.Printf("%s", event.StreamData)
 			case "stdout":
-				color.White("%s", event.StreamData)
+				fmt.Printf("%s", event.StreamData)
 			case "stderr":
-				color.Red("%s", event.StreamData)
+				fmt.Printf("%s", event.StreamData)
 			case "exit":
-				color.Cyan("%s\n", event.ExitStatus)
+				fmt.Printf("%s\n", event.ExitStatus)
 			case "error":
-				color.Red("Error: %s\n", event.Error)
+				fmt.Printf("Error: %s\n", event.Error)
 			}
 		}
 	}

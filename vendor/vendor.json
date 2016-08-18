@@ -99,12 +99,6 @@
 			"revisionTime": "2016-05-24T16:34:22Z"
 		},
 		{
-			"checksumSHA1": "gkRIq2AsG0e/ngNfqW+IF/zr9o8=",
-			"path": "github.com/fatih/color",
-			"revision": "87d4004f2ab62d0d255e0a38f1680aa534549fe3",
-			"revisionTime": "2016-06-10T11:06:02Z"
-		},
-		{
 			"checksumSHA1": "1gLLX9RmMeBaF2V/ls2DIWQj1OA=",
 			"path": "github.com/fsouza/go-dockerclient",
 			"revision": "9df1f25d542e79d7909ef321b5c13c5d34ea7f1d",
@@ -265,6 +259,12 @@
 			"path": "github.com/russross/meddler",
 			"revision": "f742b0f9424f3bfaffe189e921d734608929e84f",
 			"revisionTime": "2015-05-13T15:34:18Z"
+		},
+		{
+			"checksumSHA1": "W0r+n2/fzb16hZCu5FtceF7utCU=",
+			"path": "github.com/russross/termbox-go",
+			"revision": "e0512828ee5e336d7fe6921cfb1c52868176e565",
+			"revisionTime": "2016-08-18T21:10:16Z"
 		},
 		{
 			"checksumSHA1": "5SsK4Rr15FZgGP4zDjmKWHyKwp8=",
