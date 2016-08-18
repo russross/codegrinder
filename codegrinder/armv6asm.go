@@ -29,6 +29,12 @@ func init() {
 				Message: "Grading‥",
 				Handler: nannyHandler(asGTestGrade),
 			},
+			"shell": &ProblemTypeAction{
+				Action:  "shell",
+				Button:  "Ad hoc",
+				Message: "Running shell‥",
+				Handler: nannyHandler(asShell),
+			},
 		},
 	}
 }
@@ -108,7 +114,7 @@ func asCompileAndLink(n *Nanny, files map[string]string) {
 		cmd := []string{"as", "-g", "-march=armv6zk", "-mcpu=arm1176jzf-s", "-mfloat-abi=hard", "-mfpu=vfp", src, "-o", out}
 
 		// launch the assembler (ignore stdin)
-		_, _, _, status, err := n.ExecNonInteractive(cmd, nil)
+		_, _, _, status, err := n.Exec(cmd, nil, false)
 		if err != nil {
 			n.ReportCard.LogAndFailf("as exec error: %v", err)
 			return
@@ -124,7 +130,7 @@ func asCompileAndLink(n *Nanny, files map[string]string) {
 	cmd = append(cmd, objectFiles...)
 	cmd = append(cmd, testFiles...)
 	cmd = append(cmd, "-lgtest", "-lpthread")
-	_, _, _, status, err := n.ExecNonInteractive(cmd, nil)
+	_, _, _, status, err := n.Exec(cmd, nil, false)
 	if err != nil {
 		n.ReportCard.LogAndFailf("g++ exec error: %v", err)
 		return
@@ -139,7 +145,7 @@ func asCompileAndLink(n *Nanny, files map[string]string) {
 
 func gTestAOutCommon(n *Nanny, files map[string]string, stdin io.Reader) {
 	// run a.out with XML output
-	_, _, _, status, err := n.ExecNonInteractive([]string{"./a.out", "--gtest_output=xml"}, stdin)
+	_, _, _, status, err := n.Exec([]string{"./a.out", "--gtest_output=xml"}, stdin, false)
 
 	if err != nil {
 		n.ReportCard.LogAndFailf("Error running unit tests: %v", err)
@@ -193,5 +199,19 @@ func gTestAOutCommon(n *Nanny, files map[string]string, stdin io.Reader) {
 				n.ReportCard.AddFailedResult(name, details, ctx)
 			}
 		}
+	}
+}
+
+func asShell(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
+	log.Printf("as shell")
+
+	_, _, _, status, err := n.Exec([]string{"/bin/sh"}, stdin, true)
+	if err != nil {
+		n.ReportCard.LogAndFailf("error running bash: %v", err)
+		return
+	}
+	if status != 0 {
+		n.ReportCard.LogAndFailf("bash exited with status %d", status)
+		return
 	}
 }

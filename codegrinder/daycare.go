@@ -171,22 +171,23 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	go func() {
 		broken := false
 		for {
-			if err := socket.ReadJSON(req); err != nil {
+			msg := new(DaycareRequest)
+			if err := socket.ReadJSON(msg); err != nil {
 				log.Printf("websocket read error: %v", err)
 				broken = true
 				break
 			}
-			if req.CommitBundle != nil {
+			if msg.CommitBundle != nil {
 				logAndTransmitErrorf("unexpected commit bundle received from client; quitting")
 				broken = true
 				break
 			}
-			if len(req.Stdin) > 0 {
-				if _, err := rw.Write([]byte(req.Stdin)); err != nil {
+			if len(msg.Stdin) > 0 {
+				if _, err := rw.Write([]byte(msg.Stdin)); err != nil {
 					break
 				}
 			}
-			if req.CloseStdin {
+			if msg.CloseStdin {
 				rw.MarkEOF()
 			}
 		}
@@ -321,6 +322,7 @@ func NewNanny(problemType *ProblemType, problem *Problem, name string) (*Nanny, 
 		Memory:          int64(mem),
 		MemorySwap:      -1,
 		Cmd:             []string{"/bin/sleep", strconv.FormatInt(problemType.MaxClock, 10) + "s"},
+		Env:             []string{"USER=student", "TERM=vt100", `PS1=\W\\$ `},
 		Image:           problemType.Image,
 		NetworkDisabled: true,
 	}
@@ -627,7 +629,7 @@ func (out *execStderr) Write(data []byte) (n int, err error) {
 	return n, err
 }
 
-func (n *Nanny) ExecNonInteractive(cmd []string, stdin io.Reader) (stdout, stderr, script *bytes.Buffer, status int, err error) {
+func (n *Nanny) Exec(cmd []string, stdin io.Reader, useTTY bool) (stdout, stderr, script *bytes.Buffer, status int, err error) {
 	// log the event
 	n.Events <- &EventMessage{
 		Time:        time.Now(),
@@ -637,10 +639,10 @@ func (n *Nanny) ExecNonInteractive(cmd []string, stdin io.Reader) (stdout, stder
 
 	// create
 	exec, err := dockerClient.CreateExec(docker.CreateExecOptions{
-		AttachStdin:  false,
+		AttachStdin:  stdin != nil,
 		AttachStdout: true,
 		AttachStderr: true,
-		Tty:          false,
+		Tty:          useTTY,
 		Cmd:          cmd,
 		Container:    n.Container.ID,
 		User:         uidgid(n.UID),
@@ -656,11 +658,11 @@ func (n *Nanny) ExecNonInteractive(cmd []string, stdin io.Reader) (stdout, stder
 	// start
 	err = dockerClient.StartExec(exec.ID, docker.StartExecOptions{
 		Detach:       false,
-		Tty:          false,
+		Tty:          useTTY,
 		InputStream:  stdin,
 		OutputStream: (*execStdout)(&out),
 		ErrorStream:  (*execStderr)(&out),
-		RawTerminal:  false,
+		RawTerminal:  useTTY,
 	})
 	if err != nil {
 		return nil, nil, nil, -1, err
@@ -672,7 +674,7 @@ func (n *Nanny) ExecNonInteractive(cmd []string, stdin io.Reader) (stdout, stder
 		return nil, nil, nil, -1, err
 	}
 	if inspect.Running {
-		return nil, nil, nil, -1, fmt.Errorf("ExecNonInteractive: process still running")
+		return nil, nil, nil, -1, fmt.Errorf("process still running")
 	}
 
 	n.Events <- &EventMessage{

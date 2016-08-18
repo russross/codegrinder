@@ -148,9 +148,9 @@ func python2UnittestGrade(n *Nanny, args, options []string, files map[string]str
 	}
 
 	// launch the unit test runner (discard stdin)
-	_, stderr, _, status, err := n.ExecNonInteractive(
+	_, stderr, _, status, err := n.Exec(
 		[]string{"python", "-m", "unittest", "discover", "-vbs", "tests"},
-		nil)
+		nil, false)
 	if err != nil {
 		n.ReportCard.LogAndFailf("exec error: %v", err)
 		return
