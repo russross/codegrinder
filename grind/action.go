@@ -104,8 +104,8 @@ func runInteractiveSession(bundle *CommitBundle, args []string) {
 	sizex, sizey := termbox.Size()
 	log.Printf("terminal size is %dχ%d", sizex, sizey)
 	resize := &DaycareRequest{ResizeTerminal: []int{sizex, sizex}}
-	dumpOutgoing(req)
-	if err := socket.WriteJSON(req); err != nil {
+	dumpOutgoing(resize)
+	if err := socket.WriteJSON(resize); err != nil {
 		log.Printf("error writing resize message: %v", err)
 		return
 	}
