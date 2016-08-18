@@ -6,7 +6,9 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -71,11 +73,34 @@ func CommandAction(cmd *cobra.Command, args []string) {
 }
 
 func runInteractiveSession(bundle *CommitBundle, args []string) {
+	// initialize the terminal
+	if err := termbox.Init(); err != nil {
+		log.Printf("initializing terminal: %v", err)
+		return
+	}
+	defer termbox.Close()
+
 	headers := make(http.Header)
-	url := "wss://" + bundle.Hostname + "/v2/sockets/" + bundle.Problem.ProblemType + "/" + bundle.Commit.Action
-	socket, resp, err := websocket.DefaultDialer.Dial(url, headers)
+
+	endpoint := &url.URL{
+		Scheme: "wss",
+		Host:   bundle.Hostname,
+		Path:   "/v2/sockets/" + bundle.Problem.ProblemType + "/" + bundle.Commit.Action,
+	}
+
+	// get the terminal size
+	sizex, sizey := termbox.Size()
+	if sizex > 0 && sizey > 0 {
+		log.Printf("terminal size is %d×%d", sizex, sizey)
+		vals := url.Values{}
+		vals.Set("sizex", strconv.Itoa(sizex))
+		vals.Set("sizey", strconv.Itoa(sizey))
+		endpoint.RawQuery = vals.Encode()
+	}
+
+	socket, resp, err := websocket.DefaultDialer.Dial(endpoint.String(), headers)
 	if err != nil {
-		log.Printf("error dialing %s: %v", url, err)
+		log.Printf("error dialing: %v", err)
 		if resp != nil && resp.Body != nil {
 			io.Copy(os.Stderr, resp.Body)
 			resp.Body.Close()
@@ -90,23 +115,6 @@ func runInteractiveSession(bundle *CommitBundle, args []string) {
 	dumpOutgoing(req)
 	if err := socket.WriteJSON(req); err != nil {
 		log.Printf("error writing request message: %v", err)
-		return
-	}
-
-	// start watching the keyboard
-	if err := termbox.Init(); err != nil {
-		log.Printf("initializing keyboard: %v", err)
-		return
-	}
-	defer termbox.Close()
-
-	// get the terminal size
-	sizex, sizey := termbox.Size()
-	log.Printf("terminal size is %dχ%d", sizex, sizey)
-	resize := &DaycareRequest{ResizeTerminal: []int{sizex, sizex}}
-	dumpOutgoing(resize)
-	if err := socket.WriteJSON(resize); err != nil {
-		log.Printf("error writing resize message: %v", err)
 		return
 	}
 

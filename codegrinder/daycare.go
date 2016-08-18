@@ -216,14 +216,6 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 			if msg.CloseStdin {
 				rw.MarkEOF()
 			}
-			if len(msg.ResizeTerminal) == 2 {
-				x, y := msg.ResizeTerminal[0], msg.ResizeTerminal[1]
-				if x > 0 && x < 256 && y > 0 && y < 256 {
-					if err := n.ResizeTerminal(x, y); err != nil {
-						logAndTransmitErrorf("error resizing terminal to %dχ%d: %v", x, y, err)
-					}
-				}
-			}
 		}
 		rw.Close()
 		alive <- false
@@ -269,7 +261,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		eventListenerClosed <- struct{}{}
 	}()
 
-	// grade the problem
+	// run the problem-type specific handler
 	r.ParseForm()
 	handler, ok := action.Handler.(nannyHandler)
 	if ok {
@@ -321,16 +313,16 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 }
 
 type Nanny struct {
-	Name       string
-	Start      time.Time
-	Container  *docker.Container
-	UID        int64
-	ExecID     string
-	ReportCard *ReportCard
-	Input      chan string
-	Events     chan *EventMessage
-	Transcript []*EventMessage
-	Closed     bool
+	Name         string
+	Start        time.Time
+	Container    *docker.Container
+	UID          int64
+	SizeX, SizeY int
+	ReportCard   *ReportCard
+	Input        chan string
+	Events       chan *EventMessage
+	Transcript   []*EventMessage
+	Closed       bool
 }
 
 type nannyHandler func(nanny *Nanny, args, options []string, files map[string]string, stdin io.Reader)
@@ -692,7 +684,6 @@ func (n *Nanny) Exec(cmd []string, stdin io.Reader, useTTY bool) (stdout, stderr
 	if err != nil {
 		return nil, nil, nil, -1, err
 	}
-	n.ExecID = exec.ID
 
 	// gather output
 	var out execOutput
@@ -725,21 +716,8 @@ func (n *Nanny) Exec(cmd []string, stdin io.Reader, useTTY bool) (stdout, stderr
 		Event:      "exit",
 		ExitStatus: inspect.ExitCode,
 	}
-	n.ExecID = ""
 
 	return &out.stdout, &out.stderr, &out.script, inspect.ExitCode, nil
-}
-
-func (n *Nanny) ResizeTerminal(x, y int) error {
-	id := n.ExecID
-	if id == "" {
-		return fmt.Errorf("no command is currently running")
-	}
-	if err := dockerClient.ResizeExecTTY(id, y, x); err != nil {
-		return err
-	}
-	log.Printf("tty resized to %dχ%d", x, y)
-	return nil
 }
 
 var uidsInUse map[int64]bool = make(map[int64]bool)
