@@ -54,11 +54,13 @@ your GOPATH is set correctly.
 
 Fetch the CodeGrinder repository:
 
-    go get github.com/russross/codegrinder/...
+    mkdir -p $GOPATH/src/github.com/russross
+    cd $GOPATH/src/github.com/russross
+    git clone https://github.com/russross/codegrinder.git
 
 Build and install CodeGrinder:
 
-    $GOPATH/src/github.com/russross/build.sh
+    $GOPATH/src/github.com/russross/codegrinder/build.sh
 
 This creates two executables, `codegrinder` (the server) and `grind`
 (the command-line tool) and installs them both in `/usr/local/bin`.
@@ -91,17 +93,29 @@ Next, configure CodeGrinder:
     sudo chown username.username /etc/codegrinder
 
 Create a config file that is customized for your installation. It
-should be saved as `/etc/codegrinder/config.json` and contain the
-following:
+should be saved as `/etc/codegrinder/config.json` and its contents
+depend on what role this node will take. All nodes should contain
+the following:
 
     {
         "Hostname": "your.domain.name",
-        "LetsEncryptEmail": "yourname@domain.com",
+        "DaycareSecret": "",
+        "LetsEncryptEmail": "yourname@domain.com"
+    }
+
+For the node running the TA role, you should add these keys:
+
         "LTISecret": "",
         "SessionSecret": "",
-        "DaycareSecret": "",
-        "StaticDir": "/home/username/src/github.com/russross/codegrinder/client"
-    }
+        "StaticDir": "/home/username/src/github.com/russross/codegrinder/client",
+
+and for nodes running the daycare role, you should add these keys:
+
+        "MainHostname": "your.ta.domain.name",
+        "Capacity": 1,
+        "ProblemTypes": [
+            "python27unittest"
+        ],
 
 Put in your domain name and the contact email to use when
 registering TLS certificates with LetsEncrypt. For the secrets,
@@ -111,7 +125,8 @@ generate each one using:
 
 Run that command once and copy the output into the `LTISecret`, then
 run it again and copy the output to `SessionSecret`, then run it a
-third time and copy the output to `DaycareSecret`.
+third time and copy the output to `DaycareSecret`. The
+`DaycareSecret` value must be shared by all nodes.
 
 The `StaticDir` field is where the client code resides. It does not
 exist right now, so this setting is not too important yet. The
@@ -126,9 +141,19 @@ the config file.
 
 At this point, you should be able to run the server:
 
-    codegrinder
+    codegrinder -ta
 
-Leave it running in a terminal so you can watch the log output.`
+Leave it running in a terminal so you can watch the log output.
+
+For normal use, you will want systemd to manage it:
+
+    sudo cp $GOPATH/src/github.com/russross/codegrinder/setup/codegrinder.service /lib/systemd/system
+
+Then edit the file you have copied to customize it. In particular,
+set the options in the executable to run as -ta, -daycare, or both,
+and in the dependencies section, comment out the postgresql
+dependency if this is not a TA role, and the docker dependency if
+this is not a daycare role.
 
 Contact me directly for help with installation. At this early stage,
 I will probably only respond if I know you personally, but as I get

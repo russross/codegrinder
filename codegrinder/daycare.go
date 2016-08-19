@@ -102,23 +102,9 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	}
 
 	// gather any args
-	sizex, sizey := 0, 0
 	r.ParseForm()
 	args := []string{}
 	for key, vals := range r.Form {
-		// we handle termsize here, so pick it out and do not pass it on
-		if key == "termsize" && len(vals) == 1 {
-			parts := strings.Split(vals[0], ",")
-			if len(parts) == 2 {
-				x, err1 := strconv.Atoi(parts[0])
-				y, err2 := strconv.Atoi(parts[1])
-				if err1 == nil && err2 == nil && x > 0 && y > 0 {
-					sizex = x
-					sizey = y
-					continue
-				}
-			}
-		}
 		if len(vals) == 1 {
 			args = append(args, key+"="+vals[0])
 		}
@@ -186,7 +172,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	// launch a nanny process
 	nannyName := fmt.Sprintf("nanny-%d", req.CommitBundle.UserID)
 	log.Printf("launching container for %s", nannyName)
-	n, err := NewNanny(problemType, problem, action.Interactive, sizex, sizey, nannyName)
+	n, err := NewNanny(problemType, problem, action.Interactive, args, nannyName)
 	if err != nil {
 		logAndTransmitErrorf("error creating container: %v", err)
 		return
@@ -368,7 +354,7 @@ func getContainerID(msg string) string {
 	return groups[1]
 }
 
-func NewNanny(problemType *ProblemType, problem *Problem, interactive bool, sizex, sizey int, name string) (*Nanny, error) {
+func NewNanny(problemType *ProblemType, problem *Problem, interactive bool, args []string, name string) (*Nanny, error) {
 	// create a container
 	mem := problemType.MaxMemory * 1024 * 1024
 	disk := problemType.MaxFileSize * 1024 * 1024
@@ -387,13 +373,22 @@ func NewNanny(problemType *ProblemType, problem *Problem, interactive bool, size
 		Memory:          int64(mem),
 		MemorySwap:      -1,
 		Cmd:             []string{"/bin/sleep", strconv.FormatInt(timeLimit, 10) + "s"},
-		Env:             []string{"USER=student", "TERM=vt100"},
+		Env:             []string{"USER=student", "HOME=/home/student"},
 		Image:           problemType.Image,
 		NetworkDisabled: true,
 	}
-	if sizex > 0 && sizey > 0 {
-		config.Env = append(config.Env, fmt.Sprintf("COLUMNS=%d", sizex), fmt.Sprintf("LINES=%d", sizey))
+	for _, s := range args {
+		if strings.HasPrefix(s, "COLUMNS=") {
+			config.Env = append(config.Env, s)
+		}
+		if strings.HasPrefix(s, "LINES=") {
+			config.Env = append(config.Env, s)
+		}
+		if strings.HasPrefix(s, "TERM=") {
+			config.Env = append(config.Env, s)
+		}
 	}
+
 	hostConfig := &docker.HostConfig{
 		CapDrop: []string{
 			"NET_RAW",

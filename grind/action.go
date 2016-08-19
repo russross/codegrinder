@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -80,19 +81,23 @@ func runInteractiveSession(bundle *CommitBundle, args []string) {
 	defer termbox.Close()
 
 	headers := make(http.Header)
-
-	endpoint := &url.URL{
-		Scheme: "wss",
-		Host:   bundle.Hostname,
-		Path:   "/v2/sockets/" + bundle.Problem.ProblemType + "/" + bundle.Commit.Action,
-	}
+	vals := url.Values{}
 
 	// get the terminal size
 	sizex, sizey := termbox.Size()
 	if sizex > 0 && sizey > 0 {
-		vals := url.Values{}
-		vals.Set("termsize", fmt.Sprintf("%d,%d", sizex, sizey))
-		endpoint.RawQuery = vals.Encode()
+		vals.Set("COLUMNS", strconv.Itoa(sizex))
+		vals.Set("LINES", strconv.Itoa(sizey))
+	}
+	if term := os.Getenv("TERM"); term != "" {
+		vals.Set("TERM", term)
+	}
+
+	endpoint := &url.URL{
+		Scheme:   "wss",
+		Host:     bundle.Hostname,
+		Path:     "/v2/sockets/" + bundle.Problem.ProblemType + "/" + bundle.Commit.Action,
+		RawQuery: vals.Encode(),
 	}
 
 	socket, resp, err := websocket.DefaultDialer.Dial(endpoint.String(), headers)
@@ -199,7 +204,7 @@ func runInteractiveSession(bundle *CommitBundle, args []string) {
 		case reply.Event != nil:
 			switch reply.Event.Event {
 			case "exec":
-				fmt.Printf("student$ %s\n", strings.Join(reply.Event.ExecCommand, " "))
+				fmt.Printf("$ %s\n", strings.Join(reply.Event.ExecCommand, " "))
 			case "stdin":
 				fmt.Printf("%s", reply.Event.StreamData)
 			case "stdout":
