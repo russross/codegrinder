@@ -72,7 +72,7 @@ func standardMLUnittestGrade(n *Nanny, args, options []string, files map[string]
 var standardMLRunAOut = `#!/bin/bash
 set -e
 echo ';' > /tmp/semi
-cat *.sml /tmp/semi | poly
+cat *.sml /tmp/semi - | poly
 `
 
 func standardMLRun(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
