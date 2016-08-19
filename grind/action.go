@@ -27,8 +27,6 @@ func CommandAction(cmd *cobra.Command, args []string) {
 	action := ""
 	switch len(args) {
 	case 0:
-		cmd.Help()
-		return
 		dir = "."
 	case 1:
 		action = args[0]
@@ -57,7 +55,14 @@ func CommandAction(cmd *cobra.Command, args []string) {
 	problemType := new(ProblemType)
 	mustGetObject(fmt.Sprintf("/problem_types/%s", problem.ProblemType), nil, problemType)
 	if _, exists := problemType.Actions[action]; !exists {
-		log.Fatalf("the %s problem type does not have action %q", problem.ProblemType, action)
+		log.Printf("available actions for problem type %s:", problem.ProblemType)
+		for elt := range problemType.Actions {
+			if elt == "grade" {
+				continue
+			}
+			log.Printf("   %s", elt)
+		}
+		log.Fatalf("use 'grind action <action>' to initiate an action")
 	}
 
 	// send the commit bundle to the server

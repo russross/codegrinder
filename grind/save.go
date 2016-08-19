@@ -158,7 +158,7 @@ func findDotFile(startDir string) (dotfile *DotFileInfo, problemSetDir, problemD
 				if problemSetDir == problemDir {
 					log.Fatalf("unable to find %s in %s or an ancestor directory", perProblemSetDotFile, startDir)
 				}
-				log.Printf("could not find %s in %s, trying %s", perProblemSetDotFile, problemDir, problemSetDir)
+				// log.Printf("could not find %s in %s, trying %s", perProblemSetDotFile, problemDir, problemSetDir)
 				continue
 			}
 
