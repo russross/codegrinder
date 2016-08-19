@@ -68,10 +68,12 @@ It also gives `codegrinder` the capability to bind to low-numbered
 ports, so CodeGrinder does not need any other special privileges to
 run. It should NOT be run as root.
 
-Install PostgreSQL version 9.4 or higher. Run psql as the postgres
-user (the default admin user for PostgreSQL) and create the user and
-database for CodeGrinder. Substitute your username wherever you see
-`username` below.
+Install PostgreSQL version 9.4 or higher. Note that you only need
+PostgreSQL on the TA node.
+
+Run psql as the postgres user (the default admin user for
+PostgreSQL) and create the user and database for CodeGrinder.
+Substitute your username wherever you see `username` below.
 
     sudo -u postgres psql
 
@@ -87,6 +89,10 @@ the database schema:
 
     psql < $GOPATH/src/github.com/russross/codegrinder/setup/schema.sql
 
+Install and configure Docker, and add your CodeGrinder user to the
+docker group so it can manage containers without being root. Note
+that you only need this on daycare nodes.
+
 Next, configure CodeGrinder:
 
     sudo mkdir /etc/codegrinder
@@ -98,22 +104,22 @@ depend on what role this node will take. All nodes should contain
 the following:
 
     {
-        "Hostname": "your.domain.name",
-        "DaycareSecret": "",
-        "LetsEncryptEmail": "yourname@domain.com"
+        "hostname": "your.domain.name",
+        "daycareSecret": "",
+        "letsEncryptEmail": "yourname@domain.com"
     }
 
 For the node running the TA role, you should add these keys:
 
-        "LTISecret": "",
-        "SessionSecret": "",
-        "StaticDir": "/home/username/src/github.com/russross/codegrinder/client",
+        "ltiSecret": "",
+        "sessionSecret": "",
+        "staticDir": "/home/username/src/github.com/russross/codegrinder/client",
 
 and for nodes running the daycare role, you should add these keys:
 
-        "MainHostname": "your.ta.domain.name",
-        "Capacity": 1,
-        "ProblemTypes": [
+        "taHostname": "your.ta.domain.name",
+        "capacity": 1,
+        "problemTypes": [
             "python27unittest"
         ],
 
@@ -123,12 +129,12 @@ generate each one using:
 
     head -c 32 /dev/urandom | base64
 
-Run that command once and copy the output into the `LTISecret`, then
-run it again and copy the output to `SessionSecret`, then run it a
-third time and copy the output to `DaycareSecret`. The
-`DaycareSecret` value must be shared by all nodes.
+Run that command once and copy the output into the `ltiSecret`, then
+run it again and copy the output to `sessionSecret`, then run it a
+third time and copy the output to `daycareSecret`. The
+`daycareSecret` value must be shared by all nodes.
 
-The `StaticDir` field is where the client code resides. It does not
+The `staticDir` field is where the client code resides. It does not
 exist right now, so this setting is not too important yet. The
 CodeGrinder TA server will serve any static files in the given
 directory.
