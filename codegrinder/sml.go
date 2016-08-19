@@ -44,7 +44,7 @@ func init() {
 	}
 }
 
-var standardMLaout = `#!/bin/bash
+var standardMLGradeAOut = `#!/bin/bash
 set -e
 ln -s tests/*.sml ./
 rm -f test_detail.xml
@@ -55,7 +55,7 @@ func standardMLUnittestGrade(n *Nanny, args, options []string, files map[string]
 	log.Printf("standard ML unit test grade")
 
 	// create an a.out file
-	if err := n.PutFiles(map[string]string{"a.out": standardMLaout}); err != nil {
+	if err := n.PutFiles(map[string]string{"a.out": standardMLGradeAOut}); err != nil {
 		n.ReportCard.LogAndFailf("error creating a.out: %v", err)
 		return
 	}
@@ -69,7 +69,7 @@ func standardMLUnittestGrade(n *Nanny, args, options []string, files map[string]
 	gTestAOutCommon(n, files, nil)
 }
 
-var standardMLRunaout = `#!/bin/bash
+var standardMLRunAOut = `#!/bin/bash
 set -e
 echo ';' > /tmp/semi
 cat *.sml /tmp/semi | poly
@@ -79,7 +79,7 @@ func standardMLRun(n *Nanny, args, options []string, files map[string]string, st
 	log.Printf("standard ML run")
 
 	// create an a.out file
-	if err := n.PutFiles(map[string]string{"a.out": standardMLaout}); err != nil {
+	if err := n.PutFiles(map[string]string{"a.out": standardMLRunAOut}); err != nil {
 		n.ReportCard.LogAndFailf("error creating a.out: %v", err)
 		return
 	}
