@@ -30,57 +30,48 @@ func init() {
 				Action:  "grade",
 				Button:  "Grade",
 				Message: "Grading‥",
-				Class:   "btn-grade",
-				Handler: nannyHandler(python2UnittestGrade),
+				Handler: nannyHandler(python27UnittestGrade),
 			},
-			"": &ProblemTypeAction{
-				Action: "",
-				Button: "Save",
-				Class:  "btn-save",
-			},
-			"interactive": &ProblemTypeAction{
-				Action:  "interactive",
+			"run": &ProblemTypeAction{
+				Action:  "run",
 				Button:  "Run",
 				Message: "Running %s‥",
-				Class:   "btn-run",
-				//handler: autoHandler(python27Interactive),
+				Handler: nannyHandler(python27Run),
 			},
 			"debug": &ProblemTypeAction{
 				Action:  "debug",
 				Button:  "Debug",
 				Message: "Running debugger on %s‥",
-				Class:   "btn-debug",
-				//handler: autoHandler(python27Debug),
+				Handler: nannyHandler(python27Debug),
 			},
-			"adhoc": &ProblemTypeAction{
-				Action:  "adhoc",
+			"shell": &ProblemTypeAction{
+				Action:  "shell",
 				Button:  "Shell",
 				Message: "Running Python shell‥",
-				Class:   "btn-shell",
-				//handler: autoHandler(python27Adhoc),
+				Handler: nannyHandler(python27Shell),
 			},
-			"stylecheck": &ProblemTypeAction{
-				Action:  "stylecheck",
-				Button:  "Check style",
-				Message: "Checking for pep8 style problems‥",
-				//handler: autoHandler(python27StyleCheck),
-			},
-			"stylefix": &ProblemTypeAction{
-				Action:  "stylefix",
-				Button:  "Fix style",
-				Message: "Auto-correcting pep8 style problems‥",
-				//handler: autoHandler(python27StyleFix),
-			},
-			"confirm": &ProblemTypeAction{
-				Action:  "confirm",
-				Handler: nannyHandler(python2UnittestGrade),
-			},
+			/*
+				"stylecheck": &ProblemTypeAction{
+					Action:  "stylecheck",
+					Button:  "Check style",
+					Message: "Checking for pep8 style problems‥",
+					Handler: nannyHandler(python27StyleCheck),
+				},
+				"stylefix": &ProblemTypeAction{
+					Action:  "stylefix",
+					Button:  "Fix style",
+					Message: "Auto-correcting pep8 style problems‥",
+					Handler: nannyHandler(python27StyleFix),
+				},
+			*/
 		},
 	}
-	problemTypes["python27inout"] = &ProblemType{
-		Name:        "python27inout",
+	problemTypes["python34unittest"] = &ProblemType{
+		Name:        "python34unittest",
 		Image:       "codegrinder/python",
 		MaxCPU:      10,
+		MaxSession:  30 * 60,
+		MaxTimeout:  5 * 60,
 		MaxFD:       10,
 		MaxFileSize: 10,
 		MaxMemory:   32,
@@ -90,61 +81,60 @@ func init() {
 				Action:  "grade",
 				Button:  "Grade",
 				Message: "Grading‥",
-				Class:   "btn-grade",
-				//handler: autoHandler(python27InOutGrade),
+				Handler: nannyHandler(python34UnittestGrade),
 			},
-			"": &ProblemTypeAction{
-				Action: "",
-				Button: "Save",
-				Class:  "btn-save",
-			},
-			"interactive": &ProblemTypeAction{
-				Action:  "interactive",
+			"run": &ProblemTypeAction{
+				Action:  "run",
 				Button:  "Run",
 				Message: "Running %s‥",
-				Class:   "btn-run",
-				//handler: autoHandler(python27Interactive),
+				Handler: nannyHandler(python34Run),
 			},
 			"debug": &ProblemTypeAction{
 				Action:  "debug",
 				Button:  "Debug",
 				Message: "Running debugger on %s‥",
-				Class:   "btn-debug",
-				//handler: autoHandler(python27Debug),
+				Handler: nannyHandler(python34Debug),
 			},
-			"adhoc": &ProblemTypeAction{
-				Action:  "adhoc",
+			"shell": &ProblemTypeAction{
+				Action:  "shell",
 				Button:  "Shell",
 				Message: "Running Python shell‥",
-				Class:   "btn-shell",
-				//handler: autoHandler(python27Adhoc),
+				Handler: nannyHandler(python34Shell),
 			},
-			"stylecheck": &ProblemTypeAction{
-				Action:  "stylecheck",
-				Button:  "Check style",
-				Message: "Checking for pep8 style problems‥",
-				//handler: autoHandler(python27StyleCheck),
-			},
-			"stylefix": &ProblemTypeAction{
-				Action:  "stylefix",
-				Button:  "Fix style",
-				Message: "Auto-correcting pep8 style problems‥",
-				//handler: autoHandler(python27StyleFix),
-			},
-			"_setup": &ProblemTypeAction{
-				Action: "_setup",
-				//handler: autoHandler(python27InOutSetup),
-			},
+			/*
+				"stylecheck": &ProblemTypeAction{
+					Action:  "stylecheck",
+					Button:  "Check style",
+					Message: "Checking for pep8 style problems‥",
+					Handler: nannyHandler(python34StyleCheck),
+				},
+				"stylefix": &ProblemTypeAction{
+					Action:  "stylefix",
+					Button:  "Fix style",
+					Message: "Auto-correcting pep8 style problems‥",
+					Handler: nannyHandler(python34StyleFix),
+				},
+			*/
 		},
 	}
 }
 
-func python2UnittestGrade(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
-	log.Printf("python2 unittest grade")
+func python27UnittestGrade(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
+	log.Printf("python 2.7 unit test grade")
 
+	pythonUnittestGrade(n, args, options, files, stdin, "2.7")
+}
+
+func python34UnittestGrade(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
+	log.Printf("python 3.4 unit test grade")
+
+	pythonUnittestGrade(n, args, options, files, stdin, "3.4")
+}
+
+func pythonUnittestGrade(n *Nanny, args, options []string, files map[string]string, stdin io.Reader, suffix string) {
 	// launch the unit test runner (discard stdin)
 	_, stderr, _, status, err := n.Exec(
-		[]string{"python", "-m", "unittest", "discover", "-vbs", "tests"},
+		[]string{"python" + suffix, "-m", "unittest", "discover", "-vbs", "tests"},
 		nil, false)
 	if err != nil {
 		n.ReportCard.LogAndFailf("exec error: %v", err)
@@ -270,4 +260,127 @@ func python2UnittestGrade(n *Nanny, args, options []string, files map[string]str
 			n.ReportCard.Note += fmt.Sprintf(", exit status %d", status)
 		}
 	}
+}
+
+func python27Run(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
+	log.Printf("python 2.7 run")
+
+	exec, err := pythonGetExecArgs([]string{"python2.7", "-i"}, args, files)
+	if err != nil {
+		n.ReportCard.LogAndFailf("%v", err)
+		return
+	}
+
+	// launch the student's code
+	n.ExecSimple(exec, stdin, true)
+}
+
+func python34Run(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
+	log.Printf("python 3.4 run")
+
+	exec, err := pythonGetExecArgs([]string{"python3.4", "-i"}, args, files)
+	if err != nil {
+		n.ReportCard.LogAndFailf("%v", err)
+		return
+	}
+
+	// launch the student's code
+	n.ExecSimple(exec, stdin, true)
+}
+
+func python27Debug(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
+	log.Printf("python 2.7 debug")
+
+	exec, err := pythonGetExecArgs([]string{"pdb2.7"}, args, files)
+	if err != nil {
+		n.ReportCard.LogAndFailf("%v", err)
+		return
+	}
+
+	// launch the student's code
+	n.ExecSimple(exec, stdin, true)
+}
+
+func python34Debug(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
+	log.Printf("python 3.4 debug")
+
+	exec, err := pythonGetExecArgs([]string{"pdb3.4"}, args, files)
+	if err != nil {
+		n.ReportCard.LogAndFailf("%v", err)
+		return
+	}
+
+	// launch the student's code
+	n.ExecSimple(exec, stdin, true)
+}
+
+func python27Shell(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
+	log.Printf("python 2.7 shell")
+
+	n.ExecSimple([]string{"python2.7"}, stdin, true)
+}
+
+func python34Shell(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
+	log.Printf("python 3.4 shell")
+
+	n.ExecSimple([]string{"python3.4"}, stdin, true)
+}
+
+func pythonGetExecArgs(exec, args []string, files map[string]string) ([]string, error) {
+	// was it handed in?
+	for _, elt := range args {
+		parts := strings.SplitN(elt, "=", 2)
+		if len(parts) != 2 || parts[0] != "SCRIPT" {
+			continue
+		}
+		exec = append(exec, parts[1])
+		return exec, nil
+	}
+
+	// fallback: scan for *.py files
+	py := []string{}
+	for path := range files {
+		dir, file := filepath.Split(path)
+		if dir == "" && filepath.Ext(file) == ".py" {
+			py = append(py, path)
+		}
+	}
+
+	// only one? run it
+	if len(py) == 1 {
+		exec = append(exec, py[0])
+		return exec, nil
+	}
+
+	// cam we find one called main.py?
+	for _, elt := range py {
+		if elt == "main.py" {
+			exec = append(exec, elt)
+			return exec, nil
+		}
+	}
+
+	// does exactly one have a function called main?
+	gotmain := ""
+	for _, elt := range py {
+		file := files[elt]
+		found, err := regexp.MatchString(`\bdef main\b`, file)
+		if err != nil {
+			return nil, fmt.Errorf("regexp error searching for 'def main' in file %s: %v", elt, err)
+		}
+		if !found {
+			continue
+		}
+
+		if gotmain != "" {
+			return nil, fmt.Errorf("unable to find script to run: multiple scripts with 'def main'")
+		}
+		gotmain = elt
+	}
+	if gotmain != "" {
+		exec = append(exec, gotmain)
+		return exec, nil
+	}
+
+	return nil, fmt.Errorf("unable to find script to run")
 }

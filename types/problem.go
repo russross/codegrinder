@@ -42,7 +42,6 @@ type ProblemTypeAction struct {
 	Action      string      `json:"action,omitempty"`
 	Button      string      `json:"button,omitempty"`
 	Message     string      `json:"message,omitempty"`
-	Class       string      `json:"className,omitempty"`
 	Interactive bool        `json:"interactive,omitempty"`
 	Handler     interface{} `json:"-"`
 }
