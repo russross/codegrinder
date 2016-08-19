@@ -279,6 +279,12 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		eventListenerClosed <- struct{}{}
 	}()
 
+	// copy the files to the container
+	if err = n.PutFiles(files); err != nil {
+		n.ReportCard.LogAndFailf("PutFiles error: %v", err)
+		return
+	}
+
 	// run the problem-type specific handler
 	handler, ok := action.Handler.(nannyHandler)
 	if ok {
@@ -747,6 +753,20 @@ func (n *Nanny) Exec(cmd []string, stdin io.Reader, useTTY bool) (stdout, stderr
 	}
 
 	return &out.stdout, &out.stderr, &out.script, inspect.ExitCode, nil
+}
+
+func (n *Nanny) ExecSimple(cmd []string, stdin io.Reader, useTTY bool) error {
+	_, _, _, status, err := n.Exec(cmd, stdin, useTTY)
+	if err != nil {
+		n.ReportCard.LogAndFailf("%s exec error: %v", cmd[0], err)
+		return err
+	}
+	if status != 0 {
+		err := fmt.Errorf("%s failed with exit code %d", cmd[0], status)
+		n.ReportCard.LogAndFailf("%v", err)
+		return err
+	}
+	return nil
 }
 
 var uidsInUse map[int64]bool = make(map[int64]bool)

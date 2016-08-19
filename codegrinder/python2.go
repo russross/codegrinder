@@ -17,7 +17,7 @@ const workingDir = "/home/student"
 func init() {
 	problemTypes["python27unittest"] = &ProblemType{
 		Name:        "python27unittest",
-		Image:       "codegrinder/python2",
+		Image:       "codegrinder/python",
 		MaxCPU:      10,
 		MaxSession:  30 * 60,
 		MaxTimeout:  5 * 60,
@@ -79,7 +79,7 @@ func init() {
 	}
 	problemTypes["python27inout"] = &ProblemType{
 		Name:        "python27inout",
-		Image:       "codegrinder/python2",
+		Image:       "codegrinder/python",
 		MaxCPU:      10,
 		MaxFD:       10,
 		MaxFileSize: 10,
@@ -141,12 +141,6 @@ func init() {
 
 func python2UnittestGrade(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
 	log.Printf("python2 unittest grade")
-
-	// put the files in the container
-	if err := n.PutFiles(files); err != nil {
-		n.ReportCard.LogAndFailf("PutFiles error: %v", err)
-		return
-	}
 
 	// launch the unit test runner (discard stdin)
 	_, stderr, _, status, err := n.Exec(

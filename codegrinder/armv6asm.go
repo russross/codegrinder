@@ -88,12 +88,6 @@ type GTestFailure struct {
 func asGTestGrade(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
 	log.Printf("arm as gTest grade")
 
-	// put the files in the container
-	if err := n.PutFiles(files); err != nil {
-		n.ReportCard.LogAndFailf("PutFiles error: %v", err)
-		return
-	}
-
 	asCompileAndLink(n, files)
 	if !n.ReportCard.Passed {
 		return
@@ -132,13 +126,7 @@ func asCompileAndLink(n *Nanny, files map[string]string) {
 		cmd := []string{"as", "-g", "-march=armv6zk", "-mcpu=arm1176jzf-s", "-mfloat-abi=hard", "-mfpu=vfp", src, "-o", out}
 
 		// launch the assembler (ignore stdin)
-		_, _, _, status, err := n.Exec(cmd, nil, false)
-		if err != nil {
-			n.ReportCard.LogAndFailf("as exec error: %v", err)
-			return
-		}
-		if status != 0 {
-			n.ReportCard.LogAndFailf("as failed on %s with exit code %d", src, status)
+		if err := n.ExecSimple(cmd, nil, false); err != nil {
 			return
 		}
 	}
@@ -148,13 +136,7 @@ func asCompileAndLink(n *Nanny, files map[string]string) {
 	cmd = append(cmd, objectFiles...)
 	cmd = append(cmd, testFiles...)
 	cmd = append(cmd, "-lgtest", "-lpthread")
-	_, _, _, status, err := n.Exec(cmd, nil, false)
-	if err != nil {
-		n.ReportCard.LogAndFailf("g++ exec error: %v", err)
-		return
-	}
-	if status != 0 {
-		n.ReportCard.LogAndFailf("g++ failed with exit code %d", status)
+	if err := n.ExecSimple(cmd, nil, false); err != nil {
 		return
 	}
 
@@ -223,25 +205,11 @@ func gTestAOutCommon(n *Nanny, files map[string]string, stdin io.Reader) {
 func asShell(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
 	log.Printf("arm bash shell")
 
-	_, _, _, status, err := n.Exec([]string{"/bin/bash"}, stdin, true)
-	if err != nil {
-		n.ReportCard.LogAndFailf("error running bash: %v", err)
-		return
-	}
-	if status != 0 {
-		n.ReportCard.LogAndFailf("bash exited with status %d", status)
-		return
-	}
+	n.ExecSimple([]string{"/bin/bash"}, stdin, true)
 }
 
 func asGdb(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
 	log.Printf("arm as gdb")
-
-	// put the files in the container
-	if err := n.PutFiles(files); err != nil {
-		n.ReportCard.LogAndFailf("PutFiles error: %v", err)
-		return
-	}
 
 	// gather list of *.s files
 	var sourceFiles []string
@@ -264,13 +232,7 @@ func asGdb(n *Nanny, args, options []string, files map[string]string, stdin io.R
 		cmd := []string{"as", "-g", "-march=armv6zk", "-mcpu=arm1176jzf-s", "-mfloat-abi=hard", "-mfpu=vfp", src, "-o", out}
 
 		// launch the assembler (ignore stdin)
-		_, _, _, status, err := n.Exec(cmd, nil, false)
-		if err != nil {
-			n.ReportCard.LogAndFailf("as exec error: %v", err)
-			return
-		}
-		if status != 0 {
-			n.ReportCard.LogAndFailf("as failed on %s with exit code %d", src, status)
+		if err := n.ExecSimple(cmd, nil, false); err != nil {
 			return
 		}
 	}
@@ -278,24 +240,10 @@ func asGdb(n *Nanny, args, options []string, files map[string]string, stdin io.R
 	// link
 	cmd := []string{"ld"}
 	cmd = append(cmd, objectFiles...)
-	_, _, _, status, err := n.Exec(cmd, nil, false)
-	if err != nil {
-		n.ReportCard.LogAndFailf("ld exec error: %v", err)
-		return
-	}
-	if status != 0 {
-		n.ReportCard.LogAndFailf("ld failed with exit code %d", status)
+	if err := n.ExecSimple(cmd, nil, false); err != nil {
 		return
 	}
 
 	// run gdb
-	_, _, _, status, err = n.Exec([]string{"gdb", "a.out"}, stdin, true)
-	if err != nil {
-		n.ReportCard.LogAndFailf("error running gdb: %v", err)
-		return
-	}
-	if status != 0 {
-		n.ReportCard.LogAndFailf("gdb exited with status %d", status)
-		return
-	}
+	n.ExecSimple([]string{"gdb", "a.out"}, stdin, true)
 }
