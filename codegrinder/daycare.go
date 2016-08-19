@@ -345,16 +345,15 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 }
 
 type Nanny struct {
-	Name         string
-	Start        time.Time
-	Container    *docker.Container
-	UID          int64
-	SizeX, SizeY int
-	ReportCard   *ReportCard
-	Input        chan string
-	Events       chan *EventMessage
-	Transcript   []*EventMessage
-	Closed       bool
+	Name       string
+	Start      time.Time
+	Container  *docker.Container
+	UID        int64
+	ReportCard *ReportCard
+	Input      chan string
+	Events     chan *EventMessage
+	Transcript []*EventMessage
+	Closed     bool
 }
 
 type nannyHandler func(nanny *Nanny, args, options []string, files map[string]string, stdin io.Reader)
@@ -718,19 +717,6 @@ func (n *Nanny) Exec(cmd []string, stdin io.Reader, useTTY bool) (stdout, stderr
 	})
 	if err != nil {
 		return nil, nil, nil, -1, err
-	}
-
-	// resize the TTY
-	// warning: this is pretty ugly
-	if useTTY && n.SizeX > 0 && n.SizeY > 0 {
-		go func() {
-			time.Sleep(time.Second)
-			if err := dockerClient.ResizeExecTTY(exec.ID, n.SizeY, n.SizeX); err != nil {
-				log.Printf("error setting TTY size: %v", err)
-				return
-			}
-			log.Printf("set TTY size to %d×%d", n.SizeX, n.SizeY)
-		}()
 	}
 
 	// gather output
