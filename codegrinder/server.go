@@ -40,30 +40,30 @@ import (
 // Contains a mix of Daycare and main server parameters.
 var Config struct {
 	// required parameters
-	Hostname         string // Hostname for the site: "your.host.goes.here"
-	DaycareSecret    string // Random string used to sign daycare requests: `head -c 32 /dev/urandom | base64`
-	LetsEncryptEmail string // Email address to register TLS certificates: "foo@bar.com"
+	Hostname         string `json:"hostname"`         // Hostname for the site: "your.host.goes.here"
+	DaycareSecret    string `json:"daycareSecret"`    // Random string used to sign daycare requests: `head -c 32 /dev/urandom | base64`
+	LetsEncryptEmail string `json:"letsEncryptEmail"` // Email address to register TLS certificates: "foo@bar.com"
 
 	// ta-only required parameters
-	LTISecret     string // LTI authentication shared secret. Must match that given to Canvas course: `head -c 32 /dev/urandom | base64`
-	SessionSecret string // Random string used to sign cookie sessions: `head -c 32 /dev/urandom | base64`
-	StaticDir     string // Full path of directory holding static files to serve: "/home/foo/codegrinder/client"
+	LTISecret     string `json:"ltiSecret"`     // LTI authentication shared secret. Must match that given to Canvas course: `head -c 32 /dev/urandom | base64`
+	SessionSecret string `json:"sessionSecret"` // Random string used to sign cookie sessions: `head -c 32 /dev/urandom | base64`
+	StaticDir     string `json:"staticDir"`     // Full path of directory holding static files to serve: "/home/foo/codegrinder/client"
 
 	// daycare-only required parameters
-	MainHostname string   // Hostname for the TA: "your.host.goes.here". Defaults to Hostname
-	Capacity     int      // Relative capacity of this daycare for containers: 1
-	ProblemTypes []string // List of problem types this daycare host supports: [ "python27unittest", "gotest", ... ]
+	TAHostname   string   `json:"taHostname"`   // Hostname for the TA: "your.host.goes.here". Defaults to Hostname
+	Capacity     int      `json:"capacity"`     // Relative capacity of this daycare for containers: 1
+	ProblemTypes []string `json:"problemTypes"` // List of problem types this daycare host supports: [ "python27unittest", "gotest", ... ]
 
 	// ta-only parameters where the default is usually sufficient
-	ToolName         string // LTI human readable name: "CodeGrinder"
-	ToolID           string // LTI unique ID: "codegrinder"
-	ToolDescription  string // LTI description: "Programming exercises with grading"
-	LetsEncryptCache string // Full path of LetsEncrypt cache file: "/etc/codegrinder/letsencrypt.cache"
-	PostgresHost     string // Host parameter for Postgres: "/var/run/postgresql"
-	PostgresPort     string // Port parameter for Postgres: "5432"
-	PostgresUsername string // Username parameter for Postgres: "codegrinder"
-	PostgresPassword string // Password parameter for Postgres: "super$trong"
-	PostgresDatabase string // Database parameter for Postgres: "codegrinder"
+	ToolName         string `json:"toolName"`         // LTI human readable name: default "CodeGrinder"
+	ToolID           string `json:"toolID"`           // LTI unique ID: default "codegrinder"
+	ToolDescription  string `json:"toolDescription"`  // LTI description: default "Programming exercises with grading"
+	LetsEncryptCache string `json:"letsEncryptCache"` // Full path of LetsEncrypt cache file: default "/etc/codegrinder/letsencrypt.cache"
+	PostgresHost     string `json:"postgresHost"`     // Host parameter for Postgres: default "/var/run/postgresql"
+	PostgresPort     string `json:"postgresPort"`     // Port parameter for Postgres: default "5432"
+	PostgresUsername string `json:"postgresUsername"` // Username parameter for Postgres: default $USER
+	PostgresPassword string `json:"postgresPassword"` // Password parameter for Postgres: default ""
+	PostgresDatabase string `json:"postgresDatabase"` // Database parameter for Postgres: default $USER
 }
 
 var problemTypes = make(map[string]*ProblemType)
@@ -336,8 +336,8 @@ func main() {
 		rand.Seed(time.Now().UnixNano())
 
 		// make sure relevant fields included in config file
-		if Config.MainHostname == "" {
-			Config.MainHostname = Config.Hostname
+		if Config.TAHostname == "" {
+			Config.TAHostname = Config.Hostname
 		}
 		if len(Config.ProblemTypes) == 0 {
 			log.Fatalf("cannot run Daycare role with no ProblemTypes in the config file")
@@ -379,7 +379,7 @@ func main() {
 				if err != nil {
 					log.Fatalf("encoding daycare registration: %v", err)
 				}
-				url := fmt.Sprintf("https://%s/v2/daycare_registrations", Config.MainHostname)
+				url := fmt.Sprintf("https://%s/v2/daycare_registrations", Config.TAHostname)
 
 				body := ioutil.NopCloser(bytes.NewReader(raw))
 				req, err := http.NewRequest("POST", url, body)
