@@ -135,7 +135,7 @@ func asCompileAndLink(n *Nanny, files map[string]string) {
 	cmd := []string{"g++", "-std=c++11", "-Wpedantic", "-g", "-Wall", "-Wextra", "-Werror", "-I.", "-pthread"}
 	cmd = append(cmd, objectFiles...)
 	cmd = append(cmd, testFiles...)
-	cmd = append(cmd, "-lgtest", "-lpthread")
+	cmd = append(cmd, "-lgtest", "-lregwrapper", "-lpthread")
 	if err := n.ExecSimple(cmd, nil, false); err != nil {
 		return
 	}

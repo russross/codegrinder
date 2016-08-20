@@ -10,7 +10,7 @@ amd64: .proxy-python .proxy-standardml
 	docker build -t codegrinder/python python
 	touch .proxy-python
 
-.proxy-armv6asm: armv6asm/Dockerfile
+.proxy-armv6asm: armv6asm/Dockerfile armv6asm/regwrapper.s
 	docker build -t codegrinder/armv6asm armv6asm
 	touch .proxy-armv6asm
 

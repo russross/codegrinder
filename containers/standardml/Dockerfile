@@ -5,8 +5,7 @@ RUN apt-get update && \
     apt-get upgrade -y
 
 RUN apt-get install -y --no-install-recommends \
-    polyml \
-    rlwrap
+    polyml
 
 RUN mkdir /home/student && chmod 777 /home/student
 USER 2000

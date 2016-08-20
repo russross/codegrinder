@@ -95,7 +95,9 @@ func CommandGrade(cmd *cobra.Command, args []string) {
 			case "stderr":
 				fmt.Printf("%s", event.StreamData)
 			case "exit":
-				fmt.Printf("%s\n", event.ExitStatus)
+				if event.ExitStatus != 0 {
+					fmt.Printf("exit status %d\n", event.ExitStatus)
+				}
 			case "error":
 				fmt.Printf("Error: %s\n", event.Error)
 			}

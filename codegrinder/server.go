@@ -260,7 +260,7 @@ func main() {
 		r.Get("/v2/daycare_registrations",
 			func(w http.ResponseWriter, render render.Render) {
 				daycareRegistrations.Expire()
-				render.JSON(http.StatusOK, daycareRegistrations)
+				render.JSON(http.StatusOK, daycareRegistrations.daycares)
 			})
 		r.Post("/v2/daycare_registrations", binding.Json(DaycareRegistration{}),
 			func(w http.ResponseWriter, reg DaycareRegistration) {
