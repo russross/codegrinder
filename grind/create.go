@@ -51,7 +51,7 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 				if dir == old {
 					log.Fatalf("unable to find %s in %s or an ancestor directory", ProblemConfigName, d)
 				}
-				log.Printf("could not find %s in %s, trying %s", ProblemConfigName, old, dir)
+				// log.Printf("could not find %s in %s, trying %s", ProblemConfigName, old, dir)
 				continue
 			}
 
