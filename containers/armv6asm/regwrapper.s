@@ -95,16 +95,16 @@ regwrapper:
         ldr     r11, =.r11
         ldr     r11, [r11]
 
-        @ expected value of sp is stored value +4
+        @ expected value of sp is stored value +8
 .cr13:  ldr     r14, =.r13
         ldr     r14, [r14]
-        add     r14, r14, #4
+        add     r14, r14, #8
         cmp     r14, r13
         beq     .cr14
         ldr     r0, =13
         ldr     r13, =.r13
         ldr     r13, [r13]
-        add     r13, r13, #4
+        add     r13, r13, #8
 
 .cr14:  ldr     r14, =.r14
         ldr     r14, [r14]
