@@ -13,10 +13,10 @@
 
 regwrapper:
         @ save variable registers, sp, and lr
-        push    {r0}
+        push    {r0,ip}
         ldr     r0, =.r4
         stmea   r0, {r4,r5,r6,r7,r8,r9,r10,r11,r13,r14}
-        pop     {r0}
+        pop     {r0,ip}
 
         @ call the user function
         ldr     r14, =target_function
