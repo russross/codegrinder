@@ -127,7 +127,7 @@ func CommandGet(cmd *cobra.Command, args []string) {
 	}
 
 	// create the target directory
-	log.Printf("unpacking problem set %s in %s", problemSet.Unique, rootDir)
+	log.Printf("unpacking problem set in %s", rootDir)
 	if err := os.MkdirAll(rootDir, 0755); err != nil {
 		log.Fatalf("error creating directory %s: %v", rootDir, err)
 	}

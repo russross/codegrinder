@@ -362,9 +362,9 @@ func LtiProblemSet(w http.ResponseWriter, r *http.Request, tx *sql.Tx, form LTIR
 	session.Set("id", user.ID)
 
 	// redirect to the console
-	//http.Redirect(w, r, fmt.Sprintf("/#/assignment/%d", asst.ID), http.StatusSeeOther)
-	_ = asst
-	http.Redirect(w, r, "/v2/users/me/cookie", http.StatusSeeOther)
+	http.Redirect(w, r, fmt.Sprintf("/#/assignment/%d", asst.ID), http.StatusSeeOther)
+	//_ = asst
+	//http.Redirect(w, r, "/v2/users/me/cookie", http.StatusSeeOther)
 }
 
 // LtiProblemSets handles /lti/problem_set requests.
