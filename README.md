@@ -49,7 +49,28 @@ server and connect to PostgreSQL using Unix-domain sockets with
 ident authentication. These instructions assume you are doing the
 same. You may need to adjust if you have a different setup.
 
-Start with a Go build environment with Go 1.5 or higher. Make sure
+
+### Install database (TA node only)
+
+Install PostgreSQL version 9.4 or higher. Note that you only need
+PostgreSQL on the TA node.
+
+Run the database setup script. Warning: this will delete an existing
+installation, so use this with caution.
+
+    $GOPATH/src/github.com/russross/codegrinder/setup/setup-database.sh
+
+
+### Install Docker (daycare nodes only)
+
+Install and configure Docker, and add your CodeGrinder user to the
+docker group so it can manage containers without being root. Note
+that you only need this on daycare nodes.
+
+
+### Install CodeGrinder
+
+Start with a Go build environment with Go 1.6 or higher. Make sure
 your GOPATH is set correctly.
 
 Fetch the CodeGrinder repository:
@@ -68,30 +89,8 @@ It also gives `codegrinder` the capability to bind to low-numbered
 ports, so CodeGrinder does not need any other special privileges to
 run. It should NOT be run as root.
 
-Install PostgreSQL version 9.4 or higher. Note that you only need
-PostgreSQL on the TA node.
 
-Run psql as the postgres user (the default admin user for
-PostgreSQL) and create the user and database for CodeGrinder.
-Substitute your username wherever you see `username` below.
-
-    sudo -u postgres psql
-
-From the `postgres=#` prompt:
-
-    create user username;
-    create database username;
-    grant all privileges on database username to username;
-
-At this point you should be able to run `psql` as your dev user and
-it should connect to your new database without error. Next, set up
-the database schema:
-
-    psql < $GOPATH/src/github.com/russross/codegrinder/setup/schema.sql
-
-Install and configure Docker, and add your CodeGrinder user to the
-docker group so it can manage containers without being root. Note
-that you only need this on daycare nodes.
+### Configure CodeGrinder
 
 Next, configure CodeGrinder:
 
@@ -160,6 +159,25 @@ set the options in the executable to run as -ta, -daycare, or both,
 and in the dependencies section, comment out the postgresql
 dependency if this is not a TA role, and the docker dependency if
 this is not a daycare role.
+
+To start it, use:
+
+    sudo systemctl start codegrinder
+
+To stop it:
+
+    sudo systemctl stop codegrinder
+
+To check if it is running and see the most recent log messages:
+
+    sudo systemctl status codegrinder
+
+To review the logs:
+
+    sudo journalctl -xeu codegrinder
+
+
+### Additional help
 
 Contact me directly for help with installation. At this early stage,
 I will probably only respond if I know you personally, but as I get

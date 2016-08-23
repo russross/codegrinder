@@ -88,11 +88,7 @@ func CommandGrade(cmd *cobra.Command, args []string) {
 			switch event.Event {
 			case "exec":
 				fmt.Printf("$ %s\n", strings.Join(event.ExecCommand, " "))
-			case "stdin":
-				fmt.Printf("%s", event.StreamData)
-			case "stdout":
-				fmt.Printf("%s", event.StreamData)
-			case "stderr":
+			case "stdin", "stdout", "stderr":
 				fmt.Printf("%s", event.StreamData)
 			case "exit":
 				if event.ExitStatus != 0 {
