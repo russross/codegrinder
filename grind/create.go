@@ -155,7 +155,7 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 		}
 
 		// read files
-		blacklist := []string{"~", ".swp", ".o", ".pyc", "a.out"}
+		blacklist := []string{"~", ".swp", ".o", ".pyc", ".out"}
 		starter, solution, root := make(map[string]string), make(map[string]string), make(map[string]string)
 		stepdir := filepath.Join(dir, strconv.FormatInt(i, 10))
 		err := filepath.Walk(stepdir, func(path string, info os.FileInfo, err error) error {
