@@ -38,12 +38,12 @@ func init() {
 				Interactive: true,
 				Handler:     nannyHandler(asGdb),
 			},
-			"shell": &ProblemTypeAction{
-				Action:      "shell",
-				Button:      "Ad hoc",
-				Message:     "Running shell‥",
+			"run": &ProblemTypeAction{
+				Action:      "run",
+				Button:      "Run",
+				Message:     "Running code‥",
 				Interactive: true,
-				Handler:     nannyHandler(asShell),
+				Handler:     nannyHandler(asRun),
 			},
 		},
 	}
@@ -202,10 +202,44 @@ func gTestAOutCommon(n *Nanny, files map[string]string, stdin io.Reader) {
 	}
 }
 
-func asShell(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
-	log.Printf("arm bash shell")
+func asRun(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
+	log.Printf("arm run")
 
-	n.ExecSimple([]string{"/bin/bash"}, stdin, true)
+	// gather list of *.s files
+	var sourceFiles []string
+	for path := range files {
+		dir, file := filepath.Split(path)
+		if dir == "" && filepath.Ext(file) == ".s" {
+			sourceFiles = append(sourceFiles, path)
+		}
+	}
+	if len(sourceFiles) == 0 {
+		n.ReportCard.LogAndFailf("no source files found")
+		return
+	}
+
+	// assemble source files
+	objectFiles := []string{}
+	for _, src := range sourceFiles {
+		out := src[:len(src)-len(".s")] + ".o"
+		objectFiles = append(objectFiles, out)
+		cmd := []string{"as", "-g", "-march=armv6zk", "-mcpu=arm1176jzf-s", "-mfloat-abi=hard", "-mfpu=vfp", src, "-o", out}
+
+		// launch the assembler (ignore stdin)
+		if err := n.ExecSimple(cmd, nil, false); err != nil {
+			return
+		}
+	}
+
+	// link
+	cmd := []string{"ld"}
+	cmd = append(cmd, objectFiles...)
+	if err := n.ExecSimple(cmd, nil, false); err != nil {
+		return
+	}
+
+	// run gdb
+	n.ExecSimple([]string{"./a.out"}, stdin, true)
 }
 
 func asGdb(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
