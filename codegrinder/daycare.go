@@ -762,7 +762,7 @@ func (n *Nanny) ExecSimple(cmd []string, stdin io.Reader, useTTY bool) error {
 		return err
 	}
 	if status != 0 {
-		err := fmt.Errorf("%s failed with exit code %d", cmd[0], status)
+		err := fmt.Errorf("%s failed with exit status %d", cmd[0], status)
 		n.ReportCard.LogAndFailf("%v", err)
 		return err
 	}

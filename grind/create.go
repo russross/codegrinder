@@ -155,6 +155,7 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 		}
 
 		// read files
+		blacklist := []string{"~", ".swp", ".o", ".pyc", "a.out"}
 		starter, solution, root := make(map[string]string), make(map[string]string), make(map[string]string)
 		stepdir := filepath.Join(dir, strconv.FormatInt(i, 10))
 		err := filepath.Walk(stepdir, func(path string, info os.FileInfo, err error) error {
@@ -167,6 +168,14 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 			relpath, err := filepath.Rel(stepdir, path)
 			if err != nil {
 				log.Fatalf("error finding relative path of %s: %v", path, err)
+			}
+			for _, suffix := range blacklist {
+				if strings.HasSuffix(relpath, suffix) {
+					log.Printf("Warning: skipping file %q", relpath)
+					log.Printf("  because it has one of the following suffixes:")
+					log.Printf("  %v", blacklist)
+					return nil
+				}
 			}
 
 			// load the file and add it to the appropriate place

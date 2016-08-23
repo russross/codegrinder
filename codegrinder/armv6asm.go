@@ -154,7 +154,7 @@ func gTestAOutCommon(n *Nanny, files map[string]string, stdin io.Reader) {
 
 	// did it end in a segfault?
 	if status > 127 {
-		n.ReportCard.LogAndFailf("Unit tests did not finish normally, exit code %d", status)
+		n.ReportCard.LogAndFailf("Unit tests did not finish normally, exit status %d", status)
 		return
 	}
 
