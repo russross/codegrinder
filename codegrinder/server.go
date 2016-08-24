@@ -104,13 +104,16 @@ func main() {
 	Config.DaycareSecret = unBase64(Config.DaycareSecret)
 
 	if Config.Hostname == "" {
-		log.Fatalf("cannot run with no Hostname in the config file")
+		log.Fatalf("cannot run with no hostname in the config file")
 	}
 	if Config.DaycareSecret == "" {
-		log.Fatalf("cannot run with no DaycareSecret in the config file")
+		log.Fatalf("cannot run with no daycareSecret in the config file")
 	}
 	if Config.LetsEncryptEmail == "" {
-		log.Fatalf("cannot run with no LetsEncryptEmail in the config file")
+		log.Fatalf("cannot run with no letsEncryptEmail in the config file")
+	}
+	if Config.FilesDir == "" {
+		log.Fatalf("cannot run with no filesDir in the config file")
 	}
 
 	// load problem type files
@@ -188,13 +191,13 @@ func main() {
 
 		// make sure relevant secrets are included in config file
 		if Config.LTISecret == "" {
-			log.Fatalf("cannot run TA role with no LTISecret in the config file")
+			log.Fatalf("cannot run TA role with no ltiSecret in the config file")
 		}
 		if Config.SessionSecret == "" {
-			log.Fatalf("cannot run TA role with no SessionSecret in the config file")
+			log.Fatalf("cannot run TA role with no sessionSecret in the config file")
 		}
 		if Config.StaticDir == "" {
-			log.Fatalf("cannot run TA role with no StaticDir in the config file")
+			log.Fatalf("cannot run TA role with no staticDir in the config file")
 		}
 
 		// set up the database
@@ -376,7 +379,7 @@ func main() {
 			Config.TAHostname = Config.Hostname
 		}
 		if len(Config.ProblemTypes) == 0 {
-			log.Fatalf("cannot run Daycare role with no ProblemTypes in the config file")
+			log.Fatalf("cannot run Daycare role with no problemTypes in the config file")
 		}
 		if Config.Capacity <= 0 {
 			log.Fatalf("Daycare capacity must be greater than zero")

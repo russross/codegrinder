@@ -109,14 +109,15 @@ the following:
     {
         "hostname": "your.domain.name",
         "daycareSecret": "",
-        "letsEncryptEmail": "yourname@domain.com"
+        "letsEncryptEmail": "yourname@domain.com",
+        "filesDir": "/home/username/src/github.com/russross/codegrinder/files"
     }
 
 For the node running the TA role, you should add these keys:
 
         "ltiSecret": "",
         "sessionSecret": "",
-        "staticDir": "/home/username/src/github.com/russross/codegrinder/client",
+        "staticDir": "/home/username/src/github.com/russross/codegrinder/www",
 
 and for nodes running the daycare role, you should add these keys:
 
