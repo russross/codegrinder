@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	. "github.com/russross/codegrinder/types"
+	. "github.com/russross/codegrinder/common"
 )
 
 const workingDir = "/home/student"

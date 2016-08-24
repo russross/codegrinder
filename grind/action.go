@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	. "github.com/russross/codegrinder/types"
+	. "github.com/russross/codegrinder/common"
 	termbox "github.com/russross/termbox-go"
 	"github.com/spf13/cobra"
 )

@@ -31,7 +31,7 @@ import (
 	"github.com/martini-contrib/binding"
 	"github.com/martini-contrib/render"
 	"github.com/martini-contrib/sessions"
-	. "github.com/russross/codegrinder/types"
+	. "github.com/russross/codegrinder/common"
 	"github.com/russross/meddler"
 	"github.com/sergi/go-diff/diffmatchpatch"
 	"rsc.io/letsencrypt"

@@ -20,7 +20,7 @@ import (
 	"github.com/go-martini/martini"
 	"github.com/martini-contrib/render"
 	"github.com/martini-contrib/sessions"
-	. "github.com/russross/codegrinder/types"
+	. "github.com/russross/codegrinder/common"
 	"github.com/russross/meddler"
 )
 

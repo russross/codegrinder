@@ -9,7 +9,7 @@ import (
 	"regexp"
 	"time"
 
-	. "github.com/russross/codegrinder/types"
+	. "github.com/russross/codegrinder/common"
 )
 
 func init() {

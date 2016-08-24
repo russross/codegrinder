@@ -17,7 +17,7 @@ import (
 	"github.com/fsouza/go-dockerclient"
 	"github.com/go-martini/martini"
 	"github.com/gorilla/websocket"
-	. "github.com/russross/codegrinder/types"
+	. "github.com/russross/codegrinder/common"
 )
 
 var dockerClient *docker.Client
