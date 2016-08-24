@@ -187,8 +187,10 @@ func CommandGet(cmd *cobra.Command, args []string) {
 		for name, contents := range problemType.Files {
 			path := filepath.Join(target, name)
 			log.Printf("writing problem type file %s", name)
-			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-				log.Fatalf("error create directory %s: %v", filepath.Dir(path), err)
+			if dir := filepath.Dir(path); dir != "" {
+				if err := os.MkdirAll(dir, 0755); err != nil {
+					log.Fatalf("error create directory %s: %v", dir, err)
+				}
 			}
 			if _, err := os.Lstat(path); err == nil {
 				log.Fatalf("problem type file would overwrite problem file, quitting: %s", path)

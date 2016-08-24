@@ -25,7 +25,6 @@ func init() {
 		MaxFileSize: 10,
 		MaxMemory:   32,
 		MaxThreads:  20,
-		Files:       make(map[string]string),
 		Actions: map[string]*ProblemTypeAction{
 			"grade": &ProblemTypeAction{
 				Action:      "grade",

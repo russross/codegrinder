@@ -79,9 +79,23 @@ func gather(now time.Time, startDir string) (*ProblemType, *Problem, *Assignment
 	problem := new(Problem)
 	mustGetObject(fmt.Sprintf("/problems/%d", info.ID), nil, problem)
 
-	// get the problem type
+	// get the problem type and verify local files matach
 	problemType := new(ProblemType)
 	mustGetObject(fmt.Sprintf("/problem_types/%s", problem.ProblemType), nil, problemType)
+	for name, contents := range problemType.Files {
+		ondisk, err := ioutil.ReadFile(filepath.Join(problemDir, name))
+		if err != nil && os.IsNotExist(err) {
+			log.Printf("expected to find %s, but it is missing", name)
+			continue
+		} else if err != nil {
+			log.Fatalf("error reading %s: %v", name, err)
+		}
+		if string(ondisk) != contents {
+			log.Printf("Warning! file %s", name)
+			log.Printf("   does not match the latest version from the problem type")
+			log.Printf("   consider re-downloading to get the current version")
+		}
+	}
 
 	// get the problem step and verify local files match
 	step := new(ProblemStep)
@@ -194,7 +208,9 @@ func findDotFile(startDir string) (dotfile *DotFileInfo, problemSetDir, problemD
 				problemDir = problemSetDir
 				problemSetDir = filepath.Dir(problemSetDir)
 				if problemSetDir == problemDir {
-					log.Fatalf("unable to find %s in %s or an ancestor directory", perProblemSetDotFile, startDir)
+					log.Printf("unable to find %s in %s or an ancestor directory", perProblemSetDotFile, startDir)
+					log.Printf("   you must run this in a problem directory")
+					log.Fatalf("   or supply the directory name as an argument")
 				}
 				// log.Printf("could not find %s in %s, trying %s", perProblemSetDotFile, problemDir, problemSetDir)
 				continue

@@ -44,12 +44,12 @@ var Config struct {
 	Hostname         string `json:"hostname"`         // Hostname for the site: "your.host.goes.here"
 	DaycareSecret    string `json:"daycareSecret"`    // Random string used to sign daycare requests: `head -c 32 /dev/urandom | base64`
 	LetsEncryptEmail string `json:"letsEncryptEmail"` // Email address to register TLS certificates: "foo@bar.com"
-	FilesDir         string `json:"filesDir""`        // Full path of directory holding problem-type files: "/home/foo/codegrinder/files"
 
 	// ta-only required parameters
 	LTISecret     string `json:"ltiSecret"`     // LTI authentication shared secret. Must match that given to Canvas course: `head -c 32 /dev/urandom | base64`
 	SessionSecret string `json:"sessionSecret"` // Random string used to sign cookie sessions: `head -c 32 /dev/urandom | base64`
 	StaticDir     string `json:"staticDir"`     // Full path of directory holding static files to serve: "/home/foo/codegrinder/www"
+	FilesDir      string `json:"filesDir""`     // Full path of directory holding problem-type files: "/home/foo/codegrinder/files"
 
 	// daycare-only required parameters
 	TAHostname   string   `json:"taHostname"`   // Hostname for the TA: "your.host.goes.here". Defaults to Hostname
@@ -112,43 +112,6 @@ func main() {
 	if Config.LetsEncryptEmail == "" {
 		log.Fatalf("cannot run with no letsEncryptEmail in the config file")
 	}
-	if Config.FilesDir == "" {
-		log.Fatalf("cannot run with no filesDir in the config file")
-	}
-
-	// load problem type files
-	for key, elt := range problemTypes {
-		if key != elt.Name {
-			log.Fatalf("problem type key %q does not match problem type name %q", key, elt.Name)
-		}
-		dir := filepath.Join(Config.FilesDir, key)
-		dirInfo, err := os.Lstat(dir)
-		if err == nil && dirInfo.IsDir() {
-			err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-				// skip errors, directories, non-regular files
-				if err != nil {
-					return err
-				}
-				if info.IsDir() {
-					return nil
-				}
-				relpath, err := filepath.Rel(dir, path)
-				if err != nil {
-					return err
-				}
-				raw, err := ioutil.ReadFile(path)
-				if err != nil {
-					return err
-				}
-				elt.Files[relpath] = string(raw)
-
-				return nil
-			})
-			if err != nil && err != os.ErrNotExist {
-				log.Fatalf("error loading problem-type files for %s: %v", key, err)
-			}
-		}
-	}
 
 	// set up martini
 	r := martini.NewRouter()
@@ -162,6 +125,41 @@ func main() {
 
 	// set up TA role
 	if ta {
+		// load problem type files
+		for key, elt := range problemTypes {
+			if key != elt.Name {
+				log.Fatalf("problem type key %q does not match problem type name %q", key, elt.Name)
+			}
+			elt.Files = make(map[string]string)
+			dir := filepath.Join(Config.FilesDir, key)
+			dirInfo, err := os.Lstat(dir)
+			if err == nil && dirInfo.IsDir() {
+				err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+					// skip errors, directories, non-regular files
+					if err != nil {
+						return err
+					}
+					if info.IsDir() {
+						return nil
+					}
+					relpath, err := filepath.Rel(dir, path)
+					if err != nil {
+						return err
+					}
+					raw, err := ioutil.ReadFile(path)
+					if err != nil {
+						return err
+					}
+					elt.Files[relpath] = string(raw)
+
+					return nil
+				})
+				if err != nil && err != os.ErrNotExist {
+					log.Fatalf("error loading problem-type files for %s: %v", key, err)
+				}
+			}
+		}
+
 		m.Use(martini.Static(Config.StaticDir, martini.StaticOptions{SkipLogging: true}))
 		store := sessions.NewCookieStore([]byte(Config.SessionSecret))
 		m.Use(sessions.Sessions(CookieName, store))
@@ -198,6 +196,9 @@ func main() {
 		}
 		if Config.StaticDir == "" {
 			log.Fatalf("cannot run TA role with no staticDir in the config file")
+		}
+		if Config.FilesDir == "" {
+			log.Fatalf("cannot run TA role with no filesDir in the config file")
 		}
 
 		// set up the database
