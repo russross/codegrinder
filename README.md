@@ -81,13 +81,17 @@ Fetch the CodeGrinder repository:
 
 Build and install CodeGrinder:
 
-    $GOPATH/src/github.com/russross/codegrinder/build.sh
+    $GOPATH/src/github.com/russross/codegrinder/all.sh
 
-This creates two executables, `codegrinder` (the server) and `grind`
-(the command-line tool) and installs them both in `/usr/local/bin`.
-It also gives `codegrinder` the capability to bind to low-numbered
-ports, so CodeGrinder does not need any other special privileges to
-run. It should NOT be run as root.
+This creates two executables for the local machine, `codegrinder`
+(the server) and `grind` (the command-line tool) and installs them
+both in `/usr/local/bin`. It also builds the `grind` tool for
+several architectures and puts them in the `www` directory for users
+to download. Use the `build.sh` script instead to only build the
+server. Both of these scripts also give the `codegrinder` binary the
+capability to bind to low-numbered ports, so CodeGrinder does not
+need any other special privileges to run. It should NOT be run as
+root.
 
 
 ### Configure CodeGrinder
