@@ -34,7 +34,7 @@ func CommandGrade(cmd *cobra.Command, args []string) {
 	user := new(User)
 	mustGetObject("/users/me", nil, user)
 
-	problem, _, commit, dotfile := gather(now, dir)
+	_, problem, _, commit, dotfile := gather(now, dir)
 	commit.Action = "grade"
 	commit.Note = "grading from grind tool"
 	unsigned := &CommitBundle{
@@ -50,7 +50,7 @@ func CommandGrade(cmd *cobra.Command, args []string) {
 	if signed.Hostname == "" {
 		log.Fatalf("server was unable to find a suitable daycare, unable to grade")
 	}
-	log.Printf("submitting %s step %d to %s for grading", problem.Unique, commit.Step, signed.Hostname)
+	log.Printf("submitting %s step %d for grading", problem.Unique, commit.Step)
 	graded := mustConfirmCommitBundle(signed, nil)
 
 	// save the commit with report card

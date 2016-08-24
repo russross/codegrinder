@@ -29,10 +29,17 @@ func CommandSave(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	problem, _, commit, _ := gather(now, dir)
+	// get the user ID
+	user := new(User)
+	mustGetObject("/users/me", nil, user)
+
+	_, problem, _, commit, _ := gather(now, dir)
 	commit.Action = ""
 	commit.Note = "saving from grind tool"
-	unsigned := &CommitBundle{Commit: commit}
+	unsigned := &CommitBundle{
+		UserID: user.ID,
+		Commit: commit,
+	}
 
 	// send the commit to the server
 	signed := new(CommitBundle)
@@ -40,7 +47,7 @@ func CommandSave(cmd *cobra.Command, args []string) {
 	log.Printf("problem %s step %d saved", problem.Unique, commit.Step)
 }
 
-func gather(now time.Time, startDir string) (*Problem, *Assignment, *Commit, *DotFileInfo) {
+func gather(now time.Time, startDir string) (*ProblemType, *Problem, *Assignment, *Commit, *DotFileInfo) {
 	// find the .grind file containing the problem set info
 	dotfile, problemSetDir, problemDir := findDotFile(startDir)
 
@@ -72,7 +79,32 @@ func gather(now time.Time, startDir string) (*Problem, *Assignment, *Commit, *Do
 	problem := new(Problem)
 	mustGetObject(fmt.Sprintf("/problems/%d", info.ID), nil, problem)
 
-	// TODO: get the problem step and verify local files match
+	// get the problem type
+	problemType := new(ProblemType)
+	mustGetObject(fmt.Sprintf("/problem_types/%s", problem.ProblemType), nil, problemType)
+
+	// get the problem step and verify local files match
+	step := new(ProblemStep)
+	mustGetObject(fmt.Sprintf("/problems/%d/steps/%d", problem.ID, info.Step), nil, step)
+	for name, contents := range step.Files {
+		dir, _ := filepath.Split(name)
+		if dir == "" {
+			// skip files in the main directory
+			continue
+		}
+		ondisk, err := ioutil.ReadFile(filepath.Join(problemDir, name))
+		if err != nil && os.IsNotExist(err) {
+			log.Printf("expected to find %s, but it is missing", name)
+			continue
+		} else if err != nil {
+			log.Fatalf("error reading %s: %v", name, err)
+		}
+		if string(ondisk) != contents {
+			log.Printf("Warning! file %s", name)
+			log.Printf("   does not match the latest version from the problem")
+			log.Printf("   consider re-downloading to get the current version")
+		}
+	}
 
 	// gather the commit files from the file system
 	files := make(map[string]string)
@@ -82,7 +114,7 @@ func gather(now time.Time, startDir string) (*Problem, *Assignment, *Commit, *Do
 			return err
 		}
 		if path == problemDir {
-			// descent into the main directory
+			// descend into the main directory
 			return nil
 		}
 		if stat.IsDir() {
@@ -95,6 +127,12 @@ func gather(now time.Time, startDir string) (*Problem, *Assignment, *Commit, *Do
 
 		// skip our config file
 		if name == perProblemSetDotFile {
+			return nil
+		}
+
+		// skip files from the problem type
+		if _, exists := problemType.Files[name]; exists {
+			//log.Printf("skipping %s because it came from the problem type", name)
 			return nil
 		}
 
@@ -133,7 +171,7 @@ func gather(now time.Time, startDir string) (*Problem, *Assignment, *Commit, *Do
 		UpdatedAt:    now,
 	}
 
-	return problem, assignment, commit, dotfile
+	return problemType, problem, assignment, commit, dotfile
 }
 
 func findDotFile(startDir string) (dotfile *DotFileInfo, problemSetDir, problemDir string) {

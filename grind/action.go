@@ -43,7 +43,7 @@ func CommandAction(cmd *cobra.Command, args []string) {
 	user := new(User)
 	mustGetObject("/users/me", nil, user)
 
-	problem, _, commit, _ := gather(now, dir)
+	problemType, problem, _, commit, _ := gather(now, dir)
 	commit.Action = action
 	commit.Note = "grind tool session for action " + action
 	unsigned := &CommitBundle{
@@ -51,9 +51,7 @@ func CommandAction(cmd *cobra.Command, args []string) {
 		Commit: commit,
 	}
 
-	// get the problem type
-	problemType := new(ProblemType)
-	mustGetObject(fmt.Sprintf("/problem_types/%s", problem.ProblemType), nil, problemType)
+	// if the requested action does not exist, report available choices
 	if _, exists := problemType.Actions[action]; !exists {
 		log.Printf("available actions for problem type %s:", problem.ProblemType)
 		for elt := range problemType.Actions {

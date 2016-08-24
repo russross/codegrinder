@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
@@ -43,11 +44,12 @@ var Config struct {
 	Hostname         string `json:"hostname"`         // Hostname for the site: "your.host.goes.here"
 	DaycareSecret    string `json:"daycareSecret"`    // Random string used to sign daycare requests: `head -c 32 /dev/urandom | base64`
 	LetsEncryptEmail string `json:"letsEncryptEmail"` // Email address to register TLS certificates: "foo@bar.com"
+	FilesDir         string `json:"filesDir""`        // Full path of directory holding problem-type files: "/home/foo/codegrinder/files"
 
 	// ta-only required parameters
 	LTISecret     string `json:"ltiSecret"`     // LTI authentication shared secret. Must match that given to Canvas course: `head -c 32 /dev/urandom | base64`
 	SessionSecret string `json:"sessionSecret"` // Random string used to sign cookie sessions: `head -c 32 /dev/urandom | base64`
-	StaticDir     string `json:"staticDir"`     // Full path of directory holding static files to serve: "/home/foo/codegrinder/client"
+	StaticDir     string `json:"staticDir"`     // Full path of directory holding static files to serve: "/home/foo/codegrinder/www"
 
 	// daycare-only required parameters
 	TAHostname   string   `json:"taHostname"`   // Hostname for the TA: "your.host.goes.here". Defaults to Hostname
@@ -111,45 +113,79 @@ func main() {
 		log.Fatalf("cannot run with no LetsEncryptEmail in the config file")
 	}
 
+	// load problem type files
+	for key, elt := range problemTypes {
+		if key != elt.Name {
+			log.Fatalf("problem type key %q does not match problem type name %q", key, elt.Name)
+		}
+		dir := filepath.Join(Config.FilesDir, key)
+		dirInfo, err := os.Lstat(dir)
+		if err == nil && dirInfo.IsDir() {
+			err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+				// skip errors, directories, non-regular files
+				if err != nil {
+					return err
+				}
+				if info.IsDir() {
+					return nil
+				}
+				relpath, err := filepath.Rel(dir, path)
+				if err != nil {
+					return err
+				}
+				raw, err := ioutil.ReadFile(path)
+				if err != nil {
+					return err
+				}
+				elt.Files[relpath] = string(raw)
+
+				return nil
+			})
+			if err != nil && err != os.ErrNotExist {
+				log.Fatalf("error loading problem-type files for %s: %v", key, err)
+			}
+		}
+	}
+
 	// set up martini
 	r := martini.NewRouter()
 	m := martini.New()
 	m.Logger(log.New(os.Stderr, "", log.LstdFlags))
 	m.Use(martini.Logger())
 	m.Use(martini.Recovery())
-	m.Use(martini.Static(Config.StaticDir, martini.StaticOptions{SkipLogging: true}))
 	m.MapTo(r, (*martini.Routes)(nil))
 	m.Action(r.Handle)
-
 	m.Use(render.Renderer(render.Options{IndentJSON: true}))
-
-	store := sessions.NewCookieStore([]byte(Config.SessionSecret))
-	m.Use(sessions.Sessions(CookieName, store))
-
-	// sessions expire June 30 and December 31
-	go func() {
-		for {
-			now := time.Now()
-
-			// expire at the end of the calendar year
-			expires := time.Date(now.Year(), time.December, 31, 23, 59, 59, 0, time.Local)
-
-			if expires.Sub(now).Hours() < 14*24 {
-				// are we within 2 weeks of the end of the year? probably prepping for spring,
-				// so expire next June 30 instead
-				expires = time.Date(now.Year()+1, time.June, 30, 23, 59, 59, 0, time.Local)
-			} else if expires.Sub(now).Hours() > (365/2+14)*24 {
-				// is it still more than 2 weeks before June 30? probably in spring semester,
-				// so expire this June 30 instead
-				expires = time.Date(now.Year(), time.June, 30, 23, 59, 59, 0, time.Local)
-			}
-			store.Options(sessions.Options{Path: "/", Secure: true, MaxAge: int(expires.Sub(now).Seconds())})
-			time.Sleep(11 * time.Minute)
-		}
-	}()
 
 	// set up TA role
 	if ta {
+		m.Use(martini.Static(Config.StaticDir, martini.StaticOptions{SkipLogging: true}))
+		store := sessions.NewCookieStore([]byte(Config.SessionSecret))
+		m.Use(sessions.Sessions(CookieName, store))
+
+		// sessions expire June 30 and December 31
+		go func() {
+			for {
+				now := time.Now()
+
+				// expire at the end of the calendar year
+				expires := time.Date(now.Year(), time.December, 31, 23, 59, 59, 0, time.Local)
+
+				if expires.Sub(now).Hours() < 14*24 {
+					// are we within 2 weeks of the end of the year? probably prepping for spring,
+					// so expire next June 30 instead
+					expires = time.Date(now.Year()+1, time.June, 30, 23, 59, 59, 0, time.Local)
+				} else if expires.Sub(now).Hours() > (365/2+14)*24 {
+					// is it still more than 2 weeks before June 30? probably in spring semester,
+					// so expire this June 30 instead
+					expires = time.Date(now.Year(), time.June, 30, 23, 59, 59, 0, time.Local)
+				}
+				store.Options(sessions.Options{Path: "/", Secure: true, MaxAge: int(expires.Sub(now).Seconds())})
+				time.Sleep(11 * time.Minute)
+			}
+		}()
+		time.Sleep(5 * time.Millisecond)
+
 		// make sure relevant secrets are included in config file
 		if Config.LTISecret == "" {
 			log.Fatalf("cannot run TA role with no LTISecret in the config file")

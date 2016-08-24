@@ -79,10 +79,18 @@ func CommandGet(cmd *cobra.Command, args []string) {
 	infos := make(map[string]*ProblemInfo)
 	problems := make(map[string]*Problem)
 	steps := make(map[string]*ProblemStep)
+	types := make(map[string]*ProblemType)
 	for _, elt := range problemSetProblems {
 		problem, commit, info, step := new(Problem), new(Commit), new(ProblemInfo), new(ProblemStep)
 		mustGetObject(fmt.Sprintf("/problems/%d", elt.ProblemID), nil, problem)
 		problems[problem.Unique] = problem
+
+		// get the problem type if we do not already have it
+		if _, exists := types[problem.ProblemType]; !exists {
+			problemType := new(ProblemType)
+			mustGetObject(fmt.Sprintf("/problem_types/%s", problem.ProblemType), nil, problemType)
+			types[problem.ProblemType] = problemType
+		}
 
 		if getObject(fmt.Sprintf("/assignments/%d/problems/%d/commits/last", assignment.ID, problem.ID), nil, commit) {
 			info.ID = problem.ID
@@ -171,6 +179,22 @@ func CommandGet(cmd *cobra.Command, args []string) {
 			// does this commit indicate the step was finished and needs to advance?
 			if commit.ReportCard != nil && commit.ReportCard.Passed && commit.Score == 1.0 {
 				nextStep(target, infos[unique], problem, commit)
+			}
+		}
+
+		// save any problem type files
+		problemType := types[problem.ProblemType]
+		for name, contents := range problemType.Files {
+			path := filepath.Join(target, name)
+			log.Printf("writing problem type file %s", name)
+			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+				log.Fatalf("error create directory %s: %v", filepath.Dir(path), err)
+			}
+			if _, err := os.Lstat(path); err == nil {
+				log.Fatalf("problem type file would overwrite problem file, quitting: %s", path)
+			}
+			if err := ioutil.WriteFile(path, []byte(contents), 0644); err != nil {
+				log.Fatalf("error saving file %s: %v", path, err)
 			}
 		}
 	}
