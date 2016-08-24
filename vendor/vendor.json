@@ -153,6 +153,12 @@
 			"revisionTime": "2016-04-07T17:41:26Z"
 		},
 		{
+			"checksumSHA1": "40vJyUB4ezQSn/NSadsKEOrudMc=",
+			"path": "github.com/inconshreveable/mousetrap",
+			"revision": "76626ae9c91c4f2a10f34cad8ce83ea42c93bb75",
+			"revisionTime": "2014-10-17T20:07:13Z"
+		},
+		{
 			"checksumSHA1": "84hbcb5NWMIW9jQf51+2uaNj/eY=",
 			"path": "github.com/lib/pq",
 			"revision": "ee1442bda7bd1b6a84e913bdb421cb1874ec629d",
