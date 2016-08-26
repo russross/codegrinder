@@ -22,6 +22,57 @@ import (
 
 var dockerClient *docker.Client
 
+type limits struct {
+	maxCPU      int64
+	maxSession  int64
+	maxTimeout  int64
+	maxFD       int64
+	maxFileSize int64
+	maxMemory   int64
+	maxThreads  int64
+}
+
+func newLimits(t *ProblemType) *limits {
+	return &limits{
+		maxCPU:      t.MaxCPU,
+		maxSession:  t.MaxSession,
+		maxTimeout:  t.MaxTimeout,
+		maxFD:       t.MaxFD,
+		maxFileSize: t.MaxFileSize,
+		maxMemory:   t.MaxMemory,
+		maxThreads:  t.MaxThreads,
+	}
+}
+
+func (l *limits) override(options []string) {
+	for _, elt := range options {
+		parts := strings.Split(elt, "=")
+		if len(parts) != 2 {
+			continue
+		}
+		val, err := strconv.ParseInt(strings.TrimSpace(parts[1]), 10, 63)
+		if err != nil {
+			continue
+		}
+		switch strings.TrimSpace(parts[0]) {
+		case "maxCPU":
+			l.maxCPU = val
+		case "maxSession":
+			l.maxSession = val
+		case "maxTimeout":
+			l.maxTimeout = val
+		case "maxFD":
+			l.maxFD = val
+		case "maxFileSize":
+			l.maxFileSize = val
+		case "maxMemory":
+			l.maxMemory = val
+		case "maxThreads":
+			l.maxThreads = val
+		}
+	}
+}
+
 // SocketProblemTypeAction handles a request to /sockets/:problem_type/:action
 // It expects a websocket connection, which will receive a series of DaycareRequest objects
 // and will respond with DaycareResponse objects, though not in a one-to-one fashion.
@@ -172,7 +223,9 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	// launch a nanny process
 	nannyName := fmt.Sprintf("nanny-%d", req.CommitBundle.UserID)
 	log.Printf("launching container for %s", nannyName)
-	n, err := NewNanny(problemType, problem, action.Interactive, args, nannyName)
+	limits := newLimits(problemType)
+	limits.override(problem.Options)
+	n, err := NewNanny(problemType, problem, action.Interactive, args, limits, nannyName)
 	if err != nil {
 		logAndTransmitErrorf("error creating container: %v", err)
 		return
@@ -182,7 +235,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	// watch for timeouts
 	alive := make(chan bool)
 	go func() {
-		duration := time.Duration(problemType.MaxTimeout) * time.Second
+		duration := time.Duration(limits.maxTimeout) * time.Second
 		t := time.NewTimer(duration)
 
 		for alive != nil {
@@ -371,18 +424,18 @@ func getContainerID(msg string) string {
 	return groups[1]
 }
 
-func NewNanny(problemType *ProblemType, problem *Problem, interactive bool, args []string, name string) (*Nanny, error) {
+func NewNanny(problemType *ProblemType, problem *Problem, interactive bool, args []string, limits *limits, name string) (*Nanny, error) {
 	// create a container
-	mem := problemType.MaxMemory * 1024 * 1024
-	disk := problemType.MaxFileSize * 1024 * 1024
+	mem := limits.maxMemory * 1024 * 1024
+	disk := limits.maxFileSize * 1024 * 1024
 	uid, err := allocUID()
 	if err != nil {
 		return nil, err
 	}
 
-	timeLimit := problemType.MaxCPU * 2
+	timeLimit := limits.maxCPU * 2
 	if interactive {
-		timeLimit = problemType.MaxSession
+		timeLimit = limits.maxSession
 	}
 	config := &docker.Config{
 		Hostname:        name,
@@ -424,15 +477,15 @@ func NewNanny(problemType *ProblemType, problem *Problem, interactive bool, args
 			"KILL",
 			"SYS_CHROOT",
 		},
-		PidsLimit: problemType.MaxThreads,
+		PidsLimit: limits.maxThreads,
 		Ulimits: []docker.ULimit{
 			{Name: "core", Soft: 0, Hard: 0},
-			{Name: "cpu", Soft: problemType.MaxCPU, Hard: problemType.MaxCPU},
+			{Name: "cpu", Soft: limits.maxCPU, Hard: limits.maxCPU},
 			{Name: "data", Soft: mem, Hard: mem},
 			{Name: "fsize", Soft: disk, Hard: disk},
 			{Name: "memlock", Soft: 0, Hard: 0},
-			{Name: "nofile", Soft: problemType.MaxFD, Hard: problemType.MaxFD},
-			{Name: "nproc", Soft: problemType.MaxThreads, Hard: problemType.MaxThreads},
+			{Name: "nofile", Soft: limits.maxFD, Hard: limits.maxFD},
+			{Name: "nproc", Soft: limits.maxThreads, Hard: limits.maxThreads},
 			{Name: "stack", Soft: mem, Hard: mem},
 		},
 	}

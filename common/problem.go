@@ -102,21 +102,23 @@ func (problem *Problem) Normalize(now time.Time, steps []*ProblemStep) error {
 		return fmt.Errorf("note cannot be empty")
 	}
 
-	// 	// make sure the problem type is legitimate
-	// 	if _, exists := problemTypes[problem.ProblemType]; !exists {
-	// 		return fmt.Errorf("unrecognized problem type: %q", problem.ProblemType)
-	// 	}
-
 	// check tags
+	if len(problem.Tags) == 0 {
+		problem.Tags = []string{}
+	}
 	for i, tag := range problem.Tags {
 		problem.Tags[i] = strings.TrimSpace(tag)
 	}
 	sort.Strings(problem.Tags)
 
 	// check options
+	if len(problem.Options) == 0 {
+		problem.Options = []string{}
+	}
 	for i, option := range problem.Options {
 		problem.Options[i] = strings.TrimSpace(option)
 	}
+	sort.Strings(problem.Tags)
 
 	// check steps
 	if len(steps) == 0 {
