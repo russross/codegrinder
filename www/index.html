@@ -63,12 +63,12 @@
   <div>
     <p>Follow these steps to set up CodeGrinder:</p>
     <ol>
-    <li>Make a folder called <tt>C:\CodeGrinder</tt> (or pick your own location and remember it)</li>
-    <li>Add this directory to your PATH. Search online for help if you do not know how to do this</li>
-    <li>Download the <tt>grind.exe</tt> tool <a href="grind.exe">by right-clicking here</a> and selecting “Save link as” or “Save target as” to save it to that directory. The security system may try to scare you away, but you should stand up for yourself and do it anyway</li>
-    <li>From a command-line window, initialize <tt>grind</tt> by typing:<br>
+    <li>Make a folder in your user directory called <tt>bin</tt> (or pick your own location and remember it)</li>
+    <li>Add this directory to your <tt>Path</tt> using the Control Panel. Search online for help if you do not know how to do this</li>
+    <li>Download the <tt>grind.exe</tt> tool <a href="grind.exe">by right-clicking here</a> and selecting “Save link as” or “Save target as” to save it to that directory. If the security system tries to scare you away from doing this, stand up for yourself and do it anyway</li>
+    <li>From a Powershell window, initialize <tt>grind</tt> by typing:<br>
         <pre>grind init <script>document.write(document.location.hostname)</script></pre></li>
-    <li>When it asks you to go to Canvas and copy-and-paste the cookie, you can copy and paste this:<br>
+    <li>When it asks you to go to a special URL and copy the cookie, you can copy this and paste it into the terminal:<br>
         <pre><script>document.write(document.cookie.match('codegrinder=[^;]*')[0])</script></pre></li>
     </ol>
   </div>

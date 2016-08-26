@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"html"
 	"log"
 	"net/http"
 	"net/url"
@@ -602,7 +603,7 @@ func saveGrade(tx *sql.Tx, asst *Assignment, user *User, transcript string) erro
 
 	if strings.Contains(asst.OutcomeExtAccepted, "text") {
 		//outcomeURL = asst.OutcomeExtURL
-		gradeText = transcript
+		gradeText = "<pre>" + html.EscapeString(transcript) + "</pre>"
 	}
 
 	report := &GradeResponse{

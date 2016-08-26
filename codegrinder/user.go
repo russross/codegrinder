@@ -689,19 +689,9 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 
 		// post grade to LMS using LTI
 		var transcript bytes.Buffer
-		for _, elt := range signed.Commit.Transcript {
-			switch elt.Event {
-			case "exec":
-				transcript.WriteString("$ " + strings.Join(elt.ExecCommand, " ") + "\n")
-			case "exit":
-				if elt.ExitStatus != 0 {
-					transcript.WriteString("exit status " + strconv.Itoa(elt.ExitStatus) + "\n")
-				}
-			case "stdin", "stdout", "stderr":
-				transcript.WriteString(elt.StreamData)
-			case "error":
-				transcript.WriteString("Error: " + elt.Error + "\n")
-			}
+		if err := signed.Commit.DumpTranscript(&transcript); err != nil {
+			loggedHTTPErrorf(w, http.StatusInternalServerError, "error writing transcript: %v", err)
+			return
 		}
 		if err := saveGrade(tx, assignment, currentUser, transcript.String()); err != nil {
 			loggedHTTPErrorf(w, http.StatusInternalServerError, "error posting grade back to LMS: %v", err)

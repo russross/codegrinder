@@ -43,7 +43,6 @@ type ReportCardResult struct {
 //   error Error
 //   reportcard ReportCard
 //   files Files
-//   shutdown
 type EventMessage struct {
 	Time        time.Time         `json:"time"`
 	Event       string            `json:"event"`
@@ -78,8 +77,6 @@ func (e *EventMessage) String() string {
 			names = append(names, name)
 		}
 		return fmt.Sprintf("event: files %s", strings.Join(names, ", "))
-	case "shutdown":
-		return fmt.Sprintf("event: shutdown")
 	default:
 		return fmt.Sprintf("unknown event: %s", e.Event)
 	}

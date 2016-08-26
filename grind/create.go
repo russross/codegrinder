@@ -279,23 +279,8 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 			log.Printf("  solution for step %d failed: %s", n+1, validated.Commit.ReportCard.Note)
 
 			// play the transcript
-			for _, event := range validated.Commit.Transcript {
-				switch event.Event {
-				case "exec":
-					fmt.Printf("$ %s\n", strings.Join(event.ExecCommand, " "))
-				case "stdin":
-					fmt.Printf("%s", event.StreamData)
-				case "stdout":
-					fmt.Printf("%s", event.StreamData)
-				case "stderr":
-					fmt.Printf("%s", event.StreamData)
-				case "exit":
-					if event.ExitStatus != 0 {
-						fmt.Printf("exit status %d\n", event.ExitStatus)
-					}
-				case "error":
-					fmt.Printf("Error: %s\n", event.Error)
-				}
+			if err := validated.Commit.DumpTranscript(os.Stdout); err != nil {
+				log.Fatalf("failed to dump transcript: %v", err)
 			}
 			log.Fatalf("please fix solution and try again")
 		}
@@ -341,8 +326,6 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 }
 
 func mustConfirmCommitBundle(bundle *CommitBundle, args []string) *CommitBundle {
-	verbose := false
-
 	// create a websocket connection to the server
 	headers := make(http.Header)
 	url := "wss://" + bundle.Hostname + "/v2/sockets/" + bundle.Problem.ProblemType + "/" + bundle.Commit.Action
@@ -374,30 +357,13 @@ func mustConfirmCommitBundle(bundle *CommitBundle, args []string) *CommitBundle 
 		switch {
 		case reply.Error != "":
 			log.Printf("server returned an error:")
-			log.Fatalf("  %s", reply.Error)
+			log.Fatalf("   %s", reply.Error)
 
 		case reply.CommitBundle != nil:
 			return reply.CommitBundle
 
 		case reply.Event != nil:
-			if verbose {
-				switch reply.Event.Event {
-				case "exec":
-					fmt.Printf("$ %s\n", strings.Join(reply.Event.ExecCommand, " "))
-				case "stdin":
-					fmt.Printf("%s", reply.Event.StreamData)
-				case "stdout":
-					fmt.Printf("%s", reply.Event.StreamData)
-				case "stderr":
-					fmt.Printf("%s", reply.Event.StreamData)
-				case "exit":
-					if reply.Event.ExitStatus != 0 {
-						fmt.Printf("exit status %d\n", reply.Event.ExitStatus)
-					}
-				case "error":
-					fmt.Printf("Error: %s\n", reply.Event.Error)
-				}
-			}
+			// ignore the streamed data
 
 		default:
 			log.Fatalf("unexpected reply from server")

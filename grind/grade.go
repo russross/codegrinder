@@ -84,19 +84,8 @@ func CommandGrade(cmd *cobra.Command, args []string) {
 		}
 
 		// play the transcript
-		for _, event := range commit.Transcript {
-			switch event.Event {
-			case "exec":
-				fmt.Printf("$ %s\n", strings.Join(event.ExecCommand, " "))
-			case "stdin", "stdout", "stderr":
-				fmt.Printf("%s", event.StreamData)
-			case "exit":
-				if event.ExitStatus != 0 {
-					fmt.Printf("exit status %d\n", event.ExitStatus)
-				}
-			case "error":
-				fmt.Printf("Error: %s\n", event.Error)
-			}
+		if err := commit.DumpTranscript(os.Stdout); err != nil {
+			log.Fatalf("failed to dump transcript: %v", err)
 		}
 	}
 }

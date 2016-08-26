@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -72,10 +74,10 @@ func CommandAction(cmd *cobra.Command, args []string) {
 		log.Fatalf("server was unable to find a suitable daycare, unable to grade")
 	}
 	log.Printf("starting interactive session for %s step %d", problem.Unique, commit.Step)
-	runInteractiveSession(signed, nil)
+	runInteractiveSession(signed, nil, dir)
 }
 
-func runInteractiveSession(bundle *CommitBundle, args []string) {
+func runInteractiveSession(bundle *CommitBundle, args []string, dir string) {
 	// initialize the terminal
 	if err := termbox.Init(); err != nil {
 		log.Printf("initializing terminal: %v", err)
@@ -92,7 +94,8 @@ func runInteractiveSession(bundle *CommitBundle, args []string) {
 		vals.Set("COLUMNS", strconv.Itoa(sizex))
 		vals.Set("LINES", strconv.Itoa(sizey))
 	}
-	if term := os.Getenv("TERM"); term != "" {
+	term := os.Getenv("TERM")
+	if term != "" {
 		vals.Set("TERM", term)
 	}
 
@@ -124,7 +127,9 @@ func runInteractiveSession(bundle *CommitBundle, args []string) {
 	}
 
 	// vt100 escape code to show the cursor
-	fmt.Print("\033[?25h")
+	if term == "vt100" || term == "xterm" {
+		fmt.Print("\033[?25h")
+	}
 
 	go func() {
 		for {
@@ -220,6 +225,15 @@ func runInteractiveSession(bundle *CommitBundle, args []string) {
 				}
 			case "error":
 				fmt.Printf("Error: %s\n", reply.Event.Error)
+			case "files":
+				if reply.Event.Files != nil {
+					for name, contents := range reply.Event.Files {
+						log.Printf("downloading file %s", name)
+						if err := ioutil.WriteFile(filepath.Join(dir, name), []byte(contents), 0644); err != nil {
+							log.Fatalf("error saving file: %v", err)
+						}
+					}
+				}
 			}
 
 		default:

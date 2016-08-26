@@ -253,8 +253,8 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 			commit.Transcript = append(commit.Transcript, event)
 
 			switch event.Event {
-			case "exec", "exit", "stdin", "stdout", "stderr", "stdinclosed", "error":
-				if event.Event == "exec" {
+			case "exec", "exit", "stdin", "stdout", "stderr", "stdinclosed", "error", "files":
+				if event.Event == "exec" || event.Event == "files" {
 					log.Printf("%s", event)
 				}
 				res := &DaycareResponse{Event: event}
@@ -270,9 +270,6 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 
 			default:
 				// ignore other event types
-			}
-			if event.Event == "shutdown" {
-				break
 			}
 		}
 		rw.Close()
@@ -293,6 +290,20 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		logAndTransmitErrorf("handler for action %s is of wrong type", commit.Action)
 	}
 	commit.ReportCard = n.ReportCard
+
+	// download any files?
+	for _, option := range problem.Options {
+		parts := strings.SplitN(option, "=", 2)
+		if len(parts) != 2 || parts[0] != "download" {
+			continue
+		}
+		files, err := n.GetFiles(strings.Split(parts[1], ","))
+		if err != nil {
+			logAndTransmitErrorf("error trying to download files from container: %v", err)
+		} else if files != nil && len(files) > 0 {
+			n.Events <- &EventMessage{Event: "files", Files: files}
+		}
+	}
 
 	// shutdown the nanny
 	if err := n.Shutdown("action finished"); err != nil {
@@ -576,6 +587,10 @@ func (n *Nanny) PutFiles(files map[string]string) error {
 // GetFiles copies a set of files from the given container.
 // The container must be running.
 func (n *Nanny) GetFiles(filenames []string) (map[string]string, error) {
+	if n.Closed {
+		return nil, nil
+	}
+
 	// nothing to do?
 	if len(filenames) == 0 {
 		return nil, nil
