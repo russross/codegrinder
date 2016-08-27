@@ -55,13 +55,8 @@ func standardMLUnittestGrade(n *Nanny, args, options []string, files map[string]
 	log.Printf("standard ML unit test grade")
 
 	// create an a.out file
-	if err := n.PutFiles(map[string]string{"a.out": standardMLGradeAOut}); err != nil {
+	if err := n.PutFiles(map[string]string{"a.out": standardMLGradeAOut}, 0755); err != nil {
 		n.ReportCard.LogAndFailf("error creating a.out: %v", err)
-		return
-	}
-
-	// make it executable
-	if err := n.ExecSimple([]string{"chmod", "755", "a.out"}, nil, false); err != nil {
 		return
 	}
 
@@ -79,13 +74,8 @@ func standardMLRun(n *Nanny, args, options []string, files map[string]string, st
 	log.Printf("standard ML run")
 
 	// create an a.out file
-	if err := n.PutFiles(map[string]string{"a.out": standardMLRunAOut}); err != nil {
+	if err := n.PutFiles(map[string]string{"a.out": standardMLRunAOut}, 0755); err != nil {
 		n.ReportCard.LogAndFailf("error creating a.out: %v", err)
-		return
-	}
-
-	// make it executable
-	if err := n.ExecSimple([]string{"chmod", "755", "a.out"}, nil, false); err != nil {
 		return
 	}
 

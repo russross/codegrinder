@@ -330,8 +330,8 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	}()
 
 	// copy the files to the container
-	if err = n.PutFiles(files); err != nil {
-		n.ReportCard.LogAndFailf("PutFiles error: %v", err)
+	if err = n.PutFiles(files, 0644); err != nil {
+		n.ReportCard.LogAndFailf("uploading files: %v", err)
 		return
 	}
 
@@ -564,7 +564,7 @@ func (n *Nanny) Shutdown(msg string) error {
 
 // PutFiles copies a set of files to the given container.
 // The container must be running.
-func (n *Nanny) PutFiles(files map[string]string) error {
+func (n *Nanny) PutFiles(files map[string]string, mode int64) error {
 	// nothing to do?
 	if len(files) == 0 {
 		return nil
@@ -577,7 +577,7 @@ func (n *Nanny) PutFiles(files map[string]string) error {
 	for name, contents := range files {
 		header := &tar.Header{
 			Name:       name,
-			Mode:       0644,
+			Mode:       mode,
 			Uid:        int(n.UID),
 			Gid:        int(n.UID),
 			Size:       int64(len(contents)),
@@ -589,50 +589,29 @@ func (n *Nanny) PutFiles(files map[string]string) error {
 			ChangeTime: now,
 		}
 		if err := writer.WriteHeader(header); err != nil {
-			log.Printf("PutFiles: writing tar header: %v", err)
+			log.Printf("writing tar header: %v", err)
 			return err
 		}
 		if _, err := writer.Write([]byte(contents)); err != nil {
-			log.Printf("PutFiles: writing to tar file: %v", err)
+			log.Printf("writing to tar file: %v", err)
 			return err
 		}
 	}
 	if err := writer.Close(); err != nil {
-		log.Printf("PutFiles: closing tar file: %v", err)
+		log.Printf("closing tar file: %v", err)
 		return err
 	}
 
-	// exec tar in the container
-	exec, err := dockerClient.CreateExec(docker.CreateExecOptions{
-		AttachStdin:  true,
-		AttachStdout: true,
-		AttachStderr: true,
-		Tty:          false,
-		Cmd:          []string{"/bin/tar", "xf", "-"},
-		Container:    n.Container.ID,
-		User:         uidgid(n.UID),
+	// upload the archive
+	err := dockerClient.UploadToContainer(n.Container.ID, docker.UploadToContainerOptions{
+		InputStream:          buf,
+		Path:                 "/home/student",
+		NoOverwriteDirNonDir: true,
 	})
-	if err != nil {
-		log.Printf("PutFiles: creating exec command: %v", err)
-		return err
-	}
-	out := new(bytes.Buffer)
-	err = dockerClient.StartExec(exec.ID, docker.StartExecOptions{
-		Detach:       false,
-		Tty:          false,
-		InputStream:  buf,
-		OutputStream: out,
-		ErrorStream:  out,
-		RawTerminal:  false,
-	})
-	if err != nil {
-		log.Printf("PutFiles: starting exec command: %v", err)
-		return err
-	}
 
-	if out.Len() != 0 {
-		log.Printf("PutFiles: tar output: %q", out.String())
-		return fmt.Errorf("PutFiles: tar gave non-empty output")
+	if err != nil {
+		log.Printf("unloading files to container: %v", err)
+		return err
 	}
 	return nil
 }
