@@ -48,7 +48,7 @@ var Config struct {
 	// ta-only required parameters
 	LTISecret     string `json:"ltiSecret"`     // LTI authentication shared secret. Must match that given to Canvas course: `head -c 32 /dev/urandom | base64`
 	SessionSecret string `json:"sessionSecret"` // Random string used to sign cookie sessions: `head -c 32 /dev/urandom | base64`
-	StaticDir     string `json:"staticDir"`     // Full path of directory holding static files to serve: "/home/foo/codegrinder/www"
+	WWWDir        string `json:"wwwDir"`        // Full path of directory holding static files to serve: "/home/foo/codegrinder/www"
 	FilesDir      string `json:"filesDir""`     // Full path of directory holding problem-type files: "/home/foo/codegrinder/files"
 
 	// daycare-only required parameters
@@ -160,7 +160,7 @@ func main() {
 			}
 		}
 
-		m.Use(martini.Static(Config.StaticDir, martini.StaticOptions{SkipLogging: true}))
+		m.Use(martini.Static(Config.WWWDir, martini.StaticOptions{SkipLogging: true}))
 		store := sessions.NewCookieStore([]byte(Config.SessionSecret))
 		m.Use(sessions.Sessions(CookieName, store))
 
@@ -194,8 +194,8 @@ func main() {
 		if Config.SessionSecret == "" {
 			log.Fatalf("cannot run TA role with no sessionSecret in the config file")
 		}
-		if Config.StaticDir == "" {
-			log.Fatalf("cannot run TA role with no staticDir in the config file")
+		if Config.WWWDir == "" {
+			log.Fatalf("cannot run TA role with no wwwDir in the config file")
 		}
 		if Config.FilesDir == "" {
 			log.Fatalf("cannot run TA role with no filesDir in the config file")

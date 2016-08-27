@@ -116,7 +116,7 @@ For the node running the TA role, you should add these keys:
 
         "ltiSecret": "",
         "sessionSecret": "",
-        "staticDir": "/home/username/src/github.com/russross/codegrinder/www",
+        "wwwDir": "/home/username/src/github.com/russross/codegrinder/www",
         "filesDir": "/home/username/src/github.com/russross/codegrinder/files",
 
 and for nodes running the daycare role, you should add these keys:
@@ -138,7 +138,7 @@ run it again and copy the output to `sessionSecret`, then run it a
 third time and copy the output to `daycareSecret`. The
 `daycareSecret` value must be shared by all nodes.
 
-The `staticDir` field is where the client code resides. There is a
+The `wwwDir` field is where the client code resides. There is a
 placeholder page that helps students set up the `grind` tool in the
 `www` directory of the distribution, so I suggest pointing it there.
 The CodeGrinder TA server will serve any static files in the given
