@@ -64,7 +64,7 @@ installation, so use this with caution.
 ### Install Docker (daycare nodes only)
 
 Install and configure Docker, and add your CodeGrinder user to the
-docker group so it can manage containers without being root. Note
+`docker` group so it can manage containers without being root. Note
 that you only need this on daycare nodes.
 
 
@@ -99,7 +99,7 @@ root.
 Next, configure CodeGrinder:
 
     sudo mkdir /etc/codegrinder
-    sudo chown username.username /etc/codegrinder
+    sudo chown $USER.$USER /etc/codegrinder
 
 Create a config file that is customized for your installation. It
 should be saved as `/etc/codegrinder/config.json` and its contents
@@ -138,9 +138,10 @@ run it again and copy the output to `sessionSecret`, then run it a
 third time and copy the output to `daycareSecret`. The
 `daycareSecret` value must be shared by all nodes.
 
-The `staticDir` field is where the client code resides. It does not
-exist right now, so this setting is not too important yet. The
-CodeGrinder TA server will serve any static files in the given
+The `staticDir` field is where the client code resides. There is a
+placeholder page that helps students set up the `grind` tool in the
+`www` directory of the distribution, so I suggest pointing it there.
+The CodeGrinder TA server will serve any static files in the given
 directory.
 
 Note that there are other settings available that allow you to
@@ -157,7 +158,7 @@ Leave it running in a terminal so you can watch the log output.
 
 For normal use, you will want systemd to manage it:
 
-    sudo cp $GOPATH/src/github.com/russross/codegrinder/setup/codegrinder.service /lib/systemd/system
+    sudo cp $GOPATH/src/github.com/russross/codegrinder/setup/codegrinder.service /lib/systemd/system/
 
 Then edit the file you have copied to customize it. In particular,
 set the options in the executable to run as -ta, -daycare, or both,

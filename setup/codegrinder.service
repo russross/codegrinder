@@ -1,5 +1,5 @@
 [Unit]
-Description=Codegrinder main service
+Description=CodeGrinder main service
 Requires=postgresql.service
 After=postgresql.service
 Requires=docker.service
