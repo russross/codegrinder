@@ -44,7 +44,7 @@ func init() {
 	}
 }
 
-var standardMLGradeAOut = `#!/bin/bash
+var standardMLGradeScript = `#!/bin/bash
 set -e
 ln -s tests/*.sml ./
 rm -f test_detail.xml
@@ -54,17 +54,17 @@ poly < tests.sml
 func standardMLUnittestGrade(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
 	log.Printf("standard ML unit test grade")
 
-	// create an a.out file
-	if err := n.PutFiles(map[string]string{"a.out": standardMLGradeAOut}, 0755); err != nil {
-		n.ReportCard.LogAndFailf("error creating a.out: %v", err)
+	// create a script file
+	if err := n.PutFiles(map[string]string{"runtests.sh": standardMLGradeScript}, 0755); err != nil {
+		n.ReportCard.LogAndFailf("error creating runtests.sh: %v", err)
 		return
 	}
 
-	// run a.out and parse the output (in common with c++)
-	gTestAOutCommon(n, files, nil)
+	// run script and parse XML output
+	parseXUnit(n, []string{"./runtests.sh"}, nil, "test_detail.xml")
 }
 
-var standardMLRunAOut = `#!/bin/bash
+var standardMLRunScript = `#!/bin/bash
 set -e
 echo ';' > /tmp/semi
 cat *.sml /tmp/semi - | poly
@@ -73,14 +73,14 @@ cat *.sml /tmp/semi - | poly
 func standardMLRun(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
 	log.Printf("standard ML run")
 
-	// create an a.out file
-	if err := n.PutFiles(map[string]string{"a.out": standardMLRunAOut}, 0755); err != nil {
+	// create a driver script file
+	if err := n.PutFiles(map[string]string{"runpoly.sh": standardMLRunScript}, 0755); err != nil {
 		n.ReportCard.LogAndFailf("error creating a.out: %v", err)
 		return
 	}
 
 	// run a.out
-	n.ExecSimple([]string{"./a.out"}, stdin, true)
+	n.ExecSimple([]string{"./runpoly.sh"}, stdin, true)
 }
 
 func standardMLShell(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {

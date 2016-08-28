@@ -93,8 +93,8 @@ func asGTestGrade(n *Nanny, args, options []string, files map[string]string, std
 		return
 	}
 
-	// run a.out and parse the output (in common with c++)
-	gTestAOutCommon(n, files, nil)
+	// parse the output (in common with c++)
+	parseXUnit(n, []string{"./a.out", "--gtest_output=xml"}, nil, "test_detail.xml")
 }
 
 func asCompileAndLink(n *Nanny, files map[string]string) {
@@ -143,10 +143,9 @@ func asCompileAndLink(n *Nanny, files map[string]string) {
 	return
 }
 
-func gTestAOutCommon(n *Nanny, files map[string]string, stdin io.Reader) {
-	// run a.out with XML output
-	_, _, _, status, err := n.Exec([]string{"./a.out", "--gtest_output=xml"}, stdin, false)
-
+func parseXUnit(n *Nanny, cmd []string, stdin io.Reader, filename string) {
+	// run tests with XML output
+	_, _, _, status, err := n.Exec(cmd, stdin, false)
 	if err != nil {
 		n.ReportCard.LogAndFailf("Error running unit tests: %v", err)
 		return
@@ -157,16 +156,16 @@ func gTestAOutCommon(n *Nanny, files map[string]string, stdin io.Reader) {
 		n.ReportCard.LogAndFailf("Unit tests did not finish normally, exit status %d", status)
 		return
 	}
+	n.ReportCard.Passed = status == 0
 
 	// parse the test results
-	n.ReportCard.Passed = status == 0
-	xmlfiles, err := n.GetFiles([]string{"test_detail.xml"})
+	xmlfiles, err := n.GetFiles([]string{filename})
 	if err != nil {
 		n.ReportCard.LogAndFailf("Unit test failed: unable to read results")
 		return
 	}
 	results := new(GTestProgram)
-	if err = xml.Unmarshal([]byte(xmlfiles["test_detail.xml"]), results); err != nil {
+	if err = xml.Unmarshal([]byte(xmlfiles[filename]), results); err != nil {
 		n.ReportCard.LogAndFailf("error parsing unit test results: %v", err)
 		return
 	}
