@@ -193,7 +193,7 @@ func CommandGet(cmd *cobra.Command, args []string) {
 				}
 			}
 			if _, err := os.Lstat(path); err == nil {
-				log.Fatalf("problem type file would overwrite problem file, quitting: %s", path)
+				log.Printf("Warning! Problem type file is overwriting problem file: %s", path)
 			}
 			if err := ioutil.WriteFile(path, []byte(contents), 0644); err != nil {
 				log.Fatalf("error saving file %s: %v", path, err)

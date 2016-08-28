@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
-	"html"
 	"log"
 	"net/http"
 	"net/url"
@@ -586,7 +585,7 @@ func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Co
 	return asst, nil
 }
 
-func saveGrade(tx *sql.Tx, asst *Assignment, user *User, transcript string) error {
+func saveGrade(tx *sql.Tx, asst *Assignment, user *User, text string) error {
 	if asst.GradeID == "" {
 		log.Printf("cannot post grade for assignment %d user %d (%s) because no grade ID is present", asst.ID, asst.UserID, user.Name)
 		return nil
@@ -603,7 +602,7 @@ func saveGrade(tx *sql.Tx, asst *Assignment, user *User, transcript string) erro
 
 	if strings.Contains(asst.OutcomeExtAccepted, "text") {
 		//outcomeURL = asst.OutcomeExtURL
-		gradeText = "<pre>" + html.EscapeString(transcript) + "</pre>"
+		gradeText = text
 	}
 
 	report := &GradeResponse{

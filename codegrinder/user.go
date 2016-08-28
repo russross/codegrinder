@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"database/sql"
 	"fmt"
+	"html"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -693,7 +695,24 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 			loggedHTTPErrorf(w, http.StatusInternalServerError, "error writing transcript: %v", err)
 			return
 		}
-		if err := saveGrade(tx, assignment, currentUser, transcript.String()); err != nil {
+
+		// record the grading transcript
+		var report bytes.Buffer
+		fmt.Fprintf(&report, "<h1>Grading transcript</h1>\n<pre>%s</pre>\n", html.EscapeString(transcript.String()))
+
+		// add all of the student files
+		var names []string
+		for name := range signed.Commit.Files {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			contents := signed.Commit.Files[name]
+			fmt.Fprintf(&report, "<h1>File: <code>%s</code></h1>\n<pre><code>%s</code></pre>\n",
+				html.EscapeString(name), html.EscapeString(contents))
+		}
+
+		if err := saveGrade(tx, assignment, currentUser, report.String()); err != nil {
 			loggedHTTPErrorf(w, http.StatusInternalServerError, "error posting grade back to LMS: %v", err)
 			return
 		}

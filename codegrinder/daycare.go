@@ -211,12 +211,15 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		return
 	}
 
-	// collect the files from the problem step and overlay the files from the commit
+	// collect the files from the problem step, commit, and problem type
 	files := make(map[string]string)
 	for name, contents := range step.Files {
 		files[name] = contents
 	}
 	for name, contents := range commit.Files {
+		files[name] = contents
+	}
+	for name, contents := range problemType.Files {
 		files[name] = contents
 	}
 
