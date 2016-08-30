@@ -1,29 +1,21 @@
-CREATE TYPE problem_types AS ENUM (
-    'python27inout',
-    'python27unittest',
-    'cppgtest',
-    'cppinout',
-    'gotest',
-    'nand2tetrishardware',
-    'nand2tetrisassembly',
-    'nasmgtest',
-    'ocamlounit',
-    'prologunittest',
-    'standardmlunittest',
-    'armv6asm'
+CREATE TABLE problem_types (
+    problem_type            text NOT NULL,
+
+    PRIMARY KEY (problem_type)
 );
 
 CREATE TABLE problems (
     id                      bigserial NOT NULL,
     unique_id               text NOT NULL,
     note                    text NOT NULL,
-    problem_type            problem_types NOT NULL,
+    problem_type            text NOT NULL,
     tags                    jsonb NOT NULL,
     options                 jsonb NOT NULL,
     created_at              timestamp with time zone NOT NULL,
     updated_at              timestamp with time zone NOT NULL,
 
-    PRIMARY KEY (id)
+    PRIMARY KEY (id),
+    FOREIGN KEY (problem_type) REFERENCES problem_types (problem_type) ON DELETE CASCADE
 );
 CREATE UNIQUE INDEX problems_unique_id ON problems (unique_id);
 

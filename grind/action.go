@@ -127,7 +127,8 @@ func runInteractiveSession(bundle *CommitBundle, args []string, dir string) {
 	}
 
 	// vt100 escape code to show the cursor
-	if term == "vt100" || term == "xterm" {
+	if strings.HasPrefix(strings.ToLower(term), "vt100") ||
+		strings.HasPrefix(strings.ToLower(term), "xterm") {
 		fmt.Print("\033[?25h")
 	}
 
