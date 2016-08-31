@@ -37,7 +37,7 @@ func CommandList(cmd *cobra.Command, args []string) {
 		// fetch the problem
 		problemSet := new(ProblemSet)
 		mustGetObject(fmt.Sprintf("/problem_sets/%d", asst.ProblemSetID), nil, problemSet)
-		fmt.Printf("%d: %s (%s/%s)\n", asst.ID, asst.CanvasTitle, course.Label, problemSet.Unique)
+		fmt.Printf("id:%d %s (%s/%s)\n", asst.ID, asst.CanvasTitle, course.Label, problemSet.Unique)
 	}
 }
 
