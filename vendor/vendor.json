@@ -213,12 +213,6 @@
 			"revisionTime": "2016-06-14T16:21:01Z"
 		},
 		{
-			"checksumSHA1": "bcgbmZhNRsfsLgd8obtn7yIey6I=",
-			"path": "github.com/nsf/termbox-go",
-			"revision": "e8f6d27f72a2f2bb598eb3579afd5ea364ef67f7",
-			"revisionTime": "2016-08-08T04:50:38Z"
-		},
-		{
 			"checksumSHA1": "3AoPMXlmVq2+iWMpsdJZkcUKHB8=",
 			"path": "github.com/opencontainers/runc/libcontainer/user",
 			"revision": "8fbe19e0201569321a7398aee39158ae12793ced",
@@ -307,6 +301,12 @@
 			"path": "golang.org/x/crypto/ocsp",
 			"revision": "811831de4c4dd03a0b8737233af3b36852386373",
 			"revisionTime": "2016-06-21T01:10:02Z"
+		},
+		{
+			"checksumSHA1": "y3a1tOZVwKCqG2yJZvAYycnelyM=",
+			"path": "golang.org/x/crypto/ssh/terminal",
+			"revision": "9fbab14f903f89e23047b5971369b86380230e56",
+			"revisionTime": "2016-08-16T14:28:56Z"
 		},
 		{
 			"checksumSHA1": "9jjO5GjLa0XF/nfWihF02RoH4qc=",

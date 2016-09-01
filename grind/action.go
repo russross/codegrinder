@@ -14,9 +14,10 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/crypto/ssh/terminal"
+
 	"github.com/gorilla/websocket"
 	. "github.com/russross/codegrinder/common"
-	termbox "github.com/russross/termbox-go"
 	"github.com/spf13/cobra"
 )
 
@@ -78,24 +79,31 @@ func CommandAction(cmd *cobra.Command, args []string) {
 }
 
 func runInteractiveSession(bundle *CommitBundle, args []string, dir string) {
+	stdin := int(os.Stdin.Fd())
+	if !terminal.IsTerminal(stdin) {
+		log.Printf("not a terminal")
+	}
+
 	// initialize the terminal
-	if err := termbox.Init(); err != nil {
+	if oldState, err := terminal.MakeRaw(stdin); err != nil {
 		log.Printf("initializing terminal: %v", err)
 		return
+	} else {
+		defer terminal.Restore(stdin, oldState)
 	}
-	defer termbox.Close()
 
 	headers := make(http.Header)
 	vals := url.Values{}
 
 	// get the terminal size
-	sizex, sizey := termbox.Size()
-	if sizex > 0 && sizey > 0 {
+	sizex, sizey, err := terminal.GetSize(stdin)
+	if err != nil {
+		log.Printf("error getting terminal size: %v", err)
+	} else if sizex > 0 && sizey > 0 {
 		vals.Set("COLUMNS", strconv.Itoa(sizex))
 		vals.Set("LINES", strconv.Itoa(sizey))
 	}
-	term := os.Getenv("TERM")
-	if term != "" {
+	if term := os.Getenv("TERM"); term != "" {
 		vals.Set("TERM", term)
 	}
 
@@ -126,119 +134,94 @@ func runInteractiveSession(bundle *CommitBundle, args []string, dir string) {
 		return
 	}
 
-	// vt100 escape code to show the cursor
-	if strings.HasPrefix(strings.ToLower(term), "vt100") ||
-		strings.HasPrefix(strings.ToLower(term), "xterm") {
-		fmt.Print("\033[?25h")
-	}
-
 	go func() {
 		for {
-			key := []byte{}
-			switch event := termbox.PollEvent(); event.Type {
-			case termbox.EventKey:
-				if event.Key > 0 && event.Key <= termbox.KeyBackspace2 {
-					key = append(key, byte(event.Key))
-				} else if event.Ch != 0 {
-					key = append(key, byte(event.Ch))
-				} else {
-					// interpret some special keys using VT100 escape sequences
-					switch event.Key {
-					case termbox.KeyArrowUp:
-						key = append(key, '\033', '[', 'A')
-					case termbox.KeyArrowDown:
-						key = append(key, '\033', '[', 'B')
-					case termbox.KeyArrowRight:
-						key = append(key, '\033', '[', 'C')
-					case termbox.KeyArrowLeft:
-						key = append(key, '\033', '[', 'D')
-					case termbox.KeyInsert:
-						key = append(key, '\033', '[', '2', '~')
-					case termbox.KeyDelete:
-						key = append(key, '\033', '[', '3', '~')
-					case termbox.KeyHome:
-						key = append(key, '\033', '[', 'H')
-					case termbox.KeyEnd:
-						key = append(key, '\033', '[', 'F')
-					case termbox.KeyPgup:
-						key = append(key, '\033', '[', '5', '~')
-					case termbox.KeyPgdn:
-						key = append(key, '\033', '[', '6', '~')
-					}
-				}
-				if len(key) > 0 {
-					stdinReq := &DaycareRequest{Stdin: string(key)}
-					dumpOutgoing(stdinReq)
-					if err := socket.WriteJSON(stdinReq); err != nil {
-						log.Printf("error writing stdin request message: %v", err)
-						return
-					}
-				} else {
-					log.Printf("unimplemented input event %v", event)
-				}
-
-			case termbox.EventError:
-				log.Printf("terminal error: %v", err)
+			buffer := make([]byte, 256)
+			count, err := os.Stdin.Read(buffer)
+			if count == 0 && err == io.EOF {
 				closeReq := &DaycareRequest{CloseStdin: true}
 				dumpOutgoing(closeReq)
 				if err := socket.WriteJSON(closeReq); err != nil {
 					log.Printf("error writing stdin request message: %v", err)
 					return
 				}
+			} else if err != nil {
+				log.Printf("terminal error: %v", err)
+				closeReq := &DaycareRequest{CloseStdin: true}
+				dumpOutgoing(closeReq)
+				if err := socket.WriteJSON(closeReq); err != nil {
+					log.Printf("error writing stdin request message: %v", err)
+				}
 				return
+			}
+
+			if count > 0 {
+				stdinReq := &DaycareRequest{Stdin: string(buffer[:count])}
+				dumpOutgoing(stdinReq)
+				if err := socket.WriteJSON(stdinReq); err != nil {
+					log.Printf("error writing stdin request message: %v", err)
+					return
+				}
 			}
 		}
 	}()
 
 	// start listening for events
+	cr := func(s string) string {
+		pieces := strings.Split(s, "\r\n")
+		for i := range pieces {
+			pieces[i] = strings.Replace(pieces[i], "\n", "\r\n", -1)
+		}
+		return strings.Join(pieces, "\r\n")
+	}
 	for {
 		reply := new(DaycareResponse)
 		if err := socket.ReadJSON(reply); err != nil {
 			//log.Printf("socket error reading event: %v", err)
-			log.Printf("session closed by server")
+			log.Printf("session closed by server\r")
 			return
 		}
 		dumpIncoming(reply)
 
 		switch {
 		case reply.Error != "":
-			log.Printf("server returned an error:")
-			log.Printf("  %s", reply.Error)
+			log.Printf("server returned an error:\r")
+			log.Printf("  %s\r", reply.Error)
 			return
 
 		case reply.CommitBundle != nil:
-			log.Printf("commit bundle returned, quitting")
+			log.Printf("commit bundle returned, quitting\r")
 			return
 
 		case reply.Event != nil:
 			switch reply.Event.Event {
 			case "exec":
-				fmt.Printf("$ %s\n", strings.Join(reply.Event.ExecCommand, " "))
+				fmt.Printf("$ %s\r\n", strings.Join(reply.Event.ExecCommand, " "))
 			case "stdin":
-				fmt.Printf("%s", reply.Event.StreamData)
+				fmt.Printf("%s", cr(reply.Event.StreamData))
 			case "stdout":
-				fmt.Printf("%s", reply.Event.StreamData)
+				fmt.Printf("%s", cr(reply.Event.StreamData))
 			case "stderr":
-				fmt.Fprintf(os.Stderr, "%s", reply.Event.StreamData)
+				fmt.Fprintf(os.Stderr, "%s", cr(reply.Event.StreamData))
 			case "exit":
 				if reply.Event.ExitStatus != 0 {
-					fmt.Printf("exit status %d\n", reply.Event.ExitStatus)
+					fmt.Printf("exit status %d\r\n", reply.Event.ExitStatus)
 				}
 			case "error":
-				fmt.Printf("Error: %s\n", reply.Event.Error)
+				fmt.Printf("Error: %s\r\n", reply.Event.Error)
 			case "files":
 				if reply.Event.Files != nil {
 					for name, contents := range reply.Event.Files {
-						log.Printf("downloading file %s", name)
+						log.Printf("downloading file %s\r", name)
 						if err := ioutil.WriteFile(filepath.Join(dir, name), []byte(contents), 0644); err != nil {
-							log.Fatalf("error saving file: %v", err)
+							log.Fatalf("error saving file: %v\r", err)
 						}
 					}
 				}
 			}
 
 		default:
-			log.Printf("unexpected reply from server")
+			log.Printf("unexpected reply from server\r")
 			return
 		}
 	}
