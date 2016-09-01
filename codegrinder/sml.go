@@ -80,11 +80,11 @@ func standardMLRun(n *Nanny, args, options []string, files map[string]string, st
 	}
 
 	// run a.out
-	n.ExecSimple([]string{"./runpoly.sh"}, stdin, true)
+	n.ExecSimple([]string{"ledit", "./runpoly.sh"}, stdin, true)
 }
 
 func standardMLShell(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
 	log.Printf("standard ML shell")
 
-	n.ExecSimple([]string{"poly"}, stdin, true)
+	n.ExecSimple([]string{"ledit", "poly"}, stdin, true)
 }

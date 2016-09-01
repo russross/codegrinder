@@ -450,12 +450,19 @@ func NewNanny(problemType *ProblemType, problem *Problem, interactive bool, args
 		Image:           problemType.Image,
 		NetworkDisabled: true,
 	}
+	height, width := 0, 0
 	for _, s := range args {
 		if strings.HasPrefix(s, "COLUMNS=") {
 			config.Env = append(config.Env, s)
+			if n, err := strconv.Atoi(s[len("COLUMNS="):]); err == nil && n > 0 {
+				width = n
+			}
 		}
 		if strings.HasPrefix(s, "LINES=") {
 			config.Env = append(config.Env, s)
+			if n, err := strconv.Atoi(s[len("LINES="):]); err == nil && n > 0 {
+				height = n
+			}
 		}
 		if strings.HasPrefix(s, "TERM=") {
 			config.Env = append(config.Env, s)
@@ -515,6 +522,16 @@ func NewNanny(problemType *ProblemType, problem *Problem, interactive bool, args
 			log.Printf("CreateContainer: %v", err)
 			releaseUID(uid)
 			return nil, err
+		}
+	}
+
+	// resize it
+	if interactive && width > 0 && height > 0 {
+		err := dockerClient.ResizeContainerTTY(container.ID, width, height)
+		if err != nil {
+			log.Printf("resize tty error: %v", err)
+		} else {
+			log.Printf("resize tty succeeded")
 		}
 	}
 
