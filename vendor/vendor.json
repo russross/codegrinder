@@ -183,12 +183,6 @@
 			"revisionTime": "2015-07-07T14:21:08Z"
 		},
 		{
-			"checksumSHA1": "5X9gKYDcjO/gqmaZBlWVUu8S35E=",
-			"path": "github.com/martini-contrib/sessions",
-			"revision": "fa13114fbcf036dff8185d728651d85fcef772db",
-			"revisionTime": "2014-06-30T23:17:22Z"
-		},
-		{
 			"checksumSHA1": "6wAWOVRtaH7hX48hmw9o7noyy5Q=",
 			"path": "github.com/mattn/go-colorable",
 			"revision": "9056b7a9f2d1f2d96498d6d146acd1f9d5ed3d59",
@@ -259,6 +253,12 @@
 			"path": "github.com/russross/meddler",
 			"revision": "f742b0f9424f3bfaffe189e921d734608929e84f",
 			"revisionTime": "2015-05-13T15:34:18Z"
+		},
+		{
+			"checksumSHA1": "ryI+AT5AbL+YuM+RErw4yekiVQs=",
+			"path": "github.com/russross/sessions",
+			"revision": "fa13114fbcf036dff8185d728651d85fcef772db",
+			"revisionTime": "2014-06-30T23:17:22Z"
 		},
 		{
 			"checksumSHA1": "W0r+n2/fzb16hZCu5FtceF7utCU=",

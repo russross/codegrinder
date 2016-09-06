@@ -698,7 +698,16 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 
 		// record the grading transcript
 		var report bytes.Buffer
-		fmt.Fprintf(&report, "<h1>Grading transcript</h1>\n<pre>%s</pre>\n", html.EscapeString(transcript.String()))
+		if len(problemWeights) > 1 && len(signed.ProblemSteps) > 1 {
+			fmt.Fprintf(&report, "<h1>Grading transcript for problem %s step %d</h1>\n", signed.Problem.Unique, signed.Commit.Step)
+		} else if len(problemWeights) > 1 {
+			fmt.Fprintf(&report, "<h1>Grading transcript for problem %s</h1>\n", signed.Problem.Unique)
+		} else if len(signed.ProblemSteps) > 1 {
+			fmt.Fprintf(&report, "<h1>Grading transcript for step %d</h1>\n", signed.Commit.Step)
+		} else {
+			fmt.Fprintf(&report, "<h1>Grading transcript</h1>\n")
+		}
+		fmt.Fprintf(&report, "<pre>%s</pre>\n", html.EscapeString(transcript.String()))
 
 		// add all of the student files
 		var names []string

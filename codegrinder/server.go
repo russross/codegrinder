@@ -30,9 +30,9 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/martini-contrib/binding"
 	"github.com/martini-contrib/render"
-	"github.com/martini-contrib/sessions"
 	. "github.com/russross/codegrinder/common"
 	"github.com/russross/meddler"
+	"github.com/russross/sessions"
 	"github.com/sergi/go-diff/diffmatchpatch"
 	"rsc.io/letsencrypt"
 )
@@ -181,8 +181,13 @@ func main() {
 					// so expire this June 30 instead
 					expires = time.Date(now.Year(), time.June, 30, 23, 59, 59, 0, time.Local)
 				}
-				store.Options(sessions.Options{Path: "/", Secure: true, MaxAge: int(expires.Sub(now).Seconds())})
-				time.Sleep(11 * time.Minute)
+				store.Options(sessions.Options{
+					Domain: Config.Hostname,
+					Path:   "/",
+					Secure: true,
+					MaxAge: int(expires.Sub(now).Seconds()),
+				})
+				time.Sleep(11 * time.Hour)
 			}
 		}()
 		time.Sleep(5 * time.Millisecond)

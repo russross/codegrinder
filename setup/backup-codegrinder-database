@@ -1,0 +1,9 @@
+#!/bin/sh
+
+DIR=/home/russ/backup
+DAY=`date '+%Y-%m-%d'`
+MONTH=`date '+%Y-%m'`
+FILE=database_$DAY.sql.xz
+
+/usr/bin/sudo -u russ /usr/bin/pg_dump russ | /usr/bin/xz > $DIR/$FILE
+/bin/chown russ.russ $DIR/$FILE
