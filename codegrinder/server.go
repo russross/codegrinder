@@ -182,7 +182,6 @@ func main() {
 					expires = time.Date(now.Year(), time.June, 30, 23, 59, 59, 0, time.Local)
 				}
 				store.Options(sessions.Options{
-					Domain: Config.Hostname,
 					Path:   "/",
 					Secure: true,
 					MaxAge: int(expires.Sub(now).Seconds()),
