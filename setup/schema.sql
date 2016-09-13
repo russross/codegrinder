@@ -1,7 +1,26 @@
 CREATE TABLE problem_types (
-    problem_type            text NOT NULL,
+    name                    text NOT NULL,
+    image                   text NOT NULL,
 
-    PRIMARY KEY (problem_type)
+    PRIMARY KEY (name)
+);
+
+CREATE TABLE problem_type_actions (
+    problem_type            text NOT NULL,
+    action                  text NOT NULL,
+    button                  text NOT NULL,
+    message                 text NOT NULL,
+    interactive             boolean NOT NULL,
+    max_cpu                 bigint NOT NULL,
+    max_session             bigint NOT NULL,
+    max_timeout             bigint NOT NULL,
+    max_fd                  bigint NOT NULL,
+    max_file_size           bigint NOT NULL,
+    max_memory              bigint NOT NULL,
+    max_threads             bigint NOT NULL,
+
+    PRIMARY KEY (problem_type, action),
+    FOREIGN KEY (problem_type) REFERENCES problem_types (name) ON DELETE CASCADE
 );
 
 CREATE TABLE problems (
@@ -15,7 +34,7 @@ CREATE TABLE problems (
     updated_at              timestamp with time zone NOT NULL,
 
     PRIMARY KEY (id),
-    FOREIGN KEY (problem_type) REFERENCES problem_types (problem_type) ON DELETE CASCADE
+    FOREIGN KEY (problem_type) REFERENCES problem_types (name) ON DELETE CASCADE
 );
 CREATE UNIQUE INDEX problems_unique_id ON problems (unique_id);
 
@@ -145,7 +164,7 @@ CREATE VIEW user_problem_sets AS
     (SELECT DISTINCT instructors.id AS user_id, assignments.problem_set_id AS problem_set_id FROM
     users AS instructors JOIN assignments AS instructors_assignments ON instructors.id = instructors_assignments.user_id
     JOIN courses ON instructors_assignments.course_id = courses.id
-    JOIN assignments ON courses.id = assignments.id
+    JOIN assignments ON courses.id = assignments.course_id
     WHERE instructors_assignments.instructor);
 
 CREATE VIEW user_problems AS
@@ -156,7 +175,7 @@ CREATE VIEW user_problems AS
     (SELECT DISTINCT instructors.id AS user_id, problem_set_problems.problem_id FROM
     users AS instructors JOIN assignments AS instructors_assignments ON instructors.id = instructors_assignments.user_id
     JOIN courses ON instructors_assignments.course_id = courses.id
-    JOIN assignments ON courses.id = assignments.id
+    JOIN assignments ON courses.id = assignments.course_id
     JOIN problem_sets ON assignments.problem_set_id = problem_sets.id
     JOIN problem_set_problems ON problem_sets.id = problem_set_problems.problem_id
     WHERE instructors_assignments.instructor);
@@ -165,7 +184,7 @@ CREATE VIEW user_users AS
     (SELECT DISTINCT instructors.id AS user_id, users.id AS other_user_id FROM
     users AS instructors JOIN assignments AS instructors_assignments ON instructors.id = instructors_assignments.user_id
     JOIN courses ON instructors_assignments.course_id = courses.id
-    JOIN assignments ON courses.id = assignments.id
+    JOIN assignments ON courses.id = assignments.course_id
     JOIN users ON assignments.user_id = users.id
     WHERE instructors_assignments.instructor)
     UNION
@@ -175,7 +194,7 @@ CREATE VIEW user_assignments AS
     (SELECT DISTINCT instructors.id AS user_id, assignments.id AS assignment_id FROM
     users AS instructors JOIN assignments AS instructors_assignments ON instructors.id = instructors_assignments.user_id
     JOIN courses ON instructors_assignments.course_id = courses.id
-    JOIN assignments ON courses.id = assignments.id
+    JOIN assignments ON courses.id = assignments.course_id
     WHERE instructors_assignments.instructor)
     UNION
     (SELECT user_id, id as assignment_id FROM assignments);
