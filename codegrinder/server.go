@@ -293,8 +293,8 @@ func main() {
 		r.Post("/v2/problem_set_bundles", auth, withTx, withCurrentUser, authorOnly, binding.Json(ProblemSetBundle{}), PostProblemSetBundle)
 
 		// problem types
-		r.Get("/v2/problem_types", auth, GetProblemTypes)
-		r.Get("/v2/problem_types/:name", auth, GetProblemType)
+		r.Get("/v2/problem_types", auth, withTx, GetProblemTypes)
+		r.Get("/v2/problem_types/:name", auth, withTx, GetProblemType)
 
 		// problems
 		r.Get("/v2/problems", auth, withTx, withCurrentUser, GetProblems)

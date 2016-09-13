@@ -18,7 +18,7 @@ import (
 // returning a complete list of problem types.
 func GetProblemTypes(w http.ResponseWriter, tx *sql.Tx, render render.Render) {
 	problemTypes := []*ProblemType{}
-	err := meddler.QueryAll(tx, &problemTypes, `SELECT name FROM problem_types ORDER BY name`)
+	err := meddler.QueryAll(tx, &problemTypes, `SELECT * FROM problem_types ORDER BY name`)
 	if err != nil {
 		loggedHTTPDBNotFoundError(w, err)
 		return

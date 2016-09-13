@@ -239,6 +239,13 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		files[name] = contents
 	}
 
+	// fill in the handler
+	if pt := problemTypeHandlers[problemType.Name]; pt != nil {
+		if handler := pt[action.Action]; handler != nil {
+			action.Handler = handler
+		}
+	}
+
 	// launch a nanny process
 	nannyName := fmt.Sprintf("nanny-%d", req.CommitBundle.UserID)
 	log.Printf("launching container for %s", nannyName)
