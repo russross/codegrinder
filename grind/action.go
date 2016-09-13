@@ -195,20 +195,10 @@ func runInteractiveSession(bundle *CommitBundle, args []string, dir string) {
 
 		case reply.Event != nil:
 			switch reply.Event.Event {
-			case "exec":
-				fmt.Printf("$ %s\r\n", strings.Join(reply.Event.ExecCommand, " "))
-			case "stdin":
-				fmt.Printf("%s", cr(reply.Event.StreamData))
-			case "stdout":
-				fmt.Printf("%s", cr(reply.Event.StreamData))
+			case "exec", "stdin", "stdout", "exit", "error":
+				fmt.Printf("%s", cr(reply.Event.Dump()))
 			case "stderr":
-				fmt.Fprintf(os.Stderr, "%s", cr(reply.Event.StreamData))
-			case "exit":
-				if reply.Event.ExitStatus != 0 {
-					fmt.Printf("exit status %d\r\n", reply.Event.ExitStatus)
-				}
-			case "error":
-				fmt.Printf("Error: %s\r\n", reply.Event.Error)
+				fmt.Fprintf(os.Stderr, "%s", cr(reply.Event.Dump()))
 			case "files":
 				if reply.Event.Files != nil {
 					for name, contents := range reply.Event.Files {

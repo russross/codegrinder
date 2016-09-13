@@ -238,20 +238,7 @@ func (commit *Commit) Compress() {
 
 func (commit *Commit) DumpTranscript(w io.Writer) error {
 	for _, elt := range commit.Transcript {
-		var err error
-		switch elt.Event {
-		case "exec":
-			_, err = fmt.Fprintf(w, "$ %s\n", strings.Join(elt.ExecCommand, " "))
-		case "exit":
-			if elt.ExitStatus != 0 {
-				_, err = fmt.Fprintf(w, "exit status %d\n", elt.ExitStatus)
-			}
-		case "stdin", "stdout", "stderr":
-			_, err = fmt.Fprintf(w, "%s", elt.StreamData)
-		case "error":
-			_, err = fmt.Fprintf(w, "Error: %s\n", elt.Error)
-		}
-		if err != nil {
+		if _, err := fmt.Fprintf(w, "%s", elt.Dump()); err != nil {
 			return err
 		}
 	}
