@@ -2,7 +2,10 @@ package main
 
 import (
 	"database/sql"
+	"io/ioutil"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 
 	"github.com/go-martini/martini"
@@ -13,23 +16,94 @@ import (
 
 // GetProblemTypes handles a request to /v2/problemtypes,
 // returning a complete list of problem types.
-func GetProblemTypes(w http.ResponseWriter, render render.Render) {
+func GetProblemTypes(w http.ResponseWriter, tx *sql.Tx, render render.Render) {
+	problemTypes := []*ProblemType{}
+	err := meddler.QueryAll(tx, &problemTypes, `SELECT name FROM problem_types ORDER BY name`)
+	if err != nil {
+		loggedHTTPDBNotFoundError(w, err)
+		return
+	}
+	for i, elt := range problemTypes {
+		pt, err := getProblemType(tx, elt.Name)
+		if err != nil {
+			loggedHTTPErrorf(w, http.StatusInternalServerError, "error loading problem type %s: %v", elt.Name, err)
+			return
+		}
+		problemTypes[i] = pt
+	}
+
 	render.JSON(http.StatusOK, problemTypes)
 }
 
 // GetProblemType handles a request to /v2/problemtypes/:name,
 // returning a single problem type with the given name.
-func GetProblemType(w http.ResponseWriter, params martini.Params, render render.Render) {
+func GetProblemType(w http.ResponseWriter, tx *sql.Tx, params martini.Params, render render.Render) {
 	name := params["name"]
 
-	problemType, exists := problemTypes[name]
-
-	if !exists {
-		loggedHTTPErrorf(w, http.StatusNotFound, "not found")
+	problemType, err := getProblemType(tx, name)
+	if err != nil {
+		loggedHTTPDBNotFoundError(w, err)
 		return
 	}
 
 	render.JSON(http.StatusOK, problemType)
+}
+
+func getProblemType(tx *sql.Tx, name string) (*ProblemType, error) {
+	problemType := new(ProblemType)
+	err := meddler.QueryRow(tx, problemType, `SELECT * FROM problem_types WHERE name = $1`, name)
+	if err != nil {
+		return nil, err
+	}
+
+	// gather files
+	files := make(map[string]string)
+	dir := filepath.Join(Config.FilesDir, name)
+	dirInfo, err := os.Lstat(dir)
+	if err == nil && dirInfo.IsDir() {
+		err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+			// skip errors, directories, non-regular files
+			if err != nil {
+				return err
+			}
+			if info.IsDir() {
+				return nil
+			}
+			relpath, err := filepath.Rel(dir, path)
+			if err != nil {
+				return err
+			}
+			raw, err := ioutil.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			files[relpath] = string(raw)
+
+			return nil
+		})
+		if err != nil && err != os.ErrNotExist {
+			return nil, err
+		}
+	}
+
+	problemType.Files = files
+	problemType.Actions = make(map[string]*ProblemTypeAction)
+
+	problemTypeActions := []*ProblemTypeAction{}
+	err = meddler.QueryAll(tx, &problemTypeActions, `SELECT * FROM problem_type_actions WHERE problem_type = $1`, name)
+	if err != nil {
+		return nil, err
+	}
+	handlers := problemTypeHandlers[name]
+	if handlers == nil {
+		handlers = make(map[string]nannyHandler)
+	}
+	for _, elt := range problemTypeActions {
+		elt.Handler = handlers[elt.Action]
+		problemType.Actions[elt.Action] = elt
+	}
+
+	return problemType, nil
 }
 
 // GetProblems handles a request to /v2/problems,

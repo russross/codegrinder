@@ -95,7 +95,15 @@ func saveProblemBundleCommon(w http.ResponseWriter, tx *sql.Tx, currentUser *Use
 
 	// note: unique constraint will be checked by the database
 
-	// verify the signature
+	// verify the problem type signature
+	// note: we only need problem type signature, the problem type can be nil
+	typeSig := bundle.ProblemType.ComputeSignature(Config.DaycareSecret)
+	if bundle.ProblemTypeSignature != typeSig {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "problem type signature does not check out: found %s but expected %s", bundle.ProblemTypeSignature, typeSig)
+		return
+	}
+
+	// verify the problem signature
 	sig := problem.ComputeSignature(Config.DaycareSecret, steps)
 	if sig != bundle.ProblemSignature {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "problem signature does not check out: found %s but expected %s", bundle.ProblemSignature, sig)
@@ -117,7 +125,7 @@ func saveProblemBundleCommon(w http.ResponseWriter, tx *sql.Tx, currentUser *Use
 	}
 	for i, commit := range bundle.Commits {
 		// check the commit signature
-		csig := commit.ComputeSignature(Config.DaycareSecret, bundle.ProblemSignature, bundle.Hostname, bundle.UserID)
+		csig := commit.ComputeSignature(Config.DaycareSecret, bundle.ProblemTypeSignature, bundle.ProblemSignature, bundle.Hostname, bundle.UserID)
 		if csig != bundle.CommitSignatures[i] {
 			loggedHTTPErrorf(w, http.StatusBadRequest, "commit for step %d has a bad signature", commit.Step)
 			return
@@ -176,6 +184,14 @@ func PostProblemBundleUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser
 	now := time.Now()
 
 	// basic sanity checks
+	if bundle.ProblemType != nil {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must not include problem type")
+		return
+	}
+	if bundle.Problem == nil {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must include the problem")
+		return
+	}
 	if len(bundle.ProblemSteps) == 0 {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "problem must have at least one step")
 		return
@@ -200,6 +216,15 @@ func PostProblemBundleUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser
 		loggedHTTPErrorf(w, http.StatusBadRequest, "user ID in problem bundle must match current user ID")
 		return
 	}
+
+	// provide the problem type
+	problemType, err := getProblemType(tx, bundle.Problem.ProblemType)
+	if err != nil {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "error loading problem type: %v", err)
+		return
+	}
+	bundle.ProblemType = problemType
+	bundle.ProblemTypeSignature = problemType.ComputeSignature(Config.DaycareSecret)
 
 	// clean up basic fields and do some checks
 	if err := bundle.Problem.Normalize(now, bundle.ProblemSteps); err != nil {
@@ -290,7 +315,7 @@ func PostProblemBundleUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser
 		}
 
 		// set timestamps and compute signature
-		sig := commit.ComputeSignature(Config.DaycareSecret, bundle.ProblemSignature, bundle.Hostname, bundle.UserID)
+		sig := commit.ComputeSignature(Config.DaycareSecret, bundle.ProblemTypeSignature, bundle.ProblemSignature, bundle.Hostname, bundle.UserID)
 		bundle.CommitSignatures = append(bundle.CommitSignatures, sig)
 	}
 
@@ -311,12 +336,8 @@ func PostProblemSetBundle(w http.ResponseWriter, tx *sql.Tx, bundle ProblemSetBu
 		loggedHTTPErrorf(w, http.StatusBadRequest, "a new problem set must not have an ID")
 		return
 	}
-	if len(bundle.ProblemIDs) == 0 {
+	if len(bundle.ProblemSetProblems) == 0 {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "a problem set must have at least one problem")
-		return
-	}
-	if len(bundle.Weights) != len(bundle.ProblemIDs) {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "each problem must have exactly one associated weight")
 		return
 	}
 
@@ -333,24 +354,18 @@ func PostProblemSetBundle(w http.ResponseWriter, tx *sql.Tx, bundle ProblemSetBu
 	}
 
 	// save the problem set problem list
-	for i := 0; i < len(bundle.ProblemIDs); i++ {
-		problemID, weight := bundle.ProblemIDs[i], bundle.Weights[i]
-		if weight <= 0.0 {
-			bundle.Weights[i] = 1.0
-			weight = 1.0
+	for _, psp := range bundle.ProblemSetProblems {
+		if psp.Weight <= 0.0 {
+			psp.Weight = 1.0
 		}
-		psp := &ProblemSetProblem{
-			ProblemSetID: set.ID,
-			ProblemID:    problemID,
-			Weight:       weight,
-		}
+		psp.ProblemSetID = set.ID
 		if err := meddler.Insert(tx, "problem_set_problems", psp); err != nil {
 			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 			return
 		}
 	}
 
-	log.Printf("problem set %s (%d) with %d problem(s) created", set.Unique, set.ID, len(bundle.ProblemIDs))
+	log.Printf("problem set %s (%d) with %d problem(s) created", set.Unique, set.ID, len(bundle.ProblemSetProblems))
 
 	render.JSON(http.StatusOK, bundle)
 }

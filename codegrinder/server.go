@@ -17,7 +17,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
@@ -68,7 +67,7 @@ var Config struct {
 	PostgresDatabase string `json:"postgresDatabase"` // Database parameter for Postgres: default $USER
 }
 
-var problemTypes = make(map[string]*ProblemType)
+var problemTypeHandlers = make(map[string]map[string]nannyHandler)
 
 func main() {
 	// parse command line
@@ -125,41 +124,6 @@ func main() {
 
 	// set up TA role
 	if ta {
-		// load problem type files
-		for key, elt := range problemTypes {
-			if key != elt.Name {
-				log.Fatalf("problem type key %q does not match problem type name %q", key, elt.Name)
-			}
-			elt.Files = make(map[string]string)
-			dir := filepath.Join(Config.FilesDir, key)
-			dirInfo, err := os.Lstat(dir)
-			if err == nil && dirInfo.IsDir() {
-				err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-					// skip errors, directories, non-regular files
-					if err != nil {
-						return err
-					}
-					if info.IsDir() {
-						return nil
-					}
-					relpath, err := filepath.Rel(dir, path)
-					if err != nil {
-						return err
-					}
-					raw, err := ioutil.ReadFile(path)
-					if err != nil {
-						return err
-					}
-					elt.Files[relpath] = string(raw)
-
-					return nil
-				})
-				if err != nil && err != os.ErrNotExist {
-					log.Fatalf("error loading problem-type files for %s: %v", key, err)
-				}
-			}
-		}
-
 		m.Use(martini.Static(Config.WWWDir, martini.StaticOptions{SkipLogging: true}))
 		store := sessions.NewCookieStore([]byte(Config.SessionSecret))
 		m.Use(sessions.Sessions(CookieName, store))

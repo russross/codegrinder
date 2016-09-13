@@ -72,7 +72,7 @@ func CommandAction(cmd *cobra.Command, args []string) {
 
 	// send it to the daycare for grading
 	if signed.Hostname == "" {
-		log.Fatalf("server was unable to find a suitable daycare, unable to grade")
+		log.Fatalf("server was unable to find a suitable daycare, unable to run action")
 	}
 	log.Printf("starting interactive session for %s step %d", problem.Unique, commit.Step)
 	runInteractiveSession(signed, nil, dir)

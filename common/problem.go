@@ -23,27 +23,28 @@ var BeginningOfTime = time.Date(2016, 1, 1, 0, 0, 0, 0, time.UTC)
 
 // ProblemType defines one type of problem.
 type ProblemType struct {
-	Name        string                        `json:"name"`
-	Image       string                        `json:"image"`
-	MaxCPU      int64                         `json:"maxCPU"`
-	MaxSession  int64                         `json:"maxSession"`
-	MaxTimeout  int64                         `json:"maxTimeout"`
-	MaxFD       int64                         `json:"maxFD"`
-	MaxFileSize int64                         `json:"maxFileSize"`
-	MaxMemory   int64                         `json:"maxMemory"`
-	MaxThreads  int64                         `json:"maxThreads"`
-	Actions     map[string]*ProblemTypeAction `json:"actions"`
-	Files       map[string]string             `json:"files,omitempty"`
+	Name    string                        `json:"name" meddler:"name"`
+	Image   string                        `json:"image" meddler:"image"`
+	Files   map[string]string             `json:"files,omitempty" meddler:"-"`
+	Actions map[string]*ProblemTypeAction `json:"actions" meddler:"-"`
 }
 
 // ProblemTypeAction defines the label, button, UI classes, and handler for a
 // single problem type action.
 type ProblemTypeAction struct {
-	Action      string      `json:"action,omitempty"`
-	Button      string      `json:"button,omitempty"`
-	Message     string      `json:"message,omitempty"`
-	Interactive bool        `json:"interactive,omitempty"`
-	Handler     interface{} `json:"-"`
+	ProblemType string      `json:"problemType" meddler:"problem_type"`
+	Action      string      `json:"action,omitempty" meddler:"action"`
+	Button      string      `json:"button,omitempty" meddler:"button"`
+	Message     string      `json:"message,omitempty" meddler:"message"`
+	Interactive bool        `json:"interactive,omitempty" meddler:"interactive"`
+	MaxCPU      int64       `json:"maxCPU" meddler:"max_cpu"`
+	MaxSession  int64       `json:"maxSession" meddler:"max_session"`
+	MaxTimeout  int64       `json:"maxTimeout" meddler:"max_timeout"`
+	MaxFD       int64       `json:"maxFD" meddler:"max_fd"`
+	MaxFileSize int64       `json:"maxFileSize" meddler:"max_file_size"`
+	MaxMemory   int64       `json:"maxMemory" meddler:"max_memory"`
+	MaxThreads  int64       `json:"maxThreads" meddler:"max_threads"`
+	Handler     interface{} `json:"-" meddler:"-"`
 }
 
 type Problem struct {
@@ -80,7 +81,7 @@ type ProblemSet struct {
 }
 
 type ProblemSetProblem struct {
-	ProblemSetID int64   `json:"problemSetID" meddler:"problem_set_id"`
+	ProblemSetID int64   `json:"problemSetID,omitempty" meddler:"problem_set_id"`
 	ProblemID    int64   `json:"problemID" meddler:"problem_id"`
 	Weight       float64 `json:"weight" meddler:"weight"`
 }
@@ -137,6 +138,36 @@ func (problem *Problem) Normalize(now time.Time, steps []*ProblemStep) error {
 	}
 
 	return nil
+}
+
+func (problemType *ProblemType) ComputeSignature(secret string) string {
+	v := make(url.Values)
+
+	// gather all relevant fields
+	v.Add("name", problemType.Name)
+	v.Add("image", problemType.Image)
+	for name, contents := range problemType.Files {
+		v.Add(fmt.Sprintf("file-%s", name), contents)
+	}
+	for name, action := range problemType.Actions {
+		v.Add(fmt.Sprintf("action-%s-button", name), action.Button)
+		v.Add(fmt.Sprintf("action-%s-message", name), action.Message)
+		v.Add(fmt.Sprintf("action-%s-interactive", name), strconv.FormatBool(action.Interactive))
+		v.Add(fmt.Sprintf("action-%s-max-cpu", name), strconv.FormatInt(action.MaxCPU, 10))
+		v.Add(fmt.Sprintf("action-%s-max-session", name), strconv.FormatInt(action.MaxSession, 10))
+		v.Add(fmt.Sprintf("action-%s-max-timeout", name), strconv.FormatInt(action.MaxTimeout, 10))
+		v.Add(fmt.Sprintf("action-%s-max-fd", name), strconv.FormatInt(action.MaxFD, 10))
+		v.Add(fmt.Sprintf("action-%s-max-file-size", name), strconv.FormatInt(action.MaxFileSize, 10))
+		v.Add(fmt.Sprintf("action-%s-max-memory", name), strconv.FormatInt(action.MaxMemory, 10))
+		v.Add(fmt.Sprintf("action-%s-max-threads", name), strconv.FormatInt(action.MaxThreads, 10))
+	}
+
+	// compute signature
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(encode(v)))
+	sum := mac.Sum(nil)
+	sig := base64.StdEncoding.EncodeToString(sum)
+	return sig
 }
 
 func (problem *Problem) ComputeSignature(secret string, steps []*ProblemStep) string {

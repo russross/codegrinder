@@ -15,119 +15,17 @@ import (
 const workingDir = "/home/student"
 
 func init() {
-	problemTypes["python27unittest"] = &ProblemType{
-		Name:        "python27unittest",
-		Image:       "codegrinder/python",
-		MaxCPU:      10,
-		MaxSession:  30 * 60,
-		MaxTimeout:  5 * 60,
-		MaxFD:       10,
-		MaxFileSize: 10,
-		MaxMemory:   32,
-		MaxThreads:  20,
-		Actions: map[string]*ProblemTypeAction{
-			"grade": &ProblemTypeAction{
-				Action:      "grade",
-				Button:      "Grade",
-				Message:     "Grading‥",
-				Interactive: false,
-				Handler:     nannyHandler(python27UnittestGrade),
-			},
-			"run": &ProblemTypeAction{
-				Action:      "run",
-				Button:      "Run",
-				Message:     "Running %s‥",
-				Interactive: true,
-				Handler:     nannyHandler(python27Run),
-			},
-			"debug": &ProblemTypeAction{
-				Action:      "debug",
-				Button:      "Debug",
-				Message:     "Running debugger on %s‥",
-				Interactive: true,
-				Handler:     nannyHandler(python27Debug),
-			},
-			"shell": &ProblemTypeAction{
-				Action:      "shell",
-				Button:      "Shell",
-				Message:     "Running Python shell‥",
-				Interactive: true,
-				Handler:     nannyHandler(python27Shell),
-			},
-			/*
-				"stylecheck": &ProblemTypeAction{
-					Action:  "stylecheck",
-					Button:  "Check style",
-					Message: "Checking for pep8 style problems‥",
-					Interactive: false,
-					Handler: nannyHandler(python27StyleCheck),
-				},
-				"stylefix": &ProblemTypeAction{
-					Action:  "stylefix",
-					Button:  "Fix style",
-					Message: "Auto-correcting pep8 style problems‥",
-					Interactive: false,
-					Handler: nannyHandler(python27StyleFix),
-				},
-			*/
-		},
+	problemTypeHandlers["python27unittest"] = map[string]nannyHandler{
+		"grade": nannyHandler(python27UnittestGrade),
+		"run":   nannyHandler(python27Run),
+		"debug": nannyHandler(python27Debug),
+		"shell": nannyHandler(python27Shell),
 	}
-	problemTypes["python34unittest"] = &ProblemType{
-		Name:        "python34unittest",
-		Image:       "codegrinder/python",
-		MaxCPU:      10,
-		MaxSession:  30 * 60,
-		MaxTimeout:  5 * 60,
-		MaxFD:       10,
-		MaxFileSize: 10,
-		MaxMemory:   32,
-		MaxThreads:  20,
-		Actions: map[string]*ProblemTypeAction{
-			"grade": &ProblemTypeAction{
-				Action:      "grade",
-				Button:      "Grade",
-				Message:     "Grading‥",
-				Interactive: false,
-				Handler:     nannyHandler(python34UnittestGrade),
-			},
-			"run": &ProblemTypeAction{
-				Action:      "run",
-				Button:      "Run",
-				Message:     "Running %s‥",
-				Interactive: true,
-				Handler:     nannyHandler(python34Run),
-			},
-			"debug": &ProblemTypeAction{
-				Action:      "debug",
-				Button:      "Debug",
-				Message:     "Running debugger on %s‥",
-				Interactive: true,
-				Handler:     nannyHandler(python34Debug),
-			},
-			"shell": &ProblemTypeAction{
-				Action:      "shell",
-				Button:      "Shell",
-				Message:     "Running Python shell‥",
-				Interactive: true,
-				Handler:     nannyHandler(python34Shell),
-			},
-			/*
-				"stylecheck": &ProblemTypeAction{
-					Action:  "stylecheck",
-					Button:  "Check style",
-					Message: "Checking for pep8 style problems‥",
-					Interactive: false,
-					Handler: nannyHandler(python34StyleCheck),
-				},
-				"stylefix": &ProblemTypeAction{
-					Action:  "stylefix",
-					Button:  "Fix style",
-					Message: "Auto-correcting pep8 style problems‥",
-					Interactive: false,
-					Handler: nannyHandler(python34StyleFix),
-				},
-			*/
-		},
+	problemTypeHandlers["python34unittest"] = map[string]nannyHandler{
+		"grade": nannyHandler(python34UnittestGrade),
+		"run":   nannyHandler(python34Run),
+		"debug": nannyHandler(python34Debug),
+		"shell": nannyHandler(python34Shell),
 	}
 }
 

@@ -8,44 +8,13 @@ import (
 	"path/filepath"
 	"regexp"
 	"time"
-
-	. "github.com/russross/codegrinder/common"
 )
 
 func init() {
-	problemTypes["armv6asm"] = &ProblemType{
-		Name:        "armv6asm",
-		Image:       "codegrinder/armv6asm",
-		MaxCPU:      60,
-		MaxSession:  30 * 60,
-		MaxTimeout:  5 * 60,
-		MaxFD:       100,
-		MaxFileSize: 10,
-		MaxMemory:   128,
-		MaxThreads:  20,
-		Actions: map[string]*ProblemTypeAction{
-			"grade": &ProblemTypeAction{
-				Action:      "grade",
-				Button:      "Grade",
-				Message:     "Grading‥",
-				Interactive: false,
-				Handler:     nannyHandler(asGTestGrade),
-			},
-			"gdb": &ProblemTypeAction{
-				Action:      "gdb",
-				Button:      "Debug",
-				Message:     "Running gdb‥",
-				Interactive: true,
-				Handler:     nannyHandler(asGdb),
-			},
-			"run": &ProblemTypeAction{
-				Action:      "run",
-				Button:      "Run",
-				Message:     "Running code‥",
-				Interactive: true,
-				Handler:     nannyHandler(asRun),
-			},
-		},
+	problemTypeHandlers["armv6asm"] = map[string]nannyHandler{
+		"grade": nannyHandler(asGTestGrade),
+		"gdb":   nannyHandler(asGdb),
+		"run":   nannyHandler(asRun),
 	}
 }
 

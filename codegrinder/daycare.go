@@ -32,7 +32,7 @@ type limits struct {
 	maxThreads  int64
 }
 
-func newLimits(t *ProblemType) *limits {
+func newLimits(t *ProblemTypeAction) *limits {
 	return &limits{
 		maxCPU:      t.MaxCPU,
 		maxSession:  t.MaxSession,
@@ -81,17 +81,6 @@ func (l *limits) override(options []string) {
 func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params martini.Params) {
 	now := time.Now()
 
-	problemType, exists := problemTypes[params["problem_type"]]
-	if !exists {
-		loggedHTTPErrorf(w, http.StatusNotFound, "problem type %q not found", params["problem_type"])
-		return
-	}
-	action, exists := problemType.Actions[params["action"]]
-	if !exists {
-		loggedHTTPErrorf(w, http.StatusNotFound, "action %q not defined from problem type %s", params["action"], params["problem_type"])
-		return
-	}
-
 	// get a websocket
 	socket, err := websocket.Upgrade(w, r, nil, 1024, 1024)
 	if err != nil {
@@ -123,6 +112,27 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		logAndTransmitErrorf("first request message must include the commit bundle")
 		return
 	}
+	if req.CommitBundle.ProblemType == nil {
+		logAndTransmitErrorf("commit bundle must include the problem type")
+		return
+	}
+	if len(req.CommitBundle.ProblemTypeSignature) == 0 {
+		logAndTransmitErrorf("commit bundle must include the problem type signature")
+		return
+	}
+	if req.CommitBundle.ProblemType.Name != params["problem_type"] {
+		logAndTransmitErrorf("problem type in request URL must match problem type in bundle")
+		return
+	}
+	if params["action"] == "" {
+		logAndTransmitErrorf("action must be included in request URL")
+		return
+	}
+	if req.CommitBundle.ProblemType.Actions == nil || req.CommitBundle.ProblemType.Actions[params["action"]] == nil {
+		logAndTransmitErrorf("action %q not defined for problem type %s", params["action"], params["problem_type"])
+		return
+	}
+	action := req.CommitBundle.ProblemType.Actions[params["action"]]
 	if req.CommitBundle.Problem == nil {
 		logAndTransmitErrorf("commit bundle must include the problem")
 		return
@@ -165,6 +175,12 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	}
 
 	// check signatures
+	problemType := req.CommitBundle.ProblemType
+	typeSig := problemType.ComputeSignature(Config.DaycareSecret)
+	if req.CommitBundle.ProblemTypeSignature != typeSig {
+		logAndTransmitErrorf("problem type signature mismatch: found %s but expected %s", req.CommitBundle.ProblemTypeSignature, typeSig)
+		return
+	}
 	problem, steps := req.CommitBundle.Problem, req.CommitBundle.ProblemSteps
 	problemSig := problem.ComputeSignature(Config.DaycareSecret, steps)
 	if req.CommitBundle.ProblemSignature != problemSig {
@@ -172,7 +188,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		return
 	}
 	commit := req.CommitBundle.Commit
-	commitSig := commit.ComputeSignature(Config.DaycareSecret, problemSig, req.CommitBundle.Hostname, req.CommitBundle.UserID)
+	commitSig := commit.ComputeSignature(Config.DaycareSecret, typeSig, problemSig, req.CommitBundle.Hostname, req.CommitBundle.UserID)
 	if req.CommitBundle.CommitSignature != commitSig {
 		logAndTransmitErrorf("commit signature mismatch: found %s but expected %s", req.CommitBundle.CommitSignature, commitSig)
 		return
@@ -219,16 +235,16 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	for name, contents := range commit.Files {
 		files[name] = contents
 	}
-	for name, contents := range problemType.Files {
+	for name, contents := range req.CommitBundle.ProblemType.Files {
 		files[name] = contents
 	}
 
 	// launch a nanny process
 	nannyName := fmt.Sprintf("nanny-%d", req.CommitBundle.UserID)
 	log.Printf("launching container for %s", nannyName)
-	limits := newLimits(problemType)
+	limits := newLimits(action)
 	limits.override(problem.Options)
-	n, err := NewNanny(problemType, problem, action.Interactive, args, limits, nannyName)
+	n, err := NewNanny(req.CommitBundle.ProblemType, problem, action.Interactive, args, limits, nannyName)
 	if err != nil {
 		logAndTransmitErrorf("error creating container: %v", err)
 		return
@@ -392,7 +408,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 			commit.Score = float64(passed) / float64(len(commit.ReportCard.Results))
 		}
 		commit.UpdatedAt = now
-		req.CommitBundle.CommitSignature = commit.ComputeSignature(Config.DaycareSecret, req.CommitBundle.ProblemSignature, req.CommitBundle.Hostname, req.CommitBundle.UserID)
+		req.CommitBundle.CommitSignature = commit.ComputeSignature(Config.DaycareSecret, req.CommitBundle.ProblemTypeSignature, req.CommitBundle.ProblemSignature, req.CommitBundle.Hostname, req.CommitBundle.UserID)
 
 		res := &DaycareResponse{CommitBundle: req.CommitBundle}
 		if err := socket.WriteJSON(res); err != nil {

@@ -3,44 +3,13 @@ package main
 import (
 	"io"
 	"log"
-
-	. "github.com/russross/codegrinder/common"
 )
 
 func init() {
-	problemTypes["standardmlunittest"] = &ProblemType{
-		Name:        "standardmlunittest",
-		Image:       "codegrinder/standardml",
-		MaxCPU:      10,
-		MaxSession:  30 * 60,
-		MaxTimeout:  5 * 60,
-		MaxFD:       100,
-		MaxFileSize: 10,
-		MaxMemory:   128,
-		MaxThreads:  20,
-		Actions: map[string]*ProblemTypeAction{
-			"grade": &ProblemTypeAction{
-				Action:      "grade",
-				Button:      "Grade",
-				Message:     "Grading‥",
-				Interactive: false,
-				Handler:     nannyHandler(standardMLUnittestGrade),
-			},
-			"run": &ProblemTypeAction{
-				Action:      "run",
-				Button:      "Run",
-				Message:     "Running %s‥",
-				Interactive: true,
-				Handler:     nannyHandler(standardMLRun),
-			},
-			"shell": &ProblemTypeAction{
-				Action:      "shell",
-				Button:      "Shell",
-				Message:     "Running PolyML shell‥",
-				Interactive: true,
-				Handler:     nannyHandler(standardMLShell),
-			},
-		},
+	problemTypeHandlers["standardmlunittest"] = map[string]nannyHandler{
+		"grade": nannyHandler(standardMLUnittestGrade),
+		"run":   nannyHandler(standardMLRun),
+		"shell": nannyHandler(standardMLShell),
 	}
 }
 

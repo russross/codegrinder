@@ -485,6 +485,14 @@ func PostCommitBundlesSigned(w http.ResponseWriter, tx *sql.Tx, currentUser *Use
 }
 
 func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, currentUser *User, bundle CommitBundle, render render.Render) {
+	if bundle.ProblemType != nil {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must not include a problem type object")
+		return
+	}
+	if len(bundle.ProblemTypeSignature) != 0 {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must not include a problem type signature")
+		return
+	}
 	if bundle.Problem != nil {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must not include a problem object")
 		return
@@ -530,6 +538,13 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 		return
 	}
 
+	// get the problem type
+	problemType, err := getProblemType(tx, problem.ProblemType)
+	if err != nil {
+		loggedHTTPErrorf(w, http.StatusInternalServerError, "error loading problem type: %v", err)
+		return
+	}
+
 	// reject commit if a previous step remains incomplete
 	if assignment.RawScores == nil {
 		assignment.RawScores = map[string][]float64{}
@@ -569,8 +584,9 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 	}
 
 	// sign the problem and the commit
+	typeSig := problemType.ComputeSignature(Config.DaycareSecret)
 	problemSig := problem.ComputeSignature(Config.DaycareSecret, steps)
-	commitSig := commit.ComputeSignature(Config.DaycareSecret, problemSig, bundle.Hostname, bundle.UserID)
+	commitSig := commit.ComputeSignature(Config.DaycareSecret, typeSig, problemSig, bundle.Hostname, bundle.UserID)
 
 	// verify signature
 	if bundle.CommitSignature != "" {
@@ -611,15 +627,17 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 	}
 
 	// recompute the signature as the ID may have changed when saving
-	commitSig = commit.ComputeSignature(Config.DaycareSecret, problemSig, bundle.Hostname, bundle.UserID)
+	commitSig = commit.ComputeSignature(Config.DaycareSecret, typeSig, problemSig, bundle.Hostname, bundle.UserID)
 	signed := &CommitBundle{
-		Problem:          problem,
-		ProblemSteps:     steps,
-		ProblemSignature: problemSig,
-		Hostname:         bundle.Hostname,
-		UserID:           bundle.UserID,
-		Commit:           commit,
-		CommitSignature:  commitSig,
+		ProblemType:          problemType,
+		ProblemTypeSignature: typeSig,
+		Problem:              problem,
+		ProblemSteps:         steps,
+		ProblemSignature:     problemSig,
+		Hostname:             bundle.Hostname,
+		UserID:               bundle.UserID,
+		Commit:               commit,
+		CommitSignature:      commitSig,
 	}
 
 	// save the grade update

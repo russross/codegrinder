@@ -103,7 +103,7 @@ func (asst *Assignment) IsInstructorRole() bool {
 	return false
 }
 
-func (commit *Commit) ComputeSignature(secret, problemSignature, daycareHost string, userID int64) string {
+func (commit *Commit) ComputeSignature(secret, problemTypeSignature, problemSignature, daycareHost string, userID int64) string {
 	v := make(url.Values)
 
 	// gather all relevant fields
@@ -137,6 +137,7 @@ func (commit *Commit) ComputeSignature(secret, problemSignature, daycareHost str
 	v.Add("score", strconv.FormatFloat(commit.Score, 'g', -1, 64))
 	v.Add("created_at", commit.CreatedAt.Round(time.Second).UTC().Format(time.RFC3339))
 	v.Add("updated_at", commit.UpdatedAt.Round(time.Second).UTC().Format(time.RFC3339))
+	v.Add("problem_type_signature", problemTypeSignature)
 	v.Add("problem_signature", problemSignature)
 	v.Add("daycare_host", daycareHost)
 	v.Add("user_id", strconv.FormatInt(userID, 10))

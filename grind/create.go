@@ -265,13 +265,15 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 	for n := 0; n < len(signed.ProblemSteps); n++ {
 		log.Printf("validating solution for step %d", n+1)
 		unvalidated := &CommitBundle{
-			Problem:          signed.Problem,
-			ProblemSteps:     signed.ProblemSteps,
-			ProblemSignature: signed.ProblemSignature,
-			Hostname:         signed.Hostname,
-			UserID:           signed.UserID,
-			Commit:           signed.Commits[n],
-			CommitSignature:  signed.CommitSignatures[n],
+			ProblemType:          signed.ProblemType,
+			ProblemTypeSignature: signed.ProblemTypeSignature,
+			Problem:              signed.Problem,
+			ProblemSteps:         signed.ProblemSteps,
+			ProblemSignature:     signed.ProblemSignature,
+			Hostname:             signed.Hostname,
+			UserID:               signed.UserID,
+			Commit:               signed.Commits[n],
+			CommitSignature:      signed.CommitSignatures[n],
 		}
 		validated := mustConfirmCommitBundle(unvalidated, nil)
 		log.Printf("  finished validating solution")
@@ -284,6 +286,8 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 			}
 			log.Fatalf("please fix solution and try again")
 		}
+		signed.ProblemType = validated.ProblemType
+		signed.ProblemTypeSignature = validated.ProblemTypeSignature
 		signed.Problem = validated.Problem
 		signed.ProblemSteps = validated.ProblemSteps
 		signed.ProblemSignature = validated.ProblemSignature
@@ -316,8 +320,12 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 				CreatedAt: now,
 				UpdatedAt: now,
 			},
-			ProblemIDs: []int64{final.Problem.ID},
-			Weights:    []float64{1.0},
+			ProblemSetProblems: []*ProblemSetProblem{
+				{
+					ProblemID: final.Problem.ID,
+					Weight:    1.0,
+				},
+			},
 		}
 		finalPSBundle := new(ProblemSetBundle)
 		mustPostObject("/problem_set_bundles", nil, psBundle, finalPSBundle)

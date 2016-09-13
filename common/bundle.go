@@ -3,29 +3,33 @@ package common
 import "time"
 
 type ProblemSetBundle struct {
-	ProblemSet *ProblemSet `json:"problemSets"`
-	ProblemIDs []int64     `json:"problemIDs"`
-	Weights    []float64   `json:"weights"`
+	ProblemSet         *ProblemSet          `json:"problemSets"`
+	ProblemSetProblems []*ProblemSetProblem `json:"problemSetProblems"`
 }
 
 type ProblemBundle struct {
-	Problem          *Problem       `json:"problem"`
-	ProblemSteps     []*ProblemStep `json:"problemSteps"`
-	ProblemSignature string         `json:"problemSignature,omitempty"`
-	Hostname         string         `json:"hostname"`
-	UserID           int64          `json:"userID"`
-	Commits          []*Commit      `json:"commits"`
-	CommitSignatures []string       `json:"commitSignatures,omitempty"`
+	ProblemType          *ProblemType   `json:"problemType"`
+	ProblemTypeSignature string         `json:"problemTypeSignature,omitempty"`
+	Problem              *Problem       `json:"problem"`
+	ProblemSteps         []*ProblemStep `json:"problemSteps"`
+	ProblemSignature     string         `json:"problemSignature,omitempty"`
+	Hostname             string         `json:"hostname"`
+	UserID               int64          `json:"userID"`
+	Commits              []*Commit      `json:"commits"`
+	CommitSignatures     []string       `json:"commitSignatures,omitempty"`
 }
 
 type CommitBundle struct {
-	Problem          *Problem       `json:"problem"`
-	ProblemSteps     []*ProblemStep `json:"problemSteps"`
-	ProblemSignature string         `json:"problemSignature,omitempty"`
-	Hostname         string         `json:"hostname,omitempty"`
-	UserID           int64          `json:"userID"`
-	Commit           *Commit        `json:"commit"`
-	CommitSignature  string         `json:"commitSignature,omitempty"`
+	ProblemType          *ProblemType   `json:"problemType"`
+	ProblemTypeSignature string         `json:"problemTypeSignature,omitempty"`
+	Problem              *Problem       `json:"problem"`
+	ProblemSteps         []*ProblemStep `json:"problemSteps"`
+	ProblemSignature     string         `json:"problemSignature,omitempty"`
+	Action               string         `json:"action"`
+	Hostname             string         `json:"hostname,omitempty"`
+	UserID               int64          `json:"userID"`
+	Commit               *Commit        `json:"commit"`
+	CommitSignature      string         `json:"commitSignature,omitempty"`
 }
 
 // MaxDaycareRequestAge is the maximum age of a daycare-signed commit to be saved.
