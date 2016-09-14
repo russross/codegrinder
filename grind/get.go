@@ -176,6 +176,18 @@ func CommandGet(cmd *cobra.Command, args []string) {
 			}
 		}
 
+		// save the doc file
+		if len(step.Instructions) > 0 {
+			path := filepath.Join(target, "index.html")
+			log.Printf("writing instruction file index.html")
+			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+				log.Fatalf("error create directory %s: %v", filepath.Dir(path), err)
+			}
+			if err := ioutil.WriteFile(path, []byte(step.Instructions), 0644); err != nil {
+				log.Fatalf("error saving file %s: %v", path, err)
+			}
+		}
+
 		// commit files overwrite step files
 		if commit != nil {
 			for name, contents := range commit.Files {

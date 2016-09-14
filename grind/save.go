@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	. "github.com/russross/codegrinder/common"
@@ -144,10 +145,23 @@ func gather(now time.Time, startDir string) (*ProblemType, *Problem, *Assignment
 			return nil
 		}
 
+		// skip the instruction file
+		if name == "index.html" {
+			return nil
+		}
+
 		// skip files from the problem type
 		if _, exists := problemType.Files[name]; exists {
 			//log.Printf("skipping %s because it came from the problem type", name)
 			return nil
+		}
+
+		// silently skip some blacklisted file suffixes
+		blacklist := []string{"~", ".swp", ".o", ".pyc", ".out"}
+		for _, suffix := range blacklist {
+			if strings.HasSuffix(name, suffix) {
+				return nil
+			}
 		}
 
 		if info.Whitelist[name] {
