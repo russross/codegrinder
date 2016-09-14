@@ -3,7 +3,7 @@ package common
 import "time"
 
 type ProblemSetBundle struct {
-	ProblemSet         *ProblemSet          `json:"problemSets"`
+	ProblemSet         *ProblemSet          `json:"problemSet"`
 	ProblemSetProblems []*ProblemSetProblem `json:"problemSetProblems"`
 }
 
