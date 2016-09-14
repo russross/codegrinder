@@ -501,6 +501,7 @@ func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Co
 			course.ID, course.Name, problemSet.ID, problemSet.Note, user.ID, user.Name, user.Email)
 		asst.ID = 0
 		asst.RawScores = map[string][]float64{}
+		asst.Score = 0.0
 		asst.CreatedAt = now
 		asst.UpdatedAt = now
 	}
@@ -510,7 +511,6 @@ func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Co
 		asst.ProblemSetID != problemSet.ID ||
 		asst.UserID != user.ID ||
 		asst.Roles != form.Roles ||
-		asst.Score != form.CanvasAssignmentPointsPossible ||
 		(form.PersonSourcedID != "" && asst.GradeID != form.PersonSourcedID) ||
 		asst.LtiID != form.ResourceLinkID ||
 		asst.CanvasTitle != form.CanvasAssignmentTitle ||
@@ -546,7 +546,6 @@ func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Co
 		}
 	}
 
-	asst.Score = form.CanvasAssignmentPointsPossible
 	if form.PersonSourcedID != "" {
 		asst.GradeID = form.PersonSourcedID
 	}

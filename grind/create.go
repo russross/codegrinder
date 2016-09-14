@@ -128,7 +128,8 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 			log.Fatalf("you did not specify --update, but a problem already exists with unique ID %q", problem.Unique)
 		}
 		log.Printf("unique ID is %s", problem.Unique)
-		log.Printf("  this is an update of problem %d (%q)", existing[0].ID, existing[0].Note)
+		log.Printf("  this is an update of problem %d", existing[0].ID)
+		log.Printf("  (%q)", existing[0].Note)
 		problem.ID = existing[0].ID
 		problem.CreatedAt = existing[0].CreatedAt
 	default:
