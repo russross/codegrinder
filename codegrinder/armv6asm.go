@@ -5,21 +5,41 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"path/filepath"
 	"regexp"
 	"time"
 )
 
 func init() {
 	problemTypeHandlers["armv6asm"] = map[string]nannyHandler{
-		"grade": nannyHandler(asGTestGrade),
-		"debug": nannyHandler(asGdb),
-		"run":   nannyHandler(asRun),
+		"grade": nannyHandler(armAsGrade),
+		"test":  nannyHandler(armAsTest),
+		"debug": nannyHandler(armAsDebug),
+		"run":   nannyHandler(armAsRun),
 	}
 }
 
-// Google test framework types
-type GTestProgram struct {
+func armAsGrade(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
+	log.Printf("arm as gTest grade")
+	parseXUnit(n, []string{"make", "grade"}, nil, "test_detail.xml")
+}
+
+func armAsTest(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
+	log.Printf("arm as gTest test")
+	n.ExecSimple([]string{"make", "test"}, stdin, true)
+}
+
+func armAsDebug(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
+	log.Printf("arm as gdb")
+	n.ExecSimple([]string{"make", "debug"}, stdin, true)
+}
+
+func armAsRun(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
+	log.Printf("arm run")
+	n.ExecSimple([]string{"make", "run"}, stdin, true)
+}
+
+// XUnit types
+type XUnitProgram struct {
 	XMLName  xml.Name     `xml:"testsuites"`
 	Name     string       `xml:"name,attr"`
 	Tests    int          `xml:"tests,attr"`
@@ -27,90 +47,31 @@ type GTestProgram struct {
 	Disabled int          `xml:"disabled,attr"`
 	Errors   int          `xml:"errors,attr"`
 	Time     float64      `xml:"time,attr"`
-	Cases    []*GTestCase `xml:"testsuite"`
+	Cases    []*XUnitCase `xml:"testsuite"`
 }
 
-type GTestCase struct {
+type XUnitCase struct {
 	Name      string           `xml:"name,attr"`
 	Tests     int              `xml:"tests,attr"`
 	Failures  int              `xml:"failures,attr"`
 	Disabled  int              `xml:"disabled,attr"`
 	Errors    int              `xml:"errors,attr"`
 	Time      float64          `xml:"time,attr"`
-	Functions []*GTestFunction `xml:"testcase"`
+	Functions []*XUnitFunction `xml:"testcase"`
 }
 
-type GTestFunction struct {
+type XUnitFunction struct {
 	Name      string        `xml:"name,attr"`
 	Status    string        `xml:"status,attr"`
 	Time      float64       `xml:"time,attr"`
 	ClassName string        `xml:"classname,attr"`
-	Failure   *GTestFailure `xml:"failure"`
+	Failure   *XUnitFailure `xml:"failure"`
 }
 
-type GTestFailure struct {
+type XUnitFailure struct {
 	Message string `xml:"message,attr"`
 	Type    string `xml:"type,attr"`
 	Body    string `xml:",chardata"`
-}
-
-func asGTestGrade(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
-	log.Printf("arm as gTest grade")
-
-	// asCompileAndLink(n, files)
-	// if !n.ReportCard.Passed {
-	// 	return
-	// }
-
-	// parse the output (in common with c++)
-	// parseXUnit(n, []string{"./a.out", "--gtest_output=xml"}, nil, "test_detail.xml")
-	parseXUnit(n, []string{"make", "grade"}, nil, "test_detail.xml")
-}
-
-func asCompileAndLink(n *Nanny, files map[string]string) {
-	// gather list of *.s files and tests/*.cpp files
-	var sourceFiles, testFiles []string
-	for path := range files {
-		dir, file := filepath.Split(path)
-		if dir == "" && filepath.Ext(file) == ".s" {
-			sourceFiles = append(sourceFiles, path)
-		}
-		if dir == "tests/" && filepath.Ext(file) == ".cpp" {
-			testFiles = append(testFiles, path)
-		}
-	}
-	if len(sourceFiles) == 0 {
-		n.ReportCard.LogAndFailf("no source files found")
-		return
-	}
-	if len(testFiles) == 0 {
-		n.ReportCard.LogAndFailf("no test files found")
-		return
-	}
-
-	// assemble source files
-	objectFiles := []string{}
-	for _, src := range sourceFiles {
-		out := src[:len(src)-len(".s")] + ".o"
-		objectFiles = append(objectFiles, out)
-		cmd := []string{"as", "-g", "-march=armv6zk", "-mcpu=arm1176jzf-s", "-mfloat-abi=hard", "-mfpu=vfp", src, "-o", out}
-
-		// launch the assembler (ignore stdin)
-		if err := n.ExecSimple(cmd, nil, false); err != nil {
-			return
-		}
-	}
-
-	// compile tests and link
-	cmd := []string{"g++", "-std=c++11", "-Wpedantic", "-g", "-Wall", "-Wextra", "-Werror", "-I.", "-pthread"}
-	cmd = append(cmd, objectFiles...)
-	cmd = append(cmd, testFiles...)
-	cmd = append(cmd, "-lgtest", "-lregwrapper", "-lpthread")
-	if err := n.ExecSimple(cmd, nil, false); err != nil {
-		return
-	}
-
-	return
 }
 
 func parseXUnit(n *Nanny, cmd []string, stdin io.Reader, filename string) {
@@ -123,7 +84,7 @@ func parseXUnit(n *Nanny, cmd []string, stdin io.Reader, filename string) {
 
 	// did it end in a segfault?
 	if status > 127 {
-		n.ReportCard.LogAndFailf("Unit tests did not finish normally, exit status %d", status)
+		n.ReportCard.LogAndFailf("Crashed with exit status %d while running unit tests", status)
 		return
 	}
 	n.ReportCard.Passed = status == 0
@@ -134,7 +95,7 @@ func parseXUnit(n *Nanny, cmd []string, stdin io.Reader, filename string) {
 		n.ReportCard.LogAndFailf("Unit test failed: unable to read results")
 		return
 	}
-	results := new(GTestProgram)
+	results := new(XUnitProgram)
 	if err = xml.Unmarshal([]byte(xmlfiles[filename]), results); err != nil {
 		n.ReportCard.LogAndFailf("error parsing unit test results: %v", err)
 		return
@@ -169,84 +130,4 @@ func parseXUnit(n *Nanny, cmd []string, stdin io.Reader, filename string) {
 			}
 		}
 	}
-}
-
-func asRun(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
-	log.Printf("arm run")
-
-	// gather list of *.s files
-	var sourceFiles []string
-	for path := range files {
-		dir, file := filepath.Split(path)
-		if dir == "" && filepath.Ext(file) == ".s" {
-			sourceFiles = append(sourceFiles, path)
-		}
-	}
-	if len(sourceFiles) == 0 {
-		n.ReportCard.LogAndFailf("no source files found")
-		return
-	}
-
-	// assemble source files
-	objectFiles := []string{}
-	for _, src := range sourceFiles {
-		out := src[:len(src)-len(".s")] + ".o"
-		objectFiles = append(objectFiles, out)
-		cmd := []string{"as", "-g", "-march=armv6zk", "-mcpu=arm1176jzf-s", "-mfloat-abi=hard", "-mfpu=vfp", src, "-o", out}
-
-		// launch the assembler (ignore stdin)
-		if err := n.ExecSimple(cmd, nil, false); err != nil {
-			return
-		}
-	}
-
-	// link
-	cmd := []string{"ld"}
-	cmd = append(cmd, objectFiles...)
-	if err := n.ExecSimple(cmd, nil, false); err != nil {
-		return
-	}
-
-	// run gdb
-	n.ExecSimple([]string{"./a.out"}, stdin, true)
-}
-
-func asGdb(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
-	log.Printf("arm as gdb")
-
-	// gather list of *.s files
-	var sourceFiles []string
-	for path := range files {
-		dir, file := filepath.Split(path)
-		if dir == "" && filepath.Ext(file) == ".s" {
-			sourceFiles = append(sourceFiles, path)
-		}
-	}
-	if len(sourceFiles) == 0 {
-		n.ReportCard.LogAndFailf("no source files found")
-		return
-	}
-
-	// assemble source files
-	objectFiles := []string{}
-	for _, src := range sourceFiles {
-		out := src[:len(src)-len(".s")] + ".o"
-		objectFiles = append(objectFiles, out)
-		cmd := []string{"as", "-g", "-march=armv6zk", "-mcpu=arm1176jzf-s", "-mfloat-abi=hard", "-mfpu=vfp", src, "-o", out}
-
-		// launch the assembler (ignore stdin)
-		if err := n.ExecSimple(cmd, nil, false); err != nil {
-			return
-		}
-	}
-
-	// link
-	cmd := []string{"ld"}
-	cmd = append(cmd, objectFiles...)
-	if err := n.ExecSimple(cmd, nil, false); err != nil {
-		return
-	}
-
-	// run gdb
-	n.ExecSimple([]string{"gdb", "a.out"}, stdin, true)
 }
