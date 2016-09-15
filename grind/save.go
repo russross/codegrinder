@@ -152,7 +152,6 @@ func gather(now time.Time, startDir string) (*ProblemType, *Problem, *Assignment
 
 		// skip files from the problem type
 		if _, exists := problemType.Files[name]; exists {
-			//log.Printf("skipping %s because it came from the problem type", name)
 			return nil
 		}
 
@@ -171,7 +170,7 @@ func gather(now time.Time, startDir string) (*ProblemType, *Problem, *Assignment
 			}
 			files[name] = string(contents)
 		} else {
-			log.Printf("skipping %q which is not a file introduced by the problem", name)
+			log.Printf("skipping %q which is not distributed with the problem", name)
 		}
 		return nil
 	})
