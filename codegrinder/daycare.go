@@ -8,6 +8,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -600,7 +601,29 @@ func (n *Nanny) PutFiles(files map[string]string, mode int64) error {
 	now := time.Now()
 	buf := new(bytes.Buffer)
 	writer := tar.NewWriter(buf)
+	dirs := make(map[string]bool)
 	for name, contents := range files {
+		dir := filepath.Dir(name)
+		if dir != "" && !dirs[dir] {
+			dirs[dir] = true
+			header := &tar.Header{
+				Name:       dir,
+				Mode:       0777,
+				Uid:        int(n.UID),
+				Gid:        int(n.UID),
+				Size:       0,
+				ModTime:    now,
+				Typeflag:   tar.TypeDir,
+				Uname:      strconv.FormatInt(n.UID, 10),
+				Gname:      strconv.FormatInt(n.UID, 10),
+				AccessTime: now,
+				ChangeTime: now,
+			}
+			if err := writer.WriteHeader(header); err != nil {
+				log.Printf("writing tar header for directory: %v", err)
+				return err
+			}
+		}
 		header := &tar.Header{
 			Name:       name,
 			Mode:       mode,

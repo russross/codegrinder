@@ -24,7 +24,7 @@ func standardMLUnittestGrade(n *Nanny, args, options []string, files map[string]
 	log.Printf("standard ML unit test grade")
 
 	// create a script file
-	if err := n.PutFiles(map[string]string{"runtests.sh": standardMLGradeScript}, 0755); err != nil {
+	if err := n.PutFiles(map[string]string{"runtests.sh": standardMLGradeScript}, 0777); err != nil {
 		n.ReportCard.LogAndFailf("error creating runtests.sh: %v", err)
 		return
 	}
@@ -43,7 +43,7 @@ func standardMLRun(n *Nanny, args, options []string, files map[string]string, st
 	log.Printf("standard ML run")
 
 	// create a driver script file
-	if err := n.PutFiles(map[string]string{"runpoly.sh": standardMLRunScript}, 0755); err != nil {
+	if err := n.PutFiles(map[string]string{"runpoly.sh": standardMLRunScript}, 0777); err != nil {
 		n.ReportCard.LogAndFailf("error creating a.out: %v", err)
 		return
 	}
