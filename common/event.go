@@ -87,6 +87,9 @@ func (e *EventMessage) Dump() string {
 	case "exec":
 		return fmt.Sprintf("$ %s\n", strings.Join(e.ExecCommand, " "))
 	case "exit":
+		if e.ExitStatus == 0 {
+			return ""
+		}
 		if sig := signals[e.ExitStatus-128]; sig != "" {
 			return fmt.Sprintf("exit status %d (killed by %s)\n", e.ExitStatus, sig)
 		}

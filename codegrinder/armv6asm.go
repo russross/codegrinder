@@ -13,7 +13,7 @@ import (
 func init() {
 	problemTypeHandlers["armv6asm"] = map[string]nannyHandler{
 		"grade": nannyHandler(asGTestGrade),
-		"gdb":   nannyHandler(asGdb),
+		"debug": nannyHandler(asGdb),
 		"run":   nannyHandler(asRun),
 	}
 }
@@ -57,13 +57,14 @@ type GTestFailure struct {
 func asGTestGrade(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
 	log.Printf("arm as gTest grade")
 
-	asCompileAndLink(n, files)
-	if !n.ReportCard.Passed {
-		return
-	}
+	// asCompileAndLink(n, files)
+	// if !n.ReportCard.Passed {
+	// 	return
+	// }
 
 	// parse the output (in common with c++)
-	parseXUnit(n, []string{"./a.out", "--gtest_output=xml"}, nil, "test_detail.xml")
+	// parseXUnit(n, []string{"./a.out", "--gtest_output=xml"}, nil, "test_detail.xml")
+	parseXUnit(n, []string{"make grade"}, nil, "test_detail.xml")
 }
 
 func asCompileAndLink(n *Nanny, files map[string]string) {
