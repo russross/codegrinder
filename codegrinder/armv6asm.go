@@ -64,7 +64,7 @@ func asGTestGrade(n *Nanny, args, options []string, files map[string]string, std
 
 	// parse the output (in common with c++)
 	// parseXUnit(n, []string{"./a.out", "--gtest_output=xml"}, nil, "test_detail.xml")
-	parseXUnit(n, []string{"make grade"}, nil, "test_detail.xml")
+	parseXUnit(n, []string{"make", "grade"}, nil, "test_detail.xml")
 }
 
 func asCompileAndLink(n *Nanny, files map[string]string) {
