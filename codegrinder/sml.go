@@ -15,7 +15,7 @@ func init() {
 
 func standardMLGrade(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
 	log.Printf("standard ML grade")
-	parseXUnit(n, []string{"make", "grade"}, nil, "test_detail.xml")
+	runAndParseXUnit(n, []string{"make", "grade"}, nil, "test_detail.xml")
 }
 
 func standardMLRun(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
