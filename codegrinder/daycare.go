@@ -356,7 +356,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	}()
 
 	// copy the files to the container
-	if err = n.PutFiles(files, 0644); err != nil {
+	if err = n.PutFiles(files, 0666); err != nil {
 		n.ReportCard.LogAndFailf("uploading files: %v", err)
 		return
 	}
