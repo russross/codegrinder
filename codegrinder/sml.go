@@ -13,7 +13,7 @@ func init() {
 	}
 }
 
-func standardMLUnittestGrade(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
+func standardMLGrade(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
 	log.Printf("standard ML grade")
 	parseXUnit(n, []string{"make", "grade"}, nil, "test_detail.xml")
 }
