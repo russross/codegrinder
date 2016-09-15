@@ -19,5 +19,4 @@ RUN g++ -c -g -std=c++11 -Wpedantic -Wall -Wextra -Werror -I/usr/src/gtest -pthr
 
 RUN mkdir /home/student && chmod 777 /home/student
 USER 2000
-RUN umask 0000
 WORKDIR /home/student
