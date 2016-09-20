@@ -3,7 +3,10 @@
 
 SMLSOURCE=$(wildcard *.sml)
 
-all:	grade
+all:	test
+
+test:
+	poly < tests/tests.sml
 
 grade:
 	poly < tests/tests.sml

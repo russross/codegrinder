@@ -4,15 +4,23 @@ all:
 
 arm: .proxy-armv6asm
 
-amd64: .proxy-python .proxy-standardml
+amd64: .proxy-go .proxy-prolog .proxy-python .proxy-standardml
+
+.proxy-armv6asm: armv6asm/Dockerfile
+	docker build -t codegrinder/armv6asm armv6asm
+	touch .proxy-armv6asm
+
+.proxy-go: go/Dockerfile
+	docker build -t codegrinder/go go
+	touch .proxy-go
+
+.proxy-prolog: prolog/Dockerfile
+	docker build -t codegrinder/prolog prolog
+	touch .proxy-prolog
 
 .proxy-python: python/Dockerfile
 	docker build -t codegrinder/python python
 	touch .proxy-python
-
-.proxy-armv6asm: armv6asm/Dockerfile armv6asm/regwrapper.s
-	docker build -t codegrinder/armv6asm armv6asm
-	touch .proxy-armv6asm
 
 .proxy-standardml: standardml/Dockerfile
 	docker build -t codegrinder/standardml standardml

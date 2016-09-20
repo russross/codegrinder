@@ -15,17 +15,17 @@ func init() {
 }
 
 func armAsGrade(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
-	log.Printf("arm as gTest grade")
+	log.Printf("arm grade")
 	runAndParseXUnit(n, []string{"make", "grade"}, nil, "test_detail.xml")
 }
 
 func armAsTest(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
-	log.Printf("arm as gTest test")
+	log.Printf("arm test")
 	n.ExecSimple([]string{"make", "test"}, stdin, true)
 }
 
 func armAsDebug(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
-	log.Printf("arm as gdb")
+	log.Printf("arm debug")
 	n.ExecSimple([]string{"make", "debug"}, stdin, true)
 }
 

@@ -201,6 +201,15 @@ CREATE VIEW user_assignments AS
 
 INSERT INTO problem_types (name, image) VALUES ('armv6asm', 'codegrinder/armv6asm');
 INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('armv6asm', 'grade', 'Grade', 'Grading‥', false, 60, 120, 120, 100, 10, 128, 20);
+INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('armv6asm', 'test', 'Test', 'Testing‥', false, 60, 120, 120, 100, 10, 128, 20);
+INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('armv6asm', 'debug', 'Debug', 'Running gdb‥', true, 60, 1800, 300, 100, 10, 128, 20);
+INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('armv6asm', 'run', 'Run', 'Running‥', true, 60, 1800, 300, 100, 10, 128, 20);
+
+INSERT INTO problem_types (name, image) VALUES ('prologunittest', 'codegrinder/prolog');
+INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('prologunittest', 'test', 'Test', 'Testing‥', false, 10, 20, 20, 100, 10, 128, 20);
+INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('prologunittest', 'grade', 'Grade', 'Grading‥', false, 10, 20, 20, 100, 10, 128, 20);
+INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('prologunittest', 'run', 'Run', 'Running‥', true, 10, 1800, 300, 100, 10, 128, 20);
+INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('prologunittest', 'shell', 'Shell', 'Running Prolog shell‥', true, 10, 1800, 300, 100, 10, 128, 20);
 
 INSERT INTO problem_types (name, image) VALUES ('python27unittest', 'codegrinder/python');
 INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('python27unittest', 'grade', 'Grade', 'Grading‥', false, 60, 120, 120, 10, 10, 32, 20);
@@ -218,5 +227,3 @@ INSERT INTO problem_types (name, image) VALUES ('standardmlunittest', 'codegrind
 INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('standardmlunittest', 'grade', 'Grade', 'Grading‥', false, 10, 20, 20, 100, 10, 128, 20);
 INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('standardmlunittest', 'run', 'Run', 'Running‥', true, 10, 1800, 300, 100, 10, 128, 20);
 INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('standardmlunittest', 'shell', 'Shell', 'Running PolyML shell‥', true, 10, 1800, 300, 100, 10, 128, 20);
-INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('armv6asm', 'debug', 'Debug', 'Running gdb‥', true, 60, 1800, 300, 100, 10, 128, 20);
-INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('armv6asm', 'run', 'Run', 'Running‥', true, 60, 1800, 300, 100, 10, 128, 20);
