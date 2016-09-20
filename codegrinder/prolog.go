@@ -8,7 +8,7 @@ import (
 func init() {
 	problemTypeHandlers["prologunittest"] = map[string]nannyHandler{
 		"grade": nannyHandler(prologGrade),
-		"test":  nannyHandler(prologGrade),
+		"test":  nannyHandler(prologTest),
 		"run":   nannyHandler(prologRun),
 		"shell": nannyHandler(prologShell),
 	}
