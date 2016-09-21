@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"expvar"
 	"flag"
 	"fmt"
 	"html"
@@ -115,12 +116,32 @@ func main() {
 	// set up martini
 	r := martini.NewRouter()
 	m := martini.New()
+	m.Use(martini.Handler(func(w http.ResponseWriter, r *http.Request, c martini.Context) {
+		start := time.Now()
+		c.Next()
+		now := time.Now()
+		seconds := now.Sub(start).Seconds()
+		hits++
+		hitsCounter.Add(1)
+		if seconds > slowest {
+			slowest = seconds
+			slowestCounter.Set(seconds)
+		}
+		totalSeconds += seconds
+		totalSecondsCounter.Add(seconds)
+		averageSecondsCounter.Set(totalSeconds / float64(hits))
+		mostRecentCounter.Set(now.Format(time.Stamp))
+		rw := w.(martini.ResponseWriter)
+		if rw.Status() >= 400 {
+			errorsCounter.Add(1)
+		}
+	}))
 	m.Logger(log.New(os.Stderr, "", log.LstdFlags))
 	m.Use(martini.Logger())
 	m.Use(martini.Recovery())
 	m.MapTo(r, (*martini.Routes)(nil))
 	m.Action(r.Handle)
-	m.Use(render.Renderer(render.Options{IndentJSON: true}))
+	m.Use(render.Renderer(render.Options{IndentJSON: false}))
 
 	// set up TA role
 	if ta {
@@ -278,6 +299,21 @@ func main() {
 					return
 				}
 			})
+
+		// stats
+		r.Get("/v2/stats", auth, withTx, withCurrentUser, authorOnly, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			fmt.Fprintf(w, "{\n")
+			first := true
+			expvar.Do(func(kv expvar.KeyValue) {
+				if !first {
+					fmt.Fprintf(w, ",\n")
+				}
+				first = false
+				fmt.Fprintf(w, "%q: %s", kv.Key, kv.Value)
+			})
+			fmt.Fprintf(w, "\n}\n")
+		})
 
 		// LTI
 		r.Get("/v2/lti/config.xml", GetConfigXML)
@@ -815,3 +851,15 @@ func (reg *DaycareRegistration) ComputeSignature(secret string) string {
 	sig := base64.StdEncoding.EncodeToString(sum)
 	return sig
 }
+
+var (
+	hits                  int
+	hitsCounter           = expvar.NewInt("hits")
+	slowest               float64
+	slowestCounter        = expvar.NewFloat("slowestSeconds")
+	totalSeconds          float64
+	totalSecondsCounter   = expvar.NewFloat("totalSeconds")
+	averageSecondsCounter = expvar.NewFloat("averageSeconds")
+	mostRecentCounter     = expvar.NewString("mostRecent")
+	errorsCounter         = expvar.NewInt("errors")
+)
