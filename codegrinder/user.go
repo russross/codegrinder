@@ -557,6 +557,18 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 		}
 	}
 
+	// reject commit if user has started work on a later step
+	var latestStep int64
+	if err = tx.QueryRow(`SELECT step FROM commits WHERE assignment_id = $1 AND problem_id = $2 ORDER BY step DESC LIMIT 1`, commit.AssignmentID, commit.ProblemID).Scan(&latestStep); err != nil {
+		if err != sql.ErrNoRows {
+			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
+			return
+		}
+	} else if latestStep > commit.Step {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "commit is for step %d, but user has already started work on step %d", commit.Step, latestStep)
+		return
+	}
+
 	// validate commit
 	if commit.Step > int64(len(steps)) {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "commit has step number %d, but there are only %d steps in the problem", commit.Step, len(steps))
