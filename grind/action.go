@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -97,6 +98,9 @@ func runInteractiveSession(bundle *CommitBundle, args []string, dir string) {
 
 	// get the terminal size
 	sizex, sizey, err := terminal.GetSize(stdin)
+	if err != nil && runtime.GOOS == "windows" {
+		sizex, sizey, err = getWindowsTerminalSize()
+	}
 	if err != nil {
 		log.Printf("error getting terminal size: %v", err)
 	} else if sizex > 0 && sizey > 0 {
@@ -105,6 +109,8 @@ func runInteractiveSession(bundle *CommitBundle, args []string, dir string) {
 	}
 	if term := os.Getenv("TERM"); term != "" {
 		vals.Set("TERM", term)
+	} else if runtime.GOOS == "windows" {
+		vals.Set("TERM", "cygwin")
 	}
 
 	endpoint := &url.URL{
