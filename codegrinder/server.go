@@ -116,7 +116,14 @@ func main() {
 	// set up martini
 	r := martini.NewRouter()
 	m := martini.New()
-	m.Use(martini.Handler(func(w http.ResponseWriter, r *http.Request, c martini.Context) {
+	m.Logger(log.New(os.Stderr, "", log.LstdFlags))
+	m.Use(martini.Logger())
+	m.Use(martini.Recovery())
+	m.MapTo(r, (*martini.Routes)(nil))
+	m.Action(r.Handle)
+	m.Use(render.Renderer(render.Options{IndentJSON: false}))
+
+	counter := func(w http.ResponseWriter, r *http.Request, c martini.Context) {
 		start := time.Now()
 		c.Next()
 		now := time.Now()
@@ -126,22 +133,18 @@ func main() {
 		if seconds > slowest {
 			slowest = seconds
 			slowestCounter.Set(seconds)
+			slowestTimeCounter.Set(now.Format(time.RFC1123))
+			slowestPathCounter.Set(r.URL.Path)
 		}
 		totalSeconds += seconds
 		totalSecondsCounter.Add(seconds)
 		averageSecondsCounter.Set(totalSeconds / float64(hits))
-		mostRecentCounter.Set(now.Format(time.Stamp))
 		rw := w.(martini.ResponseWriter)
 		if rw.Status() >= 400 {
 			errorsCounter.Add(1)
 		}
-	}))
-	m.Logger(log.New(os.Stderr, "", log.LstdFlags))
-	m.Use(martini.Logger())
-	m.Use(martini.Recovery())
-	m.MapTo(r, (*martini.Routes)(nil))
-	m.Action(r.Handle)
-	m.Use(render.Renderer(render.Options{IndentJSON: false}))
+		goroutineCounter.Set(int64(runtime.NumGoroutine()))
+	}
 
 	// set up TA role
 	if ta {
@@ -281,7 +284,7 @@ func main() {
 		}
 
 		// version
-		r.Get("/v2/version", func(w http.ResponseWriter, render render.Render) {
+		r.Get("/v2/version", counter, func(w http.ResponseWriter, render render.Render) {
 			render.JSON(http.StatusOK, &CurrentVersion)
 		})
 
@@ -316,62 +319,62 @@ func main() {
 		})
 
 		// LTI
-		r.Get("/v2/lti/config.xml", GetConfigXML)
-		r.Post("/v2/lti/problem_sets", binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblemSets)
-		r.Post("/v2/lti/problem_sets/:unique", binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblemSet)
+		r.Get("/v2/lti/config.xml", counter, GetConfigXML)
+		r.Post("/v2/lti/problem_sets", counter, binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblemSets)
+		r.Post("/v2/lti/problem_sets/:unique", counter, binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblemSet)
 
 		// problem bundles--for problem creation only
-		r.Post("/v2/problem_bundles/unconfirmed", auth, withTx, withCurrentUser, authorOnly, binding.Json(ProblemBundle{}), PostProblemBundleUnconfirmed)
-		r.Post("/v2/problem_bundles/confirmed", auth, withTx, withCurrentUser, authorOnly, binding.Json(ProblemBundle{}), PostProblemBundleConfirmed)
-		r.Put("/v2/problem_bundles/:problem_id", auth, withTx, withCurrentUser, authorOnly, binding.Json(ProblemBundle{}), PutProblemBundle)
+		r.Post("/v2/problem_bundles/unconfirmed", counter, auth, withTx, withCurrentUser, authorOnly, binding.Json(ProblemBundle{}), PostProblemBundleUnconfirmed)
+		r.Post("/v2/problem_bundles/confirmed", counter, auth, withTx, withCurrentUser, authorOnly, binding.Json(ProblemBundle{}), PostProblemBundleConfirmed)
+		r.Put("/v2/problem_bundles/:problem_id", counter, auth, withTx, withCurrentUser, authorOnly, binding.Json(ProblemBundle{}), PutProblemBundle)
 
 		// problem set bundles--for problem set creation only
-		r.Post("/v2/problem_set_bundles", auth, withTx, withCurrentUser, authorOnly, binding.Json(ProblemSetBundle{}), PostProblemSetBundle)
+		r.Post("/v2/problem_set_bundles", counter, auth, withTx, withCurrentUser, authorOnly, binding.Json(ProblemSetBundle{}), PostProblemSetBundle)
 
 		// problem types
-		r.Get("/v2/problem_types", auth, withTx, GetProblemTypes)
-		r.Get("/v2/problem_types/:name", auth, withTx, GetProblemType)
+		r.Get("/v2/problem_types", counter, auth, withTx, GetProblemTypes)
+		r.Get("/v2/problem_types/:name", counter, auth, withTx, GetProblemType)
 
 		// problems
-		r.Get("/v2/problems", auth, withTx, withCurrentUser, GetProblems)
-		r.Get("/v2/problems/:problem_id", auth, withTx, withCurrentUser, GetProblem)
-		r.Get("/v2/problems/:problem_id/steps", auth, withTx, withCurrentUser, GetProblemSteps)
-		r.Get("/v2/problems/:problem_id/steps/:step", auth, withTx, withCurrentUser, GetProblemStep)
-		r.Delete("/v2/problems/:problem_id", auth, withTx, withCurrentUser, administratorOnly, DeleteProblem)
+		r.Get("/v2/problems", counter, auth, withTx, withCurrentUser, GetProblems)
+		r.Get("/v2/problems/:problem_id", counter, auth, withTx, withCurrentUser, GetProblem)
+		r.Get("/v2/problems/:problem_id/steps", counter, auth, withTx, withCurrentUser, GetProblemSteps)
+		r.Get("/v2/problems/:problem_id/steps/:step", counter, auth, withTx, withCurrentUser, GetProblemStep)
+		r.Delete("/v2/problems/:problem_id", counter, auth, withTx, withCurrentUser, administratorOnly, DeleteProblem)
 
 		// problem sets
-		r.Get("/v2/problem_sets", auth, withTx, withCurrentUser, GetProblemSets)
-		r.Get("/v2/problem_sets/:problem_set_id", auth, withTx, withCurrentUser, GetProblemSet)
-		r.Get("/v2/problem_sets/:problem_set_id/problems", auth, withTx, withCurrentUser, GetProblemSetProblems)
-		r.Delete("/v2/problem_sets/:problem_set_id", auth, withTx, withCurrentUser, administratorOnly, DeleteProblemSet)
+		r.Get("/v2/problem_sets", counter, auth, withTx, withCurrentUser, GetProblemSets)
+		r.Get("/v2/problem_sets/:problem_set_id", counter, auth, withTx, withCurrentUser, GetProblemSet)
+		r.Get("/v2/problem_sets/:problem_set_id/problems", counter, auth, withTx, withCurrentUser, GetProblemSetProblems)
+		r.Delete("/v2/problem_sets/:problem_set_id", counter, auth, withTx, withCurrentUser, administratorOnly, DeleteProblemSet)
 
 		// courses
-		r.Get("/v2/courses", auth, withTx, withCurrentUser, GetCourses)
-		r.Get("/v2/courses/:course_id", auth, withTx, withCurrentUser, GetCourse)
-		r.Delete("/v2/courses/:course_id", auth, withTx, withCurrentUser, administratorOnly, DeleteCourse)
+		r.Get("/v2/courses", counter, auth, withTx, withCurrentUser, GetCourses)
+		r.Get("/v2/courses/:course_id", counter, auth, withTx, withCurrentUser, GetCourse)
+		r.Delete("/v2/courses/:course_id", counter, auth, withTx, withCurrentUser, administratorOnly, DeleteCourse)
 
 		// users
-		r.Get("/v2/users", auth, withTx, withCurrentUser, GetUsers)
-		r.Get("/v2/users/me", auth, withTx, withCurrentUser, GetUserMe)
-		r.Get("/v2/users/me/cookie", auth, GetUserMeCookie)
-		r.Get("/v2/users/:user_id", auth, withTx, withCurrentUser, GetUser)
-		r.Get("/v2/courses/:course_id/users", auth, withTx, withCurrentUser, GetCourseUsers)
-		r.Delete("/v2/users/:user_id", auth, withTx, withCurrentUser, administratorOnly, DeleteUser)
+		r.Get("/v2/users", counter, auth, withTx, withCurrentUser, GetUsers)
+		r.Get("/v2/users/me", counter, auth, withTx, withCurrentUser, GetUserMe)
+		r.Get("/v2/users/me/cookie", counter, auth, GetUserMeCookie)
+		r.Get("/v2/users/:user_id", counter, auth, withTx, withCurrentUser, GetUser)
+		r.Get("/v2/courses/:course_id/users", counter, auth, withTx, withCurrentUser, GetCourseUsers)
+		r.Delete("/v2/users/:user_id", counter, auth, withTx, withCurrentUser, administratorOnly, DeleteUser)
 
 		// assignments
-		r.Get("/v2/users/:user_id/assignments", auth, withTx, withCurrentUser, GetUserAssignments)
-		r.Get("/v2/courses/:course_id/users/:user_id/assignments", auth, withTx, withCurrentUser, GetCourseUserAssignments)
-		r.Get("/v2/assignments/:assignment_id", auth, withTx, withCurrentUser, GetAssignment)
-		r.Delete("/v2/assignments/:assignment_id", auth, withTx, withCurrentUser, administratorOnly, DeleteAssignment)
+		r.Get("/v2/users/:user_id/assignments", counter, auth, withTx, withCurrentUser, GetUserAssignments)
+		r.Get("/v2/courses/:course_id/users/:user_id/assignments", counter, auth, withTx, withCurrentUser, GetCourseUserAssignments)
+		r.Get("/v2/assignments/:assignment_id", counter, auth, withTx, withCurrentUser, GetAssignment)
+		r.Delete("/v2/assignments/:assignment_id", counter, auth, withTx, withCurrentUser, administratorOnly, DeleteAssignment)
 
 		// commits
-		r.Get("/v2/assignments/:assignment_id/problems/:problem_id/commits/last", auth, withTx, withCurrentUser, GetAssignmentProblemCommitLast)
-		r.Get("/v2/assignments/:assignment_id/problems/:problem_id/steps/:step/commits/last", auth, withTx, withCurrentUser, GetAssignmentProblemStepCommitLast)
-		r.Delete("/v2/commits/:commit_id", auth, withTx, withCurrentUser, administratorOnly, DeleteCommit)
+		r.Get("/v2/assignments/:assignment_id/problems/:problem_id/commits/last", counter, auth, withTx, withCurrentUser, GetAssignmentProblemCommitLast)
+		r.Get("/v2/assignments/:assignment_id/problems/:problem_id/steps/:step/commits/last", counter, auth, withTx, withCurrentUser, GetAssignmentProblemStepCommitLast)
+		r.Delete("/v2/commits/:commit_id", counter, auth, withTx, withCurrentUser, administratorOnly, DeleteCommit)
 
 		// commit bundles
-		r.Post("/v2/commit_bundles/unsigned", auth, withTx, withCurrentUser, binding.Json(CommitBundle{}), PostCommitBundlesUnsigned)
-		r.Post("/v2/commit_bundles/signed", auth, withTx, withCurrentUser, binding.Json(CommitBundle{}), PostCommitBundlesSigned)
+		r.Post("/v2/commit_bundles/unsigned", counter, auth, withTx, withCurrentUser, binding.Json(CommitBundle{}), PostCommitBundlesUnsigned)
+		r.Post("/v2/commit_bundles/signed", counter, auth, withTx, withCurrentUser, binding.Json(CommitBundle{}), PostCommitBundlesSigned)
 	}
 
 	// set up daycare role
@@ -400,7 +403,7 @@ func main() {
 			log.Fatalf("Ping: %v", err)
 		}
 
-		r.Get("/v2/sockets/:problem_type/:action", SocketProblemTypeAction)
+		r.Get("/v2/sockets/:problem_type/:action", counter, SocketProblemTypeAction)
 
 		// register with the TA periodically
 		go func() {
@@ -857,9 +860,11 @@ var (
 	hitsCounter           = expvar.NewInt("hits")
 	slowest               float64
 	slowestCounter        = expvar.NewFloat("slowestSeconds")
+	slowestPathCounter    = expvar.NewString("slowestPath")
+	slowestTimeCounter    = expvar.NewString("slowestTime")
 	totalSeconds          float64
 	totalSecondsCounter   = expvar.NewFloat("totalSeconds")
 	averageSecondsCounter = expvar.NewFloat("averageSeconds")
-	mostRecentCounter     = expvar.NewString("mostRecent")
 	errorsCounter         = expvar.NewInt("errors")
+	goroutineCounter      = expvar.NewInt("goroutines")
 )
