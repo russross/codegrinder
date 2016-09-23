@@ -80,31 +80,35 @@ func gather(now time.Time, startDir string) (*ProblemType, *Problem, *Assignment
 	problem := new(Problem)
 	mustGetObject(fmt.Sprintf("/problems/%d", info.ID), nil, problem)
 
-	// get the problem type and verify local files match
-	problemType := new(ProblemType)
-	mustGetObject(fmt.Sprintf("/problem_types/%s", problem.ProblemType), nil, problemType)
-	for name, contents := range problemType.Files {
+	// check that the on-disk file matches the expected contents
+	// and update as needed
+	checkAndUpdate := func(name, contents string) {
 		path := filepath.Join(problemDir, name)
 		ondisk, err := ioutil.ReadFile(path)
 		if err != nil && os.IsNotExist(err) {
-			log.Printf("Warning! file %s", name)
-			log.Printf("   from the problem type was not found")
+			log.Printf("Warning! file %s was not found", name)
 			log.Printf("   saving the current version")
 			if err := ioutil.WriteFile(path, []byte(contents), 0644); err != nil {
 				log.Fatalf("error saving %s: %v", name, err)
 			}
-			continue
 		} else if err != nil {
 			log.Fatalf("error reading %s: %v", name, err)
 		}
 		if string(ondisk) != contents {
 			log.Printf("Warning! file %s", name)
-			log.Printf("   does not match the latest version from the problem type")
+			log.Printf("   does not match the latest version")
 			log.Printf("   replacing your file with the current version")
 			if err := ioutil.WriteFile(path, []byte(contents), 0644); err != nil {
 				log.Fatalf("error saving %s: %v", name, err)
 			}
 		}
+	}
+
+	// get the problem type and verify local files match
+	problemType := new(ProblemType)
+	mustGetObject(fmt.Sprintf("/problem_types/%s", problem.ProblemType), nil, problemType)
+	for name, contents := range problemType.Files {
+		checkAndUpdate(name, contents)
 	}
 
 	// get the problem step and verify local files match
@@ -116,27 +120,9 @@ func gather(now time.Time, startDir string) (*ProblemType, *Problem, *Assignment
 			// skip files in the main directory
 			continue
 		}
-		path := filepath.Join(problemDir, name)
-		ondisk, err := ioutil.ReadFile(path)
-		if err != nil && os.IsNotExist(err) {
-			log.Printf("Warning! file %s", name)
-			log.Printf("   from the problem step was not found")
-			log.Printf("   saving the current version")
-			if err := ioutil.WriteFile(path, []byte(contents), 0644); err != nil {
-				log.Fatalf("error saving %s: %v", name, err)
-			}
-		} else if err != nil {
-			log.Fatalf("error reading %s: %v", name, err)
-		}
-		if string(ondisk) != contents {
-			log.Printf("Warning! file %s", name)
-			log.Printf("   does not match the latest version from the problem step")
-			log.Printf("   replacing your file with the current version")
-			if err := ioutil.WriteFile(path, []byte(contents), 0644); err != nil {
-				log.Fatalf("error saving %s: %v", name, err)
-			}
-		}
+		checkAndUpdate(name, contents)
 	}
+	checkAndUpdate("index.html", step.Instructions)
 
 	// gather the commit files from the file system
 	files := make(map[string]string)
