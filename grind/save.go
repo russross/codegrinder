@@ -80,13 +80,19 @@ func gather(now time.Time, startDir string) (*ProblemType, *Problem, *Assignment
 	problem := new(Problem)
 	mustGetObject(fmt.Sprintf("/problems/%d", info.ID), nil, problem)
 
-	// get the problem type and verify local files matach
+	// get the problem type and verify local files match
 	problemType := new(ProblemType)
 	mustGetObject(fmt.Sprintf("/problem_types/%s", problem.ProblemType), nil, problemType)
 	for name, contents := range problemType.Files {
-		ondisk, err := ioutil.ReadFile(filepath.Join(problemDir, name))
+		path := filepath.Join(problemDir, name)
+		ondisk, err := ioutil.ReadFile(path)
 		if err != nil && os.IsNotExist(err) {
-			log.Printf("expected to find %s, but it is missing", name)
+			log.Printf("Warning! file %s", name)
+			log.Printf("   from the problem type was not found")
+			log.Printf("   saving the current version")
+			if err := ioutil.WriteFile(path, []byte(contents), 0644); err != nil {
+				log.Fatalf("error saving %s: %v", name, err)
+			}
 			continue
 		} else if err != nil {
 			log.Fatalf("error reading %s: %v", name, err)
@@ -94,7 +100,10 @@ func gather(now time.Time, startDir string) (*ProblemType, *Problem, *Assignment
 		if string(ondisk) != contents {
 			log.Printf("Warning! file %s", name)
 			log.Printf("   does not match the latest version from the problem type")
-			log.Printf("   consider re-downloading to get the current version")
+			log.Printf("   replacing your file with the current version")
+			if err := ioutil.WriteFile(path, []byte(contents), 0644); err != nil {
+				log.Fatalf("error saving %s: %v", name, err)
+			}
 		}
 	}
 
@@ -107,17 +116,25 @@ func gather(now time.Time, startDir string) (*ProblemType, *Problem, *Assignment
 			// skip files in the main directory
 			continue
 		}
-		ondisk, err := ioutil.ReadFile(filepath.Join(problemDir, name))
+		path := filepath.Join(problemDir, name)
+		ondisk, err := ioutil.ReadFile(path)
 		if err != nil && os.IsNotExist(err) {
-			log.Printf("expected to find %s, but it is missing", name)
-			continue
+			log.Printf("Warning! file %s", name)
+			log.Printf("   from the problem step was not found")
+			log.Printf("   saving the current version")
+			if err := ioutil.WriteFile(path, []byte(contents), 0644); err != nil {
+				log.Fatalf("error saving %s: %v", name, err)
+			}
 		} else if err != nil {
 			log.Fatalf("error reading %s: %v", name, err)
 		}
 		if string(ondisk) != contents {
 			log.Printf("Warning! file %s", name)
-			log.Printf("   does not match the latest version from the problem")
-			log.Printf("   consider re-downloading to get the current version")
+			log.Printf("   does not match the latest version from the problem step")
+			log.Printf("   replacing your file with the current version")
+			if err := ioutil.WriteFile(path, []byte(contents), 0644); err != nil {
+				log.Fatalf("error saving %s: %v", name, err)
+			}
 		}
 	}
 
