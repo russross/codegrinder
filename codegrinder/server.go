@@ -403,7 +403,7 @@ func main() {
 			log.Fatalf("Ping: %v", err)
 		}
 
-		r.Get("/v2/sockets/:problem_type/:action", counter, SocketProblemTypeAction)
+		r.Get("/v2/sockets/:problem_type/:action", SocketProblemTypeAction)
 
 		// register with the TA periodically
 		go func() {
