@@ -584,7 +584,7 @@ func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Co
 	return asst, nil
 }
 
-func saveGrade(tx *sql.Tx, asst *Assignment, user *User, text string) error {
+func saveGrade(asst *Assignment, user *User, text string) error {
 	if asst.GradeID == "" {
 		log.Printf("cannot post grade for assignment %d user %d (%s) because no grade ID is present", asst.ID, asst.UserID, user.Name)
 		return nil

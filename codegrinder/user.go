@@ -751,10 +751,32 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 				html.EscapeString(name), html.EscapeString(contents))
 		}
 
-		if err := saveGrade(tx, assignment, currentUser, report.String()); err != nil {
-			loggedHTTPErrorf(w, http.StatusInternalServerError, "error posting grade back to LMS: %v", err)
-			return
-		}
+		// send grade to the LMS in a goroutine
+		// so we can wrap up the transaction and return to the user
+		go func(asst *Assignment, user *User, msg string) {
+			// try up to 10 times before giving up
+			tries := 10
+			minSleepTime := 10 * time.Second
+			maxSleepTime := 5 * time.Minute
+			sleepTime := minSleepTime
+			for i := 0; i < tries; i++ {
+				err := saveGrade(asst, user, msg)
+				if err == nil {
+					return
+				}
+				log.Printf("error posting grade back to LMS (attempt %d/%d): %v", i+1, tries, err)
+				if i+1 < 10 {
+					log.Printf("  will try again in %v", sleepTime)
+					time.Sleep(sleepTime)
+					sleepTime *= 2
+					if sleepTime > maxSleepTime {
+						sleepTime = maxSleepTime
+					}
+				} else {
+					log.Printf("  giving up")
+				}
+			}
+		}(assignment, currentUser, report.String())
 	}
 
 	render.JSON(http.StatusOK, &signed)

@@ -16,7 +16,7 @@
     <p>Follow these steps to set up CodeGrinder. To upgrade <tt>grind</tt>, you only need to repeat the first step:</p>
     <ol>
     <li>Type the following commands:<br>
-        <pre>mkdir -p ~/bin<br>pushd ~/bin<br>curl <script>document.write(document.location.origin)</script>/grind.linux -o grind<br>chmod 755 grind<br>popd</pre></li>
+        <pre>mkdir -p ~/bin<br>cd ~/bin<br>curl <script>document.write(document.location.origin)</script>/grind.linux -o grind<br>chmod 755 grind<br>cd -</pre></li>
     <li>Log out and log back in. Type <tt>grind</tt> and hit enter. If it works, skip this step. If it complains that it cannot find the <tt>grind</tt> command, add the following line to <tt>.profile</tt> in your home directory:<br>
         <pre>export PATH=$PATH:$HOME/bin</pre>
         Then log out and log back in, or run this command to make it take effect in the same session:<br>
@@ -32,7 +32,7 @@
     <p>Follow these steps to set up CodeGrinder. To upgrade <tt>grind</tt>, you only need to repeat the first step:</p>
     <ol>
     <li>Type the following commands:<br>
-        <pre>mkdir -p ~/bin<br>pushd ~/bin<br>curl <script>document.write(document.location.origin)</script>/grind.arm -o grind<br>chmod 755 grind<br>popd</pre></li>
+        <pre>mkdir -p ~/bin<br>cd ~/bin<br>curl <script>document.write(document.location.origin)</script>/grind.arm -o grind<br>chmod 755 grind<br>cd -</pre></li>
     <li>Log out and log back in. Type <tt>grind</tt> and hit enter. If it works, skip this step. If it complains that it cannot find the <tt>grind</tt> command, add the following line to <tt>.profile</tt> in your home directory:<br>
         <pre>export PATH=$PATH:$HOME/bin</pre>
         Then log out and log back in, or run this command to make it take effect in the same session:<br>
@@ -48,7 +48,7 @@
     <p>Follow these steps to set up CodeGrinder. To upgrade <tt>grind</tt>, you only need to repeat the first step:</p>
     <ol>
     <li>Type the following commands:<br>
-        <pre>mkdir -p ~/bin<br>pushd ~/bin<br>curl <script>document.write(document.location.origin)</script>/grind.macos -o grind<br>chmod 755 grind<br>popd</pre></li>
+        <pre>mkdir -p ~/bin<br>cd ~/bin<br>curl <script>document.write(document.location.origin)</script>/grind.macos -o grind<br>chmod 755 grind<br>cd -</pre></li>
     <li>Type <tt>grind</tt> and hit enter. If it works, skip this step. If it complains that it cannot find the <tt>grind</tt> command, add the following line to <tt>.bash_profile</tt> in your home directory (you may need to create this file from scratch):<br>
         <pre>export PATH=$PATH:$HOME/bin</pre>
         Then exit the terminal and open a new one, or run this command to make it take effect in the same session:<br>
