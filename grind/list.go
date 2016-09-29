@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"strconv"
 
 	. "github.com/russross/codegrinder/common"
 	"github.com/spf13/cobra"
@@ -21,6 +22,17 @@ func CommandList(cmd *cobra.Command, args []string) {
 	}
 
 	var course *Course
+
+	// find the longest assignment ID, name
+	longestID, longestName := 1, 1
+	for _, asst := range assignments {
+		if n := len(strconv.FormatInt(asst.ID, 10)); n > longestID {
+			longestID = n
+		}
+		if n := len(asst.CanvasTitle); n > longestName {
+			longestName = n
+		}
+	}
 	for _, asst := range assignments {
 		if course == nil || asst.CourseID != course.ID {
 			if course != nil {
@@ -37,7 +49,7 @@ func CommandList(cmd *cobra.Command, args []string) {
 		// fetch the problem
 		problemSet := new(ProblemSet)
 		mustGetObject(fmt.Sprintf("/problem_sets/%d", asst.ProblemSetID), nil, problemSet)
-		fmt.Printf("id:%d %s (%s/%s)\n", asst.ID, asst.CanvasTitle, course.Label, problemSet.Unique)
+		fmt.Printf("id:%-*d %-*s (%s/%s)\n", longestID, asst.ID, longestName, asst.CanvasTitle, course.Label, problemSet.Unique)
 	}
 }
 
