@@ -44,7 +44,7 @@ CREATE TABLE problem_steps (
     note                    text NOT NULL,
     instructions            text NOT NULL,
     weight                  double precision NOT NULL,
-    files                   jsonb NOT NULL,
+    files                   json NOT NULL,
 
     PRIMARY KEY (problem_id, step),
     FOREIGN KEY (problem_id) REFERENCES problems (id) ON DELETE CASCADE
@@ -144,9 +144,9 @@ CREATE TABLE commits (
     step                    bigint NOT NULL,
     action                  text,
     note                    text,
-    files                   jsonb NOT NULL,
-    transcript              jsonb NOT NULL,
-    report_card             jsonb NOT NULL,
+    files                   json NOT NULL,
+    transcript              json NOT NULL,
+    report_card             json NOT NULL,
     score                   double precision,
     created_at              timestamp with time zone NOT NULL,
     updated_at              timestamp with time zone NOT NULL,
