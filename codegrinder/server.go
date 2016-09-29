@@ -49,7 +49,7 @@ var Config struct {
 	LTISecret     string `json:"ltiSecret"`     // LTI authentication shared secret. Must match that given to Canvas course: `head -c 32 /dev/urandom | base64`
 	SessionSecret string `json:"sessionSecret"` // Random string used to sign cookie sessions: `head -c 32 /dev/urandom | base64`
 	WWWDir        string `json:"wwwDir"`        // Full path of directory holding static files to serve: "/home/foo/codegrinder/www"
-	FilesDir      string `json:"filesDir""`     // Full path of directory holding problem-type files: "/home/foo/codegrinder/files"
+	FilesDir      string `json:"filesDir"`      // Full path of directory holding problem-type files: "/home/foo/codegrinder/files"
 
 	// daycare-only required parameters
 	TAHostname   string   `json:"taHostname"`   // Hostname for the TA: "your.host.goes.here". Defaults to Hostname

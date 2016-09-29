@@ -515,21 +515,31 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 	}
 	commit := bundle.Commit
 
-	// get the assignment and make sure it is for this user
+	// get the assignment and figure out if this is the student or the instructor
+	isInstructor := false
 	assignment := new(Assignment)
-	if err := meddler.QueryRow(tx, assignment, `SELECT * FROM assignments WHERE id = $1 AND user_id = $2`, commit.AssignmentID, currentUser.ID); err != nil {
+	err := meddler.QueryRow(tx, assignment, `SELECT * FROM assignments WHERE id = $1 AND user_id = $2`, commit.AssignmentID, currentUser.ID)
+	if err == sql.ErrNoRows {
+		// try loading it as the instructor
+		err = meddler.QueryRow(tx, assignment, `SELECT assignments.* FROM assignments JOIN user_assignments ON assignments.id = user_assignments.assignment_id `+
+			`WHERE user_assignments.assignment_id = $1 AND user_assignments.user_id = $2`, commit.AssignmentID, currentUser.ID)
+		if err == nil {
+			isInstructor = true
+		}
+	}
+	if err != nil {
 		loggedHTTPDBNotFoundError(w, err)
 		return
 	}
 
 	// get the problem
 	problem := new(Problem)
-	if err := meddler.QueryRow(tx, problem, `SELECT * FROM problems WHERE id = $1`, commit.ProblemID); err != nil {
+	if err = meddler.QueryRow(tx, problem, `SELECT * FROM problems WHERE id = $1`, commit.ProblemID); err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
 	}
 	steps := []*ProblemStep{}
-	if err := meddler.QueryAll(tx, &steps, `SELECT * FROM problem_steps WHERE problem_id = $1 ORDER BY step`, commit.ProblemID); err != nil {
+	if err = meddler.QueryAll(tx, &steps, `SELECT * FROM problem_steps WHERE problem_id = $1 ORDER BY step`, commit.ProblemID); err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
 	}
@@ -622,9 +632,13 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 		// if unsigned, save it without the action
 		commit.Action = ""
 	}
-	if err := meddler.Save(tx, "commits", commit); err != nil {
-		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-		return
+	if isInstructor {
+		log.Printf("instructor is testing student code, skipping save step")
+	} else {
+		if err := meddler.Save(tx, "commits", commit); err != nil {
+			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
+			return
+		}
 	}
 	commit.Action = action
 
@@ -653,7 +667,7 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 	}
 
 	// save the grade update
-	if signed.Commit.ReportCard != nil {
+	if !isInstructor && signed.Commit.ReportCard != nil {
 		// save the raw score for this problem step
 		scores := assignment.RawScores[problem.Unique]
 		for int(signed.Commit.Step) > len(scores) {
