@@ -131,7 +131,7 @@ func saveProblemBundleCommon(w http.ResponseWriter, tx *sql.Tx, currentUser *Use
 			return
 		}
 
-		if commit.Step != steps[i].Step {
+		if commit.Step != steps[i].Step || commit.Step != int64(i+1) {
 			loggedHTTPErrorf(w, http.StatusBadRequest, "commit for step %d says it is for step %d", steps[i].Step, commit.Step)
 			return
 		}
@@ -143,14 +143,25 @@ func saveProblemBundleCommon(w http.ResponseWriter, tx *sql.Tx, currentUser *Use
 		}
 	}
 
-	isUpdate := problem.ID != 0
+	isUpdate, oldStepCount := false, 0
+	if problem.ID != 0 {
+		isUpdate = true
+
+		// how many steps did the old version have?
+		if err := tx.QueryRow(`SELECT COUNT(1) FROM problem_steps WHERE problem_id = $1`, problem.ID).Scan(&oldStepCount); err != nil {
+			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
+			return
+		}
+	}
 	if err := meddler.Save(tx, "problems", problem); err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
 	}
 	for _, step := range steps {
 		step.ProblemID = problem.ID
-		if isUpdate {
+
+		// is this an update to an existing step?
+		if step.Step <= int64(oldStepCount) {
 			// meddler does not understand updating rows without a single integer primary key
 			raw, err := json.Marshal(step.Files)
 			if err != nil {
@@ -163,14 +174,25 @@ func saveProblemBundleCommon(w http.ResponseWriter, tx *sql.Tx, currentUser *Use
 				return
 			}
 		} else {
+			// insert a new record
 			if err := meddler.Insert(tx, "problem_steps", step); err != nil {
 				loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 				return
 			}
 		}
 	}
-	if isUpdate {
+
+	// did the old version have extra steps that need to be deleted?
+	if len(steps) < oldStepCount {
+		if _, err := tx.Exec(`DELETE FROM problem_steps WHERE problem_id = $1 AND step > $2`, problem.ID, len(steps)); err != nil {
+			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
+			return
+		}
+	}
+	if isUpdate && len(steps) == oldStepCount {
 		log.Printf("problem %s (%d) with %d step(s) updated", problem.Unique, problem.ID, len(steps))
+	} else if isUpdate {
+		log.Printf("problem %s (%d) with %d step(s) updated (old version had %d step(s))", problem.Unique, problem.ID, len(steps), oldStepCount)
 	} else {
 		log.Printf("problem %s (%d) with %d step(s) created", problem.Unique, problem.ID, len(steps))
 	}
