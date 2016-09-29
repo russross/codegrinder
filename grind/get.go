@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	. "github.com/russross/codegrinder/common"
 	"github.com/spf13/cobra"
@@ -21,7 +22,7 @@ func CommandGet(cmd *cobra.Command, args []string) {
 	name, rootDir := "", ""
 	switch len(args) {
 	case 0:
-		log.Printf("you must specify the problem set to download")
+		log.Printf("you must specify the assignment to download")
 		log.Printf("   run \"grind list\" to see your assignments")
 		log.Printf("   you must give the assignment number (displayed on the left)")
 		log.Fatalf("   or a name in the form COURSE/problem-set-id (displayed in parentheses)")
@@ -71,7 +72,10 @@ func CommandGet(cmd *cobra.Command, args []string) {
 		}
 		assignment = assignmentList[0]
 	}
+	getAssignment(assignment, rootDir)
+}
 
+func getAssignment(assignment *Assignment, rootDir string) string {
 	// get the course
 	course := new(Course)
 	mustGetObject(fmt.Sprintf("/courses/%d", assignment.CourseID), nil, course)
@@ -133,10 +137,7 @@ func CommandGet(cmd *cobra.Command, args []string) {
 	}
 
 	// check if the target directory exists
-	if rootDir == "" {
-		rootDir = filepath.Join(course.Label, problemSet.Unique)
-	}
-
+	rootDir = filepath.Join(rootDir, course.Label, problemSet.Unique)
 	if _, err := os.Stat(rootDir); err == nil {
 		log.Printf("directory %s already exists", rootDir)
 		log.Fatalf("delete it first if you want to re-download the assignment")
@@ -150,6 +151,8 @@ func CommandGet(cmd *cobra.Command, args []string) {
 		log.Fatalf("error creating directory %s: %v", rootDir, err)
 	}
 
+	mostRecentTime := time.Time{}
+	changeTo := rootDir
 	for unique := range steps {
 		commit, problem, step := commits[unique], problems[unique], steps[unique]
 
@@ -190,6 +193,12 @@ func CommandGet(cmd *cobra.Command, args []string) {
 
 		// commit files overwrite step files
 		if commit != nil {
+			if commit.UpdatedAt.After(mostRecentTime) {
+				// when an instructor is downloading a student assignment,
+				// change to the dir for the problem with the most recent commit
+				mostRecentTime = commit.UpdatedAt
+				changeTo = target
+			}
 			for name, contents := range commit.Files {
 				path := filepath.Join(target, name)
 				log.Printf("writing commit file %s", name)
@@ -235,4 +244,5 @@ func CommandGet(cmd *cobra.Command, args []string) {
 	if err := ioutil.WriteFile(dotfile.Path, contents, 0644); err != nil {
 		log.Fatalf("error saving file %s: %v", dotfile.Path, err)
 	}
+	return changeTo
 }

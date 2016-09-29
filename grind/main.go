@@ -42,6 +42,7 @@ type ProblemInfo struct {
 }
 
 func main() {
+	isInstructor := len(os.Args) > 0 && (strings.HasSuffix(os.Args[0], "grindi") || strings.HasSuffix(os.Args[0], "grindi.exe"))
 	log.SetFlags(log.Ltime)
 
 	cmdGrind := &cobra.Command{
@@ -109,14 +110,6 @@ func main() {
 	}
 	cmdGrind.AddCommand(cmdGrade)
 
-	cmdCreate := &cobra.Command{
-		Use:   "create",
-		Short: "create a new problem (authors only)",
-		Run:   CommandCreate,
-	}
-	cmdCreate.Flags().BoolP("update", "u", false, "update an existing problem")
-	cmdGrind.AddCommand(cmdCreate)
-
 	cmdAction := &cobra.Command{
 		Use:   "action",
 		Short: "launch a problem-type specific action",
@@ -128,6 +121,27 @@ func main() {
 		Run: CommandAction,
 	}
 	cmdGrind.AddCommand(cmdAction)
+
+	if isInstructor {
+		cmdCreate := &cobra.Command{
+			Use:   "create",
+			Short: "create a new problem (authors only)",
+			Run:   CommandCreate,
+		}
+		cmdCreate.Flags().BoolP("update", "u", false, "update an existing problem")
+		cmdGrind.AddCommand(cmdCreate)
+
+		cmdStudent := &cobra.Command{
+			Use:   "student",
+			Short: "download a student assignment (instructors only)",
+			Run:   CommandStudent,
+		}
+		cmdStudent.Flags().StringP("email", "e", "", "search by student email")
+		cmdStudent.Flags().StringP("name", "n", "", "search by student name")
+		cmdStudent.Flags().StringP("problem", "p", "", "search by problem set name")
+		cmdStudent.Flags().StringP("course", "c", "", "search by course name")
+		cmdGrind.AddCommand(cmdStudent)
+	}
 
 	cmdGrind.Execute()
 }
