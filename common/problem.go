@@ -201,9 +201,9 @@ func (problem *Problem) ComputeSignature(secret string, steps []*ProblemStep) st
 
 // problem files in these directories do not have line endings cleaned up
 var ProblemStepDirectoryWhitelist = map[string]bool{
-	"in":   true,
-	"out":  true,
-	"_doc": true,
+	"in":  true,
+	"out": true,
+	"doc": true,
 }
 
 // fix line endings
@@ -271,19 +271,19 @@ func (problem *Problem) GetStepWhitelists(steps []*ProblemStep) []map[string]boo
 // buildInstructions builds the instructions for a problem step as a single
 // html document. Markdown is processed and images are inlined.
 func (step *ProblemStep) BuildInstructions() (string, error) {
-	// get a list of all files in the _doc directory
+	// get a list of all files in the doc directory
 	used := make(map[string]bool)
 	for name := range step.Files {
-		if strings.HasPrefix(name, "_doc/") {
+		if strings.HasPrefix(name, "doc/") {
 			used[name] = false
 		}
 	}
 
 	var justHTML string
-	if data, ok := step.Files["_doc/index.html"]; ok {
+	if data, ok := step.Files["doc/index.html"]; ok {
 		justHTML = data
-		used["_doc/index.html"] = true
-	} else if data, ok := step.Files["_doc/index.md"]; ok {
+		used["doc/index.html"] = true
+	} else if data, ok := step.Files["doc/index.md"]; ok {
 		// render markdown
 		extensions := 0
 		extensions |= blackfriday.EXTENSION_NO_INTRA_EMPHASIS
@@ -294,9 +294,9 @@ func (step *ProblemStep) BuildInstructions() (string, error) {
 		extensions |= blackfriday.EXTENSION_SPACE_HEADERS
 
 		justHTML = string(blackfriday.Markdown([]byte(data), blackfriday.HtmlRenderer(0, "", ""), extensions))
-		used["_doc/index.md"] = true
+		used["doc/index.md"] = true
 	} else {
-		return "", loggedErrorf("No documentation found: checked _doc/index.html and _doc/index.md")
+		return "", loggedErrorf("No documentation found: checked doc/index.html and doc/index.md")
 	}
 
 	// make sure it is well-formed utf8
@@ -320,7 +320,7 @@ func (step *ProblemStep) BuildInstructions() (string, error) {
 		if n.Type == html.ElementNode && n.Data == "img" {
 			for i, a := range n.Attr {
 				if a.Key == "src" {
-					if contents, present := step.Files["_doc/"+a.Val]; present {
+					if contents, present := step.Files["doc/"+a.Val]; present {
 						mime := ""
 						switch {
 						case strings.HasSuffix(a.Val, ".gif"):
@@ -339,7 +339,7 @@ func (step *ProblemStep) BuildInstructions() (string, error) {
 
 						// base64 encode the image
 						log.Printf("encoding image %s as base64 data URI", a.Val)
-						used["_doc/"+a.Val] = true
+						used["doc/"+a.Val] = true
 						s := base64.StdEncoding.EncodeToString([]byte(contents))
 						a.Val = fmt.Sprintf("data:%s;base64,%s", mime, s)
 						n.Attr[i] = a
@@ -360,7 +360,7 @@ func (step *ProblemStep) BuildInstructions() (string, error) {
 		return "", err
 	}
 
-	// warn about unused files in _doc
+	// warn about unused files in doc
 	for name, u := range used {
 		if !u {
 			log.Printf("Warning: %s was not used in the instructions", name)
