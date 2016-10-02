@@ -95,6 +95,10 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 		UpdatedAt:   now,
 	}
 
+	// get the problem type
+	problemType := new(ProblemType)
+	mustGetObject(fmt.Sprintf("/problem_types/%s", problem.ProblemType), nil, problemType)
+
 	// start forming the problem bundle
 	unsigned := &ProblemBundle{
 		Problem: problem,
@@ -172,9 +176,14 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 			if err != nil {
 				log.Fatalf("error finding relative path of %s: %v", path, err)
 			}
+			if _, exists := problemType.Files[filepath.ToSlash(relpath)]; exists {
+				log.Printf("skipping file %s", relpath)
+				log.Printf("  because it is provided by the problem type")
+				return nil
+			}
 			for _, suffix := range blacklist {
 				if strings.HasSuffix(relpath, suffix) {
-					log.Printf("Warning: skipping file %q", relpath)
+					log.Printf("skipping file %s", relpath)
 					log.Printf("  because it has one of the following suffixes:")
 					log.Printf("  %v", blacklist)
 					return nil
@@ -189,14 +198,14 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 
 			// pick out solution/starter files
 			reldir, relfile := filepath.Split(relpath)
-			if reldir == "_solution/" && relfile != "" {
-				solution[relfile] = string(contents)
-			} else if reldir == "_starter/" && relfile != "" {
-				starter[relfile] = string(contents)
+			if filepath.ToSlash(reldir) == "_solution/" && relfile != "" {
+				solution[filepath.ToSlash(relfile)] = string(contents)
+			} else if filepath.ToSlash(reldir) == "_starter/" && relfile != "" {
+				starter[filepath.ToSlash(relfile)] = string(contents)
 			} else if reldir == "" && relfile != "" {
 				root[relfile] = string(contents)
 			} else {
-				step.Files[relpath] = string(contents)
+				step.Files[filepath.ToSlash(relpath)] = string(contents)
 			}
 
 			return nil

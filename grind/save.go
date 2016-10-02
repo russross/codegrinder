@@ -86,7 +86,7 @@ func gather(now time.Time, startDir string) (*ProblemType, *Problem, *Assignment
 		path := filepath.Join(problemDir, name)
 		ondisk, err := ioutil.ReadFile(path)
 		if err != nil && os.IsNotExist(err) {
-			log.Printf("Warning! file %s was not found", name)
+			log.Printf("warning! file %s was not found", name)
 			log.Printf("   saving the current version")
 			if err := ioutil.WriteFile(path, []byte(contents), 0644); err != nil {
 				log.Fatalf("error saving %s: %v", name, err)
@@ -95,7 +95,7 @@ func gather(now time.Time, startDir string) (*ProblemType, *Problem, *Assignment
 			log.Fatalf("error reading %s: %v", name, err)
 		}
 		if string(ondisk) != contents {
-			log.Printf("Warning! file %s", name)
+			log.Printf("warning! file %s", name)
 			log.Printf("   does not match the latest version")
 			log.Printf("   replacing your file with the current version")
 			if err := ioutil.WriteFile(path, []byte(contents), 0644); err != nil {
@@ -122,7 +122,7 @@ func gather(now time.Time, startDir string) (*ProblemType, *Problem, *Assignment
 		}
 		checkAndUpdate(name, contents)
 	}
-	checkAndUpdate("index.html", step.Instructions)
+	checkAndUpdate(filepath.Join("doc", "index.html"), step.Instructions)
 
 	// gather the commit files from the file system
 	files := make(map[string]string)
@@ -148,11 +148,6 @@ func gather(now time.Time, startDir string) (*ProblemType, *Problem, *Assignment
 			return nil
 		}
 
-		// skip the instruction file
-		if name == "index.html" {
-			return nil
-		}
-
 		// skip files from the problem type
 		if _, exists := problemType.Files[name]; exists {
 			return nil
@@ -173,7 +168,7 @@ func gather(now time.Time, startDir string) (*ProblemType, *Problem, *Assignment
 			}
 			files[name] = string(contents)
 		} else {
-			log.Printf("skipping %q which is not distributed with the problem", name)
+			//log.Printf("skipping %q which is not distributed with the problem", name)
 		}
 		return nil
 	})

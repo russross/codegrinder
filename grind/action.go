@@ -42,6 +42,10 @@ func CommandAction(cmd *cobra.Command, args []string) {
 		cmd.Help()
 		return
 	}
+	if action == "grade" {
+		log.Printf("grind action is for testing code, not for grading")
+		log.Fatalf("  to submit your code for grading, use \"grind grade\"")
+	}
 
 	// get the user ID
 	user := new(User)

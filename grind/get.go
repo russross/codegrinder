@@ -170,7 +170,7 @@ func getAssignment(assignment *Assignment, rootDir string) string {
 		// save the step files
 		for name, contents := range step.Files {
 			path := filepath.Join(target, name)
-			log.Printf("writing step %d file %s", step.Step, name)
+			//log.Printf("writing step %d file %s", step.Step, name)
 			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 				log.Fatalf("error create directory %s: %v", filepath.Dir(path), err)
 			}
@@ -181,13 +181,14 @@ func getAssignment(assignment *Assignment, rootDir string) string {
 
 		// save the doc file
 		if len(step.Instructions) > 0 {
-			path := filepath.Join(target, "index.html")
-			log.Printf("writing instruction file index.html")
+			name := filepath.Join("doc", "index.html")
+			path := filepath.Join(target, name)
+			//log.Printf("writing instruction file %s", name)
 			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 				log.Fatalf("error create directory %s: %v", filepath.Dir(path), err)
 			}
 			if err := ioutil.WriteFile(path, []byte(step.Instructions), 0644); err != nil {
-				log.Fatalf("error saving file %s: %v", path, err)
+				log.Fatalf("error saving file %s: %v", name, err)
 			}
 		}
 
@@ -201,7 +202,7 @@ func getAssignment(assignment *Assignment, rootDir string) string {
 			}
 			for name, contents := range commit.Files {
 				path := filepath.Join(target, name)
-				log.Printf("writing commit file %s", name)
+				//log.Printf("writing commit file %s", name)
 				if err := ioutil.WriteFile(path, []byte(contents), 0644); err != nil {
 					log.Fatalf("error saving file %s: %v", path, err)
 				}
@@ -217,14 +218,14 @@ func getAssignment(assignment *Assignment, rootDir string) string {
 		problemType := types[problem.ProblemType]
 		for name, contents := range problemType.Files {
 			path := filepath.Join(target, name)
-			log.Printf("writing problem type file %s", name)
+			//log.Printf("writing problem type file %s", name)
 			if dir := filepath.Dir(path); dir != "" {
 				if err := os.MkdirAll(dir, 0755); err != nil {
 					log.Fatalf("error create directory %s: %v", dir, err)
 				}
 			}
 			if _, err := os.Lstat(path); err == nil {
-				log.Printf("Warning! Problem type file is overwriting problem file: %s", path)
+				log.Printf("warning! problem type file is overwriting problem file: %s", path)
 			}
 			if err := ioutil.WriteFile(path, []byte(contents), 0644); err != nil {
 				log.Fatalf("error saving file %s: %v", path, err)

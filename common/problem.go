@@ -280,10 +280,10 @@ func (step *ProblemStep) BuildInstructions() (string, error) {
 	}
 
 	var justHTML string
-	if data, ok := step.Files["doc/index.html"]; ok {
+	if data, ok := step.Files["doc/doc.html"]; ok {
 		justHTML = data
-		used["doc/index.html"] = true
-	} else if data, ok := step.Files["doc/index.md"]; ok {
+		used["doc/doc.html"] = true
+	} else if data, ok := step.Files["doc/doc.md"]; ok {
 		// render markdown
 		extensions := 0
 		extensions |= blackfriday.EXTENSION_NO_INTRA_EMPHASIS
@@ -294,20 +294,20 @@ func (step *ProblemStep) BuildInstructions() (string, error) {
 		extensions |= blackfriday.EXTENSION_SPACE_HEADERS
 
 		justHTML = string(blackfriday.Markdown([]byte(data), blackfriday.HtmlRenderer(0, "", ""), extensions))
-		used["doc/index.md"] = true
+		used["doc/doc.md"] = true
 	} else {
-		return "", loggedErrorf("No documentation found: checked doc/index.html and doc/index.md")
+		return "", loggedErrorf("No documentation found: checked doc/doc.html and doc/doc.md")
 	}
 
 	// make sure it is well-formed utf8
 	if !utf8.ValidString(justHTML) {
-		return "", loggedErrorf("index.{html,md} is not valid utf8")
+		return "", loggedErrorf("doc.{html,md} is not valid utf8")
 	}
 
 	// parse the html
 	doc, err := html.Parse(strings.NewReader(justHTML))
 	if err != nil {
-		log.Printf("Error parsing index.html: %v", err)
+		log.Printf("Error parsing doc.html: %v", err)
 		return "", err
 	}
 	if doc == nil {
