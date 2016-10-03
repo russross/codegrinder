@@ -244,7 +244,7 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 			if whitelist[name] {
 				commit.Files[name] = contents
 			} else {
-				log.Printf("Warning: skipping solution file %q", name)
+				log.Printf("warning: skipping solution file %q", name)
 				log.Printf("  because it is not in the starter file set of this or any previous step")
 			}
 		}

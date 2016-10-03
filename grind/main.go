@@ -42,7 +42,7 @@ type ProblemInfo struct {
 }
 
 func main() {
-	isInstructor := len(os.Args) > 0 && (strings.HasSuffix(os.Args[0], "grindi") || strings.HasSuffix(os.Args[0], "grindi.exe"))
+	isInstructor := len(os.Args) > 0 && (strings.HasSuffix(os.Args[0], "grin") || strings.HasSuffix(os.Args[0], "grin.exe"))
 	log.SetFlags(log.Ltime)
 
 	cmdGrind := &cobra.Command{

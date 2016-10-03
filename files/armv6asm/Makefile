@@ -29,7 +29,7 @@ debug:	a.out
 	g++ -c -g -pthread -std=c++11 -Wpedantic -Wall -Wextra -Werror $< -o $@
 
 a.out:	$(ASMOBJECT)
-	ld $^
+	ld --fatal-warnings $^
 
 unittest.out:	$(ASMOBJECT) $(LIBOBJECT) $(CPPOBJECT)
 	g++ -g -pthread -lgtest -lpthread $(LIBOBJECT) $(CPPOBJECT) $(ASMOBJECT) -lgtest -lpthread -o $@

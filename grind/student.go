@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -35,6 +36,9 @@ func CommandStudent(cmd *cobra.Command, args []string) {
 		// look it up by ID
 		assignment = new(Assignment)
 		mustGetObject(fmt.Sprintf("/assignments/%d", id), nil, assignment)
+		user := new(User)
+		mustGetObject(fmt.Sprintf("/users/%d", assignment.UserID), nil, user)
+		log.Printf("assignment is for %s, total score is %f", user.Name, math.Floor(assignment.Score*100.0+0.5)/100.0)
 	} else {
 		log.Fatalf("unimplemented")
 	}

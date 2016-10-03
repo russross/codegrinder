@@ -86,8 +86,11 @@ func gather(now time.Time, startDir string) (*ProblemType, *Problem, *Assignment
 		path := filepath.Join(problemDir, name)
 		ondisk, err := ioutil.ReadFile(path)
 		if err != nil && os.IsNotExist(err) {
-			log.Printf("warning! file %s was not found", name)
+			log.Printf("warning: file %s was not found", name)
 			log.Printf("   saving the current version")
+			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+				log.Fatalf("error creating directory %s: %v", filepath.Dir(path), err)
+			}
 			if err := ioutil.WriteFile(path, []byte(contents), 0644); err != nil {
 				log.Fatalf("error saving %s: %v", name, err)
 			}
@@ -95,7 +98,7 @@ func gather(now time.Time, startDir string) (*ProblemType, *Problem, *Assignment
 			log.Fatalf("error reading %s: %v", name, err)
 		}
 		if string(ondisk) != contents {
-			log.Printf("warning! file %s", name)
+			log.Printf("warning: file %s", name)
 			log.Printf("   does not match the latest version")
 			log.Printf("   replacing your file with the current version")
 			if err := ioutil.WriteFile(path, []byte(contents), 0644); err != nil {
@@ -117,8 +120,11 @@ func gather(now time.Time, startDir string) (*ProblemType, *Problem, *Assignment
 	for name, contents := range step.Files {
 		dir, _ := filepath.Split(name)
 		if dir == "" {
-			// skip files in the main directory
-			continue
+			// in main directory, skip files that exist (but write files that are missing)
+			path := filepath.Join(problemDir, name)
+			if _, err := os.Stat(path); err == nil {
+				continue
+			}
 		}
 		checkAndUpdate(name, contents)
 	}
