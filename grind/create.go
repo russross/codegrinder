@@ -307,6 +307,11 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 
 	log.Printf("problem and solution confirmed successfully")
 
+	if cmd.Flag("test").Value.String() == "true" {
+		log.Printf("problem %q tested successfully", signed.Problem.Unique)
+		return
+	}
+
 	// save the problem
 	final := new(ProblemBundle)
 	if signed.Problem.ID == 0 {

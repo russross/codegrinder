@@ -129,6 +129,7 @@ func main() {
 			Run:   CommandCreate,
 		}
 		cmdCreate.Flags().BoolP("update", "u", false, "update an existing problem")
+		cmdCreate.Flags().BoolP("test", "t", false, "test problem without saving result")
 		cmdGrind.AddCommand(cmdCreate)
 
 		cmdStudent := &cobra.Command{
