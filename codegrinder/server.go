@@ -117,7 +117,7 @@ func main() {
 	r := martini.NewRouter()
 	m := martini.New()
 	m.Logger(log.New(os.Stderr, "", log.LstdFlags))
-	m.Use(martini.Logger())
+	//m.Use(martini.Logger())
 	m.Use(martini.Recovery())
 	m.MapTo(r, (*martini.Routes)(nil))
 	m.Action(r.Handle)
@@ -461,7 +461,7 @@ func main() {
 	}
 
 	// start redirecting http calls to https
-	log.Printf("starting http -> https forwarder")
+	//log.Printf("starting http -> https forwarder")
 	go http.ListenAndServe(":http", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// get the address of the client
 		addr := r.Header.Get("X-Real-IP")
@@ -514,9 +514,9 @@ func main() {
 
 func setupDB(host, port, user, password, database string) *sql.DB {
 	if port == "" {
-		log.Printf("connecting to database at %s", host)
+		//log.Printf("connecting to database at %s", host)
 	} else {
-		log.Printf("connecting to database at %s:%s", host, port)
+		//log.Printf("connecting to database at %s:%s", host, port)
 	}
 	meddler.Default = meddler.PostgreSQL
 	parts := []string{"sslmode=disable"}
