@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"log"
-	"math"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -79,7 +78,7 @@ func CommandStudent(cmd *cobra.Command, args []string) {
 			fmt.Println(dashes(len(user.Name) + len(user.Email) + len(" ()")))
 		}
 
-		fmt.Printf("id:%-*d %-*s (%s)\n", longestID, asst.ID, longestName, asst.CanvasTitle, courses[asst.CourseID].Name)
+		fmt.Printf("id:%-*d %-*s %3.0f%% (%s)\n", longestID, asst.ID, longestName, asst.CanvasTitle, asst.Score*100.0, courses[asst.CourseID].Name)
 	}
 	fmt.Println()
 
@@ -114,7 +113,7 @@ func downloadStudentAssignment(id int64, assignment *Assignment) {
 	}
 	user := new(User)
 	mustGetObject(fmt.Sprintf("/users/%d", assignment.UserID), nil, user)
-	log.Printf("user %s, assignment %d with score %g (%s)", user.Name, assignment.ID, math.Floor(assignment.Score*100.0+0.5)/100.0, assignment.CanvasTitle)
+	log.Printf("[%s] asst %d @ %.0f%% \"%s\"", user.Name, assignment.ID, assignment.Score*100.0, assignment.CanvasTitle)
 
 	rootDir := filepath.Join(os.TempDir(), fmt.Sprintf("grind-tmp.%d", os.Getpid()))
 	if err := os.Mkdir(rootDir, 0700); err != nil {
