@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -195,23 +196,23 @@ Paste here: `)
 	log.Printf("cookie verified and saved: welcome %s", user.Name)
 }
 
-func mustGetObject(path string, params map[string]string, download interface{}) {
+func mustGetObject(path string, params url.Values, download interface{}) {
 	doRequest(path, params, "GET", nil, download, false)
 }
 
-func getObject(path string, params map[string]string, download interface{}) bool {
+func getObject(path string, params url.Values, download interface{}) bool {
 	return doRequest(path, params, "GET", nil, download, true)
 }
 
-func mustPostObject(path string, params map[string]string, upload interface{}, download interface{}) {
+func mustPostObject(path string, params url.Values, upload interface{}, download interface{}) {
 	doRequest(path, params, "POST", upload, download, false)
 }
 
-func mustPutObject(path string, params map[string]string, upload interface{}, download interface{}) {
+func mustPutObject(path string, params url.Values, upload interface{}, download interface{}) {
 	doRequest(path, params, "PUT", upload, download, false)
 }
 
-func doRequest(path string, params map[string]string, method string, upload interface{}, download interface{}, notfoundokay bool) bool {
+func doRequest(path string, params url.Values, method string, upload interface{}, download interface{}, notfoundokay bool) bool {
 	if !strings.HasPrefix(path, "/") {
 		log.Panicf("doRequest path must start with /")
 	}
@@ -226,11 +227,7 @@ func doRequest(path string, params map[string]string, method string, upload inte
 
 	// add any parameters
 	if params != nil && len(params) > 0 {
-		values := req.URL.Query()
-		for key, value := range params {
-			values.Add(key, value)
-		}
-		req.URL.RawQuery = values.Encode()
+		req.URL.RawQuery = params.Encode()
 	}
 
 	if Config.apiReport {

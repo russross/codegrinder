@@ -96,8 +96,7 @@ func gather(now time.Time, startDir string) (*ProblemType, *Problem, *Assignment
 			}
 		} else if err != nil {
 			log.Fatalf("error reading %s: %v", name, err)
-		}
-		if string(ondisk) != contents {
+		} else if string(ondisk) != contents {
 			log.Printf("warning: file %s", name)
 			log.Printf("   does not match the latest version")
 			log.Printf("   replacing your file with the current version")

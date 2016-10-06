@@ -199,6 +199,16 @@ CREATE VIEW user_assignments AS
     UNION
     (SELECT user_id, id as assignment_id FROM assignments);
 
+CREATE VIEW assignment_search_fields AS
+    (SELECT assignments.id AS assignment_id,
+        assignments.canvas_title || ',' ||
+        courses.name || ',' ||
+        users.name || ',' || users.email || ',' ||
+        problem_sets.unique_id || ',' || problem_sets.note || ',' || problem_sets.tags::text AS search_text
+    FROM assignments JOIN courses ON assignments.course_id = courses.id
+    JOIN users ON assignments.user_id = users.id
+    JOIN problem_sets ON assignments.problem_set_id = problem_sets.id);
+
 INSERT INTO problem_types (name, image) VALUES ('armv6asm', 'codegrinder/armv6asm');
 INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('armv6asm', 'grade', 'Grade', 'Grading‥', false, 60, 120, 120, 100, 10, 128, 20);
 INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('armv6asm', 'test', 'Test', 'Testing‥', false, 60, 120, 120, 100, 10, 128, 20);

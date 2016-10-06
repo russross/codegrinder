@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -106,7 +107,9 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 
 	// check if this is an existing problem
 	existing := []*Problem{}
-	mustGetObject("/problems", map[string]string{"unique": problem.Unique}, &existing)
+	params := make(url.Values)
+	params.Add("unique", problem.Unique)
+	mustGetObject("/problems", params, &existing)
 	switch len(existing) {
 	case 0:
 		// new problem
@@ -116,7 +119,9 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 
 		// make sure the problem set with this unique name is free as well
 		existingSets := []*ProblemSet{}
-		mustGetObject("/problem_sets", map[string]string{"unique": problem.Unique}, &existingSets)
+		params = make(url.Values)
+		params.Add("unique", problem.Unique)
+		mustGetObject("/problem_sets", params, &existingSets)
 		if len(existingSets) > 1 {
 			log.Fatalf("error: server found multiple problem sets with matching unique ID %q", problem.Unique)
 		}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -57,9 +58,10 @@ func CommandGet(cmd *cobra.Command, args []string) {
 
 		// find the assignment
 		assignmentList := []*Assignment{}
-		mustGetObject(fmt.Sprintf("/users/%d/assignments", user.ID),
-			map[string]string{"course_lti_label": label, "problem_unique": unique},
-			&assignmentList)
+		params := make(url.Values)
+		params.Add("course_lti_label", label)
+		params.Add("problem_unique", unique)
+		mustGetObject(fmt.Sprintf("/users/%d/assignments", user.ID), params, &assignmentList)
 		if len(assignmentList) == 0 {
 			log.Printf("no matching assignment found")
 			log.Printf("   run \"grind get [id]\"")

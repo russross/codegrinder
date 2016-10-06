@@ -182,7 +182,7 @@ func GetUser(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUs
 	if currentUser.Admin {
 		err = meddler.Load(tx, "users", user, int64(userID))
 	} else {
-		err = meddler.QueryRow(tx, &user, `SELECT users.* `+
+		err = meddler.QueryRow(tx, user, `SELECT users.* `+
 			`FROM users JOIN user_users ON users.id = user_users.other_user_id `+
 			`WHERE user_users.user_id = $1 AND user_users.other_user_id = $2`,
 			currentUser.ID, userID)
@@ -245,6 +245,46 @@ func DeleteUser(w http.ResponseWriter, tx *sql.Tx, params martini.Params) {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
 	}
+}
+
+// GetAssignments handles requests to /v2/assignments,
+// returning a list of assignments.
+//
+// If parameter search=<...> present (can be repeated), it will be interpreted as search terms,
+// and results will be filtered by case-insensitive substring match on several fields
+// related to the assignment, including the assignment canvas title, user name, user email, course name,
+// problem set unique ID, problem set note, and problem set tags. The returned assignments match
+// all search terms.
+func GetAssignments(w http.ResponseWriter, r *http.Request, tx *sql.Tx, currentUser *User, render render.Render) {
+	if err := r.ParseForm(); err != nil {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "parsing form data: %v", err)
+		return
+	}
+
+	// build search terms
+	where := ""
+	args := []interface{}{}
+	for _, term := range r.Form["search"] {
+		where, args = addWhereLike(where, args, "assignment_search_fields.search_text", term)
+	}
+
+	assignments := []*Assignment{}
+	var err error
+	if currentUser.Admin {
+		err = meddler.QueryAll(tx, &assignments, `SELECT assignments.* FROM assignments JOIN assignment_search_fields `+
+			`ON assignments.id = assignment_search_fields.assignment_id`+where+` ORDER BY assignments.id`, args...)
+	} else {
+		where, args = addWhereEq(where, args, "user_assignments.user_id", currentUser.ID)
+		err = meddler.QueryAll(tx, &assignments, `SELECT assignments.* FROM assignments JOIN assignment_search_fields `+
+			`ON assignments.id = assignment_search_fields.assignment_id `+
+			`JOIN user_assignments ON user_assignments.assignment_id = assignments.id`+where+` ORDER BY assignments.id`, args...)
+	}
+
+	if err != nil {
+		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
+		return
+	}
+	render.JSON(http.StatusOK, assignments)
 }
 
 // GetUserAssignments handles requests to /v2/users/:user_id/assignments,
@@ -372,13 +412,13 @@ func GetAssignmentProblemCommitLast(w http.ResponseWriter, tx *sql.Tx, params ma
 	commit := new(Commit)
 
 	if currentUser.Admin {
-		err = meddler.QueryRow(tx, commit, `SELECT * FROM commits WHERE assignment_id = $1 AND problem_id = $2 ORDER BY step DESC, created_at DESC LIMIT 1`,
+		err = meddler.QueryRow(tx, commit, `SELECT * FROM commits WHERE assignment_id = $1 AND problem_id = $2 ORDER BY step DESC, updated_at DESC LIMIT 1`,
 			assignmentID, problemID)
 	} else {
 		err = meddler.QueryRow(tx, commit, `SELECT commits.* `+
 			`FROM commits JOIN user_assignments ON commits.assignment_id = user_assignments.assignment_id `+
 			`WHERE commits.assignment_id = $1 AND problem_id = $2 AND user_assignments.user_id = $3 `+
-			`ORDER BY step DESC, created_at DESC LIMIT 1`, assignmentID, problemID, currentUser.ID)
+			`ORDER BY step DESC, updated_at DESC LIMIT 1`, assignmentID, problemID, currentUser.ID)
 	}
 
 	if err != nil {
@@ -408,12 +448,12 @@ func GetAssignmentProblemStepCommitLast(w http.ResponseWriter, tx *sql.Tx, param
 	commit := new(Commit)
 
 	if currentUser.Admin {
-		err = meddler.QueryRow(tx, commit, `SELECT * FROM commits WHERE assignment_id = $1 AND problem_id = $2 AND step = $3 ORDER BY created_at DESC LIMIT 1`, assignmentID, problemID, step)
+		err = meddler.QueryRow(tx, commit, `SELECT * FROM commits WHERE assignment_id = $1 AND problem_id = $2 AND step = $3 ORDER BY updated_at DESC LIMIT 1`, assignmentID, problemID, step)
 	} else {
 		err = meddler.QueryRow(tx, commit, `SELECT commits.* `+
 			`FROM commits JOIN user_assignments ON commits.assignment_id = user_assignments.assignment_id `+
 			`WHERE commits.assignment_id = $1 AND problem_id = $2 AND step = $3 AND user_assignments.user_id = $4 `+
-			`ORDER BY created_at DESC LIMIT 1`,
+			`ORDER BY updated_at DESC LIMIT 1`,
 			assignmentID, problemID, step, currentUser.ID)
 	}
 

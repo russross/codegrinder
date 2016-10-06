@@ -364,6 +364,7 @@ func main() {
 		// assignments
 		r.Get("/v2/users/:user_id/assignments", counter, auth, withTx, withCurrentUser, GetUserAssignments)
 		r.Get("/v2/courses/:course_id/users/:user_id/assignments", counter, auth, withTx, withCurrentUser, GetCourseUserAssignments)
+		r.Get("/v2/assignments", counter, auth, withTx, withCurrentUser, GetAssignments)
 		r.Get("/v2/assignments/:assignment_id", counter, auth, withTx, withCurrentUser, GetAssignment)
 		r.Delete("/v2/assignments/:assignment_id", counter, auth, withTx, withCurrentUser, administratorOnly, DeleteAssignment)
 

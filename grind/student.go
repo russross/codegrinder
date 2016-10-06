@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 
 	. "github.com/russross/codegrinder/common"
@@ -16,32 +18,103 @@ func CommandStudent(cmd *cobra.Command, args []string) {
 	mustLoadConfig(cmd)
 
 	// parse parameters
-	name := ""
-	switch len(args) {
-	case 0:
+	if len(args) == 0 {
 		log.Printf("you must specify the assignment to download")
-		log.Printf("   run \"grind list\" to see your assignments")
-		log.Printf("   you must give the assignment number (displayed on the left)")
-		log.Fatalf("   or a name in the form COURSE/problem-set-id (displayed in parentheses)")
-	case 1:
-		name = args[0]
-	default:
-		cmd.Help()
+		log.Printf("   either give the student's assignment number")
+		log.Printf("   or give search terms to find the assignment")
+		log.Printf("   where terms search assignment name, course name,")
+		log.Printf("   problem set name, problem set tags, user name, and user email")
+		log.Fatalf("   e.g.: \"grin student alice loops")
+	}
+
+	// special case: user gave us an assignment number
+	if id, err := strconv.Atoi(args[0]); len(args) == 1 && err == nil && id > 0 {
+		downloadStudentAssignment(int64(id), nil)
 		return
 	}
 
-	var assignment *Assignment
+	// search for matching assignments
+	assignments := []*Assignment{}
+	params := make(url.Values)
+	for _, term := range args {
+		params.Add("search", term)
+	}
+	mustGetObject("/assignments", params, &assignments)
+	if len(assignments) == 0 {
+		log.Fatalf("no assignments found matching the terms you gave")
+	}
+	sort.Sort(ByUserUpdatedAt(assignments))
 
-	if id, err := strconv.Atoi(name); err == nil && id > 0 {
-		// look it up by ID
+	// gather related objects and find max lengths for pretty printing
+	users := make(map[int64]*User)
+	courses := make(map[int64]*Course)
+	longestID, longestName := 1, 1
+	for _, asst := range assignments {
+		if users[asst.UserID] == nil {
+			users[asst.UserID] = new(User)
+			mustGetObject(fmt.Sprintf("/users/%d", asst.UserID), nil, users[asst.UserID])
+		}
+		if courses[asst.CourseID] == nil {
+			courses[asst.CourseID] = new(Course)
+			mustGetObject(fmt.Sprintf("/courses/%d", asst.CourseID), nil, courses[asst.CourseID])
+		}
+		if n := len(strconv.FormatInt(asst.ID, 10)); n > longestID {
+			longestID = n
+		}
+		if n := len(asst.CanvasTitle); n > longestName {
+			longestName = n
+		}
+	}
+
+	// print out the results in a table
+	prevUserID := int64(0)
+	for _, asst := range assignments {
+		user := users[asst.UserID]
+		if user.ID != prevUserID {
+			if prevUserID != 0 {
+				fmt.Println()
+			}
+			prevUserID = user.ID
+			fmt.Printf("%s (%s)\n", user.Name, user.Email)
+			fmt.Println(dashes(len(user.Name) + len(user.Email) + len(" ()")))
+		}
+
+		fmt.Printf("id:%-*d %-*s (%s)\n", longestID, asst.ID, longestName, asst.CanvasTitle, courses[asst.CourseID].Name)
+	}
+	fmt.Println()
+
+	if len(users) == 1 {
+		mostRecent := assignments[len(assignments)-1]
+		downloadStudentAssignment(mostRecent.ID, mostRecent)
+	} else {
+		log.Printf("the search found assignments for more than one user")
+		log.Printf("   either pick the correct assignment id from the list")
+		log.Printf("   and run \"grin student <id>\"")
+		log.Printf("   or repeat the search with additional terms")
+		log.Fatalf("   to narrow the results")
+	}
+}
+
+type ByUserUpdatedAt []*Assignment
+
+func (a ByUserUpdatedAt) Len() int      { return len(a) }
+func (a ByUserUpdatedAt) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
+func (a ByUserUpdatedAt) Less(i, j int) bool {
+	if a[i].UserID != a[j].UserID {
+		return a[i].UserID < a[j].UserID
+	}
+	return a[i].UpdatedAt.Before(a[j].UpdatedAt)
+}
+
+func downloadStudentAssignment(id int64, assignment *Assignment) {
+	// look it up by ID
+	if assignment == nil {
 		assignment = new(Assignment)
 		mustGetObject(fmt.Sprintf("/assignments/%d", id), nil, assignment)
-		user := new(User)
-		mustGetObject(fmt.Sprintf("/users/%d", assignment.UserID), nil, user)
-		log.Printf("assignment is for %s, total score is %f", user.Name, math.Floor(assignment.Score*100.0+0.5)/100.0)
-	} else {
-		log.Fatalf("unimplemented")
 	}
+	user := new(User)
+	mustGetObject(fmt.Sprintf("/users/%d", assignment.UserID), nil, user)
+	log.Printf("user %s, assignment %d with score %g (%s)", user.Name, assignment.ID, math.Floor(assignment.Score*100.0+0.5)/100.0, assignment.CanvasTitle)
 
 	rootDir := filepath.Join(os.TempDir(), fmt.Sprintf("grind-tmp.%d", os.Getpid()))
 	if err := os.Mkdir(rootDir, 0700); err != nil {
