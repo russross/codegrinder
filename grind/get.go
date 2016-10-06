@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -249,14 +248,7 @@ func getAssignment(assignment *Assignment, rootDir string) string {
 		Problems:     infos,
 		Path:         filepath.Join(rootDir, perProblemSetDotFile),
 	}
-	contents, err := json.MarshalIndent(dotfile, "", "    ")
-	if err != nil {
-		log.Fatalf("JSON error encoding %s: %v", dotfile.Path, err)
-	}
-	contents = append(contents, '\n')
-	if err := ioutil.WriteFile(dotfile.Path, contents, 0644); err != nil {
-		log.Fatalf("error saving file %s: %v", dotfile.Path, err)
-	}
+	saveDotFile(dotfile)
 	return changeTo
 }
 

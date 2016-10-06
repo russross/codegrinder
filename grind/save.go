@@ -51,6 +51,7 @@ func CommandSave(cmd *cobra.Command, args []string) {
 func gather(now time.Time, startDir string) (*ProblemType, *Problem, *Assignment, *Commit, *DotFileInfo) {
 	// find the .grind file containing the problem set info
 	dotfile, problemSetDir, problemDir := findDotFile(startDir)
+	dotfileChanged := false
 
 	// get the assignment
 	assignment := new(Assignment)
@@ -119,6 +120,12 @@ func gather(now time.Time, startDir string) (*ProblemType, *Problem, *Assignment
 	for name, contents := range step.Files {
 		dir, _ := filepath.Split(name)
 		if dir == "" {
+			// add to the whitelist in case it is a new file
+			if !info.Whitelist[name] {
+				info.Whitelist[name] = true
+				dotfileChanged = true
+			}
+
 			// in main directory, skip files that exist (but write files that are missing)
 			path := filepath.Join(problemDir, name)
 			if _, err := os.Stat(path); err == nil {
@@ -128,6 +135,9 @@ func gather(now time.Time, startDir string) (*ProblemType, *Problem, *Assignment
 		checkAndUpdate(name, contents)
 	}
 	checkAndUpdate(filepath.Join("doc", "index.html"), step.Instructions)
+	if dotfileChanged {
+		saveDotFile(dotfile)
+	}
 
 	// gather the commit files from the file system
 	files := make(map[string]string)
@@ -250,4 +260,15 @@ func findDotFile(startDir string) (dotfile *DotFileInfo, problemSetDir, problemD
 	dotfile.Path = path
 
 	return dotfile, problemSetDir, problemDir
+}
+
+func saveDotFile(dotfile *DotFileInfo) {
+	contents, err := json.MarshalIndent(dotfile, "", "    ")
+	if err != nil {
+		log.Fatalf("JSON error encoding %s: %v", dotfile.Path, err)
+	}
+	contents = append(contents, '\n')
+	if err := ioutil.WriteFile(dotfile.Path, contents, 0644); err != nil {
+		log.Fatalf("error saving file %s: %v", dotfile.Path, err)
+	}
 }
