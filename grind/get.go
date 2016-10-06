@@ -23,7 +23,7 @@ func CommandGet(cmd *cobra.Command, args []string) {
 	switch len(args) {
 	case 0:
 		log.Printf("you must specify the assignment to download")
-		log.Printf("   run \"grind list\" to see your assignments")
+		log.Printf("   run '%s list' to see your assignments", os.Args[0])
 		log.Printf("   you must give the assignment number (displayed on the left)")
 		log.Fatalf("   or a name in the form COURSE/problem-set-id (displayed in parentheses)")
 	case 1:
@@ -49,9 +49,9 @@ func CommandGet(cmd *cobra.Command, args []string) {
 		parts := strings.Split(name, "/")
 		if len(parts) != 2 {
 			log.Printf("unknown assignment identifier")
-			log.Printf("   run \"grind get [id]\"")
-			log.Printf("   or  \"grind get [course/problem-id]\"")
-			log.Fatalf("   [id] and [course/problem-id] can be found using \"grind list\"")
+			log.Printf("   run '%s get [id]'", os.Args[0])
+			log.Printf("   or  '%s get [course/problem-id]'", os.Args[0])
+			log.Fatalf("   [id] and [course/problem-id] can be found using '%s list'", os.Args[0])
 		}
 		label, unique := parts[0], parts[1]
 
@@ -63,13 +63,13 @@ func CommandGet(cmd *cobra.Command, args []string) {
 		mustGetObject(fmt.Sprintf("/users/%d/assignments", user.ID), params, &assignmentList)
 		if len(assignmentList) == 0 {
 			log.Printf("no matching assignment found")
-			log.Printf("   run \"grind get [id]\"")
-			log.Printf("   or  \"grind get [course/problem-id]\"")
-			log.Fatalf("   [id] and [course/problem-id] can be found using \"grind list\"")
+			log.Printf("   run '%s get [id]'", os.Args[0])
+			log.Printf("   or  '%s get [course/problem-id]'", os.Args[0])
+			log.Fatalf("   [id] and [course/problem-id] can be found using '%s list'", os.Args[0])
 		} else if len(assignmentList) != 1 {
 			log.Printf("found more than one matching assignment")
-			log.Printf("   run \"grind get [id]\" instead")
-			log.Fatalf("   [id] can be found using \"grind list\"")
+			log.Printf("   run '%s get [id]' instead", os.Args[0])
+			log.Fatalf("   [id] can be found using '%s list'", os.Args[0])
 		}
 		assignment = assignmentList[0]
 	}

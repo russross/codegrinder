@@ -85,14 +85,14 @@ func main() {
 	cmdGet := &cobra.Command{
 		Use:   "get",
 		Short: "download an assignment to work on it locally",
-		Long: "   Give either the numeric ID (given at the start of each listing)\n" +
-			"   or the course/problem identifier (given in parentheses).\n\n" +
-			"   Use \"grind list\" to see a list of assignments available to you.\n\n" +
-			"   By default, the assignment will be stored in a directory matching the\n" +
-			"   course/problem name, but you can override this by supplying the directory\n" +
-			"   name as an additional argument.\n\n" +
-			"   Example: grind get CS-1400/cs1400-loops\n\n" +
-			"   Note: you must load an assignment through Canvas before you can access it.",
+		Long: fmt.Sprintf("   Give either the numeric ID (given at the start of each listing)\n"+
+			"   or the course/problem identifier (given in parentheses).\n\n"+
+			"   Use '%s list' to see a list of assignments available to you.\n\n"+
+			"   By default, the assignment will be stored in a directory matching the\n"+
+			"   course/problem name, but you can override this by supplying the directory\n"+
+			"   name as an additional argument.\n\n"+
+			"   Example: '%s get CS-1400/cs1400-loops'\n\n"+
+			"   Note: you must load an assignment through Canvas before you can access it.", os.Args[0], os.Args[0]),
 		Run: CommandGet,
 	}
 	cmdGrind.AddCommand(cmdGet)
@@ -114,11 +114,11 @@ func main() {
 	cmdAction := &cobra.Command{
 		Use:   "action",
 		Short: "launch a problem-type specific action",
-		Long: "   Give the name of the action to be performed. Your code\n" +
-			"   will be uploaded and the action will be initiated, and then you\n" +
-			"   can interact with the server if appropriate for the action\n\n" +
-			"   Example: grind action debug\n\n" +
-			"   Note: this has the side effect of saving your code.",
+		Long: fmt.Sprintf("   Give the name of the action to be performed. Your code\n"+
+			"   will be uploaded and the action will be initiated, and then you\n"+
+			"   can interact with the server if appropriate for the action\n\n"+
+			"   Example: '%s action debug'\n\n"+
+			"   Note: this has the side effect of saving your code.", os.Args[0]),
 		Run: CommandAction,
 	}
 	cmdGrind.AddCommand(cmdAction)
@@ -297,10 +297,10 @@ func mustLoadConfig(cmd *cobra.Command) {
 	configFile := filepath.Join(home, perUserDotFile)
 
 	if raw, err := ioutil.ReadFile(configFile); err != nil {
-		log.Fatalf("Unable to load config file; try running \"grind init\"\n")
+		log.Fatalf("Unable to load config file; try running '%s init'\n", os.Args[0])
 	} else if err := json.Unmarshal(raw, &Config); err != nil {
 		log.Printf("failed to parse %s: %v", configFile, err)
-		log.Fatalf("you may wish to try deleting the file and running \"grind init\" again\n")
+		log.Fatalf("you may wish to try deleting the file and running '%s init' again\n", os.Args[0])
 	}
 	if cmd.Flag("api").Value.String() == "true" {
 		Config.apiReport = true

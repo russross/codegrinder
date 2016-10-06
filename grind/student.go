@@ -23,7 +23,7 @@ func CommandStudent(cmd *cobra.Command, args []string) {
 		log.Printf("   or give search terms to find the assignment")
 		log.Printf("   where terms search assignment name, course name,")
 		log.Printf("   problem set name, problem set tags, user name, and user email")
-		log.Fatalf("   e.g.: \"grin student alice loops")
+		log.Fatalf("   e.g.: '%s student alice loops'", os.Args[0])
 	}
 
 	// special case: user gave us an assignment number
@@ -88,7 +88,7 @@ func CommandStudent(cmd *cobra.Command, args []string) {
 	} else {
 		log.Printf("the search found assignments for more than one user")
 		log.Printf("   either pick the correct assignment id from the list")
-		log.Printf("   and run \"grin student <id>\"")
+		log.Printf("   and run '%s student [id]'", os.Args[0])
 		log.Printf("   or repeat the search with additional terms")
 		log.Fatalf("   to narrow the results")
 	}
@@ -113,7 +113,7 @@ func downloadStudentAssignment(id int64, assignment *Assignment) {
 	}
 	user := new(User)
 	mustGetObject(fmt.Sprintf("/users/%d", assignment.UserID), nil, user)
-	log.Printf("[%s] asst %d @ %.0f%% \"%s\"", user.Name, assignment.ID, assignment.Score*100.0, assignment.CanvasTitle)
+	log.Printf("[%s] asst %d @ %.0f%% '%s'", user.Name, assignment.ID, assignment.Score*100.0, assignment.CanvasTitle)
 
 	rootDir := filepath.Join(os.TempDir(), fmt.Sprintf("grind-tmp.%d", os.Getpid()))
 	if err := os.Mkdir(rootDir, 0700); err != nil {

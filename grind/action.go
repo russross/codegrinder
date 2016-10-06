@@ -43,8 +43,8 @@ func CommandAction(cmd *cobra.Command, args []string) {
 		return
 	}
 	if action == "grade" {
-		log.Printf("grind action is for testing code, not for grading")
-		log.Fatalf("  to submit your code for grading, use \"grind grade\"")
+		log.Printf("'%s action' is for testing code, not for grading", os.Args[0])
+		log.Fatalf("  to submit your code for grading, use '%s grade'", os.Args[0])
 	}
 
 	// get the user ID
@@ -68,7 +68,7 @@ func CommandAction(cmd *cobra.Command, args []string) {
 			}
 			log.Printf("   %s", elt)
 		}
-		log.Fatalf("use 'grind action <action>' to initiate an action")
+		log.Fatalf("use '%s action [action]' to initiate an action", os.Args[0])
 	}
 
 	// send the commit bundle to the server

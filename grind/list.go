@@ -49,7 +49,7 @@ func CommandList(cmd *cobra.Command, args []string) {
 		// fetch the problem
 		problemSet := new(ProblemSet)
 		mustGetObject(fmt.Sprintf("/problem_sets/%d", asst.ProblemSetID), nil, problemSet)
-		fmt.Printf("id:%-*d %-*s (%s/%s)\n", longestID, asst.ID, longestName, asst.CanvasTitle, course.Label, problemSet.Unique)
+		fmt.Printf("id:%-*d %-*s %3.0f%% (%s/%s)\n", longestID, asst.ID, longestName, asst.CanvasTitle, asst.Score*100.0, course.Label, problemSet.Unique)
 	}
 }
 
