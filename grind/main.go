@@ -20,6 +20,7 @@ import (
 
 const (
 	perUserDotFile       = ".codegrinderrc"
+	instructorFile       = ".codegrinderinstructor"
 	perProblemSetDotFile = ".grind"
 )
 
@@ -43,7 +44,7 @@ type ProblemInfo struct {
 }
 
 func main() {
-	isInstructor := len(os.Args) > 0 && (strings.HasSuffix(os.Args[0], "grin") || strings.HasSuffix(os.Args[0], "grin.exe"))
+	isInstructor := hasInstructorFile()
 	log.SetFlags(log.Ltime)
 
 	cmdGrind := &cobra.Command{
@@ -52,8 +53,10 @@ func main() {
 		Long: "A command-line tool to access CodeGrinder\n" +
 			"by Russ Ross <russ@russross.com>",
 	}
-	cmdGrind.PersistentFlags().BoolP("api", "", false, "report all API requests")
-	cmdGrind.PersistentFlags().BoolP("api-dump", "", false, "dump API request and response data")
+	if isInstructor {
+		cmdGrind.PersistentFlags().BoolVarP(&Config.apiReport, "api", "", false, "report all API requests")
+		cmdGrind.PersistentFlags().BoolVarP(&Config.apiDump, "api-dump", "", false, "dump API request and response data")
+	}
 
 	cmdVersion := &cobra.Command{
 		Use:   "version",
@@ -286,6 +289,18 @@ func doRequest(path string, params url.Values, method string, upload interface{}
 	return false
 }
 
+func hasInstructorFile() bool {
+	home := os.Getenv("HOME")
+	if home == "" {
+		home = os.Getenv("USERPROFILE")
+	}
+	if home == "" {
+		log.Fatalf("Unable to locate home directory, giving up\n")
+	}
+	_, err := os.Stat(filepath.Join(home, instructorFile))
+	return err == nil
+}
+
 func mustLoadConfig(cmd *cobra.Command) {
 	home := os.Getenv("HOME")
 	if home == "" {
@@ -302,12 +317,8 @@ func mustLoadConfig(cmd *cobra.Command) {
 		log.Printf("failed to parse %s: %v", configFile, err)
 		log.Fatalf("you may wish to try deleting the file and running '%s init' again\n", os.Args[0])
 	}
-	if cmd.Flag("api").Value.String() == "true" {
+	if Config.apiDump {
 		Config.apiReport = true
-	}
-	if cmd.Flag("api-dump").Value.String() == "true" {
-		Config.apiReport = true
-		Config.apiDump = true
 	}
 
 	checkVersion()
