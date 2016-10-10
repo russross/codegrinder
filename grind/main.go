@@ -117,14 +117,34 @@ func main() {
 	cmdAction := &cobra.Command{
 		Use:   "action",
 		Short: "launch a problem-type specific action",
-		Long: fmt.Sprintf("   Give the name of the action to be performed. Your code\n"+
-			"   will be uploaded and the action will be initiated, and then you\n"+
-			"   can interact with the server if appropriate for the action\n\n"+
+		Long: fmt.Sprintf("   Give the name of the action to be performed.\n"+
+			"   Run this with no action to see a list of valid actions.\n"+
+			"   Your code will be saved first, and then it will be uploaded\n"+
+			"   and the action will be initiated on the server.\n"+
+			"   You can interact with the server if appropriate for the action\n\n"+
 			"   Example: '%s action debug'\n\n"+
 			"   Note: this has the side effect of saving your code.", os.Args[0]),
 		Run: CommandAction,
 	}
 	cmdGrind.AddCommand(cmdAction)
+
+	/*
+		cmdReset := &cobra.Command{
+			Use:   "reset",
+			Short: "go back to the beginning of the current step",
+			Long: fmt.Sprintf("   When run without arguments, this shows which files have\n"+
+				"   been changed. If you name one or more files, it will revert them\n"+
+				"   to their state at the beginning of the current step.\n"+
+				"   Note: this saves your code before doing anything else, and any\n"+
+				"   changes occur only in your local file system. Until you perform\n"+
+				"   another action that forces a save (save, grade, action),\n"+
+				"   you can restore your files by deleting the directory and running\n"+
+				"   '%s get' to re-download your assignment.\n\n"+
+				"   Example: '%s reset file1 file2'", os.Args[0], os.Args[0]),
+			Run: CommandReset,
+		}
+		cmdGrind.AddCommand(cmdReset)
+	*/
 
 	if isInstructor {
 		cmdCreate := &cobra.Command{

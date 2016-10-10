@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"os"
 	"strconv"
 
 	. "github.com/russross/codegrinder/common"
@@ -11,6 +12,11 @@ import (
 
 func CommandList(cmd *cobra.Command, args []string) {
 	mustLoadConfig(cmd)
+
+	if len(args) != 0 {
+		cmd.Help()
+		os.Exit(1)
+	}
 
 	user := new(User)
 	mustGetObject("/users/me", nil, user)

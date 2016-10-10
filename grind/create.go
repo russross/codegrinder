@@ -25,20 +25,15 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 	mustLoadConfig(cmd)
 	now := time.Now()
 
-	// find the directory
-	d := ""
-	switch len(args) {
-	case 0:
-		d = "."
-	case 1:
-		d = args[0]
-	default:
+	if len(args) != 0 {
 		cmd.Help()
-		return
+		os.Exit(1)
 	}
-	dir, err := filepath.Abs(d)
+
+	// find the absolute directory so we can walk up the tree if needed
+	dir, err := filepath.Abs(".")
 	if err != nil {
-		log.Fatalf("error finding directory %q: %v", d, err)
+		log.Fatalf("error finding directory: %v", err)
 	}
 
 	// find the problem.cfg file
@@ -50,9 +45,8 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 				old := dir
 				dir = filepath.Dir(dir)
 				if dir == old {
-					log.Printf("unable to find %s in %s or an ancestor directory", ProblemConfigName, d)
-					log.Printf("   you must run this in a problem directory")
-					log.Fatalf("   or supply the directory name as an argument")
+					log.Printf("unable to find %s in current directory or one of its ancestors", ProblemConfigName)
+					log.Fatalf("   you must run this in a problem directory")
 				}
 				// log.Printf("could not find %s in %s, trying %s", ProblemConfigName, old, dir)
 				continue

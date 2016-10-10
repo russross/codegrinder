@@ -18,23 +18,16 @@ func CommandSave(cmd *cobra.Command, args []string) {
 	mustLoadConfig(cmd)
 	now := time.Now()
 
-	// find the directory
-	dir := ""
-	switch len(args) {
-	case 0:
-		dir = "."
-	case 1:
-		dir = args[0]
-	default:
+	if len(args) != 0 {
 		cmd.Help()
-		return
+		os.Exit(1)
 	}
 
 	// get the user ID
 	user := new(User)
 	mustGetObject("/users/me", nil, user)
 
-	_, problem, _, commit, _ := gather(now, dir)
+	_, problem, _, commit, _ := gather(now, ".")
 	commit.Action = ""
 	commit.Note = "saving from grind tool"
 	unsigned := &CommitBundle{

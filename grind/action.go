@@ -26,22 +26,15 @@ func CommandAction(cmd *cobra.Command, args []string) {
 	mustLoadConfig(cmd)
 	now := time.Now()
 
-	// find the directory
-	dir := ""
 	action := ""
-	switch len(args) {
-	case 0:
-		dir = "."
-	case 1:
-		action = args[0]
-		dir = "."
-	case 2:
-		action = args[0]
-		dir = args[1]
-	default:
+	if len(args) > 1 {
 		cmd.Help()
-		return
+		os.Exit(1)
+	} else if len(args) == 1 {
+		action = args[0]
 	}
+
+	// do not allow grade as an interactive action
 	if action == "grade" {
 		log.Printf("'%s action' is for testing code, not for grading", os.Args[0])
 		log.Fatalf("  to submit your code for grading, use '%s grade'", os.Args[0])
@@ -51,7 +44,7 @@ func CommandAction(cmd *cobra.Command, args []string) {
 	user := new(User)
 	mustGetObject("/users/me", nil, user)
 
-	problemType, problem, _, commit, _ := gather(now, dir)
+	problemType, problem, _, commit, _ := gather(now, ".")
 	commit.Action = action
 	commit.Note = "grind tool session for action " + action
 	unsigned := &CommitBundle{
@@ -80,7 +73,7 @@ func CommandAction(cmd *cobra.Command, args []string) {
 		log.Fatalf("server was unable to find a suitable daycare, unable to run action")
 	}
 	log.Printf("starting interactive session for %s step %d", problem.Unique, commit.Step)
-	runInteractiveSession(signed, nil, dir)
+	runInteractiveSession(signed, nil, ".")
 }
 
 func runInteractiveSession(bundle *CommitBundle, args []string, dir string) {
