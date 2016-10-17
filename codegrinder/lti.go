@@ -432,7 +432,7 @@ func getUpdateUser(tx *sql.Tx, form *LTIRequest, now time.Time) (*User, error) {
 	user.CanvasID = form.CanvasUserID
 	if user.ID > 0 && changed {
 		// if something changed, note the update time
-		log.Printf("user %d (%s) updated", user.ID, user.Email)
+		log.Printf("user %d (%s) updated because of new LTI request", user.ID, user.Email)
 		user.UpdatedAt = now
 	}
 
@@ -497,8 +497,8 @@ func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Co
 			return nil, err
 		}
 
-		log.Printf("creating new assignment for course %d (%s), problem set %d (%s), user %d: %s (%s)",
-			course.ID, course.Name, problemSet.ID, problemSet.Note, user.ID, user.Name, user.Email)
+		log.Printf("creating new assignment %q for course %d (%s), problem set %d, user %d: %s (%s)",
+			form.CanvasAssignmentTitle, course.ID, course.Name, problemSet.ID, user.ID, user.Name, user.Email)
 		asst.ID = 0
 		asst.RawScores = map[string][]float64{}
 		asst.Score = 0.0
@@ -640,7 +640,7 @@ func saveGrade(asst *Assignment, user *User, text string) error {
 	}
 	resp.Body.Close()
 	if resp.StatusCode == http.StatusOK {
-		log.Printf("grade of %0.5f posted for %s (%s)", asst.Score, user.Name, user.Email)
+		log.Printf("assignment %q grade of %0.5f posted for %s (%s)", asst.CanvasTitle, asst.Score, user.Name, user.Email)
 	} else {
 		return loggedErrorf("result status %d (%s) when posting grade for user %d", resp.StatusCode, resp.Status, asst.UserID)
 	}

@@ -322,8 +322,8 @@ func PostProblemBundleUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser
 		commit.AssignmentID = 0
 		commit.ProblemID = bundle.Problem.ID
 		commit.Step = int64(n) + 1
-		if commit.Action != "grade" {
-			loggedHTTPErrorf(w, http.StatusBadRequest, "commit %d has action %q, expected %q", n, commit.Action, "grade")
+		if _, exists := problemType.Actions[commit.Action]; !exists {
+			loggedHTTPErrorf(w, http.StatusBadRequest, "commit %d has action %q, which does not exist for problem type %s", n, commit.Action, problemType.Name)
 			return
 		}
 		commit.Transcript = []*EventMessage{}

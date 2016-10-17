@@ -320,7 +320,9 @@ func (step *ProblemStep) BuildInstructions() (string, error) {
 		if n.Type == html.ElementNode && n.Data == "img" {
 			for i, a := range n.Attr {
 				if a.Key == "src" {
-					if contents, present := step.Files["doc/"+a.Val]; present {
+					if strings.HasPrefix(a.Val, "data:") {
+						// do nothing--the data is already encoded in the tag
+					} else if contents, present := step.Files["doc/"+a.Val]; present {
 						mime := ""
 						switch {
 						case strings.HasSuffix(a.Val, ".gif"):

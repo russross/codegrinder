@@ -30,6 +30,8 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
+	action := cmd.Flag("action").Value.String()
+
 	// find the absolute directory so we can walk up the tree if needed
 	dir, err := filepath.Abs(".")
 	if err != nil {
@@ -37,14 +39,16 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 	}
 
 	// find the problem.cfg file
+	actionDir := dir
+	actionStep := 0
 	for {
 		path := filepath.Join(dir, ProblemConfigName)
 		if _, err := os.Stat(path); err != nil {
 			if os.IsNotExist(err) {
 				// try moving up a directory
-				old := dir
+				actionDir = dir
 				dir = filepath.Dir(dir)
-				if dir == old {
+				if dir == actionDir {
 					log.Printf("unable to find %s in current directory or one of its ancestors", ProblemConfigName)
 					log.Fatalf("   you must run this in a problem directory")
 				}
@@ -55,6 +59,20 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 			log.Fatalf("error searching for %s in %s: %v", ProblemConfigName, dir, err)
 		}
 		break
+	}
+	if action != "" {
+		if actionDir == dir {
+			log.Fatalf("to run an action, you must be in the step directory")
+		}
+		stepName := filepath.Base(actionDir)
+		stepN, err := strconv.Atoi(stepName)
+		if err != nil {
+			log.Fatalf("to run an action, you must be in the step directory, not %s", stepName)
+		}
+		actionStep = stepN
+		if actionStep < 1 {
+			log.Fatalf("step directory must be > 0, not %d", actionStep)
+		}
 	}
 
 	// parse problem.cfg
@@ -93,6 +111,13 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 	// get the problem type
 	problemType := new(ProblemType)
 	mustGetObject(fmt.Sprintf("/problem_types/%s", problem.ProblemType), nil, problemType)
+
+	// if the user requested an interactive action, it must be valid
+	if action != "" {
+		if _, exists := problemType.Actions[action]; !exists {
+			log.Fatalf("action %q does not exist for problem type %s", action, problemType.Name)
+		}
+	}
 
 	// start forming the problem bundle
 	unsigned := &ProblemBundle{
@@ -159,6 +184,10 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 			CreatedAt: now,
 			UpdatedAt: now,
 		}
+		if action != "" {
+			commit.Action = action
+			commit.Note = fmt.Sprintf("author solution tested with action %s via grind", action)
+		}
 
 		// read files
 		blacklist := []string{"~", ".swp", ".o", ".pyc", ".out"}
@@ -183,8 +212,7 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 			for _, suffix := range blacklist {
 				if strings.HasSuffix(relpath, suffix) {
 					log.Printf("skipping file %s", relpath)
-					log.Printf("  because it has one of the following suffixes:")
-					log.Printf("  %v", blacklist)
+					log.Printf("  because it has the following suffix: %s", suffix)
 					return nil
 				}
 			}
@@ -257,6 +285,10 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 		log.Fatalf("expected to find %d step%s, but only found %d", len(cfg.Step), plural(len(cfg.Step)), len(unsigned.ProblemSteps))
 	}
 
+	if action != "" && actionStep > len(unsigned.ProblemSteps) {
+		log.Fatalf("must run action from within a valid step directory, not %d", actionStep)
+	}
+
 	// get user ID
 	user := new(User)
 	mustGetObject("/users/me", nil, user)
@@ -268,6 +300,27 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 
 	if signed.Hostname == "" {
 		log.Fatalf("server was unable to find a suitable daycare, unable to validate")
+	}
+
+	if action != "" {
+		log.Printf("running interactive session for action %q on step %d", action, actionStep)
+
+		// run the interactive action for a single step instead
+		// of validating all steps
+		unvalidated := &CommitBundle{
+			ProblemType:          signed.ProblemType,
+			ProblemTypeSignature: signed.ProblemTypeSignature,
+			Problem:              signed.Problem,
+			ProblemSteps:         signed.ProblemSteps,
+			ProblemSignature:     signed.ProblemSignature,
+			Hostname:             signed.Hostname,
+			UserID:               signed.UserID,
+			Commit:               signed.Commits[actionStep-1],
+			CommitSignature:      signed.CommitSignatures[actionStep-1],
+		}
+
+		runInteractiveSession(unvalidated, nil, actionDir)
+		return
 	}
 
 	// validate the commits one at a time
@@ -306,11 +359,6 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 
 	log.Printf("problem and solution confirmed successfully")
 
-	if cmd.Flag("test").Value.String() == "true" {
-		log.Printf("problem %q tested successfully", signed.Problem.Unique)
-		return
-	}
-
 	// save the problem
 	final := new(ProblemBundle)
 	if signed.Problem.ID == 0 {
@@ -343,7 +391,7 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 		}
 		finalPSBundle := new(ProblemSetBundle)
 		mustPostObject("/problem_set_bundles", nil, psBundle, finalPSBundle)
-		log.Printf("problem set %q created and ready to use for this problem", finalPSBundle.ProblemSet.Unique)
+		log.Printf("problem set %q created and ready to use", finalPSBundle.ProblemSet.Unique)
 	}
 }
 
