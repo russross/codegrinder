@@ -216,46 +216,44 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 	}
 
 	// check if this is an existing problem
-	if action == "" {
-		existing := []*Problem{}
-		params := make(url.Values)
-		params.Add("unique", problem.Unique)
-		mustGetObject("/problems", params, &existing)
-		switch len(existing) {
-		case 0:
-			// new problem
-			if isUpdate {
-				log.Fatalf("you specified --update, but no existing problem with unique ID %q was found", problem.Unique)
-			}
-
-			// make sure the problem set with this unique name is free as well
-			existingSets := []*ProblemSet{}
-			params = make(url.Values)
-			params.Add("unique", problem.Unique)
-			mustGetObject("/problem_sets", params, &existingSets)
-			if len(existingSets) > 1 {
-				log.Fatalf("error: server found multiple problem sets with matching unique ID %q", problem.Unique)
-			}
-			if len(existingSets) != 0 {
-				log.Printf("problem set %d already exists with unique ID %q", existingSets[0].ID, existingSets[0].Unique)
-				log.Fatalf("  this would prevent creating a problem set containing just this problem with matching id")
-			}
-
-			log.Printf("this problem is new--no existing problem has the same unique ID")
-		case 1:
-			// update to existing problem
-			if !isUpdate {
-				log.Fatalf("you did not specify --update, but a problem already exists with unique ID %q", problem.Unique)
-			}
-			log.Printf("unique ID is %s", problem.Unique)
-			log.Printf("  this is an update of problem %d", existing[0].ID)
-			log.Printf("  (%q)", existing[0].Note)
-			problem.ID = existing[0].ID
-			problem.CreatedAt = existing[0].CreatedAt
-		default:
-			// server does not know what "unique" means
-			log.Fatalf("error: server found multiple problems with matching unique ID %q", problem.Unique)
+	existing := []*Problem{}
+	params := make(url.Values)
+	params.Add("unique", problem.Unique)
+	mustGetObject("/problems", params, &existing)
+	switch len(existing) {
+	case 0:
+		// new problem
+		if isUpdate {
+			log.Fatalf("you specified --update, but no existing problem with unique ID %q was found", problem.Unique)
 		}
+
+		// make sure the problem set with this unique name is free as well
+		existingSets := []*ProblemSet{}
+		params = make(url.Values)
+		params.Add("unique", problem.Unique)
+		mustGetObject("/problem_sets", params, &existingSets)
+		if len(existingSets) > 1 {
+			log.Fatalf("error: server found multiple problem sets with matching unique ID %q", problem.Unique)
+		}
+		if len(existingSets) != 0 {
+			log.Printf("problem set %d already exists with unique ID %q", existingSets[0].ID, existingSets[0].Unique)
+			log.Fatalf("  this would prevent creating a problem set containing just this problem with matching id")
+		}
+
+		log.Printf("this problem is new--no existing problem has the same unique ID")
+	case 1:
+		// update to existing problem
+		if action == "" && !isUpdate {
+			log.Fatalf("you did not specify --update, but a problem already exists with unique ID %q", problem.Unique)
+		}
+		log.Printf("unique ID is %s", problem.Unique)
+		log.Printf("  this is an update of problem %d", existing[0].ID)
+		log.Printf("  (%q)", existing[0].Note)
+		problem.ID = existing[0].ID
+		problem.CreatedAt = existing[0].CreatedAt
+	default:
+		// server does not know what "unique" means
+		log.Fatalf("error: server found multiple problems with matching unique ID %q", problem.Unique)
 	}
 
 	// generate steps
