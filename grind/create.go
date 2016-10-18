@@ -31,7 +31,124 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 	}
 
 	action := cmd.Flag("action").Value.String()
+	isUpdate := cmd.Flag("update").Value.String() == "true"
+	if isUpdate && action != "" {
+		log.Fatalf("you specified --update, which is not valid when running an action")
+	}
 
+	unsigned, stepDir, step := gatherAuthor(now, isUpdate, action, ".")
+
+	// get user ID
+	user := new(User)
+	mustGetObject("/users/me", nil, user)
+	unsigned.UserID = user.ID
+
+	// get the request validated and signed
+	signed := new(ProblemBundle)
+	mustPostObject("/problem_bundles/unconfirmed", nil, unsigned, signed)
+
+	if signed.Hostname == "" {
+		log.Fatalf("server was unable to find a suitable daycare, unable to validate")
+	}
+
+	// run an interactive action for a single step?
+	if action != "" {
+		if step < 1 || stepDir == "" {
+			log.Fatalf("to use --action, you must run from within a step directory")
+		}
+		log.Printf("running interactive session for action %q on step %d", action, step)
+
+		// run the interactive action for a single step instead
+		// of validating all steps
+		unvalidated := &CommitBundle{
+			ProblemType:          signed.ProblemType,
+			ProblemTypeSignature: signed.ProblemTypeSignature,
+			Problem:              signed.Problem,
+			ProblemSteps:         signed.ProblemSteps,
+			ProblemSignature:     signed.ProblemSignature,
+			Hostname:             signed.Hostname,
+			UserID:               signed.UserID,
+			Commit:               signed.Commits[step-1],
+			CommitSignature:      signed.CommitSignatures[step-1],
+		}
+
+		runInteractiveSession(unvalidated, nil, stepDir)
+		return
+	}
+
+	// validate the commits one at a time
+	for n := 0; n < len(signed.ProblemSteps); n++ {
+		log.Printf("validating solution for step %d", n+1)
+		unvalidated := &CommitBundle{
+			ProblemType:          signed.ProblemType,
+			ProblemTypeSignature: signed.ProblemTypeSignature,
+			Problem:              signed.Problem,
+			ProblemSteps:         signed.ProblemSteps,
+			ProblemSignature:     signed.ProblemSignature,
+			Hostname:             signed.Hostname,
+			UserID:               signed.UserID,
+			Commit:               signed.Commits[n],
+			CommitSignature:      signed.CommitSignatures[n],
+		}
+		validated := mustConfirmCommitBundle(unvalidated, nil)
+		log.Printf("  finished validating solution")
+		if validated.Commit.ReportCard == nil || validated.Commit.Score != 1.0 || !validated.Commit.ReportCard.Passed {
+			log.Printf("  solution for step %d failed: %s", n+1, validated.Commit.ReportCard.Note)
+
+			// play the transcript
+			if err := validated.Commit.DumpTranscript(os.Stdout); err != nil {
+				log.Fatalf("failed to dump transcript: %v", err)
+			}
+			log.Fatalf("please fix solution and try again")
+		}
+		signed.ProblemType = validated.ProblemType
+		signed.ProblemTypeSignature = validated.ProblemTypeSignature
+		signed.Problem = validated.Problem
+		signed.ProblemSteps = validated.ProblemSteps
+		signed.ProblemSignature = validated.ProblemSignature
+		signed.Commits[n] = validated.Commit
+		signed.CommitSignatures[n] = validated.CommitSignature
+	}
+
+	log.Printf("problem and solution confirmed successfully")
+
+	// save the problem
+	final := new(ProblemBundle)
+	if signed.Problem.ID == 0 {
+		mustPostObject("/problem_bundles/confirmed", nil, signed, final)
+	} else {
+		mustPutObject(fmt.Sprintf("/problem_bundles/%d", signed.Problem.ID), nil, signed, final)
+	}
+	log.Printf("problem %q saved and ready to use", final.Problem.Unique)
+
+	if signed.Problem.ID == 0 {
+		// create a matching problem set
+		// pause for a bit since the database seems to need to catch up
+		time.Sleep(time.Second)
+
+		// create a problem set with just this problem and the same unique name
+		psBundle := &ProblemSetBundle{
+			ProblemSet: &ProblemSet{
+				Unique:    final.Problem.Unique,
+				Note:      "set for single problem " + final.Problem.Unique + "\n" + final.Problem.Note,
+				Tags:      final.Problem.Tags,
+				CreatedAt: now,
+				UpdatedAt: now,
+			},
+			ProblemSetProblems: []*ProblemSetProblem{
+				{
+					ProblemID: final.Problem.ID,
+					Weight:    1.0,
+				},
+			},
+		}
+		finalPSBundle := new(ProblemSetBundle)
+		mustPostObject("/problem_set_bundles", nil, psBundle, finalPSBundle)
+		log.Printf("problem set %q created and ready to use", finalPSBundle.ProblemSet.Unique)
+	}
+}
+
+func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) (*ProblemBundle, string, int) {
 	// find the absolute directory so we can walk up the tree if needed
 	dir, err := filepath.Abs(".")
 	if err != nil {
@@ -39,16 +156,15 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 	}
 
 	// find the problem.cfg file
-	actionDir := dir
-	actionStep := 0
+	stepDir, stepDirN := dir, 0
 	for {
 		path := filepath.Join(dir, ProblemConfigName)
 		if _, err := os.Stat(path); err != nil {
 			if os.IsNotExist(err) {
 				// try moving up a directory
-				actionDir = dir
+				stepDir = dir
 				dir = filepath.Dir(dir)
-				if dir == actionDir {
+				if dir == stepDir {
 					log.Printf("unable to find %s in current directory or one of its ancestors", ProblemConfigName)
 					log.Fatalf("   you must run this in a problem directory")
 				}
@@ -60,22 +176,8 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 		}
 		break
 	}
-	if action != "" {
-		if actionDir == dir {
-			log.Fatalf("to run an action, you must be in the step directory")
-		}
-		stepName := filepath.Base(actionDir)
-		stepN, err := strconv.Atoi(stepName)
-		if err != nil {
-			log.Fatalf("to run an action, you must be in the step directory, not %s", stepName)
-		}
-		actionStep = stepN
-		if actionStep < 1 {
-			log.Fatalf("step directory must be > 0, not %d", actionStep)
-		}
-	}
 
-	// parse problem.cfg
+	// parse problem.cfg to create the problem object
 	cfg := struct {
 		Problem struct {
 			Unique string
@@ -89,15 +191,11 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 			Weight float64
 		}
 	}{}
-
 	configPath := filepath.Join(dir, ProblemConfigName)
 	fmt.Printf("reading %s\n", configPath)
-	err = gcfg.ReadFileInto(&cfg, configPath)
-	if err != nil {
+	if err = gcfg.ReadFileInto(&cfg, configPath); err != nil {
 		log.Fatalf("failed to parse %s: %v", configPath, err)
 	}
-
-	// create problem object
 	problem := &Problem{
 		Unique:      cfg.Problem.Unique,
 		Note:        cfg.Problem.Note,
@@ -112,61 +210,57 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 	problemType := new(ProblemType)
 	mustGetObject(fmt.Sprintf("/problem_types/%s", problem.ProblemType), nil, problemType)
 
-	// if the user requested an interactive action, it must be valid
-	if action != "" {
-		if _, exists := problemType.Actions[action]; !exists {
-			log.Fatalf("action %q does not exist for problem type %s", action, problemType.Name)
-		}
-	}
-
 	// start forming the problem bundle
 	unsigned := &ProblemBundle{
 		Problem: problem,
 	}
 
 	// check if this is an existing problem
-	existing := []*Problem{}
-	params := make(url.Values)
-	params.Add("unique", problem.Unique)
-	mustGetObject("/problems", params, &existing)
-	switch len(existing) {
-	case 0:
-		// new problem
-		if cmd.Flag("update").Value.String() == "true" {
-			log.Fatalf("you specified --update, but no existing problem with unique ID %q was found", problem.Unique)
-		}
-
-		// make sure the problem set with this unique name is free as well
-		existingSets := []*ProblemSet{}
-		params = make(url.Values)
+	if action == "" {
+		existing := []*Problem{}
+		params := make(url.Values)
 		params.Add("unique", problem.Unique)
-		mustGetObject("/problem_sets", params, &existingSets)
-		if len(existingSets) > 1 {
-			log.Fatalf("error: server found multiple problem sets with matching unique ID %q", problem.Unique)
-		}
-		if len(existingSets) != 0 {
-			log.Printf("problem set %d already exists with unique ID %q", existingSets[0].ID, existingSets[0].Unique)
-			log.Fatalf("  this would prevent creating a problem set containing just this problem with matching id")
-		}
+		mustGetObject("/problems", params, &existing)
+		switch len(existing) {
+		case 0:
+			// new problem
+			if isUpdate {
+				log.Fatalf("you specified --update, but no existing problem with unique ID %q was found", problem.Unique)
+			}
 
-		log.Printf("this problem is new--no existing problem has the same unique ID")
-	case 1:
-		// update to existing problem
-		if cmd.Flag("update").Value.String() == "false" {
-			log.Fatalf("you did not specify --update, but a problem already exists with unique ID %q", problem.Unique)
+			// make sure the problem set with this unique name is free as well
+			existingSets := []*ProblemSet{}
+			params = make(url.Values)
+			params.Add("unique", problem.Unique)
+			mustGetObject("/problem_sets", params, &existingSets)
+			if len(existingSets) > 1 {
+				log.Fatalf("error: server found multiple problem sets with matching unique ID %q", problem.Unique)
+			}
+			if len(existingSets) != 0 {
+				log.Printf("problem set %d already exists with unique ID %q", existingSets[0].ID, existingSets[0].Unique)
+				log.Fatalf("  this would prevent creating a problem set containing just this problem with matching id")
+			}
+
+			log.Printf("this problem is new--no existing problem has the same unique ID")
+		case 1:
+			// update to existing problem
+			if !isUpdate {
+				log.Fatalf("you did not specify --update, but a problem already exists with unique ID %q", problem.Unique)
+			}
+			log.Printf("unique ID is %s", problem.Unique)
+			log.Printf("  this is an update of problem %d", existing[0].ID)
+			log.Printf("  (%q)", existing[0].Note)
+			problem.ID = existing[0].ID
+			problem.CreatedAt = existing[0].CreatedAt
+		default:
+			// server does not know what "unique" means
+			log.Fatalf("error: server found multiple problems with matching unique ID %q", problem.Unique)
 		}
-		log.Printf("unique ID is %s", problem.Unique)
-		log.Printf("  this is an update of problem %d", existing[0].ID)
-		log.Printf("  (%q)", existing[0].Note)
-		problem.ID = existing[0].ID
-		problem.CreatedAt = existing[0].CreatedAt
-	default:
-		// server does not know what "unique" means
-		log.Fatalf("error: server found multiple problems with matching unique ID %q", problem.Unique)
 	}
 
 	// generate steps
 	whitelist := make(map[string]bool)
+	blacklist := []string{"~", ".swp", ".o", ".pyc", ".out"}
 	for i := int64(1); cfg.Step[strconv.FormatInt(i, 10)] != nil; i++ {
 		log.Printf("gathering step %d", i)
 		s := cfg.Step[strconv.FormatInt(i, 10)]
@@ -190,7 +284,6 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 		}
 
 		// read files
-		blacklist := []string{"~", ".swp", ".o", ".pyc", ".out"}
 		starter, solution, root := make(map[string]string), make(map[string]string), make(map[string]string)
 		stepdir := filepath.Join(dir, strconv.FormatInt(i, 10))
 		err := filepath.Walk(stepdir, func(path string, info os.FileInfo, err error) error {
@@ -285,114 +378,33 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 		log.Fatalf("expected to find %d step%s, but only found %d", len(cfg.Step), plural(len(cfg.Step)), len(unsigned.ProblemSteps))
 	}
 
-	if action != "" && actionStep > len(unsigned.ProblemSteps) {
-		log.Fatalf("must run action from within a valid step directory, not %d", actionStep)
-	}
-
-	// get user ID
-	user := new(User)
-	mustGetObject("/users/me", nil, user)
-	unsigned.UserID = user.ID
-
-	// get the request validated and signed
-	signed := new(ProblemBundle)
-	mustPostObject("/problem_bundles/unconfirmed", nil, unsigned, signed)
-
-	if signed.Hostname == "" {
-		log.Fatalf("server was unable to find a suitable daycare, unable to validate")
-	}
-
 	if action != "" {
-		log.Printf("running interactive session for action %q on step %d", action, actionStep)
-
-		// run the interactive action for a single step instead
-		// of validating all steps
-		unvalidated := &CommitBundle{
-			ProblemType:          signed.ProblemType,
-			ProblemTypeSignature: signed.ProblemTypeSignature,
-			Problem:              signed.Problem,
-			ProblemSteps:         signed.ProblemSteps,
-			ProblemSignature:     signed.ProblemSignature,
-			Hostname:             signed.Hostname,
-			UserID:               signed.UserID,
-			Commit:               signed.Commits[actionStep-1],
-			CommitSignature:      signed.CommitSignatures[actionStep-1],
+		// figure out the step number
+		if stepDir == dir {
+			log.Fatalf("to run an action, you must be in the step directory")
+		}
+		stepName := filepath.Base(stepDir)
+		stepN, err := strconv.Atoi(stepName)
+		if err != nil {
+			log.Fatalf("to run an action, you must be in the step directory, not %s", stepName)
+		}
+		stepDirN = stepN
+		if stepDirN < 1 {
+			log.Fatalf("step directory must be > 0, not %d", stepDirN)
 		}
 
-		runInteractiveSession(unvalidated, nil, actionDir)
-		return
-	}
-
-	// validate the commits one at a time
-	for n := 0; n < len(signed.ProblemSteps); n++ {
-		log.Printf("validating solution for step %d", n+1)
-		unvalidated := &CommitBundle{
-			ProblemType:          signed.ProblemType,
-			ProblemTypeSignature: signed.ProblemTypeSignature,
-			Problem:              signed.Problem,
-			ProblemSteps:         signed.ProblemSteps,
-			ProblemSignature:     signed.ProblemSignature,
-			Hostname:             signed.Hostname,
-			UserID:               signed.UserID,
-			Commit:               signed.Commits[n],
-			CommitSignature:      signed.CommitSignatures[n],
+		// if the user requested an interactive action, it must be valid for the problem type
+		if _, exists := problemType.Actions[action]; !exists {
+			log.Fatalf("action %q does not exist for problem type %s", action, problemType.Name)
 		}
-		validated := mustConfirmCommitBundle(unvalidated, nil)
-		log.Printf("  finished validating solution")
-		if validated.Commit.ReportCard == nil || validated.Commit.Score != 1.0 || !validated.Commit.ReportCard.Passed {
-			log.Printf("  solution for step %d failed: %s", n+1, validated.Commit.ReportCard.Note)
 
-			// play the transcript
-			if err := validated.Commit.DumpTranscript(os.Stdout); err != nil {
-				log.Fatalf("failed to dump transcript: %v", err)
-			}
-			log.Fatalf("please fix solution and try again")
+		// make sure the user was in a directory for a valid step number
+		if stepDirN > len(unsigned.ProblemSteps) {
+			log.Fatalf("must run action from within a valid step directory, not %d", stepDirN)
 		}
-		signed.ProblemType = validated.ProblemType
-		signed.ProblemTypeSignature = validated.ProblemTypeSignature
-		signed.Problem = validated.Problem
-		signed.ProblemSteps = validated.ProblemSteps
-		signed.ProblemSignature = validated.ProblemSignature
-		signed.Commits[n] = validated.Commit
-		signed.CommitSignatures[n] = validated.CommitSignature
 	}
 
-	log.Printf("problem and solution confirmed successfully")
-
-	// save the problem
-	final := new(ProblemBundle)
-	if signed.Problem.ID == 0 {
-		mustPostObject("/problem_bundles/confirmed", nil, signed, final)
-	} else {
-		mustPutObject(fmt.Sprintf("/problem_bundles/%d", signed.Problem.ID), nil, signed, final)
-	}
-	log.Printf("problem %q saved and ready to use", final.Problem.Unique)
-
-	if signed.Problem.ID == 0 {
-		// create a matching problem set
-		// pause for a bit since the database seems to need to catch up
-		time.Sleep(time.Second)
-
-		// create a problem set with just this problem and the same unique name
-		psBundle := &ProblemSetBundle{
-			ProblemSet: &ProblemSet{
-				Unique:    final.Problem.Unique,
-				Note:      "set for single problem " + final.Problem.Unique + "\n" + final.Problem.Note,
-				Tags:      final.Problem.Tags,
-				CreatedAt: now,
-				UpdatedAt: now,
-			},
-			ProblemSetProblems: []*ProblemSetProblem{
-				{
-					ProblemID: final.Problem.ID,
-					Weight:    1.0,
-				},
-			},
-		}
-		finalPSBundle := new(ProblemSetBundle)
-		mustPostObject("/problem_set_bundles", nil, psBundle, finalPSBundle)
-		log.Printf("problem set %q created and ready to use", finalPSBundle.ProblemSet.Unique)
-	}
+	return unsigned, stepDir, stepDirN
 }
 
 func mustConfirmCommitBundle(bundle *CommitBundle, args []string) *CommitBundle {

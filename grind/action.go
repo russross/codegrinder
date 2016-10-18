@@ -44,7 +44,7 @@ func CommandAction(cmd *cobra.Command, args []string) {
 	user := new(User)
 	mustGetObject("/users/me", nil, user)
 
-	problemType, problem, _, commit, _ := gather(now, ".")
+	problemType, problem, _, commit, _ := gatherStudent(now, ".")
 	commit.Action = action
 	commit.Note = "grind tool session for action " + action
 	unsigned := &CommitBundle{

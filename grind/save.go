@@ -27,7 +27,7 @@ func CommandSave(cmd *cobra.Command, args []string) {
 	user := new(User)
 	mustGetObject("/users/me", nil, user)
 
-	_, problem, _, commit, _ := gather(now, ".")
+	_, problem, _, commit, _ := gatherStudent(now, ".")
 	commit.Action = ""
 	commit.Note = "saving from grind tool"
 	unsigned := &CommitBundle{
@@ -41,7 +41,7 @@ func CommandSave(cmd *cobra.Command, args []string) {
 	log.Printf("problem %s step %d saved", problem.Unique, commit.Step)
 }
 
-func gather(now time.Time, startDir string) (*ProblemType, *Problem, *Assignment, *Commit, *DotFileInfo) {
+func gatherStudent(now time.Time, startDir string) (*ProblemType, *Problem, *Assignment, *Commit, *DotFileInfo) {
 	// find the .grind file containing the problem set info
 	dotfile, problemSetDir, problemDir := findDotFile(startDir)
 	dotfileChanged := false
