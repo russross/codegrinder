@@ -258,7 +258,8 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 
 	// generate steps
 	whitelist := make(map[string]bool)
-	blacklist := []string{"~", ".swp", ".o", ".pyc", ".out"}
+	blacklist := []string{"~", ".swp", ".o", ".pyc", ".out", ".DS_Store"}
+	blacklistDir := []string{"__pycache__"}
 	for i := int64(1); cfg.Step[strconv.FormatInt(i, 10)] != nil; i++ {
 		log.Printf("gathering step %d", i)
 		s := cfg.Step[strconv.FormatInt(i, 10)]
@@ -288,12 +289,19 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 			if err != nil {
 				log.Fatalf("walk error for %s: %v", path, err)
 			}
-			if info.IsDir() {
-				return nil
-			}
 			relpath, err := filepath.Rel(stepdir, path)
 			if err != nil {
 				log.Fatalf("error finding relative path of %s: %v", path, err)
+			}
+			if info.IsDir() {
+				dirname := filepath.Base(path)
+				for _, name := range blacklistDir {
+					if dirname == name {
+						log.Printf("skipping directory %s", relpath)
+						return filepath.SkipDir
+					}
+				}
+				return nil
 			}
 			if _, exists := problemType.Files[filepath.ToSlash(relpath)]; exists {
 				log.Printf("skipping file %s", relpath)

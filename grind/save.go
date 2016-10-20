@@ -134,6 +134,7 @@ func gatherStudent(now time.Time, startDir string) (*ProblemType, *Problem, *Ass
 
 	// gather the commit files from the file system
 	files := make(map[string]string)
+	blacklist := []string{"~", ".swp", ".o", ".pyc", ".out", ".DS_Store"}
 	err := filepath.Walk(problemDir, func(path string, stat os.FileInfo, err error) error {
 		// skip errors, directories, non-regular files
 		if err != nil {
@@ -162,7 +163,6 @@ func gatherStudent(now time.Time, startDir string) (*ProblemType, *Problem, *Ass
 		}
 
 		// silently skip some blacklisted file suffixes
-		blacklist := []string{"~", ".swp", ".o", ".pyc", ".out"}
 		for _, suffix := range blacklist {
 			if strings.HasSuffix(name, suffix) {
 				return nil
