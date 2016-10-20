@@ -5,9 +5,10 @@ RUN apt-get update && \
     apt-get upgrade -y
 
 RUN apt-get install -y --no-install-recommends \
-    python2.7 \
     python3.4 \
-    python-pip
+    python-pip \
+    python3-six \
+    make
 
 RUN pip install autopep8
 

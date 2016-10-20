@@ -126,7 +126,9 @@ func (problem *Problem) Normalize(now time.Time, steps []*ProblemStep) error {
 		return fmt.Errorf("problem must have at least one step")
 	}
 	for n, step := range steps {
-		step.Normalize(int64(n) + 1)
+		if err := step.Normalize(int64(n) + 1); err != nil {
+			return err
+		}
 	}
 
 	// sanity check timestamps
