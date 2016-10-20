@@ -69,20 +69,17 @@ func python34UnittestStyleFix(n *Nanny, args, options []string, files map[string
 		n.ReportCard.LogAndFailf("no source files found")
 		return
 	}
-	log.Printf("found %d source file(s)", len(sources))
 	after, err := n.GetFiles(sources)
 	if err != nil {
 		log.Printf("error trying to download files from container: %v", err)
 		return
 	}
-	log.Printf("downloaded %d after file(s)", len(after))
 	changed := make(map[string]string)
 	for name, contents := range after {
 		if files[name] != contents {
 			changed[name] = contents
 		}
 	}
-	log.Printf("found %d changed file(s)", len(changed))
 	if len(changed) > 0 {
 		n.Events <- &EventMessage{Event: "files", Files: changed}
 	}
