@@ -522,8 +522,8 @@ func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Co
 		}
 
 		for _, elt := range counts {
-			scores := []float64{}
-			for i := int64(0); i < elt.StepCount; i++ {
+			scores := asst.RawScores[elt.ProblemUnique]
+			for i := int64(len(scores)); i < elt.StepCount; i++ {
 				scores = append(scores, 0.0)
 			}
 			asst.RawScores[elt.ProblemUnique] = scores

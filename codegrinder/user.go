@@ -595,10 +595,31 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 		return
 	}
 
-	// reject commit if a previous step remains incomplete
 	if assignment.RawScores == nil {
 		assignment.RawScores = map[string][]float64{}
 	}
+
+	// fill in raw scores for legacy data
+	// TODO: delete this eventually
+	counts := []*ProblemStepCount{}
+	if err := meddler.QueryAll(tx, &counts, `SELECT problems.unique_id AS problem_unique_id, COUNT(problem_steps.step) AS step_count `+
+		`FROM problem_set_problems `+
+		`JOIN problems ON problem_set_problems.problem_id = problems.id `+
+		`JOIN problem_steps ON problems.id = problem_steps.problem_id `+
+		`WHERE problem_set_problems.problem_set_id = $1 GROUP BY problems.id`, assignment.ProblemSetID); err != nil {
+		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error getting problem step counts: %v", err)
+		return
+	}
+
+	for _, elt := range counts {
+		scores := assignment.RawScores[elt.ProblemUnique]
+		for i := int64(len(scores)); i < elt.StepCount; i++ {
+			scores = append(scores, 0.0)
+		}
+		assignment.RawScores[elt.ProblemUnique] = scores
+	}
+
+	// reject commit if a previous step remains incomplete
 	scores := assignment.RawScores[problem.Unique]
 	for i := 0; i < int(commit.Step)-1; i++ {
 		if i >= len(scores) || scores[i] != 1.0 {
@@ -708,6 +729,9 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 
 	// save the grade update
 	if !isInstructor && signed.Commit.ReportCard != nil {
+		// TODO: eventually start to assume that RawScores has a full list
+		// of scores including zeros. Can't do it until next DB reset.
+
 		// save the raw score for this problem step
 		scores := assignment.RawScores[problem.Unique]
 		for int(signed.Commit.Step) > len(scores) {
