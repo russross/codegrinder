@@ -217,7 +217,7 @@ func (step *ProblemStep) Normalize(n int64) error {
 	}
 	instructions, err := step.BuildInstructions()
 	if err != nil {
-		return fmt.Errorf("error building instructions for step %d: %v", n+1, err)
+		return fmt.Errorf("error building instructions for step %d: %v", n, err)
 	}
 	step.Instructions = instructions
 	if step.Weight <= 0.0 {
@@ -298,7 +298,7 @@ func (step *ProblemStep) BuildInstructions() (string, error) {
 		justHTML = string(blackfriday.Markdown([]byte(data), blackfriday.HtmlRenderer(0, "", ""), extensions))
 		used["doc/doc.md"] = true
 	} else {
-		return "", loggedErrorf("No documentation found: checked doc/doc.html and doc/doc.md")
+		return "", loggedErrorf("no documentation found: checked doc/doc.html and doc/doc.md")
 	}
 
 	// make sure it is well-formed utf8

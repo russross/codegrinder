@@ -240,7 +240,8 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 			log.Fatalf("  this would prevent creating a problem set containing just this problem with matching id")
 		}
 
-		log.Printf("this problem is new--no existing problem has the same unique ID")
+		log.Printf("unique ID is %s", problem.Unique)
+		log.Printf("  this problem is new--no existing problem has the same unique ID")
 	case 1:
 		// update to existing problem
 		if action == "" && !isUpdate {

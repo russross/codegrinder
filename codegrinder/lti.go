@@ -486,6 +486,11 @@ func getUpdateCourse(tx *sql.Tx, form *LTIRequest, now time.Time) (*Course, erro
 	return course, nil
 }
 
+type ProblemStepCount struct {
+	ProblemUnique string `meddler:"problem_unique_id"`
+	StepCount     int64  `meddler:"step_count"`
+}
+
 // get/create/update this assignment
 func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Course, problemSet *ProblemSet, user *User) (*Assignment, error) {
 	asst := new(Assignment)
@@ -504,6 +509,25 @@ func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Co
 		asst.Score = 0.0
 		asst.CreatedAt = now
 		asst.UpdatedAt = now
+
+		// fill in blanks for the raw scores
+		counts := []*ProblemStepCount{}
+		if err := meddler.QueryAll(tx, &counts, `SELECT problems.unique_id AS problem_unique_id, COUNT(problem_steps.step) AS step_count `+
+			`FROM problem_set_problems `+
+			`JOIN problems ON problem_set_problems.problem_id = problems.id `+
+			`JOIN problem_steps ON problems.id = problem_steps.problem_id `+
+			`WHERE problem_set_problems.problem_set_id = $1 GROUP BY problems.id`, problemSet.ID); err != nil {
+			log.Printf("db error getting problem step counts: %v", err)
+			return nil, err
+		}
+
+		for _, elt := range counts {
+			scores := []float64{}
+			for i := int64(0); i < elt.StepCount; i++ {
+				scores = append(scores, 0.0)
+			}
+			asst.RawScores[elt.ProblemUnique] = scores
+		}
 	}
 
 	// any changes?
