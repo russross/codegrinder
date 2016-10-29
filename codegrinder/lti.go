@@ -175,8 +175,8 @@ func GetConfigXML(w http.ResponseWriter) {
 	}
 }
 
-func signXMLRequest(consumerKey, method, targetURL, content, secret string) string {
-	sum := sha1.Sum([]byte(content))
+func signXMLRequest(consumerKey, method, targetURL string, content []byte, secret string) string {
+	sum := sha1.Sum(content)
 	bodyHash := base64.StdEncoding.EncodeToString(sum[:])
 
 	// gather parts as form value for the signature
@@ -260,7 +260,7 @@ func computeOAuthSignature(method, urlString string, parameters url.Values, secr
 	// get a sorted list of parameter keys (minus oauth_signature)
 	oldsig := parameters.Get("oauth_signature")
 	parameters.Del("oauth_signature")
-	params := encode(parameters)
+	params := string(encode(parameters))
 	if oldsig != "" {
 		parameters.Set("oauth_signature", oldsig)
 	}
@@ -290,9 +290,9 @@ func escape(s string) string {
 }
 
 // this is url.URL.Encode from the standard library, but using escape instead of url.QueryEscape
-func encode(v url.Values) string {
+func encode(v url.Values) []byte {
 	if v == nil {
-		return ""
+		return []byte{}
 	}
 	var buf bytes.Buffer
 	keys := make([]string, 0, len(v))
@@ -311,7 +311,7 @@ func encode(v url.Values) string {
 			buf.WriteString(escape(v))
 		}
 	}
-	return buf.String()
+	return buf.Bytes()
 }
 
 // LtiProblem handles /lti/problem/:unique requests.
@@ -596,8 +596,8 @@ func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Co
 			// dump the request to the logs for debugging purposes
 			if raw, err := json.MarshalIndent(form, ">>>>", "    "); err == nil {
 				log.Printf("LTI Request dump:")
-				for _, line := range strings.Split(string(raw), "\n") {
-					log.Print(line)
+				for _, line := range bytes.Split(raw, []byte("\n")) {
+					log.Printf("%s", line)
 				}
 			}
 
@@ -644,13 +644,13 @@ func saveGrade(asst *Assignment, user *User, text string) error {
 		log.Printf("error rendering XML grade response: %v", err)
 		return err
 	}
-	result := fmt.Sprintf("%s%s\n", xml.Header, raw)
+	result := []byte(fmt.Sprintf("%s%s\n", xml.Header, raw))
 
 	// sign the request
 	auth := signXMLRequest(asst.ConsumerKey, "POST", outcomeURL, result, Config.LTISecret)
 
 	// POST the grade
-	req, err := http.NewRequest("POST", outcomeURL, strings.NewReader(result))
+	req, err := http.NewRequest("POST", outcomeURL, bytes.NewReader(result))
 	if err != nil {
 		log.Printf("error preparing grade request: %v", err)
 		return err

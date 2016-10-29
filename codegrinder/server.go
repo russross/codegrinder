@@ -850,7 +850,7 @@ func (reg *DaycareRegistration) ComputeSignature(secret string) string {
 
 	// compute signature
 	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(encode(v)))
+	mac.Write(encode(v))
 	sum := mac.Sum(nil)
 	sig := base64.StdEncoding.EncodeToString(sum)
 	return sig

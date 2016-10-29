@@ -144,7 +144,7 @@ func (commit *Commit) ComputeSignature(secret, problemTypeSignature, problemSign
 
 	// compute signature
 	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(encode(v)))
+	mac.Write(encode(v))
 	sum := mac.Sum(nil)
 	sig := base64.StdEncoding.EncodeToString(sum)
 	//log.Printf("commit signature: %s data: %s", sig, encode(v))
@@ -246,9 +246,9 @@ func (commit *Commit) DumpTranscript(w io.Writer) error {
 }
 
 // this is url.URL.Encode from the standard library, but using escape instead of url.QueryEscape
-func encode(v url.Values) string {
+func encode(v url.Values) []byte {
 	if v == nil {
-		return ""
+		return []byte{}
 	}
 	var buf bytes.Buffer
 	keys := make([]string, 0, len(v))
@@ -267,7 +267,7 @@ func encode(v url.Values) string {
 			buf.WriteString(escape(v))
 		}
 	}
-	return buf.String()
+	return buf.Bytes()
 }
 
 func escape(s string) string {

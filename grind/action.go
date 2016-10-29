@@ -206,7 +206,7 @@ func runInteractiveSession(bundle *CommitBundle, args []string, dir string) {
 				if reply.Event.Files != nil {
 					for name, contents := range reply.Event.Files {
 						log.Printf("downloading file %s\r", name)
-						if err := ioutil.WriteFile(filepath.Join(dir, name), []byte(contents), 0644); err != nil {
+						if err := ioutil.WriteFile(filepath.Join(dir, filepath.FromSlash(name)), contents, 0644); err != nil {
 							log.Fatalf("error saving file: %v\r", err)
 						}
 					}

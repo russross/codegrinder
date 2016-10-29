@@ -105,15 +105,14 @@ func gatherStudent(now time.Time, startDir string) (*ProblemType, *Problem, *Ass
 	problemType := new(ProblemType)
 	mustGetObject(fmt.Sprintf("/problem_types/%s", problem.ProblemType), nil, problemType)
 	for name, contents := range problemType.Files {
-		checkAndUpdate(name, contents)
+		checkAndUpdate(filepath.FromSlash(name), contents)
 	}
 
 	// get the problem step and verify local files match
 	step := new(ProblemStep)
 	mustGetObject(fmt.Sprintf("/problems/%d/steps/%d", problem.ID, info.Step), nil, step)
 	for name, contents := range step.Files {
-		dir, _ := filepath.Split(name)
-		if dir == "" {
+		if filepath.Dir(filepath.FromSlash(name)) == "." {
 			// add to the whitelist in case it is a new file
 			if !info.Whitelist[name] {
 				info.Whitelist[name] = true
@@ -126,7 +125,7 @@ func gatherStudent(now time.Time, startDir string) (*ProblemType, *Problem, *Ass
 				continue
 			}
 		}
-		checkAndUpdate(name, contents)
+		checkAndUpdate(filepath.FromSlash(name), contents)
 	}
 	checkAndUpdate(filepath.Join("doc", "index.html"), []byte(step.Instructions))
 	if dotfileChanged {
@@ -151,7 +150,7 @@ func gatherStudent(now time.Time, startDir string) (*ProblemType, *Problem, *Ass
 		if !stat.Mode().IsRegular() {
 			return nil
 		}
-		_, name := filepath.Split(path)
+		name := filepath.Base(path)
 
 		// skip our config file
 		if name == perProblemSetDotFile {

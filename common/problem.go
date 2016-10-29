@@ -167,7 +167,7 @@ func (problemType *ProblemType) ComputeSignature(secret string) string {
 
 	// compute signature
 	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(encode(v)))
+	mac.Write(encode(v))
 	sum := mac.Sum(nil)
 	sig := base64.StdEncoding.EncodeToString(sum)
 	return sig
@@ -195,7 +195,7 @@ func (problem *Problem) ComputeSignature(secret string, steps []*ProblemStep) st
 
 	// compute signature
 	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(encode(v)))
+	mac.Write(encode(v))
 	sum := mac.Sum(nil)
 	sig := base64.StdEncoding.EncodeToString(sum)
 	//log.Printf("problem signature: %s data: %s", sig, encode(v))
@@ -227,9 +227,9 @@ func (step *ProblemStep) Normalize(n int64) error {
 	}
 	clean := make(map[string][]byte)
 	for name, contents := range step.Files {
-		parts := strings.Split(name, "/")
+		dir := filepath.Dir(filepath.FromSlash(name))
 		fixed := contents
-		if (len(parts) < 2 || !ProblemStepDirectoryWhitelist[parts[0]]) && utf8.Valid(contents) {
+		if (dir == "." || !ProblemStepDirectoryWhitelist[dir]) && utf8.Valid(contents) {
 			fixed = fixLineEndings(contents)
 			if !bytes.Equal(fixed, contents) {
 				log.Printf("fixed line endings for %s", name)
@@ -261,7 +261,7 @@ func (problem *Problem) GetStepWhitelists(steps []*ProblemStep) []map[string]boo
 
 		// add files defined in the root directory of the problem step
 		for name := range step.Files {
-			if len(strings.Split(name, "/")) == 1 {
+			if filepath.Dir(filepath.FromSlash(name)) == "." {
 				m[name] = true
 			}
 		}
@@ -327,7 +327,7 @@ func (step *ProblemStep) BuildInstructions() (string, error) {
 				if a.Key == "src" {
 					if strings.HasPrefix(a.Val, "data:") {
 						// do nothing--the data is already encoded in the tag
-					} else if contents, present := step.Files["doc/"+a.Val]; present {
+					} else if contents, present := step.Files[filepath.Join("doc", a.Val)]; present {
 						mime := ""
 						switch {
 						case strings.HasSuffix(a.Val, ".gif"):
@@ -347,7 +347,7 @@ func (step *ProblemStep) BuildInstructions() (string, error) {
 						// base64 encode the image
 						log.Printf("encoding image %s as base64 data URI", a.Val)
 						used[filepath.Join("doc", a.Val)] = true
-						s := base64.StdEncoding.EncodeToString([]byte(contents))
+						s := base64.StdEncoding.EncodeToString(contents)
 						a.Val = fmt.Sprintf("data:%s;base64,%s", mime, s)
 						n.Attr[i] = a
 					} else {
