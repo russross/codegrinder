@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"io"
 	"log"
 	"path/filepath"
@@ -21,37 +22,37 @@ func init() {
 	}
 }
 
-func python34UnittestGrade(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
+func python34UnittestGrade(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
 	log.Printf("python3.4 unittest grade")
 	runAndParseXUnit(n, []string{"make", "grade"}, nil, "test_detail.xml")
 }
 
-func python34UnittestTest(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
+func python34UnittestTest(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
 	log.Printf("python3.4 unittest test")
 	n.ExecSimple([]string{"make", "test"}, stdin, true)
 }
 
-func python34UnittestDebug(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
+func python34UnittestDebug(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
 	log.Printf("python3.4 unittest debug")
 	n.ExecSimple([]string{"make", "debug"}, stdin, true)
 }
 
-func python34UnittestRun(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
+func python34UnittestRun(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
 	log.Printf("python3.4 unittest run")
 	n.ExecSimple([]string{"make", "run"}, stdin, true)
 }
 
-func python34UnittestShell(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
+func python34UnittestShell(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
 	log.Printf("python3.4 unittest shell")
 	n.ExecSimple([]string{"make", "shell"}, stdin, true)
 }
 
-func python34UnittestStyleCheck(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
+func python34UnittestStyleCheck(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
 	log.Printf("python3.4 unittest stylecheck")
 	n.ExecSimple([]string{"make", "stylecheck"}, stdin, true)
 }
 
-func python34UnittestStyleFix(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
+func python34UnittestStyleFix(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
 	log.Printf("python3.4 unittest stylefix")
 	if err := n.ExecSimple([]string{"make", "stylefix"}, stdin, true); err != nil {
 		return
@@ -74,9 +75,9 @@ func python34UnittestStyleFix(n *Nanny, args, options []string, files map[string
 		log.Printf("error trying to download files from container: %v", err)
 		return
 	}
-	changed := make(map[string]string)
+	changed := make(map[string][]byte)
 	for name, contents := range after {
-		if files[name] != contents {
+		if !bytes.Equal(files[name], contents) {
 			changed[name] = contents
 		}
 	}

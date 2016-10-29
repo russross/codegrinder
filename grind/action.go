@@ -159,7 +159,7 @@ func runInteractiveSession(bundle *CommitBundle, args []string, dir string) {
 			}
 
 			if count > 0 {
-				stdinReq := &DaycareRequest{Stdin: string(buffer[:count])}
+				stdinReq := &DaycareRequest{Stdin: buffer[:count]}
 				dumpOutgoing(stdinReq)
 				if err := socket.WriteJSON(stdinReq); err != nil {
 					log.Printf("error writing stdin request message: %v", err)

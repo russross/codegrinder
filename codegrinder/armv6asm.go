@@ -14,22 +14,22 @@ func init() {
 	}
 }
 
-func armAsGrade(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
+func armAsGrade(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
 	log.Printf("arm grade")
 	runAndParseXUnit(n, []string{"make", "grade"}, nil, "test_detail.xml")
 }
 
-func armAsTest(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
+func armAsTest(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
 	log.Printf("arm test")
 	n.ExecSimple([]string{"make", "test"}, stdin, true)
 }
 
-func armAsDebug(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
+func armAsDebug(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
 	log.Printf("arm debug")
 	n.ExecSimple([]string{"make", "debug"}, stdin, true)
 }
 
-func armAsRun(n *Nanny, args, options []string, files map[string]string, stdin io.Reader) {
+func armAsRun(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
 	log.Printf("arm run")
 	n.ExecSimple([]string{"make", "run"}, stdin, true)
 }

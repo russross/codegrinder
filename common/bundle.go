@@ -40,7 +40,7 @@ const MaxDaycareRequestAge = 15 * time.Minute
 // These objects are streamed across a websockets connection.
 type DaycareRequest struct {
 	CommitBundle *CommitBundle `json:"commitBundle,omitempty"`
-	Stdin        string        `json:"stdin,omitempty"`
+	Stdin        []byte        `json:"stdin,omitempty"`
 	CloseStdin   bool          `json:"closeStdin,omitempty"`
 }
 

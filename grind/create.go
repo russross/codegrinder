@@ -268,13 +268,13 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 			Step:   i,
 			Note:   s.Note,
 			Weight: s.Weight,
-			Files:  make(map[string]string),
+			Files:  make(map[string][]byte),
 		}
 		commit := &Commit{
 			Step:      i,
 			Action:    "grade",
 			Note:      "author solution submitted via grind",
-			Files:     make(map[string]string),
+			Files:     make(map[string][]byte),
 			CreatedAt: now,
 			UpdatedAt: now,
 		}
@@ -284,7 +284,7 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 		}
 
 		// read files
-		starter, solution, root := make(map[string]string), make(map[string]string), make(map[string]string)
+		starter, solution, root := make(map[string][]byte), make(map[string][]byte), make(map[string][]byte)
 		stepdir := filepath.Join(dir, strconv.FormatInt(i, 10))
 		err := filepath.Walk(stepdir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
@@ -326,13 +326,13 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 			// pick out solution/starter files
 			reldir, relfile := filepath.Split(relpath)
 			if filepath.ToSlash(reldir) == "_solution/" && relfile != "" {
-				solution[filepath.ToSlash(relfile)] = string(contents)
+				solution[filepath.ToSlash(relfile)] = contents
 			} else if filepath.ToSlash(reldir) == "_starter/" && relfile != "" {
-				starter[filepath.ToSlash(relfile)] = string(contents)
+				starter[filepath.ToSlash(relfile)] = contents
 			} else if reldir == "" && relfile != "" {
-				root[relfile] = string(contents)
+				root[relfile] = contents
 			} else {
-				step.Files[filepath.ToSlash(relpath)] = string(contents)
+				step.Files[filepath.ToSlash(relpath)] = contents
 			}
 
 			return nil

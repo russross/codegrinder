@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
@@ -25,7 +26,7 @@ var BeginningOfTime = time.Date(2016, 1, 1, 0, 0, 0, 0, time.UTC)
 type ProblemType struct {
 	Name    string                        `json:"name" meddler:"name"`
 	Image   string                        `json:"image" meddler:"image"`
-	Files   map[string]string             `json:"files,omitempty" meddler:"-"`
+	Files   map[string][]byte             `json:"files,omitempty" meddler:"-"`
 	Actions map[string]*ProblemTypeAction `json:"actions" meddler:"-"`
 }
 
@@ -68,7 +69,7 @@ type ProblemStep struct {
 	Note         string            `json:"note" meddler:"note"`
 	Instructions string            `json:"instructions" meddler:"instructions"`
 	Weight       float64           `json:"weight" meddler:"weight"`
-	Files        map[string]string `json:"files" meddler:"files,json"`
+	Files        map[string][]byte `json:"files" meddler:"files,json"`
 }
 
 type ProblemSet struct {
@@ -149,7 +150,7 @@ func (problemType *ProblemType) ComputeSignature(secret string) string {
 	v.Add("name", problemType.Name)
 	v.Add("image", problemType.Image)
 	for name, contents := range problemType.Files {
-		v.Add(fmt.Sprintf("file-%s", name), contents)
+		v.Add(fmt.Sprintf("file-%s", name), string(contents))
 	}
 	for name, action := range problemType.Actions {
 		v.Add(fmt.Sprintf("action-%s-button", name), action.Button)
@@ -188,7 +189,7 @@ func (problem *Problem) ComputeSignature(secret string, steps []*ProblemStep) st
 		v.Add(fmt.Sprintf("step-%d-note", step.Step), step.Note)
 		v.Add(fmt.Sprintf("step-%d-weight", step.Step), strconv.FormatFloat(step.Weight, 'g', -1, 64))
 		for name, contents := range step.Files {
-			v.Add(fmt.Sprintf("step-%d-file-%s", step.Step, name), contents)
+			v.Add(fmt.Sprintf("step-%d-file-%s", step.Step, name), string(contents))
 		}
 	}
 
@@ -224,18 +225,18 @@ func (step *ProblemStep) Normalize(n int64) error {
 		// default to 1.0
 		step.Weight = 1.0
 	}
-	clean := make(map[string]string)
+	clean := make(map[string][]byte)
 	for name, contents := range step.Files {
 		parts := strings.Split(name, "/")
 		fixed := contents
-		if (len(parts) < 2 || !ProblemStepDirectoryWhitelist[parts[0]]) && utf8.ValidString(contents) {
+		if (len(parts) < 2 || !ProblemStepDirectoryWhitelist[parts[0]]) && utf8.Valid(contents) {
 			fixed = fixLineEndings(contents)
-			if fixed != contents {
+			if !bytes.Equal(fixed, contents) {
 				log.Printf("fixed line endings for %s", name)
 			}
-		} else if utf8.ValidString(contents) {
+		} else if utf8.Valid(contents) {
 			fixed = fixNewLines(contents)
-			if fixed != contents {
+			if !bytes.Equal(fixed, contents) {
 				log.Printf("fixed newlines for %s", name)
 			}
 		}
@@ -276,16 +277,18 @@ func (step *ProblemStep) BuildInstructions() (string, error) {
 	// get a list of all files in the doc directory
 	used := make(map[string]bool)
 	for name := range step.Files {
-		if strings.HasPrefix(name, "doc/") {
+		if filepath.Dir(name) == "doc" {
 			used[name] = false
 		}
 	}
 
-	var justHTML string
-	if data, ok := step.Files["doc/doc.html"]; ok {
+	var justHTML []byte
+	dochtml := filepath.Join("doc", "doc.html")
+	docmd := filepath.Join("doc", "doc.md")
+	if data, ok := step.Files[dochtml]; ok {
 		justHTML = data
-		used["doc/doc.html"] = true
-	} else if data, ok := step.Files["doc/doc.md"]; ok {
+		used[dochtml] = true
+	} else if data, ok := step.Files[docmd]; ok {
 		// render markdown
 		extensions := 0
 		extensions |= blackfriday.EXTENSION_NO_INTRA_EMPHASIS
@@ -295,19 +298,19 @@ func (step *ProblemStep) BuildInstructions() (string, error) {
 		extensions |= blackfriday.EXTENSION_STRIKETHROUGH
 		extensions |= blackfriday.EXTENSION_SPACE_HEADERS
 
-		justHTML = string(blackfriday.Markdown([]byte(data), blackfriday.HtmlRenderer(0, "", ""), extensions))
-		used["doc/doc.md"] = true
+		justHTML = blackfriday.Markdown(data, blackfriday.HtmlRenderer(0, "", ""), extensions)
+		used[docmd] = true
 	} else {
 		return "", loggedErrorf("no documentation found: checked doc/doc.html and doc/doc.md")
 	}
 
 	// make sure it is well-formed utf8
-	if !utf8.ValidString(justHTML) {
+	if !utf8.Valid(justHTML) {
 		return "", loggedErrorf("doc.{html,md} is not valid utf8")
 	}
 
 	// parse the html
-	doc, err := html.Parse(strings.NewReader(justHTML))
+	doc, err := html.Parse(bytes.NewReader(justHTML))
 	if err != nil {
 		log.Printf("Error parsing doc.html: %v", err)
 		return "", err
@@ -343,7 +346,7 @@ func (step *ProblemStep) BuildInstructions() (string, error) {
 
 						// base64 encode the image
 						log.Printf("encoding image %s as base64 data URI", a.Val)
-						used["doc/"+a.Val] = true
+						used[filepath.Join("doc", a.Val)] = true
 						s := base64.StdEncoding.EncodeToString([]byte(contents))
 						a.Val = fmt.Sprintf("data:%s;base64,%s", mime, s)
 						n.Attr[i] = a
@@ -415,27 +418,27 @@ func (set *ProblemSet) Normalize(now time.Time) error {
 	return nil
 }
 
-func fixLineEndings(s string) string {
-	s = strings.Replace(s, "\r\n", "\n", -1) + "\n"
-	for strings.Contains(s, " \n") {
-		s = strings.Replace(s, " \n", "\n", -1)
+func fixLineEndings(s []byte) []byte {
+	s = append(bytes.Replace(s, []byte("\r\n"), []byte("\n"), -1), '\n')
+	for bytes.Contains(s, []byte(" \n")) {
+		s = bytes.Replace(s, []byte(" \n"), []byte("\n"), -1)
 	}
-	for strings.HasSuffix(s, "\n\n") {
+	for bytes.HasSuffix(s, []byte("\n\n")) {
 		s = s[:len(s)-1]
 	}
-	if s == "\n" {
-		s = ""
+	if bytes.Equal(s, []byte("\n")) {
+		s = []byte{}
 	}
 	return s
 }
 
-func fixNewLines(s string) string {
-	s = strings.Replace(s, "\r\n", "\n", -1) + "\n"
-	for strings.HasSuffix(s, "\n\n") {
+func fixNewLines(s []byte) []byte {
+	s = append(bytes.Replace(s, []byte("\r\n"), []byte("\n"), -1), '\n')
+	for bytes.HasSuffix(s, []byte("\n\n")) {
 		s = s[:len(s)-1]
 	}
-	if s == "\n" {
-		s = ""
+	if bytes.Equal(s, []byte("\n")) {
+		s = []byte{}
 	}
 	return s
 }

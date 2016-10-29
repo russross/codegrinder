@@ -84,7 +84,7 @@ type Commit struct {
 	Step         int64             `json:"step" meddler:"step"` // note: one-based
 	Action       string            `json:"action" meddler:"action,zeroisnull"`
 	Note         string            `json:"note" meddler:"note,zeroisnull"`
-	Files        map[string]string `json:"files" meddler:"files,json"`
+	Files        map[string][]byte `json:"files" meddler:"files,json"`
 	Transcript   []*EventMessage   `json:"transcript,omitempty" meddler:"transcript,json"`
 	ReportCard   *ReportCard       `json:"reportCard" meddler:"report_card,json"`
 	Score        float64           `json:"score" meddler:"score,zeroisnull"`
@@ -114,7 +114,7 @@ func (commit *Commit) ComputeSignature(secret, problemTypeSignature, problemSign
 	v.Add("action", commit.Action)
 	v.Add("note", commit.Note)
 	for name, contents := range commit.Files {
-		v.Add(fmt.Sprintf("file-%s", name), contents)
+		v.Add(fmt.Sprintf("file-%s", name), string(contents))
 	}
 	for n, event := range commit.Transcript {
 		v.Add(fmt.Sprintf("transcript-%d", n), event.String())
@@ -175,7 +175,7 @@ func (commit *Commit) Normalize(now time.Time, whitelist map[string]bool) error 
 
 // filter out files in subdirectories/not on whitelist, and clean up line endings
 func (commit *Commit) FilterIncoming(whitelist map[string]bool) {
-	clean := make(map[string]string)
+	clean := make(map[string][]byte)
 	for name, contents := range commit.Files {
 		// normalize line endings
 		if whitelist == nil {
@@ -214,7 +214,7 @@ func (commit *Commit) Compress() {
 				}
 				count += len(elt.StreamData)
 				if prev.Event == elt.Event {
-					prev.StreamData += elt.StreamData
+					prev.StreamData = append(prev.StreamData, elt.StreamData...)
 					prev.Time = elt.Time
 					continue
 				}

@@ -87,9 +87,9 @@ func runAndParseXUnit(n *Nanny, cmd []string, stdin io.Reader, filename string) 
 var testFailureContextGTest = regexp.MustCompile(`^(tests/[^:/]*:\d+)`)
 var testFailureContextPython = regexp.MustCompile(`File "[^"]*/([^/]+)", line (\d+)`)
 
-func parseXUnit(n *Nanny, contents string) {
+func parseXUnit(n *Nanny, contents []byte) {
 	results := new(XUnitProgram)
-	if err := xml.Unmarshal([]byte(contents), results); err != nil {
+	if err := xml.Unmarshal(contents, results); err != nil {
 		n.ReportCard.LogAndFailf("error parsing unit test results: %v", err)
 		return
 	}

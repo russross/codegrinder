@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-martini/martini"
 	"github.com/martini-contrib/render"
@@ -825,8 +826,12 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 		sort.Strings(names)
 		for _, name := range names {
 			contents := signed.Commit.Files[name]
-			fmt.Fprintf(&report, "<h1>File: <code>%s</code></h1>\n<pre><code>%s</code></pre>\n",
-				html.EscapeString(name), html.EscapeString(contents))
+			if utf8.Valid(contents) {
+				fmt.Fprintf(&report, "<h1>File: <code>%s</code></h1>\n<pre><code>%s</code></pre>\n",
+					html.EscapeString(name), html.EscapeString(string(contents)))
+			} else {
+				fmt.Fprintf(&report, "<h1>File: <code>%s</code> (binary contents)</h1>\n", html.EscapeString(name))
+			}
 		}
 
 		// send grade to the LMS in a goroutine

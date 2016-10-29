@@ -229,7 +229,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	}
 
 	// collect the files from the problem step, commit, and problem type
-	files := make(map[string]string)
+	files := make(map[string][]byte)
 	for name, contents := range step.Files {
 		files[name] = contents
 	}
@@ -439,7 +439,7 @@ type Nanny struct {
 	Closed     bool
 }
 
-type nannyHandler func(nanny *Nanny, args, options []string, files map[string]string, stdin io.Reader)
+type nannyHandler func(nanny *Nanny, args, options []string, files map[string][]byte, stdin io.Reader)
 
 var getContainerIDRE = regexp.MustCompile(`The name .* is already in use by container (.*)\. You have to delete \(or rename\) that container to be able to reuse that name`)
 
@@ -591,7 +591,7 @@ func (n *Nanny) Shutdown(msg string) error {
 
 // PutFiles copies a set of files to the given container.
 // The container must be running.
-func (n *Nanny) PutFiles(files map[string]string, mode int64) error {
+func (n *Nanny) PutFiles(files map[string][]byte, mode int64) error {
 	// nothing to do?
 	if len(files) == 0 {
 		return nil
@@ -641,7 +641,7 @@ func (n *Nanny) PutFiles(files map[string]string, mode int64) error {
 			log.Printf("writing tar header: %v", err)
 			return err
 		}
-		if _, err := writer.Write([]byte(contents)); err != nil {
+		if _, err := writer.Write(contents); err != nil {
 			log.Printf("writing to tar file: %v", err)
 			return err
 		}
@@ -667,7 +667,7 @@ func (n *Nanny) PutFiles(files map[string]string, mode int64) error {
 
 // GetFiles copies a set of files from the given container.
 // The container must be running.
-func (n *Nanny) GetFiles(filenames []string) (map[string]string, error) {
+func (n *Nanny) GetFiles(filenames []string) (map[string][]byte, error) {
 	if n.Closed {
 		return nil, nil
 	}
@@ -712,7 +712,7 @@ func (n *Nanny) GetFiles(filenames []string) (map[string]string, error) {
 	}
 
 	// untar the files
-	files := make(map[string]string)
+	files := make(map[string][]byte)
 	reader := tar.NewReader(tarFile)
 	for {
 		header, err := reader.Next()
@@ -727,7 +727,7 @@ func (n *Nanny) GetFiles(filenames []string) (map[string]string, error) {
 			continue
 		}
 		if header.Size == 0 {
-			files[header.Name] = ""
+			files[header.Name] = []byte{}
 			continue
 		}
 		contents := make([]byte, int(header.Size))
@@ -735,7 +735,7 @@ func (n *Nanny) GetFiles(filenames []string) (map[string]string, error) {
 			log.Printf("GetFiles: reading tar file contents: %v", err)
 			return nil, err
 		}
-		files[header.Name] = string(contents)
+		files[header.Name] = contents
 	}
 
 	return files, nil
@@ -765,7 +765,7 @@ func (out *execStdout) Write(data []byte) (n int, err error) {
 	out.events <- &EventMessage{
 		Time:       time.Now(),
 		Event:      "stdout",
-		StreamData: string(data),
+		StreamData: data,
 	}
 
 	return n, err
@@ -788,7 +788,7 @@ func (out *execStderr) Write(data []byte) (n int, err error) {
 	out.events <- &EventMessage{
 		Time:       time.Now(),
 		Event:      "stderr",
-		StreamData: string(data),
+		StreamData: data,
 	}
 
 	return n, err

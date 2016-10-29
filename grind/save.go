@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -76,7 +77,7 @@ func gatherStudent(now time.Time, startDir string) (*ProblemType, *Problem, *Ass
 
 	// check that the on-disk file matches the expected contents
 	// and update as needed
-	checkAndUpdate := func(name, contents string) {
+	checkAndUpdate := func(name string, contents []byte) {
 		path := filepath.Join(problemDir, name)
 		ondisk, err := ioutil.ReadFile(path)
 		if err != nil && os.IsNotExist(err) {
@@ -85,16 +86,16 @@ func gatherStudent(now time.Time, startDir string) (*ProblemType, *Problem, *Ass
 			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 				log.Fatalf("error creating directory %s: %v", filepath.Dir(path), err)
 			}
-			if err := ioutil.WriteFile(path, []byte(contents), 0644); err != nil {
+			if err := ioutil.WriteFile(path, contents, 0644); err != nil {
 				log.Fatalf("error saving %s: %v", name, err)
 			}
 		} else if err != nil {
 			log.Fatalf("error reading %s: %v", name, err)
-		} else if string(ondisk) != contents {
+		} else if !bytes.Equal(ondisk, contents) {
 			log.Printf("warning: file %s", name)
 			log.Printf("   does not match the latest version")
 			log.Printf("   replacing your file with the current version")
-			if err := ioutil.WriteFile(path, []byte(contents), 0644); err != nil {
+			if err := ioutil.WriteFile(path, contents, 0644); err != nil {
 				log.Fatalf("error saving %s: %v", name, err)
 			}
 		}
@@ -127,13 +128,13 @@ func gatherStudent(now time.Time, startDir string) (*ProblemType, *Problem, *Ass
 		}
 		checkAndUpdate(name, contents)
 	}
-	checkAndUpdate(filepath.Join("doc", "index.html"), step.Instructions)
+	checkAndUpdate(filepath.Join("doc", "index.html"), []byte(step.Instructions))
 	if dotfileChanged {
 		saveDotFile(dotfile)
 	}
 
 	// gather the commit files from the file system
-	files := make(map[string]string)
+	files := make(map[string][]byte)
 	blacklist := []string{"~", ".swp", ".o", ".pyc", ".out", ".DS_Store"}
 	err := filepath.Walk(problemDir, func(path string, stat os.FileInfo, err error) error {
 		// skip errors, directories, non-regular files
@@ -174,7 +175,7 @@ func gatherStudent(now time.Time, startDir string) (*ProblemType, *Problem, *Ass
 			if err != nil {
 				return err
 			}
-			files[name] = string(contents)
+			files[name] = contents
 		} else {
 			//log.Printf("skipping %q which is not distributed with the problem", name)
 		}
