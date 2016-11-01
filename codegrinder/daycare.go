@@ -328,10 +328,31 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	// relay container events to the socket
 	eventListenerClosed := make(chan struct{})
 	go func() {
+		count, overflow, discarded := 0, 0, 0
 		for event := range n.Events {
-			// record the event
-			commit.Transcript = append(commit.Transcript, event)
+			if count > TranscriptDataLimit {
+				overflow += len(event.StreamData)
+			} else {
+				count += len(event.StreamData)
 
+				// record the event
+				if len(commit.Transcript) > 0 && commit.Transcript[len(commit.Transcript)-1].Event == event.Event &&
+					(event.Event == "stdin" || event.Event == "stdout" || event.Event == "stderr") {
+					// merge this with the previous event
+					prev := commit.Transcript[len(commit.Transcript)-1]
+
+					// the previous event has already been JSON encoded for transmission,
+					// so it is okay to change its StreamData data in place
+					prev.StreamData = append(prev.StreamData, event.StreamData...)
+					prev.Time = event.Time
+				} else if len(commit.Transcript) < TranscriptEventCountLimit {
+					commit.Transcript = append(commit.Transcript, event)
+				} else {
+					discarded++
+				}
+			}
+
+			// transmit the message to the client
 			switch event.Event {
 			case "exec", "exit", "stdin", "stdout", "stderr", "stdinclosed", "error", "files":
 				if event.Event == "exec" || event.Event == "files" {
@@ -353,6 +374,12 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 			}
 		}
 		rw.Close()
+
+		// report any truncation
+		if overflow > 0 || discarded > 0 {
+			log.Printf("transcript truncated by %d events and %d bytes of stream data", discarded, overflow)
+		}
+
 		eventListenerClosed <- struct{}{}
 	}()
 
@@ -394,10 +421,8 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	close(n.Events)
 	<-eventListenerClosed
 
+	// send the final commit back to the client
 	if commit.Action == "grade" {
-		// send the final commit back to the client
-		commit.Compress()
-
 		// compute the score for this step on a scale of 0.0 to 1.0
 		if commit.ReportCard.Passed {
 			// award full credit for this step

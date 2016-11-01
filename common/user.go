@@ -159,7 +159,6 @@ func (commit *Commit) Normalize(now time.Time, whitelist map[string]bool) error 
 	if len(commit.Files) == 0 {
 		return fmt.Errorf("commit must have at least one file")
 	}
-	commit.Compress()
 	if commit.Score < 0.0 || commit.Score > 1.0 {
 		return fmt.Errorf("commit score must be between 0 and 1")
 	}
@@ -195,45 +194,6 @@ func (commit *Commit) FilterIncoming(whitelist map[string]bool) {
 		}
 	}
 	commit.Files = clean
-}
-
-// compress merges adjacent Transcript events of the same type.
-// it also truncates the total stdin, stdout, stderr data to a fixed limit
-// and sets a maximum number of events
-func (commit *Commit) Compress() {
-	count := 0
-	overflow := 0
-	out := []*EventMessage{}
-	for _, elt := range commit.Transcript {
-		if len(out) > 0 {
-			prev := out[len(out)-1]
-			if elt.Event == "stdin" || elt.Event == "stdout" || elt.Event == "stderr" {
-				if count >= TranscriptDataLimit {
-					overflow += len(elt.StreamData)
-					continue
-				}
-				count += len(elt.StreamData)
-				if prev.Event == elt.Event {
-					prev.StreamData = append(prev.StreamData, elt.StreamData...)
-					prev.Time = elt.Time
-					continue
-				}
-			}
-		}
-		out = append(out, elt)
-	}
-
-	if overflow > 0 {
-		log.Printf("transcript compressed from %d to %d events, %d bytes discarded", len(commit.Transcript), len(out), overflow)
-	} else if len(commit.Transcript) != len(out) {
-		log.Printf("transcript compressed from %d to %d events", len(commit.Transcript), len(out))
-	}
-	if len(out) > TranscriptEventCountLimit {
-		log.Printf("transcript truncated from %d to %d events", len(out), TranscriptEventCountLimit)
-		out = out[:TranscriptEventCountLimit]
-	}
-
-	commit.Transcript = out
 }
 
 func (commit *Commit) DumpTranscript(w io.Writer) error {
