@@ -762,10 +762,12 @@ func (out *execStdout) Write(data []byte) (n int, err error) {
 		return n, err
 	}
 
+	clone := make([]byte, len(data))
+	copy(clone, data)
 	out.events <- &EventMessage{
 		Time:       time.Now(),
 		Event:      "stdout",
-		StreamData: data,
+		StreamData: clone,
 	}
 
 	return n, err
@@ -785,10 +787,12 @@ func (out *execStderr) Write(data []byte) (n int, err error) {
 		return n, err
 	}
 
+	clone := make([]byte, len(data))
+	copy(clone, data)
 	out.events <- &EventMessage{
 		Time:       time.Now(),
 		Event:      "stderr",
-		StreamData: data,
+		StreamData: clone,
 	}
 
 	return n, err
