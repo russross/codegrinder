@@ -304,7 +304,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 				break
 			}
 			if len(msg.Stdin) > 0 {
-				if _, err := rw.Write([]byte(msg.Stdin)); err != nil {
+				if _, err := rw.Write(msg.Stdin); err != nil {
 					break
 				}
 				alive <- true
@@ -341,9 +341,10 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 					// merge this with the previous event
 					prev := commit.Transcript[len(commit.Transcript)-1]
 
-					// the previous event has already been JSON encoded for transmission,
-					// so it is okay to change its StreamData data in place
-					prev.StreamData = append(prev.StreamData, event.StreamData...)
+					data := make([]byte, 0, len(prev.StreamData)+len(event.StreamData))
+					data = append(data, prev.StreamData...)
+					data = append(data, event.StreamData...)
+					prev.StreamData = data
 					prev.Time = event.Time
 				} else if len(commit.Transcript) < TranscriptEventCountLimit {
 					commit.Transcript = append(commit.Transcript, event)
@@ -462,6 +463,7 @@ type Nanny struct {
 	Events     chan *EventMessage
 	Transcript []*EventMessage
 	Closed     bool
+	Files      map[string][]byte
 }
 
 type nannyHandler func(nanny *Nanny, args, options []string, files map[string][]byte, stdin io.Reader)
@@ -591,6 +593,8 @@ func NewNanny(problemType *ProblemType, problem *Problem, interactive bool, args
 		Input:      make(chan string),
 		Events:     make(chan *EventMessage),
 		Transcript: []*EventMessage{},
+		Closed:     false,
+		Files:      nil,
 	}, nil
 }
 
@@ -691,76 +695,78 @@ func (n *Nanny) PutFiles(files map[string][]byte, mode int64) error {
 }
 
 // GetFiles copies a set of files from the given container.
-// The container must be running.
+// All student files are copied from the container on the first call to GetFiles.
+// Subsequent calls will just gather files from the collection.
+// The container must be running or the files must have already been fetched
+// by a previous call to GetFiles.
 func (n *Nanny) GetFiles(filenames []string) (map[string][]byte, error) {
-	if n.Closed {
-		return nil, nil
-	}
-
 	// nothing to do?
 	if len(filenames) == 0 {
 		return nil, nil
 	}
 
-	// exec tar in the container
-	exec, err := dockerClient.CreateExec(docker.CreateExecOptions{
-		AttachStdin:  false,
-		AttachStdout: true,
-		AttachStderr: true,
-		Tty:          false,
-		Cmd:          append([]string{"/bin/tar", "cf", "-"}, filenames...),
-		Container:    n.Container.ID,
-		User:         uidgid(n.UID),
-	})
-	if err != nil {
-		log.Printf("GetFiles: creating exec command: %v", err)
-		return nil, err
-	}
-	tarFile := new(bytes.Buffer)
-	tarErr := new(bytes.Buffer)
-	err = dockerClient.StartExec(exec.ID, docker.StartExecOptions{
-		Detach:       false,
-		Tty:          false,
-		InputStream:  nil,
-		OutputStream: tarFile,
-		ErrorStream:  tarErr,
-		RawTerminal:  false,
-	})
-	if err != nil {
-		log.Printf("GetFiles: starting exec command: %v", err)
-		return nil, err
-	}
-
-	if tarErr.Len() != 0 {
-		log.Printf("GetFiles: tar error output: %q", tarErr.String())
-		return nil, fmt.Errorf("GetFiles: tar gave non-empty error output")
-	}
-
-	// untar the files
-	files := make(map[string][]byte)
-	reader := tar.NewReader(tarFile)
-	for {
-		header, err := reader.Next()
-		if err == io.EOF {
-			break
+	// do we need to fetch the files?
+	if n.Files == nil {
+		// cannot fetch files if the container is closed
+		if n.Closed {
+			return nil, nil
 		}
+
+		n.Files = make(map[string][]byte)
+
+		// download the entire student directory
+		buf := new(bytes.Buffer)
+		err := dockerClient.DownloadFromContainer(n.Container.ID, docker.DownloadFromContainerOptions{
+			OutputStream: buf,
+			Path:         "/home/student/.",
+		})
 		if err != nil {
-			log.Printf("GetFiles: reading tar file header: %v", err)
+			log.Printf("failed to download tar file from container: %v", err)
 			return nil, err
 		}
-		if header.Typeflag != tar.TypeReg {
-			continue
+
+		// extract the files
+		reader := tar.NewReader(bytes.NewReader(buf.Bytes()))
+		for {
+			header, err := reader.Next()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				log.Printf("error decoding tar file: %v", err)
+				return nil, err
+			}
+			if header.Typeflag != tar.TypeReg {
+				continue
+			}
+			contents := make([]byte, header.Size)
+			if _, err = io.ReadFull(reader, contents); err != nil {
+				log.Printf("error reading %q from tar file: %v", header.Name, err)
+				return nil, err
+			}
+
+			name := filepath.Clean(header.Name)
+			n.Files[name] = contents
 		}
-		if header.Size == 0 {
-			files[header.Name] = []byte{}
-			continue
+	}
+
+	// pick out the requested files
+	files := make(map[string][]byte)
+	badpattern := ""
+	for name, contents := range n.Files {
+		for _, pattern := range filenames {
+			matched, err := filepath.Match(pattern, name)
+			if err != nil {
+				badpattern = pattern
+			} else if matched {
+				files[name] = contents
+				log.Printf("getfiles: getting %s", name)
+				break
+			}
 		}
-		contents := make([]byte, int(header.Size))
-		if _, err = reader.Read(contents); err != nil {
-			log.Printf("GetFiles: reading tar file contents: %v", err)
-			return nil, err
-		}
-		files[header.Name] = contents
+	}
+	if badpattern != "" {
+		log.Printf("GetFiles: bad pattern found: %q", badpattern)
 	}
 
 	return files, nil

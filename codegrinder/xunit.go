@@ -77,7 +77,7 @@ func runAndParseXUnit(n *Nanny, cmd []string, stdin io.Reader, filename string) 
 	// parse the test results
 	xmlfiles, err := n.GetFiles([]string{filename})
 	if err != nil {
-		n.ReportCard.LogAndFailf("Unit test failed: unable to read results")
+		n.ReportCard.LogAndFailf("Error getting unit test results")
 		return
 	}
 
@@ -88,6 +88,11 @@ var testFailureContextGTest = regexp.MustCompile(`^(tests/[^:/]*:\d+)`)
 var testFailureContextPython = regexp.MustCompile(`File "[^"]*/([^/]+)", line (\d+)`)
 
 func parseXUnit(n *Nanny, contents []byte) {
+	if len(contents) == 0 {
+		n.ReportCard.LogAndFailf("No unit test results found")
+		return
+	}
+
 	results := new(XUnitProgram)
 	if err := xml.Unmarshal(contents, results); err != nil {
 		n.ReportCard.LogAndFailf("error parsing unit test results: %v", err)

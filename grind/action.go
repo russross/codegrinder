@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -87,7 +88,11 @@ func runInteractiveSession(bundle *CommitBundle, args []string, dir string) {
 		log.Printf("initializing terminal: %v", err)
 		return
 	} else {
-		defer terminal.Restore(stdin, oldState)
+		rawMode = true
+		defer func() {
+			terminal.Restore(stdin, oldState)
+			rawMode = false
+		}()
 	}
 
 	headers := make(http.Header)
@@ -159,7 +164,9 @@ func runInteractiveSession(bundle *CommitBundle, args []string, dir string) {
 			}
 
 			if count > 0 {
-				stdinReq := &DaycareRequest{Stdin: buffer[:count]}
+				data := make([]byte, count)
+				copy(data, buffer[:count])
+				stdinReq := &DaycareRequest{Stdin: data}
 				dumpOutgoing(stdinReq)
 				if err := socket.WriteJSON(stdinReq); err != nil {
 					log.Printf("error writing stdin request message: %v", err)
@@ -220,11 +227,16 @@ func runInteractiveSession(bundle *CommitBundle, args []string, dir string) {
 	}
 }
 
+var rawMode = false
+
 func dumpOutgoing(msg interface{}) {
 	if Config.apiDump {
 		raw, err := json.MarshalIndent(msg, "", "    ")
 		if err != nil {
 			log.Fatalf("json error encoding request: %v", err)
+		}
+		if rawMode {
+			raw = bytes.Replace(raw, []byte("\n"), []byte("\r\n"), -1)
 		}
 		log.Printf("--> %s\n", raw)
 	}
@@ -235,6 +247,9 @@ func dumpIncoming(msg interface{}) {
 		raw, err := json.MarshalIndent(msg, "", "    ")
 		if err != nil {
 			log.Fatalf("json error encoding request: %v", err)
+		}
+		if rawMode {
+			raw = bytes.Replace(raw, []byte("\n"), []byte("\r\n"), -1)
 		}
 		log.Printf("<-- %s\n", raw)
 	}

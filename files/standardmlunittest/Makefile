@@ -6,13 +6,16 @@ SMLSOURCE=$(wildcard *.sml)
 all:	test
 
 test:
-	poly < tests/tests.sml
+	poly -H 16 < tests/tests.sml
 
 grade:
-	poly < tests/tests.sml
+	poly -H 16 < tests/tests.sml
 
 run:	
-	( cat $(SMLSOURCE) ; echo ';' ; cat ) | ledit poly
+	( cat $(SMLSOURCE) ; echo ';' ; cat ) | ledit poly -H 16
+
+shell:
+	ledit poly -H 16
 
 setup:
 	sudo apt-get install -y polyml ledit make
