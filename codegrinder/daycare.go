@@ -408,7 +408,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		files, err := n.GetFiles(strings.Split(parts[1], ","))
 		if err != nil {
 			log.Printf("error trying to download files from container: %v", err)
-		} else if files != nil && len(files) > 0 {
+		} else if len(files) > 0 {
 			n.Events <- &EventMessage{Event: "files", Files: files}
 		}
 	}

@@ -70,6 +70,8 @@ var Config struct {
 
 var problemTypeHandlers = make(map[string]map[string]nannyHandler)
 
+const daycareRegistrationInterval = 10 * time.Second
+
 func main() {
 	// parse command line
 	var configFile string
@@ -455,7 +457,7 @@ func main() {
 						status = "failed"
 					}
 				}
-				time.Sleep(time.Minute)
+				time.Sleep(daycareRegistrationInterval)
 			}
 		}()
 	}
@@ -755,7 +757,7 @@ func (m *daycares) Expire() {
 	defer m.Unlock()
 
 	for host, elt := range m.daycares {
-		if time.Since(elt.Time) > 2*time.Minute {
+		if time.Since(elt.Time) > 2*daycareRegistrationInterval {
 			log.Printf("daycare registration for %s has expired", host)
 			delete(m.daycares, host)
 		}

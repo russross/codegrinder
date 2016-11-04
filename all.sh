@@ -18,7 +18,7 @@ sudo mv $GOPATH/bin/grind /usr/local/bin/
 
 echo building grind for linux
 (GOOS=linux GOARCH=amd64 go build -ldflags=-s -o $GOPATH/src/github.com/russross/codegrinder/www/grind.linux github.com/russross/codegrinder/grind && \
-upx -qq $GOPATH/src/github.com/russross/codegrinder/www/grind.linux) &
+echo upx -qq $GOPATH/src/github.com/russross/codegrinder/www/grind.linux) &
 
 echo building grind for arm
 (GOOS=linux GOARCH=arm go build -ldflags=-s -o $GOPATH/src/github.com/russross/codegrinder/www/grind.arm github.com/russross/codegrinder/grind && \
