@@ -34,7 +34,7 @@ import (
 	"github.com/russross/meddler"
 	"github.com/russross/sessions"
 	"github.com/sergi/go-diff/diffmatchpatch"
-	"rsc.io/letsencrypt"
+	"golang.org/x/crypto/acme/autocert"
 )
 
 // Config holds site-specific configuration data.
@@ -60,7 +60,7 @@ var Config struct {
 	ToolName         string `json:"toolName"`         // LTI human readable name: default "CodeGrinder"
 	ToolID           string `json:"toolID"`           // LTI unique ID: default "codegrinder"
 	ToolDescription  string `json:"toolDescription"`  // LTI description: default "Programming exercises with grading"
-	LetsEncryptCache string `json:"letsEncryptCache"` // Full path of LetsEncrypt cache file: default "/etc/codegrinder/letsencrypt.cache"
+	LetsEncryptCache string `json:"letsEncryptDir"`   // Full path of LetsEncrypt cache file: default "/etc/codegrinder/letsencrypt"
 	PostgresHost     string `json:"postgresHost"`     // Host parameter for Postgres: default "/var/run/postgresql"
 	PostgresPort     string `json:"postgresPort"`     // Port parameter for Postgres: default "5432"
 	PostgresUsername string `json:"postgresUsername"` // Username parameter for Postgres: default $USER
@@ -89,7 +89,7 @@ func main() {
 	Config.ToolName = "CodeGrinder"
 	Config.ToolID = "codegrinder"
 	Config.ToolDescription = "Programming exercises with grading"
-	Config.LetsEncryptCache = "/etc/codegrinder/letsencrypt.cache"
+	Config.LetsEncryptCache = "/etc/codegrinder/letsencrypt"
 	Config.PostgresHost = "/var/run/postgresql"
 	Config.PostgresPort = ""
 	Config.PostgresUsername = os.Getenv("USER")
@@ -487,16 +487,11 @@ func main() {
 	}))
 
 	// set up letsencrypt
-	lem := letsencrypt.Manager{}
-	if err := lem.CacheFile(Config.LetsEncryptCache); err != nil {
-		log.Fatalf("Setting up LetsEncrypt: %v", err)
-	}
-	lem.SetHosts([]string{Config.Hostname})
-	if !lem.Registered() {
-		log.Printf("registering with LetsEncrypt")
-		if err := lem.Register(Config.LetsEncryptEmail, nil); err != nil {
-			log.Fatalf("Registering with LetsEncrypt: %v", err)
-		}
+	lem := autocert.Manager{
+		Prompt:     autocert.AcceptTOS,
+		Cache:      autocert.DirCache(Config.LetsEncryptCache),
+		HostPolicy: autocert.HostWhitelist(Config.Hostname),
+		Email:      Config.LetsEncryptEmail,
 	}
 
 	// start the https server
