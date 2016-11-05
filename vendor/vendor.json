@@ -315,12 +315,6 @@
 			"revisionTime": "2016-06-10T19:09:02Z"
 		},
 		{
-			"checksumSHA1": "dVm+Yy7mBS4i+lmRnzOAvE2w7sM=",
-			"path": "github.com/xenolf/lego/acme",
-			"revision": "ca19a90028e242e878585941c2a27c8f3b3efc25",
-			"revisionTime": "2016-03-28T16:28:34Z"
-		},
-		{
 			"checksumSHA1": "TK1Yr8BbwionaaAvM+77lwAAx/8=",
 			"path": "golang.org/x/crypto/acme",
 			"revision": "9477e0b78b9ac3d0b03822fd95422e2fe07627cd",
@@ -331,12 +325,6 @@
 			"path": "golang.org/x/crypto/acme/autocert",
 			"revision": "9477e0b78b9ac3d0b03822fd95422e2fe07627cd",
 			"revisionTime": "2016-10-31T15:37:30Z"
-		},
-		{
-			"checksumSHA1": "lHxT2HoDb53IQpOr4q7em28PKGY=",
-			"path": "golang.org/x/crypto/ocsp",
-			"revision": "811831de4c4dd03a0b8737233af3b36852386373",
-			"revisionTime": "2016-06-21T01:10:02Z"
 		},
 		{
 			"checksumSHA1": "9jjO5GjLa0XF/nfWihF02RoH4qc=",
@@ -363,16 +351,16 @@
 			"revisionTime": "2016-06-09T04:57:12Z"
 		},
 		{
-			"checksumSHA1": "fpW2dhGFC6SrVzipJx7fjg2DIH8=",
-			"path": "golang.org/x/sys/windows",
+			"checksumSHA1": "aVgPDgwY3/t4J/JOw9H3FVMHqh0=",
+			"path": "golang.org/x/sys/unix",
 			"revision": "c200b10b5d5e122be351b67af224adc6128af5bf",
 			"revisionTime": "2016-10-22T18:22:21Z"
 		},
 		{
-			"checksumSHA1": "h/06ikMECfJoTkWj2e1nJ30aDDg=",
-			"path": "golang.org/x/time/rate",
-			"revision": "a4bde12657593d5e90d0533a3e4fd95e635124cb",
-			"revisionTime": "2016-02-02T18:34:45Z"
+			"checksumSHA1": "fpW2dhGFC6SrVzipJx7fjg2DIH8=",
+			"path": "golang.org/x/sys/windows",
+			"revision": "c200b10b5d5e122be351b67af224adc6128af5bf",
+			"revisionTime": "2016-10-22T18:22:21Z"
 		},
 		{
 			"checksumSHA1": "7E+wlsgFE3g4oZj0e3y7YPCjfbs=",
@@ -403,13 +391,6 @@
 			"path": "gopkg.in/warnings.v0",
 			"revision": "8a331561fe74dadba6edfc59f3be66c22c3b065d",
 			"revisionTime": "2016-08-15T18:11:09Z"
-		},
-		{
-			"checksumSHA1": "N2YA19SyM9agqcevqS/LZxUyYzI=",
-			"path": "rsc.io/letsencrypt",
-			"revision": "a019c9e6fce0c7132679dea13bd8df7c86ffe26c",
-			"revisionTime": "2016-04-20T18:42:23Z",
-			"tree": true
 		}
 	],
 	"rootPath": "github.com/russross/codegrinder"
