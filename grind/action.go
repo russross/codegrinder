@@ -7,19 +7,17 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
-	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
-	"strings"
 	"time"
-
-	"golang.org/x/crypto/ssh/terminal"
 
 	"github.com/gorilla/websocket"
 	. "github.com/russross/codegrinder/common"
+	"github.com/russross/codegrinder/term"
+	"github.com/russross/codegrinder/tty"
 	"github.com/spf13/cobra"
 )
 
@@ -78,41 +76,44 @@ func CommandAction(cmd *cobra.Command, args []string) {
 }
 
 func runInteractiveSession(bundle *CommitBundle, args []string, dir string) {
-	stdin := int(os.Stdin.Fd())
-	if !terminal.IsTerminal(stdin) {
-		log.Printf("not a terminal")
-	}
+	stdin, stdout, stderr := term.StdStreams()
 
-	// initialize the terminal
-	if oldState, err := terminal.MakeRaw(stdin); err != nil {
-		log.Printf("initializing terminal: %v", err)
+	// initialize the input terminal
+	in := tty.NewInStream(stdin)
+	if !in.IsTerminal() {
+		log.Printf("stdin not a terminal")
+	}
+	if err := in.SetRawTerminal(); err != nil {
+		log.Printf("initializing stdin: %v", err)
 		return
-	} else {
-		rawMode = true
-		defer func() {
-			terminal.Restore(stdin, oldState)
-			rawMode = false
-		}()
 	}
+	defer in.RestoreTerminal()
 
-	headers := make(http.Header)
+	// initialize the output terminal
+	out := tty.NewOutStream(stdout)
+	if !out.IsTerminal() {
+		log.Printf("stdout not a terminal")
+	}
+	if err := out.SetRawTerminal(); err != nil {
+		log.Printf("initializing stdout: %v", err)
+		return
+	}
+	rawMode = true
+	defer func() { rawMode = false }()
+	defer out.RestoreTerminal()
+
 	vals := url.Values{}
 
 	// get the terminal size
-	sizex, sizey, err := terminal.GetSize(stdin)
-	if err != nil && runtime.GOOS == "windows" {
-		sizex, sizey, err = getWindowsTerminalSize()
-	}
-	if err != nil {
-		log.Printf("error getting terminal size: %v", err)
-	} else if sizex > 0 && sizey > 0 {
-		vals.Set("COLUMNS", strconv.Itoa(sizex))
-		vals.Set("LINES", strconv.Itoa(sizey))
+	sizey, sizex := out.GetTtySize()
+	if sizex > 0 && sizey > 0 {
+		vals.Set("COLUMNS", strconv.Itoa(int(sizex)))
+		vals.Set("LINES", strconv.Itoa(int(sizey)))
 	}
 	if term := os.Getenv("TERM"); term != "" {
 		vals.Set("TERM", term)
 	} else if runtime.GOOS == "windows" {
-		vals.Set("TERM", "cygwin")
+		vals.Set("TERM", "ansi")
 	}
 
 	endpoint := &url.URL{
@@ -122,7 +123,7 @@ func runInteractiveSession(bundle *CommitBundle, args []string, dir string) {
 		RawQuery: vals.Encode(),
 	}
 
-	socket, resp, err := websocket.DefaultDialer.Dial(endpoint.String(), headers)
+	socket, resp, err := websocket.DefaultDialer.Dial(endpoint.String(), nil)
 	if err != nil {
 		log.Printf("error dialing: %v", err)
 		if resp != nil && resp.Body != nil {
@@ -145,7 +146,7 @@ func runInteractiveSession(bundle *CommitBundle, args []string, dir string) {
 	go func() {
 		for {
 			buffer := make([]byte, 256)
-			count, err := os.Stdin.Read(buffer)
+			count, err := in.Read(buffer)
 			if count == 0 && err == io.EOF {
 				closeReq := &DaycareRequest{CloseStdin: true}
 				dumpOutgoing(closeReq)
@@ -177,13 +178,6 @@ func runInteractiveSession(bundle *CommitBundle, args []string, dir string) {
 	}()
 
 	// start listening for events
-	cr := func(s string) string {
-		pieces := strings.Split(s, "\r\n")
-		for i := range pieces {
-			pieces[i] = strings.Replace(pieces[i], "\n", "\r\n", -1)
-		}
-		return strings.Join(pieces, "\r\n")
-	}
 	for {
 		reply := new(DaycareResponse)
 		if err := socket.ReadJSON(reply); err != nil {
@@ -206,15 +200,15 @@ func runInteractiveSession(bundle *CommitBundle, args []string, dir string) {
 		case reply.Event != nil:
 			switch reply.Event.Event {
 			case "exec", "stdin", "stdout", "exit", "error":
-				fmt.Printf("%s", cr(reply.Event.Dump()))
+				fmt.Fprintf(out, "%s", reply.Event.Dump())
 			case "stderr":
-				fmt.Fprintf(os.Stderr, "%s", cr(reply.Event.Dump()))
+				fmt.Fprintf(stderr, "%s", reply.Event.Dump())
 			case "files":
 				if reply.Event.Files != nil {
 					for name, contents := range reply.Event.Files {
 						log.Printf("downloading file %s\r", name)
 						if err := ioutil.WriteFile(filepath.Join(dir, filepath.FromSlash(name)), contents, 0644); err != nil {
-							log.Fatalf("error saving file: %v\r", err)
+							log.Printf("error saving file: %v\r", err)
 						}
 					}
 				}
