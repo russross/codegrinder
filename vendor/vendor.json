@@ -279,30 +279,6 @@
 			"revisionTime": "2016-05-31T11:12:24Z"
 		},
 		{
-			"checksumSHA1": "MBX1+pSq2W7FLvTf8elLdv1O4XI=",
-			"path": "github.com/russross/gcfg",
-			"revision": "a61e4006af9f737e57ddeb5cb335d10b7e3cf208",
-			"revisionTime": "2015-06-19T22:38:34Z"
-		},
-		{
-			"checksumSHA1": "6BcohZXld8o0cmWk7rsEwRU5MDU=",
-			"path": "github.com/russross/gcfg/scanner",
-			"revision": "a61e4006af9f737e57ddeb5cb335d10b7e3cf208",
-			"revisionTime": "2015-06-19T22:38:34Z"
-		},
-		{
-			"checksumSHA1": "pYKqyNHG76RaZwf7icNTPZ6lu18=",
-			"path": "github.com/russross/gcfg/token",
-			"revision": "a61e4006af9f737e57ddeb5cb335d10b7e3cf208",
-			"revisionTime": "2015-06-19T22:38:34Z"
-		},
-		{
-			"checksumSHA1": "V65+K2VoU/P2Pi25JWoFUPpECDo=",
-			"path": "github.com/russross/gcfg/types",
-			"revision": "a61e4006af9f737e57ddeb5cb335d10b7e3cf208",
-			"revisionTime": "2015-06-19T22:38:34Z"
-		},
-		{
 			"checksumSHA1": "8T6S2BULujaIanLkxD1iw5rklBY=",
 			"path": "github.com/russross/meddler",
 			"revision": "f742b0f9424f3bfaffe189e921d734608929e84f",
@@ -385,6 +361,36 @@
 			"path": "golang.org/x/time/rate",
 			"revision": "a4bde12657593d5e90d0533a3e4fd95e635124cb",
 			"revisionTime": "2016-02-02T18:34:45Z"
+		},
+		{
+			"checksumSHA1": "7E+wlsgFE3g4oZj0e3y7YPCjfbs=",
+			"path": "gopkg.in/gcfg.v1",
+			"revision": "27e4946190b4a327b539185f2b5b1f7c84730728",
+			"revisionTime": "2016-08-14T19:51:52Z"
+		},
+		{
+			"checksumSHA1": "LExJ7qoRMacllJ0cGb0mYpK1b/s=",
+			"path": "gopkg.in/gcfg.v1/scanner",
+			"revision": "27e4946190b4a327b539185f2b5b1f7c84730728",
+			"revisionTime": "2016-08-14T19:51:52Z"
+		},
+		{
+			"checksumSHA1": "9agO8MliOVQGjMcOIV7g7LPHeFY=",
+			"path": "gopkg.in/gcfg.v1/token",
+			"revision": "27e4946190b4a327b539185f2b5b1f7c84730728",
+			"revisionTime": "2016-08-14T19:51:52Z"
+		},
+		{
+			"checksumSHA1": "A2FpDz2muvMPC91Ec63wmUPfxFE=",
+			"path": "gopkg.in/gcfg.v1/types",
+			"revision": "27e4946190b4a327b539185f2b5b1f7c84730728",
+			"revisionTime": "2016-08-14T19:51:52Z"
+		},
+		{
+			"checksumSHA1": "ALQFMX3kmJkyB/8VEzVnGZG1H4A=",
+			"path": "gopkg.in/warnings.v0",
+			"revision": "8a331561fe74dadba6edfc59f3be66c22c3b065d",
+			"revisionTime": "2016-08-15T18:11:09Z"
 		},
 		{
 			"checksumSHA1": "N2YA19SyM9agqcevqS/LZxUyYzI=",

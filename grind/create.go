@@ -15,8 +15,8 @@ import (
 
 	"github.com/gorilla/websocket"
 	. "github.com/russross/codegrinder/common"
-	"github.com/russross/gcfg"
 	"github.com/spf13/cobra"
+	"gopkg.in/gcfg.v1"
 )
 
 const ProblemConfigName string = "problem.cfg"
