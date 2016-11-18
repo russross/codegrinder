@@ -147,18 +147,18 @@ func GetConfigXML(w http.ResponseWriter) {
 				LTIConfigExtension{Name: "privacy_level", Value: "public"},
 				LTIConfigExtension{Name: "domain", Value: Config.Hostname},
 			},
-			Options: []LTIConfigOptions{
-				LTIConfigOptions{
-					Name: "resource_selection",
-					Options: []LTIConfigExtension{
-						LTIConfigExtension{Name: "url", Value: "https://" + Config.Hostname + "/v2/lti/problem_sets"},
-						LTIConfigExtension{Name: "text", Value: Config.ToolName},
-						LTIConfigExtension{Name: "selection_width", Value: "320"},
-						LTIConfigExtension{Name: "selection_height", Value: "640"},
-						LTIConfigExtension{Name: "enabled", Value: "true"},
-					},
-				},
-			},
+			// Options: []LTIConfigOptions{
+			// 	LTIConfigOptions{
+			// 		Name: "resource_selection",
+			// 		Options: []LTIConfigExtension{
+			// 			LTIConfigExtension{Name: "url", Value: "https://" + Config.Hostname + "/v2/lti/problem_sets"},
+			// 			LTIConfigExtension{Name: "text", Value: Config.ToolName},
+			// 			LTIConfigExtension{Name: "selection_width", Value: "320"},
+			// 			LTIConfigExtension{Name: "selection_height", Value: "640"},
+			// 			LTIConfigExtension{Name: "enabled", Value: "true"},
+			// 		},
+			// 	},
+			// },
 		},
 		CartridgeBundle: LTICartridge{IdentifierRef: "BLTI001_Bundle"},
 		CartridgeIcon:   LTICartridge{IdentifierRef: "BLTI001_Icon"},

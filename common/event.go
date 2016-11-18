@@ -85,19 +85,19 @@ func (e *EventMessage) String() string {
 func (e *EventMessage) Dump() string {
 	switch e.Event {
 	case "exec":
-		return fmt.Sprintf("$ %s\n", strings.Join(e.ExecCommand, " "))
+		return fmt.Sprintf("$ %s\r\n", strings.Join(e.ExecCommand, " "))
 	case "exit":
 		if e.ExitStatus == 0 {
 			return ""
 		}
 		if sig := signals[e.ExitStatus-128]; sig != "" {
-			return fmt.Sprintf("exit status %d (killed by %s)\n", e.ExitStatus, sig)
+			return fmt.Sprintf("exit status %d (killed by %s)\r\n", e.ExitStatus, sig)
 		}
-		return fmt.Sprintf("exit status %d\n", e.ExitStatus)
+		return fmt.Sprintf("exit status %d\r\n", e.ExitStatus)
 	case "stdin", "stdout", "stderr":
 		return string(e.StreamData)
 	case "error":
-		return fmt.Sprintf("Error: %s\n", e.Error)
+		return fmt.Sprintf("Error: %s\r\n", e.Error)
 	default:
 		return ""
 	}
