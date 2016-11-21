@@ -444,6 +444,10 @@ func main() {
 					}
 					status = "failed"
 				} else {
+					body, err := ioutil.ReadAll(res.Body)
+					if err != nil {
+						body = []byte(fmt.Sprintf("error reading response body: %v", err))
+					}
 					res.Body.Close()
 					if res.StatusCode == http.StatusOK {
 						if status != "succeeded" {
@@ -453,6 +457,11 @@ func main() {
 					} else {
 						if status != "failed" {
 							log.Printf("unexpected status from %s: %v", url, res.Status)
+							for _, line := range bytes.Split(body, []byte("\n")) {
+								if len(line) > 0 {
+									log.Printf("--> %s", line)
+								}
+							}
 						}
 						status = "failed"
 					}
