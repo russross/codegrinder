@@ -7,10 +7,12 @@ Project status
 ==============
 
 This is a rewrite of a tool we use internally at Dixie State
-University in our Computer Science program. The version 1 system was
-overly complex and was missing some crucial features. This is
-currently a work in progress, and you should approach it with
-caution.
+University in our Computer Science program. This is a work in
+progress, and you should approach it with caution.
+
+CodeGrinder is released under the terms of the GPL. If you would
+like to use it and these terms are not suitable, please contact the
+author to inquire about alternate licensing.
 
 
 What is here
@@ -20,7 +22,8 @@ This repository currently hosts two tools:
 
 1.  The CodeGrinder server. This is further divided into two parts,
     which can run as part of the same service, or can be hosted on
-    separate servers.
+    separate servers. A CodeGrinder installation needs exactly one
+    TA service and one or more daycare services.
 
     1.  The TA service: this manages bookkeeping and runs on top of
         PostgreSQL. It interfaces with an LMS by acting as an LTI
@@ -49,11 +52,42 @@ server and connect to PostgreSQL using Unix-domain sockets with
 ident authentication. These instructions assume you are doing the
 same. You may need to adjust if you have a different setup.
 
+All instructions here assume a Debian Jessie server environment.
+
+
+### Install Go environment (all nodes)
+
+Start with a Go build environment with Go 1.6 or higher. Make sure
+your GOPATH is set correctly.
+
+Get the URL for the latest version of Go here:
+
+* https://golang.org/dl/
+
+Using that URL (this example assumes version 1.7.3), install Go
+using:
+
+    curl https://storage.googleapis.com/golang/go1.7.3.linux-amd64.tar.gz | sudo tar zxvf - -C /usr/local
+    cd /usr/local/bin
+    sudo ln -s ../go/bin/* ./
+
+If you are upgrading Go, first delete the old version (delete
+`/usr/local/go`) and skip the `sudo ln -s ../go/bin/* ./` part.
+
+Be sure to set your `GOPATH` variable. I add this line to
+`~/.profile`:
+
+    export GOPATH=$HOME
+
+Then log out and log back in so it will take effect.
+
 
 ### Install database (TA node only)
 
 Install PostgreSQL version 9.4 or higher. Note that you only need
-PostgreSQL on the TA node.
+PostgreSQL on the TA node:
+
+* http://wiki.postgresql.org/wiki/Apt
 
 Run the database setup script. Warning: this will delete an existing
 installation, so use this with caution.
@@ -65,13 +99,12 @@ installation, so use this with caution.
 
 Install and configure Docker, and add your CodeGrinder user to the
 `docker` group so it can manage containers without being root. Note
-that you only need this on daycare nodes.
+that you only need this on daycare nodes:
+
+* https://docs.docker.com/engine/installation/linux/debian/
 
 
 ### Install CodeGrinder
-
-Start with a Go build environment with Go 1.6 or higher. Make sure
-your GOPATH is set correctly.
 
 Fetch the CodeGrinder repository:
 
@@ -79,7 +112,7 @@ Fetch the CodeGrinder repository:
     cd $GOPATH/src/github.com/russross
     git clone https://github.com/russross/codegrinder.git
 
-Build and install CodeGrinder:
+Build and install CodeGrinder. For a TA node, use:
 
     $GOPATH/src/github.com/russross/codegrinder/all.sh
 
@@ -87,11 +120,16 @@ This creates two executables for the local machine, `codegrinder`
 (the server) and `grind` (the command-line tool) and installs them
 both in `/usr/local/bin`. It also builds the `grind` tool for
 several architectures and puts them in the `www` directory for users
-to download. Use the `build.sh` script instead to only build the
-server. Both of these scripts also give the `codegrinder` binary the
-capability to bind to low-numbered ports, so CodeGrinder does not
-need any other special privileges to run. It should NOT be run as
-root.
+to download.
+
+For a daycare node that is not also a TA node, use:
+
+    $GOPATH/src/github.com/russross/codegrinder/build.sh
+
+This only builds and installs the server. Both of these scripts
+also give the `codegrinder` binary the capability to bind to
+low-numbered ports, so CodeGrinder does not need any other special
+privileges to run. It should NOT be run as root.
 
 
 ### Configure CodeGrinder
@@ -150,9 +188,23 @@ need them, check out the `Config` type defined in
 `codegrinder/server.go`. The fields of that struct are the fields of
 the config file.
 
-At this point, you should be able to run the server:
+For daycare nodes, you must also build the Docker images that will
+host the student code:
+
+    make -C $GOPATH/src/github.com/russross/codegrinder/containers amd64
+
+Or if you are running on a Raspberry Pi and need the ARM images:
+
+    make -C $GOPATH/src/github.com/russross/codegrinder/containers arm
+
+At this point, you should be able to run the server. To run it with
+only the TA service, use:
 
     codegrinder -ta
+
+If you want a daycare running on the same node, use:
+
+    codegrinder -ta -daycare
 
 Leave it running in a terminal so you can watch the log output.
 
@@ -183,9 +235,21 @@ To review the logs:
     sudo journalctl -xeu codegrinder
 
 
-### Additional help
+License
+=======
 
-Contact me directly for help with installation. At this early stage,
-I will probably only respond if I know you personally, but as I get
-closer to completing the core functionality, I will update these
-instructions and start paying attention to feedback.
+CodeGrinder programming exercise system
+Copyright © 2016  Russ Ross
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <http://www.gnu.org/licenses/>.
