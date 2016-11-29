@@ -13,9 +13,11 @@ run:
 	go run *.go
 
 setup:
-	# install Go 1.7.3
+	sudo apt-get install -y make
+	# delete old installation of Go
 	sudo rm -rf /usr/local/go
 	sudo rm -f /usr/local/bin/go /usr/local/bin/gofmt /usr/local/bin/godoc
+	# install Go 1.7.3
 	curl -s https://storage.googleapis.com/golang/go1.7.3.linux-amd64.tar.gz | sudo tar zxf - -C /usr/local
 	sudo ln -s ../go/bin/go /usr/local/bin/
 	sudo ln -s ../go/bin/gofmt /usr/local/bin/

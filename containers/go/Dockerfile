@@ -4,6 +4,9 @@ MAINTAINER russ@russross.com
 RUN apt-get update && \
     apt-get upgrade -y
 
+RUN apt-get install -u --no-install-recommends \
+    make
+
 ADD https://storage.googleapis.com/golang/go1.7.3.linux-amd64.tar.gz /tmp/
 RUN tar zxf /tmp/go1.7.3.linux-amd64.tar.gz -C /usr/local && \
     ln -s ../go/bin/go /usr/local/bin/go && \
