@@ -19,11 +19,11 @@ func goGrade(n *Nanny, args, options []string, files map[string][]byte, stdin io
 }
 
 func goTest(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
-	log.Printf("go ML test")
+	log.Printf("go test")
 	n.ExecSimple([]string{"make", "test"}, stdin, true)
 }
 
 func goRun(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
-	log.Printf("go ML run")
+	log.Printf("go run")
 	n.ExecSimple([]string{"make", "run"}, stdin, true)
 }
