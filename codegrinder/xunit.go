@@ -15,6 +15,7 @@ type XUnitProgram struct {
 	Tests    int           `xml:"tests,attr"`
 	Failures int           `xml:"failures,attr"`
 	Disabled int           `xml:"disabled,attr"`
+	Skipped  int           `xml:"skipped,attr"`
 	Errors   int           `xml:"errors,attr"`
 	Time     float64       `xml:"time,attr"`
 	Suites   []*XUnitSuite `xml:"testsuite"`
@@ -39,6 +40,7 @@ type XUnitCase struct {
 	Failure   *XUnitFailure  `xml:"failure"`
 	Error     *XUnitError    `xml:"error"`
 	Disabled  *XUnitDisabled `xml:"disabled"`
+	Skipped   *XUnitSkipped  `xml:"skipped"`
 }
 
 type XUnitFailure struct {
@@ -54,6 +56,12 @@ type XUnitError struct {
 }
 
 type XUnitDisabled struct {
+	Message string `xml:"message,attr"`
+	Type    string `xml:"type,attr"`
+	Body    string `xml:",chardata"`
+}
+
+type XUnitSkipped struct {
 	Message string `xml:"message,attr"`
 	Type    string `xml:"type,attr"`
 	Body    string `xml:",chardata"`
@@ -95,12 +103,33 @@ func parseXUnit(n *Nanny, contents []byte) {
 
 	results := new(XUnitProgram)
 	if err := xml.Unmarshal(contents, results); err != nil {
-		n.ReportCard.LogAndFailf("error parsing unit test results: %v", err)
-		return
+		// try parsing as a list of testsuite entries
+		results.Suites = nil
+		err := xml.Unmarshal(contents, &results.Suites)
+		if err != nil {
+			n.ReportCard.LogAndFailf("error parsing unit test results: %v", err)
+			return
+		}
+
+		results.Tests = 0
+		results.Failures = 0
+		results.Disabled = 0
+		results.Skipped = 0
+		results.Errors = 0
+		results.Time = 0
+
+		for _, elt := range results.Suites {
+			results.Tests += elt.Tests
+			results.Failures += elt.Failures
+			results.Disabled += elt.Disabled
+			results.Skipped += elt.Skipped
+			results.Errors += elt.Errors
+			results.Time += elt.Time
+		}
 	}
 
 	// form a report card
-	fails := results.Failures + results.Disabled + results.Errors
+	fails := results.Failures + results.Disabled + results.Skipped + results.Errors
 	n.ReportCard.Note = fmt.Sprintf("Passed %d/%d tests in %v",
 		results.Tests-fails, results.Tests, time.Since(n.Start))
 	n.ReportCard.Passed = n.ReportCard.Passed && results.Tests > 0 && fails == 0
@@ -115,7 +144,8 @@ func parseXUnit(n *Nanny, contents []byte) {
 			if (testCase.Status == "run" || testCase.Status == "") &&
 				testCase.Failure == nil &&
 				testCase.Error == nil &&
-				testCase.Disabled == nil {
+				testCase.Disabled == nil &&
+				testCase.Skipped == nil {
 				n.ReportCard.AddPassedResult(name, "")
 			} else {
 				body := ""
@@ -125,6 +155,8 @@ func parseXUnit(n *Nanny, contents []byte) {
 					body = testCase.Error.Body
 				} else if testCase.Disabled != nil {
 					body = testCase.Disabled.Body
+				} else if testCase.Skipped != nil {
+					body = testCase.Skipped.Body
 				}
 
 				// try to parse context

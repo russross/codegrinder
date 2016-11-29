@@ -235,3 +235,8 @@ INSERT INTO problem_type_actions (problem_type, action, button, message, interac
 INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('standardmlunittest', 'test', 'Test', 'Testing‥', false, 10, 20, 20, 100, 10, 128, 20);
 INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('standardmlunittest', 'run', 'Run', 'Running‥', true, 10, 1800, 300, 100, 10, 128, 20);
 INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('standardmlunittest', 'shell', 'Shell', 'Running PolyML shell‥', true, 10, 1800, 300, 100, 10, 128, 20);
+
+INSERT INTO problem_types (name, image) VALUES ('gounittest', 'codegrinder/go');
+INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('gounittest', 'grade', 'Grade', 'Grading‥', false, 10, 20, 20, 100, 20, 128, 20);
+INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('gounittest', 'test', 'Test', 'Testing‥', false, 10, 20, 20, 100, 20, 128, 20);
+INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('gounittest', 'debug', 'Debug', 'Running gdb‥', true, 10, 1800, 300, 100, 20, 128, 20);
