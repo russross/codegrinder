@@ -4,10 +4,10 @@
 all:	test
 
 test:
-	go test ./tests
+	go test -v ./tests
 
 grade:
-	go test -v ./tests
+	go test -v ./tests | go run lib/*.go -output test_detail.xml
 
 run:
 	go run *.go
