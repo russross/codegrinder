@@ -13,3 +13,4 @@ sudo -u postgres psql -c "grant all privileges on database $USER to $USER;"
 
 echo Creating tables
 psql < $GOPATH/src/github.com/russross/codegrinder/setup/schema.sql
+psql < $GOPATH/src/github.com/russross/codegrinder/setup/problemtypes.sql
