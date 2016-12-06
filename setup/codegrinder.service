@@ -1,8 +1,6 @@
 [Unit]
 Description=CodeGrinder main service
-Requires=postgresql.service
 After=postgresql.service
-Requires=docker.service
 After=docker.service
 
 [Service]
@@ -11,3 +9,6 @@ User=russ
 ExecStart=/usr/local/bin/codegrinder -ta -daycare
 Restart=always
 RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
