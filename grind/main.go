@@ -67,16 +67,16 @@ func main() {
 	}
 	cmdGrind.AddCommand(cmdVersion)
 
-	cmdInit := &cobra.Command{
-		Use:   "init",
-		Short: "connect to codegrinder server",
+	cmdLogin := &cobra.Command{
+		Use:   "login",
+		Short: "login to codegrinder server",
 		Long: "   Give the hostname of your CodeGrinder installation\n" +
 			"   and this will walk you through the process of setting up\n" +
 			"   your environment.\n\n" +
 			"   You should normally only need to do this once per semester.",
-		Run: CommandInit,
+		Run: CommandLogin,
 	}
-	cmdGrind.AddCommand(cmdInit)
+	cmdGrind.AddCommand(cmdLogin)
 
 	cmdList := &cobra.Command{
 		Use:   "list",
@@ -171,7 +171,7 @@ func main() {
 	cmdGrind.Execute()
 }
 
-func CommandInit(cmd *cobra.Command, args []string) {
+func CommandLogin(cmd *cobra.Command, args []string) {
 	if len(args) != 1 {
 		log.Fatalf("you must specify the CodeGrinder hostname")
 	}
@@ -332,10 +332,10 @@ func mustLoadConfig(cmd *cobra.Command) {
 	configFile := filepath.Join(home, perUserDotFile)
 
 	if raw, err := ioutil.ReadFile(configFile); err != nil {
-		log.Fatalf("Unable to load config file; try running '%s init'\n", os.Args[0])
+		log.Fatalf("Unable to load config file; try running '%s login'\n", os.Args[0])
 	} else if err := json.Unmarshal(raw, &Config); err != nil {
 		log.Printf("failed to parse %s: %v", configFile, err)
-		log.Fatalf("you may wish to try deleting the file and running '%s init' again\n", os.Args[0])
+		log.Fatalf("you may wish to try deleting the file and running '%s login' again\n", os.Args[0])
 	}
 	if Config.apiDump {
 		Config.apiReport = true

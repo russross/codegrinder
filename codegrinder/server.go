@@ -232,7 +232,7 @@ func main() {
 		// martini service: to require an active logged-in session
 		auth := func(w http.ResponseWriter, session sessions.Session) {
 			if userID := session.Get("id"); userID == nil {
-				loggedHTTPErrorf(w, http.StatusUnauthorized, "authentication: no user ID found in session")
+				loggedHTTPErrorf(w, http.StatusUnauthorized, "authentication failed: try logging in again")
 				return
 			}
 		}

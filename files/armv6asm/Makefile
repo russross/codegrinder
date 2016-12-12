@@ -3,6 +3,8 @@
 
 ASMSOURCE=$(wildcard *.s)
 ASMOBJECT=$(ASMSOURCE:.s=.o)
+TSTSOURCE=$(filter-out start.s, $(ASMSOURCE))
+TSTOBJECT=$(TSTSOURCE:.s=.o)
 LIBSOURCE=$(wildcard lib/*.s)
 LIBOBJECT=$(LIBSOURCE:.s=.o)
 CPPSOURCE=$(wildcard tests/*.cpp)
@@ -31,8 +33,8 @@ debug:	a.out
 a.out:	$(ASMOBJECT)
 	ld --fatal-warnings $^
 
-unittest.out:	$(ASMOBJECT) $(LIBOBJECT) $(CPPOBJECT)
-	g++ -g -pthread -lgtest -lpthread $(LIBOBJECT) $(CPPOBJECT) $(ASMOBJECT) -lgtest -lpthread -o $@
+unittest.out:	$(TSTOBJECT) $(LIBOBJECT) $(CPPOBJECT)
+	g++ -g -pthread -lgtest -lpthread $(LIBOBJECT) $(CPPOBJECT) $(TSTOBJECT) -lgtest -lpthread -o $@
 
 setup:
 	# install build tools and sources for gtest
@@ -47,4 +49,4 @@ setup:
 	sudo chown root:root /usr/local/lib/libgtest.a
 
 clean:
-	rm -f $(ASMOBJECT) $(LIBOBJECT) $(CPPOBJECT) *.out *.xml
+	rm -f $(TSTOBJECT) $(LIBOBJECT) $(CPPOBJECT) *.out *.xml
