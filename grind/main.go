@@ -70,10 +70,10 @@ func main() {
 	cmdLogin := &cobra.Command{
 		Use:   "login",
 		Short: "login to codegrinder server",
-		Long: "   Give the hostname of your CodeGrinder installation\n" +
-			"   and this will walk you through the process of setting up\n" +
-			"   your environment.\n\n" +
-			"   You should normally only need to do this once per semester.",
+		Long: "Give the hostname of your CodeGrinder installation\n" +
+			"and this will walk you through the process of setting up\n" +
+			"your environment.\n\n" +
+			"You should normally only need to do this once per semester.",
 		Run: CommandLogin,
 	}
 	cmdGrind.AddCommand(cmdLogin)
@@ -88,14 +88,14 @@ func main() {
 	cmdGet := &cobra.Command{
 		Use:   "get",
 		Short: "download an assignment to work on it locally",
-		Long: fmt.Sprintf("   Give either the numeric ID (given at the start of each listing)\n"+
-			"   or the course/problem identifier (given in parentheses).\n\n"+
-			"   Use '%s list' to see a list of assignments available to you.\n\n"+
-			"   By default, the assignment will be stored in a directory matching the\n"+
-			"   course/problem name, but you can override this by supplying the directory\n"+
-			"   name as an additional argument.\n\n"+
+		Long: fmt.Sprintf("Give either the numeric ID (given at the start of each listing)\n"+
+			"or the course/problem identifier (given in parentheses).\n\n"+
+			"Use '%s list' to see a list of assignments available to you.\n\n"+
+			"The assignment will be stored in a directory matching the\n"+
+			"course/problem name.\n\n"+
+			"   Example: '%s get 342'\n\n"+
 			"   Example: '%s get CS-1400/cs1400-loops'\n\n"+
-			"   Note: you must load an assignment through Canvas before you can access it.", os.Args[0], os.Args[0]),
+			"Note: you must load an assignment through Canvas before you can access it.", os.Args[0], os.Args[0], os.Args[0]),
 		Run: CommandGet,
 	}
 	cmdGrind.AddCommand(cmdGet)
@@ -117,13 +117,12 @@ func main() {
 	cmdAction := &cobra.Command{
 		Use:   "action",
 		Short: "launch a problem-type specific action",
-		Long: fmt.Sprintf("   Give the name of the action to be performed.\n"+
-			"   Run this with no action to see a list of valid actions.\n"+
-			"   Your code will be saved first, and then it will be uploaded\n"+
-			"   and the action will be initiated on the server.\n"+
-			"   You can interact with the server if appropriate for the action\n\n"+
+		Long: fmt.Sprintf("Give the name of the action to be performed.\n"+
+			"Run this with no action to see a list of valid actions.\n"+
+			"Your code will be uploaded and the action initiated on the server.\n"+
+			"You can interact with the server if appropriate for the action\n\n"+
 			"   Example: '%s action debug'\n\n"+
-			"   Note: this has the side effect of saving your code.", os.Args[0]),
+			"Note: this has the side effect of saving your code.", os.Args[0]),
 		Run: CommandAction,
 	}
 	cmdGrind.AddCommand(cmdAction)
@@ -132,14 +131,14 @@ func main() {
 		cmdReset := &cobra.Command{
 			Use:   "reset",
 			Short: "go back to the beginning of the current step",
-			Long: fmt.Sprintf("   When run without arguments, this shows which files have\n"+
-				"   been changed. If you name one or more files, it will revert them\n"+
-				"   to their state at the beginning of the current step.\n"+
-				"   Note: this saves your code before doing anything else, and any\n"+
-				"   changes occur only in your local file system. Until you perform\n"+
-				"   another action that forces a save (save, grade, action),\n"+
-				"   you can restore your files by deleting the directory and running\n"+
-				"   '%s get' to re-download your assignment.\n\n"+
+			Long: fmt.Sprintf("When run without arguments, this shows which files have\n"+
+				"been changed. If you name one or more files, it will revert them\n"+
+				"to their state at the beginning of the current step.\n"+
+				"Note: this saves your code before doing anything else, and any\n"+
+				"changes occur only in your local file system. Until you perform\n"+
+				"another action that forces a save (save, grade, action),\n"+
+				"you can restore your files by deleting the directory and running\n"+
+				"'%s get' to re-download your assignment.\n\n"+
 				"   Example: '%s reset file1 file2'", os.Args[0], os.Args[0]),
 			Run: CommandReset,
 		}
@@ -148,11 +147,17 @@ func main() {
 
 	if isInstructor {
 		cmdCreate := &cobra.Command{
-			Use:   "create",
-			Short: "create a new problem (authors only)",
-			Run:   CommandCreate,
+			Use:   "create [filename]",
+			Short: "create a new problem/problem set (authors only)",
+			Long: fmt.Sprintf("To create a problem, run without arguments in a problem directory.\n\n"+
+				"   Example: '%s create'\n\n"+
+				"To create a problem set, give the name of the .cfg file.\n\n"+
+				"   Example: '%s create cs1400-problem-set.cfg'\n\n"+
+				"Note: a problem set is automatically created with the same unique ID\n"+
+				"when a new problem is created\n", os.Args[0], os.Args[0]),
+			Run: CommandCreate,
 		}
-		cmdCreate.Flags().BoolP("update", "u", false, "update an existing problem")
+		cmdCreate.Flags().BoolP("update", "u", false, "update an existing problem/problem set")
 		cmdCreate.Flags().StringP("action", "a", "", "run interactive action for problem step")
 		cmdGrind.AddCommand(cmdCreate)
 
