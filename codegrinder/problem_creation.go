@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/go-martini/martini"
@@ -344,7 +345,7 @@ func PostProblemBundleUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser
 	render.JSON(http.StatusOK, &bundle)
 }
 
-// PostProblemSetBundle handles requests to /v2/problem_set/bundles,
+// PostProblemSetBundle handles requests to /v2/problem_set_bundles,
 // creating a new problem set.
 func PostProblemSetBundle(w http.ResponseWriter, tx *sql.Tx, bundle ProblemSetBundle, render render.Render) {
 	now := time.Now()
@@ -364,6 +365,8 @@ func PostProblemSetBundle(w http.ResponseWriter, tx *sql.Tx, bundle ProblemSetBu
 	}
 
 	// clean up basic fields and do some checks
+	set.CreatedAt = now
+	set.UpdatedAt = now
 	if err := set.Normalize(now); err != nil {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "%v", err)
 		return
@@ -377,10 +380,10 @@ func PostProblemSetBundle(w http.ResponseWriter, tx *sql.Tx, bundle ProblemSetBu
 
 	// save the problem set problem list
 	for _, psp := range bundle.ProblemSetProblems {
+		psp.ProblemSetID = set.ID
 		if psp.Weight <= 0.0 {
 			psp.Weight = 1.0
 		}
-		psp.ProblemSetID = set.ID
 		if err := meddler.Insert(tx, "problem_set_problems", psp); err != nil {
 			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 			return
@@ -388,6 +391,131 @@ func PostProblemSetBundle(w http.ResponseWriter, tx *sql.Tx, bundle ProblemSetBu
 	}
 
 	log.Printf("problem set %s (%d) with %d problem(s) created", set.Unique, set.ID, len(bundle.ProblemSetProblems))
+
+	render.JSON(http.StatusOK, bundle)
+}
+
+// PutProblemSetBundle handles requests to /v2/problem_set_bundles/:problem_set_id,
+// updating an existing problem set.
+func PutProblemSetBundle(w http.ResponseWriter, tx *sql.Tx, bundle ProblemSetBundle, render render.Render) {
+	now := time.Now()
+
+	if bundle.ProblemSet == nil {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must contain a problem set")
+		return
+	}
+	set := bundle.ProblemSet
+	if set.ID <= 0 {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "updated problem set must have ID > 0")
+		return
+	}
+	if len(bundle.ProblemSetProblems) == 0 {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "a problem set must have at least one problem")
+		return
+	}
+
+	// get the old problem set and check for illegal changes
+	old := new(ProblemSet)
+	if err := meddler.Load(tx, "problem_sets", old, set.ID); err != nil {
+		loggedHTTPDBNotFoundError(w, err)
+		return
+	}
+	if set.Unique != old.Unique {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "updating a problem set cannot change its unique ID from %q to %q; create a new problem set instead", old.Unique, set.Unique)
+		return
+	}
+	if !set.CreatedAt.Equal(old.CreatedAt) {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "updating a problem set cannot change its created time from %v to %v", old.CreatedAt, set.CreatedAt)
+		return
+	}
+
+	// clean up basic fields and do some checks
+	set.UpdatedAt = now
+	if err := set.Normalize(now); err != nil {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "%v", err)
+		return
+	}
+
+	// get the list of problems
+	var oldPSPs []*ProblemSetProblem
+	if err := meddler.QueryAll(tx, &oldPSPs, `SELECT * FROM problem_set_problems WHERE problem_set_id = $1 ORDER BY problem_id`, set.ID); err != nil {
+		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
+		return
+	}
+
+	sort.Slice(bundle.ProblemSetProblems, func(i, j int) bool {
+		return bundle.ProblemSetProblems[i].ProblemID < bundle.ProblemSetProblems[j].ProblemID
+	})
+
+	// any changes in the set of problems?
+	// note: changes to the weights are okay
+	changes := len(oldPSPs) != len(bundle.ProblemSetProblems)
+	for i := 0; !changes && i < len(oldPSPs); i++ {
+		changes = oldPSPs[i].ProblemID != bundle.ProblemSetProblems[i].ProblemID
+	}
+
+	// cannot change the set of problems for a set that is already assigned
+	var assignmentCount int
+	if err := tx.QueryRow(`SELECT COUNT(1) FROM assignments WHERE problem_set_id = $1`, set.ID).Scan(&assignmentCount); err != nil {
+		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
+		return
+	}
+	if assignmentCount > 0 && changes {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "cannot change the set of problems in a problem set that is already in use")
+		return
+	}
+
+	// save the updated problem set object
+	if err := meddler.Update(tx, "problem_sets", set); err != nil {
+		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
+		return
+	}
+
+	// walk through the two lists of problems in step, updating the database as needed
+	i, j := 0, 0
+	for i < len(oldPSPs) || j < len(bundle.ProblemSetProblems) {
+		var oldPSP, newPSP *ProblemSetProblem
+		if i < len(oldPSPs) {
+			oldPSP = oldPSPs[i]
+		}
+		if j < len(bundle.ProblemSetProblems) {
+			newPSP = bundle.ProblemSetProblems[j]
+			newPSP.ProblemSetID = set.ID
+			if newPSP.Weight <= 0.0 {
+				newPSP.Weight = 1.0
+			}
+		}
+
+		switch {
+		case oldPSP != nil && (newPSP == nil || newPSP.ProblemID > oldPSP.ProblemID):
+			// delete the old entry
+			if _, err := tx.Exec(`DELETE FROM problem_set_problems WHERE problem_set_id = $1 AND problem_id = $2`, oldPSP.ProblemSetID, oldPSP.ProblemID); err != nil {
+				loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
+				return
+			}
+			i++
+		case newPSP != nil && (oldPSP == nil || oldPSP.ProblemID > newPSP.ProblemID):
+			// insert the new entry
+			newPSP.ProblemSetID = set.ID
+			if err := meddler.Insert(tx, "problem_set_problems", newPSP); err != nil {
+				loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
+				return
+			}
+			j++
+		default:
+			// update the entry in place (if it has changed)
+			if oldPSP.Weight != newPSP.Weight {
+				if _, err := tx.Exec(`UPDATE problem_set_problems SET weight = $1 WHERE problem_set_id = $2 AND problem_id = $3`, newPSP.Weight, set.ID, oldPSP.ProblemID); err != nil {
+					loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
+					return
+				}
+			}
+			i++
+			j++
+		}
+	}
+
+	log.Printf("problem set %s (%d) with %d problem(s) updated", set.Unique, set.ID, len(bundle.ProblemSetProblems))
 
 	render.JSON(http.StatusOK, bundle)
 }

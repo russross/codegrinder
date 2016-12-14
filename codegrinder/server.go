@@ -332,6 +332,7 @@ func main() {
 
 		// problem set bundles--for problem set creation only
 		r.Post("/v2/problem_set_bundles", counter, auth, withTx, withCurrentUser, authorOnly, binding.Json(ProblemSetBundle{}), PostProblemSetBundle)
+		r.Put("/v2/problem_set_bundles/:problem_set_id", counter, auth, withTx, withCurrentUser, authorOnly, binding.Json(ProblemSetBundle{}), PutProblemSetBundle)
 
 		// problem types
 		r.Get("/v2/problem_types", counter, auth, withTx, GetProblemTypes)

@@ -23,15 +23,30 @@ const ProblemConfigName string = "problem.cfg"
 
 func CommandCreate(cmd *cobra.Command, args []string) {
 	mustLoadConfig(cmd)
-	now := time.Now()
+	pset := ""
 
-	if len(args) != 0 {
+	if len(args) == 1 {
+		// create problem set
+		pset = args[0]
+	} else if len(args) != 0 {
 		cmd.Help()
 		os.Exit(1)
 	}
 
 	action := cmd.Flag("action").Value.String()
 	isUpdate := cmd.Flag("update").Value.String() == "true"
+
+	// branch off for problem set creation
+	// the rest of this function is for problems
+	if pset != "" {
+		if action != "" {
+			log.Fatalf("you cannot specify an action when creating a problem set")
+		}
+		createProblemSet(pset, isUpdate)
+		return
+	}
+
+	now := time.Now()
 	if isUpdate && action != "" {
 		log.Fatalf("you specified --update, which is not valid when running an action")
 	}
@@ -116,10 +131,11 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 	final := new(ProblemBundle)
 	if signed.Problem.ID == 0 {
 		mustPostObject("/problem_bundles/confirmed", nil, signed, final)
+		log.Printf("problem %q created and ready to use", final.Problem.Unique)
 	} else {
 		mustPutObject(fmt.Sprintf("/problem_bundles/%d", signed.Problem.ID), nil, signed, final)
+		log.Printf("problem %q saved and ready to use", final.Problem.Unique)
 	}
-	log.Printf("problem %q saved and ready to use", final.Problem.Unique)
 
 	if signed.Problem.ID == 0 {
 		// create a matching problem set
@@ -206,6 +222,11 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 		UpdatedAt:   now,
 	}
 
+	// require the directory name to match the unique ID
+	if filepath.Base(dir) != problem.Unique {
+		log.Fatalf("the problem directory name must match the problem unique ID")
+	}
+
 	// get the problem type
 	problemType := new(ProblemType)
 	mustGetObject(fmt.Sprintf("/problem_types/%s", problem.ProblemType), nil, problemType)
@@ -240,14 +261,14 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 			log.Fatalf("  this would prevent creating a problem set containing just this problem with matching id")
 		}
 
-		log.Printf("unique ID is %s", problem.Unique)
+		log.Printf("unique ID is %q", problem.Unique)
 		log.Printf("  this problem is new--no existing problem has the same unique ID")
 	case 1:
 		// update to existing problem
 		if action == "" && !isUpdate {
 			log.Fatalf("you did not specify --update, but a problem already exists with unique ID %q", problem.Unique)
 		}
-		log.Printf("unique ID is %s", problem.Unique)
+		log.Printf("unique ID is %q", problem.Unique)
 		log.Printf("  this is an update of problem %d", existing[0].ID)
 		log.Printf("  (%q)", existing[0].Note)
 		problem.ID = existing[0].ID
@@ -461,4 +482,108 @@ func mustConfirmCommitBundle(bundle *CommitBundle, args []string) *CommitBundle 
 
 	log.Fatalf("no commit returned from server")
 	return nil
+}
+
+func createProblemSet(path string, isUpdate bool) {
+	now := time.Now()
+
+	// parse the cfg file to create the problem set object
+	cfg := struct {
+		ProblemSet struct {
+			Unique string
+			Note   string
+			Tag    []string
+		}
+		Problem map[string]*struct {
+			Weight float64
+		}
+	}{}
+	fmt.Printf("reading %s\n", path)
+	if err := gcfg.ReadFileInto(&cfg, path); err != nil {
+		log.Fatalf("failed to parse %s: %v", path, err)
+	}
+
+	problemSet := &ProblemSet{
+		Unique:    cfg.ProblemSet.Unique,
+		Note:      cfg.ProblemSet.Note,
+		Tags:      cfg.ProblemSet.Tag,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	// require the file name to match the unique ID
+	if filepath.Base(path) != problemSet.Unique+".cfg" {
+		log.Fatalf("the problem set file name must match the problem set unique ID")
+	}
+
+	// start forming the problem set bundle
+	bundle := &ProblemSetBundle{
+		ProblemSet: problemSet,
+	}
+
+	// check if this is an existing problem set
+	existing := []*ProblemSet{}
+	params := make(url.Values)
+	params.Add("unique", problemSet.Unique)
+	mustGetObject("/problem_sets", params, &existing)
+	switch len(existing) {
+	case 0:
+		// new problem
+		if isUpdate {
+			log.Fatalf("you specified --update, but no existing problem set with unique ID %q was found", problemSet.Unique)
+		}
+
+		log.Printf("unique ID is %q", problemSet.Unique)
+		log.Printf("  this problem set is new--no existing problem set has the same unique ID")
+	case 1:
+		// update to existing problem set
+		if !isUpdate {
+			log.Fatalf("you did not specify --update, but a problem set already exists with unique ID %q", problemSet.Unique)
+		}
+
+		log.Printf("unique ID is %q", problemSet.Unique)
+		log.Printf("  this is an update of problem set %d", existing[0].ID)
+		log.Printf("  (%q)", existing[0].Note)
+		problemSet.ID = existing[0].ID
+		problemSet.CreatedAt = existing[0].CreatedAt
+	default:
+		// server does not know what "unique" means
+		log.Fatalf("error: server found multiple problems with matching unique ID %q", problemSet.Unique)
+	}
+
+	// generate the individual problems
+	if len(cfg.Problem) == 0 {
+		log.Fatalf("a problem set must contain at least one problem")
+	}
+	for unique, elt := range cfg.Problem {
+		problems := []*Problem{}
+		params := make(url.Values)
+		params.Add("unique", unique)
+		mustGetObject("/problems", params, &problems)
+		if len(problems) == 0 {
+			log.Fatalf("problem with unique ID %q not found", unique)
+		}
+		if len(problems) != 1 {
+			// server does not know what "unique" means
+			log.Fatalf("error: server found multiple problems with matching unique ID %q", unique)
+		}
+		psp := &ProblemSetProblem{
+			ProblemID: problems[0].ID,
+			Weight:    elt.Weight,
+		}
+		if psp.Weight <= 0.0 {
+			psp.Weight = 1.0
+		}
+		bundle.ProblemSetProblems = append(bundle.ProblemSetProblems, psp)
+	}
+
+	// save the problem set
+	final := new(ProblemSetBundle)
+	if bundle.ProblemSet.ID == 0 {
+		mustPostObject("/problem_set_bundles", nil, bundle, final)
+		log.Printf("problem set %q created and ready to use", final.ProblemSet.Unique)
+	} else {
+		mustPutObject(fmt.Sprintf("/problem_set_bundles/%d", bundle.ProblemSet.ID), nil, bundle, final)
+		log.Printf("problem set %q saved and ready to use", final.ProblemSet.Unique)
+	}
 }
