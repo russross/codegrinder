@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/tls"
@@ -28,6 +29,7 @@ import (
 	"github.com/go-martini/martini"
 	_ "github.com/lib/pq"
 	"github.com/martini-contrib/binding"
+	mgzip "github.com/martini-contrib/gzip"
 	"github.com/martini-contrib/render"
 	. "github.com/russross/codegrinder/common"
 	"github.com/russross/meddler"
@@ -125,7 +127,6 @@ func main() {
 	m.Use(martini.Recovery())
 	m.MapTo(r, (*martini.Routes)(nil))
 	m.Action(r.Handle)
-	m.Use(render.Renderer(render.Options{IndentJSON: false}))
 
 	counter := func(w http.ResponseWriter, r *http.Request, c martini.Context) {
 		start := time.Now()
@@ -150,6 +151,98 @@ func main() {
 		goroutineCounter.Set(int64(runtime.NumGoroutine()))
 	}
 
+	// set up daycare role
+	// note: this must come before TA role to avoid gzip handler for daycare requests
+	if daycare {
+		// initialize random number generator
+		rand.Seed(time.Now().UnixNano())
+
+		// make sure relevant fields included in config file
+		if Config.TAHostname == "" {
+			Config.TAHostname = Config.Hostname
+		}
+		if len(Config.ProblemTypes) == 0 {
+			log.Fatalf("cannot run Daycare role with no problemTypes in the config file")
+		}
+		if Config.Capacity <= 0 {
+			log.Fatalf("Daycare capacity must be greater than zero")
+		}
+
+		// attach to docker and try a ping
+		var err error
+		dockerClient, err = docker.NewVersionedClient("unix:///var/run/docker.sock", "1.23")
+		if err != nil {
+			log.Fatalf("NewVersionedClient: %v", err)
+		}
+		if err = dockerClient.Ping(); err != nil {
+			log.Fatalf("Ping: %v", err)
+		}
+
+		r.Get("/v2/sockets/:problem_type/:action", SocketProblemTypeAction)
+
+		// register with the TA periodically
+		go func() {
+			if ta {
+				// it we are also the TA, give the server a chance to start listening
+				time.Sleep(2 * time.Second)
+			}
+			status := ""
+
+			for {
+				reg := DaycareRegistration{
+					Hostname:     Config.Hostname,
+					ProblemTypes: Config.ProblemTypes,
+					Capacity:     Config.Capacity,
+					Time:         time.Now(),
+					Version:      CurrentVersion.Version,
+				}
+				reg.Signature = reg.ComputeSignature(Config.DaycareSecret)
+				raw, err := json.MarshalIndent(&reg, "", "    ")
+				if err != nil {
+					log.Fatalf("encoding daycare registration: %v", err)
+				}
+				url := fmt.Sprintf("https://%s/v2/daycare_registrations", Config.TAHostname)
+
+				body := ioutil.NopCloser(bytes.NewReader(raw))
+				req, err := http.NewRequest("POST", url, body)
+				if err != nil {
+					log.Fatalf("forming http request for daycare registration: %v", err)
+				}
+				req.Header.Add("Content-Type", "application/json")
+				res, err := http.DefaultClient.Do(req)
+				if err != nil {
+					if status != "failed" {
+						log.Printf("error connecting to register daycare: %v", err)
+					}
+					status = "failed"
+				} else {
+					body, err := ioutil.ReadAll(res.Body)
+					if err != nil {
+						body = []byte(fmt.Sprintf("error reading response body: %v", err))
+					}
+					res.Body.Close()
+					if res.StatusCode == http.StatusOK {
+						if status != "succeeded" {
+							log.Printf("registered with %s", url)
+						}
+						status = "succeeded"
+					} else {
+						if status != "failed" {
+							log.Printf("unexpected status from %s: %v", url, res.Status)
+							for _, line := range bytes.Split(body, []byte("\n")) {
+								if len(line) > 0 {
+									log.Printf("--> %s", line)
+								}
+							}
+						}
+						status = "failed"
+					}
+				}
+				time.Sleep(daycareRegistrationInterval)
+			}
+		}()
+	}
+
 	// set up TA role
 	if ta {
 		// make sure relevant secrets are included in config file
@@ -166,7 +259,9 @@ func main() {
 			log.Fatalf("cannot run TA role with no filesDir in the config file")
 		}
 
+		m.Use(mgzip.All())
 		m.Use(martini.Static(Config.WWWDir, martini.StaticOptions{SkipLogging: true}))
+		m.Use(render.Renderer(render.Options{IndentJSON: false}))
 
 		// set up the database
 		db := setupDB(Config.PostgresHost, Config.PostgresPort, Config.PostgresUsername, Config.PostgresPassword, Config.PostgresDatabase)
@@ -258,6 +353,24 @@ func main() {
 			}
 		}
 
+		// martini middleware: decompress incoming requests
+		gunzip := func(c martini.Context, w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Content-Encoding") != "gzip" {
+				return
+			}
+
+			r.Header.Del("Content-Encoding")
+			body := r.Body
+			var err error
+			r.Body, err = gzip.NewReader(body)
+			defer body.Close()
+			if err != nil {
+				loggedHTTPErrorf(w, http.StatusBadRequest, "gzip error in request: %v", err)
+				return
+			}
+			c.Next()
+		}
+
 		// version
 		r.Get("/v2/version", counter, func(w http.ResponseWriter, render render.Render) {
 			render.JSON(http.StatusOK, &CurrentVersion)
@@ -269,7 +382,7 @@ func main() {
 				daycareRegistrations.Expire()
 				render.JSON(http.StatusOK, daycareRegistrations.daycares)
 			})
-		r.Post("/v2/daycare_registrations", binding.Json(DaycareRegistration{}),
+		r.Post("/v2/daycare_registrations", gunzip, binding.Json(DaycareRegistration{}),
 			func(w http.ResponseWriter, reg DaycareRegistration) {
 				daycareRegistrations.Expire()
 				if err := daycareRegistrations.Insert(&reg); err != nil {
@@ -295,17 +408,17 @@ func main() {
 
 		// LTI
 		r.Get("/v2/lti/config.xml", counter, GetConfigXML)
-		r.Post("/v2/lti/problem_sets", counter, binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblemSets)
-		r.Post("/v2/lti/problem_sets/:unique", counter, binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblemSet)
+		r.Post("/v2/lti/problem_sets", counter, gunzip, binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblemSets)
+		r.Post("/v2/lti/problem_sets/:unique", counter, gunzip, binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblemSet)
 
 		// problem bundles--for problem creation only
-		r.Post("/v2/problem_bundles/unconfirmed", counter, withTx, withCurrentUser, authorOnly, binding.Json(ProblemBundle{}), PostProblemBundleUnconfirmed)
-		r.Post("/v2/problem_bundles/confirmed", counter, withTx, withCurrentUser, authorOnly, binding.Json(ProblemBundle{}), PostProblemBundleConfirmed)
-		r.Put("/v2/problem_bundles/:problem_id", counter, withTx, withCurrentUser, authorOnly, binding.Json(ProblemBundle{}), PutProblemBundle)
+		r.Post("/v2/problem_bundles/unconfirmed", counter, withTx, withCurrentUser, authorOnly, gunzip, binding.Json(ProblemBundle{}), PostProblemBundleUnconfirmed)
+		r.Post("/v2/problem_bundles/confirmed", counter, withTx, withCurrentUser, authorOnly, gunzip, binding.Json(ProblemBundle{}), PostProblemBundleConfirmed)
+		r.Put("/v2/problem_bundles/:problem_id", counter, withTx, withCurrentUser, authorOnly, gunzip, binding.Json(ProblemBundle{}), PutProblemBundle)
 
 		// problem set bundles--for problem set creation only
-		r.Post("/v2/problem_set_bundles", counter, withTx, withCurrentUser, authorOnly, binding.Json(ProblemSetBundle{}), PostProblemSetBundle)
-		r.Put("/v2/problem_set_bundles/:problem_set_id", counter, withTx, withCurrentUser, authorOnly, binding.Json(ProblemSetBundle{}), PutProblemSetBundle)
+		r.Post("/v2/problem_set_bundles", counter, withTx, withCurrentUser, authorOnly, gunzip, binding.Json(ProblemSetBundle{}), PostProblemSetBundle)
+		r.Put("/v2/problem_set_bundles/:problem_set_id", counter, withTx, withCurrentUser, authorOnly, gunzip, binding.Json(ProblemSetBundle{}), PutProblemSetBundle)
 
 		// problem types
 		r.Get("/v2/problem_types", counter, auth, withTx, GetProblemTypes)
@@ -350,99 +463,8 @@ func main() {
 		r.Delete("/v2/commits/:commit_id", counter, withTx, withCurrentUser, administratorOnly, DeleteCommit)
 
 		// commit bundles
-		r.Post("/v2/commit_bundles/unsigned", counter, withTx, withCurrentUser, binding.Json(CommitBundle{}), PostCommitBundlesUnsigned)
-		r.Post("/v2/commit_bundles/signed", counter, withTx, withCurrentUser, binding.Json(CommitBundle{}), PostCommitBundlesSigned)
-	}
-
-	// set up daycare role
-	if daycare {
-		// initialize random number generator
-		rand.Seed(time.Now().UnixNano())
-
-		// make sure relevant fields included in config file
-		if Config.TAHostname == "" {
-			Config.TAHostname = Config.Hostname
-		}
-		if len(Config.ProblemTypes) == 0 {
-			log.Fatalf("cannot run Daycare role with no problemTypes in the config file")
-		}
-		if Config.Capacity <= 0 {
-			log.Fatalf("Daycare capacity must be greater than zero")
-		}
-
-		// attach to docker and try a ping
-		var err error
-		dockerClient, err = docker.NewVersionedClient("unix:///var/run/docker.sock", "1.23")
-		if err != nil {
-			log.Fatalf("NewVersionedClient: %v", err)
-		}
-		if err = dockerClient.Ping(); err != nil {
-			log.Fatalf("Ping: %v", err)
-		}
-
-		r.Get("/v2/sockets/:problem_type/:action", SocketProblemTypeAction)
-
-		// register with the TA periodically
-		go func() {
-			if ta {
-				// it we are also the TA, give the server a chance to start listening
-				time.Sleep(2 * time.Second)
-			}
-			status := ""
-
-			for {
-				reg := DaycareRegistration{
-					Hostname:     Config.Hostname,
-					ProblemTypes: Config.ProblemTypes,
-					Capacity:     Config.Capacity,
-					Time:         time.Now(),
-					Version:      CurrentVersion.Version,
-				}
-				reg.Signature = reg.ComputeSignature(Config.DaycareSecret)
-				raw, err := json.MarshalIndent(&reg, "", "    ")
-				if err != nil {
-					log.Fatalf("encoding daycare registration: %v", err)
-				}
-				url := fmt.Sprintf("https://%s/v2/daycare_registrations", Config.TAHostname)
-
-				body := ioutil.NopCloser(bytes.NewReader(raw))
-				req, err := http.NewRequest("POST", url, body)
-				if err != nil {
-					log.Fatalf("forming http request for daycare registration: %v", err)
-				}
-				req.Header.Add("Content-Type", "application/json")
-				res, err := http.DefaultClient.Do(req)
-				if err != nil {
-					if status != "failed" {
-						log.Printf("error connecting to register daycare: %v", err)
-					}
-					status = "failed"
-				} else {
-					body, err := ioutil.ReadAll(res.Body)
-					if err != nil {
-						body = []byte(fmt.Sprintf("error reading response body: %v", err))
-					}
-					res.Body.Close()
-					if res.StatusCode == http.StatusOK {
-						if status != "succeeded" {
-							log.Printf("registered with %s", url)
-						}
-						status = "succeeded"
-					} else {
-						if status != "failed" {
-							log.Printf("unexpected status from %s: %v", url, res.Status)
-							for _, line := range bytes.Split(body, []byte("\n")) {
-								if len(line) > 0 {
-									log.Printf("--> %s", line)
-								}
-							}
-						}
-						status = "failed"
-					}
-				}
-				time.Sleep(daycareRegistrationInterval)
-			}
-		}()
+		r.Post("/v2/commit_bundles/unsigned", counter, withTx, withCurrentUser, gunzip, binding.Json(CommitBundle{}), PostCommitBundlesUnsigned)
+		r.Post("/v2/commit_bundles/signed", counter, withTx, withCurrentUser, gunzip, binding.Json(CommitBundle{}), PostCommitBundlesSigned)
 	}
 
 	// start redirecting http calls to https

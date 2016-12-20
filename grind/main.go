@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -263,17 +264,26 @@ func doRequest(path string, params url.Values, method string, upload interface{}
 	}
 
 	// set the headers
-	req.Header["Accept"] = []string{"application/json"}
-	req.Header["Cookie"] = []string{Config.Cookie}
+	req.Header.Add("Cookie", Config.Cookie)
+	if download != nil {
+		req.Header.Add("Accept", "application/json")
+		req.Header.Add("Accept-Encoding", "gzip")
+	}
 
 	// upload the payload if any
 	if upload != nil && (method == "POST" || method == "PUT") {
-		req.Header["Content-Type"] = []string{"application/json"}
-		payload, err := json.MarshalIndent(upload, "", "    ")
-		if err != nil {
+		req.Header.Add("Content-Type", "application/json")
+		req.Header.Add("Content-Encoding", "gzip")
+		payload := new(bytes.Buffer)
+		gw := gzip.NewWriter(payload)
+		jw := json.NewEncoder(gw)
+		if err := jw.Encode(upload); err != nil {
 			log.Fatalf("doRequest: JSON error encoding object to upload: %v", err)
 		}
-		req.Body = ioutil.NopCloser(bytes.NewReader(payload))
+		if err := gw.Close(); err != nil {
+			log.Fatalf("doRequest: gzip error encoding object to upload: %v", err)
+		}
+		req.Body = ioutil.NopCloser(payload)
 
 		if Config.apiDump {
 			log.Printf("Request data: %s", payload)
@@ -282,23 +292,32 @@ func doRequest(path string, params url.Values, method string, upload interface{}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Fatalf("error connecting to %s: %v\n", Config.Host, err)
+		log.Fatalf("error connecting to %s: %v", Config.Host, err)
 	}
 	defer resp.Body.Close()
 	if notfoundokay && resp.StatusCode == http.StatusNotFound {
 		return false
 	}
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("unexpected status from %s: %s\n", url, resp.Status)
+		log.Printf("unexpected status from %s: %s", url, resp.Status)
 		io.Copy(os.Stderr, resp.Body)
 		log.Fatalf("giving up")
 	}
 
 	// parse the result if any
 	if download != nil {
-		decoder := json.NewDecoder(resp.Body)
+		body := resp.Body
+		if resp.Header.Get("Content-Encoding") == "gzip" {
+			gz, err := gzip.NewReader(body)
+			if err != nil {
+				log.Fatalf("failed to decompress gzip result: %v", err)
+			}
+			body = gz
+			defer gz.Close()
+		}
+		decoder := json.NewDecoder(body)
 		if err := decoder.Decode(download); err != nil {
-			log.Fatalf("failed to parse result object from server: %v\n", err)
+			log.Fatalf("failed to parse result object from server: %v", err)
 		}
 
 		if Config.apiDump {

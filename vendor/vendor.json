@@ -225,6 +225,12 @@
 			"revisionTime": "2015-04-29T23:30:13Z"
 		},
 		{
+			"checksumSHA1": "lcQCWGN8rTHBhM5SCfBh8+g8rfE=",
+			"path": "github.com/martini-contrib/gzip",
+			"revision": "6c035326b43f79aa18793d2f1db512d21253ea61",
+			"revisionTime": "2015-11-24T21:41:56Z"
+		},
+		{
 			"checksumSHA1": "WMoHBLFJLLvhzbnatHIY+SgrrFI=",
 			"path": "github.com/martini-contrib/render",
 			"revision": "ec18f8345a1181146728238980606fb1d6f40e8c",

@@ -10,9 +10,9 @@ import (
 )
 
 type CookieSession struct {
-	Path      string
 	ExpiresAt time.Time
 	UserID    int64
+	path      string
 }
 
 func NewSession(id int64) *CookieSession {
@@ -33,9 +33,9 @@ func NewSession(id int64) *CookieSession {
 	}
 
 	return &CookieSession{
-		Path:      "/v2/",
 		ExpiresAt: expires,
 		UserID:    id,
+		path:      "/v2/",
 	}
 }
 
@@ -81,7 +81,7 @@ func (session *CookieSession) Save(w http.ResponseWriter) {
 	cookie := &http.Cookie{
 		Name:    CookieName,
 		Value:   encoded,
-		Path:    session.Path,
+		Path:    session.path,
 		Expires: session.ExpiresAt,
 		MaxAge:  int(time.Until(session.ExpiresAt).Seconds()),
 		Secure:  true,
@@ -94,7 +94,7 @@ func (session *CookieSession) Delete(w http.ResponseWriter) {
 	cookie := &http.Cookie{
 		Name:    CookieName,
 		Value:   "deleted",
-		Path:    session.Path,
+		Path:    session.path,
 		Expires: epoch,
 		MaxAge:  -1,
 		Secure:  true,
