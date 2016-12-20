@@ -164,8 +164,10 @@ func GetUserMe(w http.ResponseWriter, tx *sql.Tx, currentUser *User, render rend
 func GetUserMeCookie(w http.ResponseWriter, r *http.Request) {
 	cookie := r.Header.Get("Cookie")
 	for _, field := range strings.Fields(cookie) {
-		if strings.HasPrefix(field, CookieName+"=") {
-			fmt.Fprintf(w, "%s", field)
+		for _, subfield := range strings.Split(field, ";") {
+			if strings.HasPrefix(subfield, CookieName+"=") {
+				fmt.Fprintf(w, "%s", subfield)
+			}
 		}
 	}
 }

@@ -33,12 +33,6 @@
 			"revisionTime": "2016-06-16T22:19:14Z"
 		},
 		{
-			"checksumSHA1": "mXuhmsoWRrMxD3j836MtLNirGiM=",
-			"path": "github.com/boj/redistore",
-			"revision": "fc113767cd6b051980f260d6dbe84b2740c46ab0",
-			"revisionTime": "2016-01-28T11:33:10Z"
-		},
-		{
 			"checksumSHA1": "fcfxNsCuheCrubAAl6zWgimCnLY=",
 			"path": "github.com/codegangsta/inject",
 			"revision": "33e0aa1cb7c019ccc3fbe049a8262a6403d30504",
@@ -183,40 +177,16 @@
 			"revisionTime": "2016-11-02T00:40:33Z"
 		},
 		{
-			"checksumSHA1": "2UmMbNHc8FBr98mJFN1k8ISOIHk=",
-			"path": "github.com/garyburd/redigo/internal",
-			"revision": "b8dc90050f24c1a73a52f107f3f575be67b21b7c",
-			"revisionTime": "2016-05-25T16:57:06Z"
-		},
-		{
-			"checksumSHA1": "507OiSqTxfGCje7xDT5eq9CCaNQ=",
-			"path": "github.com/garyburd/redigo/redis",
-			"revision": "b8dc90050f24c1a73a52f107f3f575be67b21b7c",
-			"revisionTime": "2016-05-25T16:57:06Z"
-		},
-		{
 			"checksumSHA1": "s8LkYBuPyrsEKfafm/01pzM/hYI=",
 			"path": "github.com/go-martini/martini",
 			"revision": "0c6ad5903d2bf9337762caa9c357247279c230c3",
 			"revisionTime": "2016-04-30T15:43:47Z"
 		},
 		{
-			"checksumSHA1": "iIUYZyoanCQQTUaWsu8b+iOSPt4=",
-			"path": "github.com/gorilla/context",
-			"revision": "aed02d124ae4a0e94fea4541c8effd05bf0c8296",
-			"revisionTime": "2016-05-25T20:33:19Z"
-		},
-		{
 			"checksumSHA1": "nZoAsxDHOA8fLilA56HKvezLqNU=",
 			"path": "github.com/gorilla/securecookie",
 			"revision": "ff356348f74133a59d3e93aa24b5b4551b6fe90d",
 			"revisionTime": "2016-05-25T20:33:48Z"
-		},
-		{
-			"checksumSHA1": "oSx9IYMY+lnnX3op2Pnh376tIe4=",
-			"path": "github.com/gorilla/sessions",
-			"revision": "56ba4b0a11da87516629a57408a5f7e4c8ea7b0b",
-			"revisionTime": "2016-06-04T16:54:08Z"
 		},
 		{
 			"checksumSHA1": "dyGQP5AipmInoTQmnqvbFmUORpk=",
@@ -283,18 +253,6 @@
 			"path": "github.com/russross/meddler",
 			"revision": "f742b0f9424f3bfaffe189e921d734608929e84f",
 			"revisionTime": "2015-05-13T15:34:18Z"
-		},
-		{
-			"checksumSHA1": "ryI+AT5AbL+YuM+RErw4yekiVQs=",
-			"path": "github.com/russross/sessions",
-			"revision": "fa13114fbcf036dff8185d728651d85fcef772db",
-			"revisionTime": "2014-06-30T23:17:22Z"
-		},
-		{
-			"checksumSHA1": "5SsK4Rr15FZgGP4zDjmKWHyKwp8=",
-			"path": "github.com/sergi/go-diff/diffmatchpatch",
-			"revision": "ec7fdbb58eb3e300c8595ad5ac74a5aa50019cc7",
-			"revisionTime": "2015-10-21T19:14:53Z"
 		},
 		{
 			"checksumSHA1": "XXTR/ftEYSqQn4+Y7wNfiJJmq9U=",

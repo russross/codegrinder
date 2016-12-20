@@ -31,7 +31,6 @@ import (
 	"github.com/martini-contrib/render"
 	. "github.com/russross/codegrinder/common"
 	"github.com/russross/meddler"
-	"github.com/russross/sessions"
 	"golang.org/x/crypto/acme/autocert"
 )
 
@@ -55,15 +54,16 @@ var Config struct {
 	ProblemTypes []string `json:"problemTypes"` // List of problem types this daycare host supports: [ "python27unittest", "gotest", ... ]
 
 	// ta-only parameters where the default is usually sufficient
-	ToolName         string `json:"toolName"`         // LTI human readable name: default "CodeGrinder"
-	ToolID           string `json:"toolID"`           // LTI unique ID: default "codegrinder"
-	ToolDescription  string `json:"toolDescription"`  // LTI description: default "Programming exercises with grading"
-	LetsEncryptCache string `json:"letsEncryptDir"`   // Full path of LetsEncrypt cache file: default "/etc/codegrinder/letsencrypt"
-	PostgresHost     string `json:"postgresHost"`     // Host parameter for Postgres: default "/var/run/postgresql"
-	PostgresPort     string `json:"postgresPort"`     // Port parameter for Postgres: default "5432"
-	PostgresUsername string `json:"postgresUsername"` // Username parameter for Postgres: default $USER
-	PostgresPassword string `json:"postgresPassword"` // Password parameter for Postgres: default ""
-	PostgresDatabase string `json:"postgresDatabase"` // Database parameter for Postgres: default $USER
+	ToolName         string      `json:"toolName"`         // LTI human readable name: default "CodeGrinder"
+	ToolID           string      `json:"toolID"`           // LTI unique ID: default "codegrinder"
+	ToolDescription  string      `json:"toolDescription"`  // LTI description: default "Programming exercises with grading"
+	LetsEncryptCache string      `json:"letsEncryptDir"`   // Full path of LetsEncrypt cache file: default "/etc/codegrinder/letsencrypt"
+	PostgresHost     string      `json:"postgresHost"`     // Host parameter for Postgres: default "/var/run/postgresql"
+	PostgresPort     string      `json:"postgresPort"`     // Port parameter for Postgres: default "5432"
+	PostgresUsername string      `json:"postgresUsername"` // Username parameter for Postgres: default $USER
+	PostgresPassword string      `json:"postgresPassword"` // Password parameter for Postgres: default ""
+	PostgresDatabase string      `json:"postgresDatabase"` // Database parameter for Postgres: default $USER
+	SessionsExpire   []time.Time `json:"sessionsExpire"`   // times/dates when sessions should expire (year is ignored)
 }
 
 var problemTypeHandlers = make(map[string]map[string]nannyHandler)
@@ -93,6 +93,10 @@ func main() {
 	Config.PostgresUsername = os.Getenv("USER")
 	Config.PostgresPassword = ""
 	Config.PostgresDatabase = os.Getenv("USER")
+	Config.SessionsExpire = []time.Time{
+		time.Date(2017, 1, 1, 0, 0, 0, 0, time.Local),
+		time.Date(2017, 7, 1, 0, 0, 0, 0, time.Local),
+	}
 
 	// load config file
 	if raw, err := ioutil.ReadFile(configFile); err != nil {
@@ -148,37 +152,6 @@ func main() {
 
 	// set up TA role
 	if ta {
-		m.Use(martini.Static(Config.WWWDir, martini.StaticOptions{SkipLogging: true}))
-		store := sessions.NewCookieStore([]byte(Config.SessionSecret))
-		m.Use(sessions.Sessions(CookieName, store))
-
-		// sessions expire June 30 and December 31
-		go func() {
-			for {
-				now := time.Now()
-
-				// expire at the end of the calendar year
-				expires := time.Date(now.Year(), time.December, 31, 23, 59, 59, 0, time.Local)
-
-				if expires.Sub(now).Hours() < 14*24 {
-					// are we within 2 weeks of the end of the year? probably prepping for spring,
-					// so expire next June 30 instead
-					expires = time.Date(now.Year()+1, time.June, 30, 23, 59, 59, 0, time.Local)
-				} else if expires.Sub(now).Hours() > (365/2+14)*24 {
-					// is it still more than 2 weeks before June 30? probably in spring semester,
-					// so expire this June 30 instead
-					expires = time.Date(now.Year(), time.June, 30, 23, 59, 59, 0, time.Local)
-				}
-				store.Options(sessions.Options{
-					Path:   "/",
-					Secure: true,
-					MaxAge: int(expires.Sub(now).Seconds()),
-				})
-				time.Sleep(11 * time.Hour)
-			}
-		}()
-		time.Sleep(5 * time.Millisecond)
-
 		// make sure relevant secrets are included in config file
 		if Config.LTISecret == "" {
 			log.Fatalf("cannot run TA role with no ltiSecret in the config file")
@@ -192,6 +165,8 @@ func main() {
 		if Config.FilesDir == "" {
 			log.Fatalf("cannot run TA role with no filesDir in the config file")
 		}
+
+		m.Use(martini.Static(Config.WWWDir, martini.StaticOptions{SkipLogging: true}))
 
 		// set up the database
 		db := setupDB(Config.PostgresHost, Config.PostgresPort, Config.PostgresUsername, Config.PostgresPassword, Config.PostgresDatabase)
@@ -228,30 +203,30 @@ func main() {
 		}
 
 		// martini service: to require an active logged-in session
-		auth := func(w http.ResponseWriter, session sessions.Session) {
-			if userID := session.Get("id"); userID == nil {
+		auth := func(w http.ResponseWriter, r *http.Request) {
+			_, err := GetSession(r)
+			if err != nil {
 				loggedHTTPErrorf(w, http.StatusUnauthorized, "authentication failed: try logging in again")
+				log.Printf("%v", err)
 				return
 			}
 		}
 
-		// martini service: include the current logged-in user (requires withTx and auth)
-		withCurrentUser := func(c martini.Context, w http.ResponseWriter, tx *sql.Tx, session sessions.Session) {
-			rawID := session.Get("id")
-			if rawID == nil {
-				loggedHTTPErrorf(w, http.StatusInternalServerError, "cannot find user ID in session")
-				return
-			}
-			userID, ok := rawID.(int64)
-			if !ok {
-				session.Clear()
-				loggedHTTPErrorf(w, http.StatusInternalServerError, "error extracting user ID from session")
+		// martini service: include the current logged-in user (requires withTx)
+		withCurrentUser := func(c martini.Context, w http.ResponseWriter, r *http.Request, tx *sql.Tx) {
+			session, err := GetSession(r)
+			if err != nil {
+				loggedHTTPErrorf(w, http.StatusUnauthorized, "authentication failed: try logging in again")
+				log.Printf("%v", err)
 				return
 			}
 
 			// load the user record
+			userID := session.UserID
 			user := new(User)
 			if err := meddler.Load(tx, "users", user, userID); err != nil {
+				session.Delete(w)
+
 				if err == sql.ErrNoRows {
 					loggedHTTPErrorf(w, http.StatusUnauthorized, "user %d not found", userID)
 					return
@@ -304,7 +279,7 @@ func main() {
 			})
 
 		// stats
-		r.Get("/v2/stats", auth, withTx, withCurrentUser, authorOnly, func(w http.ResponseWriter, r *http.Request) {
+		r.Get("/v2/stats", withTx, withCurrentUser, authorOnly, func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			fmt.Fprintf(w, "{\n")
 			first := true
@@ -324,59 +299,59 @@ func main() {
 		r.Post("/v2/lti/problem_sets/:unique", counter, binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblemSet)
 
 		// problem bundles--for problem creation only
-		r.Post("/v2/problem_bundles/unconfirmed", counter, auth, withTx, withCurrentUser, authorOnly, binding.Json(ProblemBundle{}), PostProblemBundleUnconfirmed)
-		r.Post("/v2/problem_bundles/confirmed", counter, auth, withTx, withCurrentUser, authorOnly, binding.Json(ProblemBundle{}), PostProblemBundleConfirmed)
-		r.Put("/v2/problem_bundles/:problem_id", counter, auth, withTx, withCurrentUser, authorOnly, binding.Json(ProblemBundle{}), PutProblemBundle)
+		r.Post("/v2/problem_bundles/unconfirmed", counter, withTx, withCurrentUser, authorOnly, binding.Json(ProblemBundle{}), PostProblemBundleUnconfirmed)
+		r.Post("/v2/problem_bundles/confirmed", counter, withTx, withCurrentUser, authorOnly, binding.Json(ProblemBundle{}), PostProblemBundleConfirmed)
+		r.Put("/v2/problem_bundles/:problem_id", counter, withTx, withCurrentUser, authorOnly, binding.Json(ProblemBundle{}), PutProblemBundle)
 
 		// problem set bundles--for problem set creation only
-		r.Post("/v2/problem_set_bundles", counter, auth, withTx, withCurrentUser, authorOnly, binding.Json(ProblemSetBundle{}), PostProblemSetBundle)
-		r.Put("/v2/problem_set_bundles/:problem_set_id", counter, auth, withTx, withCurrentUser, authorOnly, binding.Json(ProblemSetBundle{}), PutProblemSetBundle)
+		r.Post("/v2/problem_set_bundles", counter, withTx, withCurrentUser, authorOnly, binding.Json(ProblemSetBundle{}), PostProblemSetBundle)
+		r.Put("/v2/problem_set_bundles/:problem_set_id", counter, withTx, withCurrentUser, authorOnly, binding.Json(ProblemSetBundle{}), PutProblemSetBundle)
 
 		// problem types
 		r.Get("/v2/problem_types", counter, auth, withTx, GetProblemTypes)
 		r.Get("/v2/problem_types/:name", counter, auth, withTx, GetProblemType)
 
 		// problems
-		r.Get("/v2/problems", counter, auth, withTx, withCurrentUser, GetProblems)
-		r.Get("/v2/problems/:problem_id", counter, auth, withTx, withCurrentUser, GetProblem)
-		r.Get("/v2/problems/:problem_id/steps", counter, auth, withTx, withCurrentUser, GetProblemSteps)
-		r.Get("/v2/problems/:problem_id/steps/:step", counter, auth, withTx, withCurrentUser, GetProblemStep)
-		r.Delete("/v2/problems/:problem_id", counter, auth, withTx, withCurrentUser, administratorOnly, DeleteProblem)
+		r.Get("/v2/problems", counter, withTx, withCurrentUser, GetProblems)
+		r.Get("/v2/problems/:problem_id", counter, withTx, withCurrentUser, GetProblem)
+		r.Get("/v2/problems/:problem_id/steps", counter, withTx, withCurrentUser, GetProblemSteps)
+		r.Get("/v2/problems/:problem_id/steps/:step", counter, withTx, withCurrentUser, GetProblemStep)
+		r.Delete("/v2/problems/:problem_id", counter, withTx, withCurrentUser, administratorOnly, DeleteProblem)
 
 		// problem sets
-		r.Get("/v2/problem_sets", counter, auth, withTx, withCurrentUser, GetProblemSets)
-		r.Get("/v2/problem_sets/:problem_set_id", counter, auth, withTx, withCurrentUser, GetProblemSet)
-		r.Get("/v2/problem_sets/:problem_set_id/problems", counter, auth, withTx, withCurrentUser, GetProblemSetProblems)
-		r.Delete("/v2/problem_sets/:problem_set_id", counter, auth, withTx, withCurrentUser, administratorOnly, DeleteProblemSet)
+		r.Get("/v2/problem_sets", counter, withTx, withCurrentUser, GetProblemSets)
+		r.Get("/v2/problem_sets/:problem_set_id", counter, withTx, withCurrentUser, GetProblemSet)
+		r.Get("/v2/problem_sets/:problem_set_id/problems", counter, withTx, withCurrentUser, GetProblemSetProblems)
+		r.Delete("/v2/problem_sets/:problem_set_id", counter, withTx, withCurrentUser, administratorOnly, DeleteProblemSet)
 
 		// courses
-		r.Get("/v2/courses", counter, auth, withTx, withCurrentUser, GetCourses)
-		r.Get("/v2/courses/:course_id", counter, auth, withTx, withCurrentUser, GetCourse)
-		r.Delete("/v2/courses/:course_id", counter, auth, withTx, withCurrentUser, administratorOnly, DeleteCourse)
+		r.Get("/v2/courses", counter, withTx, withCurrentUser, GetCourses)
+		r.Get("/v2/courses/:course_id", counter, withTx, withCurrentUser, GetCourse)
+		r.Delete("/v2/courses/:course_id", counter, withTx, withCurrentUser, administratorOnly, DeleteCourse)
 
 		// users
-		r.Get("/v2/users", counter, auth, withTx, withCurrentUser, GetUsers)
-		r.Get("/v2/users/me", counter, auth, withTx, withCurrentUser, GetUserMe)
+		r.Get("/v2/users", counter, withTx, withCurrentUser, GetUsers)
+		r.Get("/v2/users/me", counter, withTx, withCurrentUser, GetUserMe)
 		r.Get("/v2/users/me/cookie", counter, auth, GetUserMeCookie)
-		r.Get("/v2/users/:user_id", counter, auth, withTx, withCurrentUser, GetUser)
-		r.Get("/v2/courses/:course_id/users", counter, auth, withTx, withCurrentUser, GetCourseUsers)
-		r.Delete("/v2/users/:user_id", counter, auth, withTx, withCurrentUser, administratorOnly, DeleteUser)
+		r.Get("/v2/users/:user_id", counter, withTx, withCurrentUser, GetUser)
+		r.Get("/v2/courses/:course_id/users", counter, withTx, withCurrentUser, GetCourseUsers)
+		r.Delete("/v2/users/:user_id", counter, withTx, withCurrentUser, administratorOnly, DeleteUser)
 
 		// assignments
-		r.Get("/v2/users/:user_id/assignments", counter, auth, withTx, withCurrentUser, GetUserAssignments)
-		r.Get("/v2/courses/:course_id/users/:user_id/assignments", counter, auth, withTx, withCurrentUser, GetCourseUserAssignments)
-		r.Get("/v2/assignments", counter, auth, withTx, withCurrentUser, GetAssignments)
-		r.Get("/v2/assignments/:assignment_id", counter, auth, withTx, withCurrentUser, GetAssignment)
-		r.Delete("/v2/assignments/:assignment_id", counter, auth, withTx, withCurrentUser, administratorOnly, DeleteAssignment)
+		r.Get("/v2/users/:user_id/assignments", counter, withTx, withCurrentUser, GetUserAssignments)
+		r.Get("/v2/courses/:course_id/users/:user_id/assignments", counter, withTx, withCurrentUser, GetCourseUserAssignments)
+		r.Get("/v2/assignments", counter, withTx, withCurrentUser, GetAssignments)
+		r.Get("/v2/assignments/:assignment_id", counter, withTx, withCurrentUser, GetAssignment)
+		r.Delete("/v2/assignments/:assignment_id", counter, withTx, withCurrentUser, administratorOnly, DeleteAssignment)
 
 		// commits
-		r.Get("/v2/assignments/:assignment_id/problems/:problem_id/commits/last", counter, auth, withTx, withCurrentUser, GetAssignmentProblemCommitLast)
-		r.Get("/v2/assignments/:assignment_id/problems/:problem_id/steps/:step/commits/last", counter, auth, withTx, withCurrentUser, GetAssignmentProblemStepCommitLast)
-		r.Delete("/v2/commits/:commit_id", counter, auth, withTx, withCurrentUser, administratorOnly, DeleteCommit)
+		r.Get("/v2/assignments/:assignment_id/problems/:problem_id/commits/last", counter, withTx, withCurrentUser, GetAssignmentProblemCommitLast)
+		r.Get("/v2/assignments/:assignment_id/problems/:problem_id/steps/:step/commits/last", counter, withTx, withCurrentUser, GetAssignmentProblemStepCommitLast)
+		r.Delete("/v2/commits/:commit_id", counter, withTx, withCurrentUser, administratorOnly, DeleteCommit)
 
 		// commit bundles
-		r.Post("/v2/commit_bundles/unsigned", counter, auth, withTx, withCurrentUser, binding.Json(CommitBundle{}), PostCommitBundlesUnsigned)
-		r.Post("/v2/commit_bundles/signed", counter, auth, withTx, withCurrentUser, binding.Json(CommitBundle{}), PostCommitBundlesSigned)
+		r.Post("/v2/commit_bundles/unsigned", counter, withTx, withCurrentUser, binding.Json(CommitBundle{}), PostCommitBundlesUnsigned)
+		r.Post("/v2/commit_bundles/signed", counter, withTx, withCurrentUser, binding.Json(CommitBundle{}), PostCommitBundlesSigned)
 	}
 
 	// set up daycare role
