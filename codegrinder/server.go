@@ -11,7 +11,6 @@ import (
 	"expvar"
 	"flag"
 	"fmt"
-	"html"
 	"io/ioutil"
 	"log"
 	"math/rand"
@@ -33,7 +32,6 @@ import (
 	. "github.com/russross/codegrinder/common"
 	"github.com/russross/meddler"
 	"github.com/russross/sessions"
-	"github.com/sergi/go-diff/diffmatchpatch"
 	"golang.org/x/crypto/acme/autocert"
 )
 
@@ -493,6 +491,7 @@ func main() {
 		u.Scheme = "https"
 		u.Host = Config.Hostname
 		log.Printf("redirecting http request from %s to %s", addr, u.String())
+		w.Header().Set("Connection", "close")
 		http.Redirect(w, r, u.String(), http.StatusMovedPermanently)
 	}))
 
@@ -510,8 +509,9 @@ func main() {
 		Addr:    ":https",
 		Handler: m,
 		TLSConfig: &tls.Config{
-			MinVersion:     tls.VersionTLS10,
-			GetCertificate: lem.GetCertificate,
+			PreferServerCipherSuites: true,
+			MinVersion:               tls.VersionTLS12,
+			GetCertificate:           lem.GetCertificate,
 		},
 	}
 	if err := server.ListenAndServeTLS("", ""); err != nil {
@@ -626,105 +626,6 @@ func logPrefix() string {
 		prefix = fmt.Sprintf("%s:%d: ", file, line)
 	}
 	return prefix
-}
-
-func intContains(lst []int, n int) bool {
-	for _, elt := range lst {
-		if elt == n {
-			return true
-		}
-	}
-	return false
-}
-
-func int64Contains(lst []int64, n int64) bool {
-	for _, elt := range lst {
-		if elt == n {
-			return true
-		}
-	}
-	return false
-}
-
-func htmlEscapePre(txt string) string {
-	if len(txt) > MaxDetailsLen {
-		txt = txt[:MaxDetailsLen] + "\n\n[TRUNCATED]"
-	}
-	if strings.HasSuffix(txt, "\n") {
-		txt = txt[:len(txt)-1]
-	}
-	escaped := html.EscapeString(txt)
-	pre := "<pre>" + escaped + "</pre>"
-	return pre
-}
-
-func htmlEscapeUl(txt string) string {
-	if len(txt) > MaxDetailsLen {
-		txt = txt[:MaxDetailsLen] + "\n\n[TRUNCATED]"
-	}
-	if strings.HasSuffix(txt, "\n") {
-		txt = txt[:len(txt)-1]
-	}
-	var buf bytes.Buffer
-	buf.WriteString("<ul>\n")
-	lines := strings.Split(txt, "\n")
-	for _, line := range lines {
-		buf.WriteString("<li>")
-		buf.WriteString(html.EscapeString(line))
-		buf.WriteString("</li>\n")
-	}
-	buf.WriteString("</ul>\n")
-	return buf.String()
-}
-
-func htmlEscapePara(txt string) string {
-	if len(txt) > MaxDetailsLen {
-		txt = txt[:MaxDetailsLen] + "\n\n[TRUNCATED]"
-	}
-	if strings.HasSuffix(txt, "\n") {
-		txt = txt[:len(txt)-1]
-	}
-	var buf bytes.Buffer
-	lines := strings.Split(txt, "\n")
-	for _, line := range lines {
-		buf.WriteString("<p>")
-		buf.WriteString(html.EscapeString(line))
-		buf.WriteString("</p>\n")
-	}
-	return buf.String()
-}
-
-func writeDiffHTML(out *bytes.Buffer, from, to, header string) {
-	dmp := diffmatchpatch.New()
-	diff := dmp.DiffMain(from, to, true)
-	diff = dmp.DiffCleanupSemantic(diff)
-
-	out.WriteString("<h1>" + html.EscapeString(header) + "</h1>\n<pre>")
-
-	// write the diff
-	for _, chunk := range diff {
-		txt := html.EscapeString(chunk.Text)
-		txt = strings.Replace(txt, "\n", "↩\n", -1)
-		switch chunk.Type {
-		case diffmatchpatch.DiffInsert:
-			out.WriteString(`<ins style="background:#e6ffe6;">`)
-			out.WriteString(txt)
-			out.WriteString(`</ins>`)
-		case diffmatchpatch.DiffDelete:
-			out.WriteString(`<del style="background:#ffe6e6;">`)
-			out.WriteString(txt)
-			out.WriteString(`</del>`)
-		case diffmatchpatch.DiffEqual:
-			out.WriteString(`<span>`)
-			out.WriteString(txt)
-			out.WriteString(`</span>`)
-		}
-	}
-	if out.Len() > MaxDetailsLen {
-		out.Truncate(MaxDetailsLen)
-		out.WriteString("\n\n[TRUNCATED]")
-	}
-	out.WriteString("</pre>")
 }
 
 func mustMarshal(elt interface{}) []byte {

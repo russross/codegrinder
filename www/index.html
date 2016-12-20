@@ -13,7 +13,7 @@
 <p>Click on the name of your operating system to open the instructions:</p>
 <h3>Linux</h3>
   <div>
-    <p>Follow these steps to set up CodeGrinder. To upgrade <tt>grind</tt>, you only need to repeat the first step:</p>
+    <p>Follow these steps to set up CodeGrinder. To upgrade <tt>grind</tt>, you only need to repeat the 1st step. If you need to log in again, you only need to repeat the 3rd and 4th steps:</p>
     <ol>
     <li>Type the following commands:<br>
         <pre>mkdir -p ~/bin<br>cd ~/bin<br>curl <script>document.write(document.location.origin)</script>/grind.linux -o grind<br>chmod 755 grind<br>cd -</pre></li>
@@ -22,14 +22,14 @@
         Then log out and log back in, or run this command to make it take effect in the same session:<br>
         <pre>. ~/.profile</pre></li>
     <li>Initialize <tt>grind</tt> by typing:<br>
-        <pre>grind init <script>document.write(document.location.hostname)</script></pre></li>
+        <pre>grind login <script>document.write(document.location.hostname)</script></pre></li>
     <li>When it asks you to go to a special URL and copy the cookie, you can copy this and paste it into the terminal:<br>
         <pre><script>document.write(document.cookie.match('codegrinder=[^;]*')[0])</script></pre></li>
     </ol>
   </div>
-<h3>Linux on ARM (Raspberry Pi)</h3>
+<h3>Raspbian on Raspberry Pi</h3>
   <div>
-    <p>Follow these steps to set up CodeGrinder. To upgrade <tt>grind</tt>, you only need to repeat the first step:</p>
+    <p>Follow these steps to set up CodeGrinder. To upgrade <tt>grind</tt>, you only need to repeat the 1st step. If you need to log in again, you only need to repeat the 3rd and 4th steps:</p>
     <ol>
     <li>Type the following commands:<br>
         <pre>mkdir -p ~/bin<br>cd ~/bin<br>curl <script>document.write(document.location.origin)</script>/grind.arm -o grind<br>chmod 755 grind<br>cd -</pre></li>
@@ -38,14 +38,14 @@
         Then log out and log back in, or run this command to make it take effect in the same session:<br>
         <pre>. ~/.profile</pre></li>
     <li>Initialize <tt>grind</tt> by typing:<br>
-        <pre>grind init <script>document.write(document.location.hostname)</script></pre></li>
+        <pre>grind login <script>document.write(document.location.hostname)</script></pre></li>
     <li>When it asks you to go to a special URL and copy the cookie, you can copy this and paste it into the terminal:<br>
         <pre><script>document.write(document.cookie.match('codegrinder=[^;]*')[0])</script></pre></li>
     </ol>
   </div>
 <h3>macOS</h3>
   <div>
-    <p>Follow these steps to set up CodeGrinder. To upgrade <tt>grind</tt>, you only need to repeat the first step:</p>
+    <p>Follow these steps to set up CodeGrinder. To upgrade <tt>grind</tt>, you only need to repeat the 1st step. If you need to log in again, you only need to repeat the 3rd and 4th steps:</p>
     <ol>
     <li>Type the following commands:<br>
         <pre>mkdir -p ~/bin<br>cd ~/bin<br>curl <script>document.write(document.location.origin)</script>/grind.macos -o grind<br>chmod 755 grind<br>cd -</pre></li>
@@ -54,7 +54,7 @@
         Then exit the terminal and open a new one, or run this command to make it take effect in the same session:<br>
         <pre>. ~/.bash_profile</pre></li>
     <li>Initialize <tt>grind</tt> by typing:<br>
-        <pre>grind init <script>document.write(document.location.hostname)</script></pre></li>
+        <pre>grind login <script>document.write(document.location.hostname)</script></pre></li>
     <li>When it asks you to go to a special URL and copy the cookie, you can copy this and paste it into the terminal:<br>
         <pre><script>document.write(document.cookie.match('codegrinder=[^;]*')[0])</script></pre></li>
     </ol>
@@ -63,12 +63,13 @@
   <div>
     <p>Note: if you are using Windows 10, <a href="http://www.howtogeek.com/249966/how-to-install-and-use-the-linux-bash-shell-on-windows-10/">install Bash for Windows</a> and then use the Linux instructions from a Bash shell. This is simpler and works much better than the normal Windows method.</p>
     <p>Follow these steps to set up CodeGrinder. To upgrade <tt>grind</tt>, you only need to repeat step 3:</p>
+    <p>Follow these steps to set up CodeGrinder. To upgrade <tt>grind</tt>, you only need to repeat the 3rd step. If you need to log in again, you only need to repeat the 4th and 5th steps:</p>
     <ol>
     <li>Make a folder on your U: drive called <tt>winbin</tt> (or pick your own location and remember it)</li>
     <li>Add this directory to your <tt>Path</tt> using the Control Panel. Search online for help if you do not know how to do this</li>
     <li>Download the <tt>grind.exe</tt> tool <a href="grind.exe">by right-clicking here</a> and selecting “Save link as” or “Save target as” to save it to that directory. If the security system tries to scare you away from doing this, stand up for yourself and do it anyway</li>
     <li>From a Powershell window, initialize <tt>grind</tt> by typing:<br>
-        <pre>grind init <script>document.write(document.location.hostname)</script></pre></li>
+        <pre>grind login <script>document.write(document.location.hostname)</script></pre></li>
     <li>When it asks you to go to a special URL and copy the cookie, you can copy this and paste it into the terminal:<br>
         <pre><script>document.write(document.cookie.match('codegrinder=[^;]*')[0])</script></pre></li>
     </ol>

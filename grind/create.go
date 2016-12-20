@@ -319,21 +319,21 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 				dirname := filepath.Base(path)
 				for _, name := range blacklistDir {
 					if dirname == name {
-						log.Printf("skipping directory %s", relpath)
+						log.Printf("  skipping directory %s", relpath)
 						return filepath.SkipDir
 					}
 				}
 				return nil
 			}
 			if _, exists := problemType.Files[filepath.ToSlash(relpath)]; exists {
-				log.Printf("skipping file %s", relpath)
-				log.Printf("  because it is provided by the problem type")
+				log.Printf("  skipping file %s", relpath)
+				log.Printf("    because it is provided by the problem type")
 				return nil
 			}
 			for _, suffix := range blacklist {
 				if strings.HasSuffix(relpath, suffix) {
-					log.Printf("skipping file %s", relpath)
-					log.Printf("  because it has the following suffix: %s", suffix)
+					log.Printf("  skipping file %s", relpath)
+					log.Printf("    because it has the following suffix: %s", suffix)
 					return nil
 				}
 			}
@@ -392,8 +392,8 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 			if whitelist[name] {
 				commit.Files[name] = contents
 			} else {
-				log.Printf("warning: skipping solution file %q", name)
-				log.Printf("  because it is not in the starter file set of this or any previous step")
+				log.Printf("  warning: skipping solution file %q", name)
+				log.Printf("    because it is not in the starter file set of this or any previous step")
 			}
 		}
 
