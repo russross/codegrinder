@@ -71,10 +71,11 @@ func main() {
 	cmdLogin := &cobra.Command{
 		Use:   "login",
 		Short: "login to codegrinder server",
-		Long: "Give the hostname of your CodeGrinder installation\n" +
-			"and this will walk you through the process of setting up\n" +
-			"your environment.\n\n" +
-			"You should normally only need to do this once per semester.",
+		Long: fmt.Sprintf("To log in, click on an assignment in Canvas and follow the\n"+
+			"instructions given. You should run a command of the form:\n\n"+
+			"%s login <hostname> <sessionkey>\n\n"+
+			"where <hostname> and <sessionkey> are given in the instructions.\n\n"+
+			"You should normally only need to do this once per semester.", os.Args[0]),
 		Run: CommandLogin,
 	}
 	cmdGrind.AddCommand(cmdLogin)
@@ -177,40 +178,30 @@ func main() {
 	cmdGrind.Execute()
 }
 
+type LoginSession struct {
+	Cookie string
+}
+
 func CommandLogin(cmd *cobra.Command, args []string) {
-	if len(args) != 1 {
-		log.Fatalf("you must specify the CodeGrinder hostname")
+	if len(args) != 2 {
+		fmt.Printf("To log in, click on an assignment in Canvas and follow the\n"+
+			"instructions given. You should run a command of the form:\n\n"+
+			"%s login <hostname> <sessionkey>\n\n"+
+			"where <hostname> and <sessionkey> are given in the instructions.\n\n"+
+			"You should normally only need to do this once per semester.\n\n", os.Args[0])
+
+		log.Fatalf("Usage: %s login <hostname> <sessionkey>", os.Args[0])
 	}
-	hostname := args[0]
+	hostname, key := args[0], args[1]
+	Config.Host = hostname
 
-	fmt.Println(
-		`Please follow these steps:
-
-1.  Use Canvas to load a CodeGrinder window
-2.  Open a new tab in your browser and copy this URL into the address bar:
-
-    https://` + hostname + `/v2/users/me/cookie
-
-3.  The browser will display something of the form: ` + CookieName + `=...
-4.  Copy that entire string to the clipboard and paste it below.
-
-Paste here: `)
-
-	var cookie string
-	n, err := fmt.Scanln(&cookie)
-	if err != nil {
-		log.Fatalf("error encountered while reading the cookie you pasted: %v\n", err)
-	}
-	if n != 1 {
-		log.Fatalf("failed to read the cookie you pasted; please try again\n")
-	}
-	if !strings.HasPrefix(cookie, CookieName+"=") {
-		log.Fatalf("the cookie must start with %s=; perhaps you copied the wrong thing?\n", CookieName)
-	}
+	params := make(url.Values)
+	params.Add("key", key)
+	session := new(LoginSession)
+	mustGetObject("/users/session", params, session)
 
 	// set up config
-	Config.Cookie = cookie
-	Config.Host = hostname
+	Config.Cookie = session.Cookie
 
 	// see if they need an upgrade
 	checkVersion()
@@ -222,7 +213,7 @@ Paste here: `)
 	// save config for later use
 	mustWriteConfig()
 
-	log.Printf("cookie verified and saved: welcome %s", user.Name)
+	log.Printf("login successful; welcome %s", user.Name)
 }
 
 func mustGetObject(path string, params url.Values, download interface{}) {

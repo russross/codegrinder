@@ -408,7 +408,7 @@ func main() {
 
 		// LTI
 		r.Get("/v2/lti/config.xml", counter, GetConfigXML)
-		r.Post("/v2/lti/problem_sets", counter, gunzip, binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblemSets)
+		//r.Post("/v2/lti/problem_sets", counter, gunzip, binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblemSets)
 		r.Post("/v2/lti/problem_sets/:unique", counter, gunzip, binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblemSet)
 
 		// problem bundles--for problem creation only
@@ -445,7 +445,7 @@ func main() {
 		// users
 		r.Get("/v2/users", counter, withTx, withCurrentUser, GetUsers)
 		r.Get("/v2/users/me", counter, withTx, withCurrentUser, GetUserMe)
-		r.Get("/v2/users/me/cookie", counter, auth, GetUserMeCookie)
+		r.Get("/v2/users/session", counter, GetUserSession)
 		r.Get("/v2/users/:user_id", counter, withTx, withCurrentUser, GetUser)
 		r.Get("/v2/courses/:course_id/users", counter, withTx, withCurrentUser, GetCourseUsers)
 		r.Delete("/v2/users/:user_id", counter, withTx, withCurrentUser, administratorOnly, DeleteUser)

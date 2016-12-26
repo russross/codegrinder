@@ -68,14 +68,14 @@ func GetSession(r *http.Request) (*CookieSession, error) {
 	return session, nil
 }
 
-func (session *CookieSession) Save(w http.ResponseWriter) {
+func (session *CookieSession) Save(w http.ResponseWriter) string {
 	// encode and sign
 	secure := securecookie.New([]byte(Config.SessionSecret), nil)
 	secure.MaxAge(0)
 	encoded, err := secure.Encode(CookieName, session)
 	if err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "creating session: %v", err)
-		return
+		return ""
 	}
 
 	cookie := &http.Cookie{
@@ -87,6 +87,7 @@ func (session *CookieSession) Save(w http.ResponseWriter) {
 		Secure:  true,
 	}
 	http.SetCookie(w, cookie)
+	return fmt.Sprintf("%s=%s", CookieName, encoded)
 }
 
 func (session *CookieSession) Delete(w http.ResponseWriter) {

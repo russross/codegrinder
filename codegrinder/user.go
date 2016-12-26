@@ -6,10 +6,11 @@ import (
 	"fmt"
 	"html"
 	"log"
+	"math/rand"
 	"net/http"
 	"sort"
 	"strconv"
-	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -18,6 +19,8 @@ import (
 	. "github.com/russross/codegrinder/common"
 	"github.com/russross/meddler"
 )
+
+const loginRecordTimeout = 5 * time.Minute
 
 // GetCourses handles /v2/courses requests,
 // returning a list of all courses.
@@ -159,17 +162,31 @@ func GetUserMe(w http.ResponseWriter, tx *sql.Tx, currentUser *User, render rend
 	render.JSON(http.StatusOK, currentUser)
 }
 
-// GetUserMeCookie handlers /v2/users/me/cookie requests,
-// returning the cookie for the current user session.
-func GetUserMeCookie(w http.ResponseWriter, r *http.Request) {
-	cookie := r.Header.Get("Cookie")
-	for _, field := range strings.Fields(cookie) {
-		for _, subfield := range strings.Split(field, ";") {
-			if strings.HasPrefix(subfield, CookieName+"=") {
-				fmt.Fprintf(w, "%s", subfield)
-			}
-		}
+// GetUserSession handlers /v2/users/session requests,
+// returning a cookie for a user session.
+//
+// Parameter key=<...> must be present, and must be a valid session key that was issued
+// within the last 5 minutes. The key is deleted after its first use.
+func GetUserSession(w http.ResponseWriter, r *http.Request, render render.Render) {
+	key := r.FormValue("key")
+	if key == "" {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "missing key= parameter")
+		return
 	}
+	userID, err := loginRecords.Get(key)
+	if err != nil {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "%v", err)
+		return
+	}
+	if userID < 1 {
+		loggedHTTPErrorf(w, http.StatusInternalServerError, "illegal user ID found: %d", userID)
+		return
+	}
+	session := NewSession(userID)
+	cookie := session.Save(w)
+
+	result := map[string]string{"Cookie": cookie}
+	render.JSON(http.StatusOK, result)
 }
 
 // GetUser handles /v2/users/:user_id requests,
@@ -872,4 +889,78 @@ type StepWeights struct {
 	ProblemWeight float64 `meddler:"problem_weight"`
 	Step          int64   `meddler:"step"`
 	StepWeight    float64 `meddler:"step_weight"`
+}
+
+type loginRecord struct {
+	userID int64
+	time   time.Time
+}
+
+type logins struct {
+	sync.Mutex
+	logins map[string]*loginRecord
+}
+
+var loginRecords logins
+
+func init() {
+	loginRecords.logins = make(map[string]*loginRecord)
+}
+
+func (l *logins) expire() {
+	now := time.Now()
+	for key, elt := range l.logins {
+		if now.Sub(elt.time) >= loginRecordTimeout {
+			delete(l.logins, key)
+		}
+	}
+}
+
+func (l *logins) Insert(userID int64) string {
+	l.Lock()
+	defer l.Unlock()
+
+	key := ""
+	for {
+		key = makeLoginKey()
+		if _, exists := l.logins[key]; !exists {
+			break
+		}
+	}
+
+	elt := &loginRecord{
+		userID: userID,
+		time:   time.Now(),
+	}
+
+	l.logins[key] = elt
+	l.expire()
+
+	return key
+}
+
+func (l *logins) Get(key string) (int64, error) {
+	l.Lock()
+	defer l.Unlock()
+
+	l.expire()
+
+	elt, exists := l.logins[key]
+	if !exists {
+		return 0, fmt.Errorf("session %q not found: key expires after 5 minutes and can only be used once", key)
+	}
+
+	delete(l.logins, key)
+	return elt.userID, nil
+}
+
+const keyCharSet string = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+
+func makeLoginKey() string {
+	var key string
+	for i := 0; i < 8; i++ {
+		n := rand.Intn(len(keyCharSet))
+		key += keyCharSet[n : n+1]
+	}
+	return key
 }
