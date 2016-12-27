@@ -1,14 +1,15 @@
 .SUFFIXES:
 .SUFFIXES: .s .o .cpp .out .xml
 
-AOUTSOURCE=$(wildcard *.s)
-AOUTOBJECT=$(AOUTSOURCE:.s=.o)
-UNITSOURCE=$(filter-out start.s, $(AOUTSOURCE))
-UNITOBJECT=$(UNITSOURCE:.s=.o)
-LIBSOURCE=$(wildcard lib/*.s)
-LIBOBJECT=$(LIBSOURCE:.s=.o)
+AOUTSOURCE=$(wildcard *.cpp)
+AOUTOBJECT=$(AOUTSOURCE:.cpp=.o)
+UNITSOURCE=$(filter-out main.cpp, $(AOUTSOURCE))
+UNITOBJECT=$(UNITSOURCE:.cpp=.o)
 TESTSOURCE=$(wildcard tests/*.cpp)
 TESTOBJECT=$(TESTSOURCE:.cpp=.o)
+CXXFLAGS=-std=c++11 -Wpedantic -g -Wall -Wextra -Werror -I. -pthread
+LDFLAGS=-lgtest -lpthread
+CXX=g++
 
 all:	test
 
@@ -18,27 +19,29 @@ test:	unittest.out
 grade:	unittest.out
 	./unittest.out --gtest_output=xml
 
+valgrind:	unittest.out
+	rm -f valgrind.log
+	-valgrind --leak-check=full --track-fds=yes --log-file=valgrind.log ./unittest.out --gtest_output=xml
+	cat valgrind.log
+
 run:	a.out
 	./a.out
 
 debug:	a.out
 	gdb ./a.out
 
-.s.o:
-	as -g -march=armv6zk -mcpu=arm1176jzf-s -mfloat-abi=hard -mfpu=vfp $< -o $@
-
 .cpp.o:
-	g++ -c -g -pthread -std=c++11 -Wpedantic -Wall -Wextra -Werror $< -o $@
+	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 a.out:	$(AOUTOBJECT)
-	ld --fatal-warnings $^
+        	$(CXX) $(CXXFLAGS) $^ $(LDFLAGS)
 
-unittest.out:	$(UNITOBJECT) $(LIBOBJECT) $(TESTOBJECT)
-	g++ -g -pthread -lgtest -lpthread $(LIBOBJECT) $(TESTOBJECT) $(UNITOBJECT) -lgtest -lpthread -o $@
+unittest.out:	$(UNITOBJECT) $(TESTOBJECT)
+	$(CXX) $(CXXFLAGS) $^ $(LDFLAGS) -o $@
 
 setup:
-	# install build tools and sources for gtest
-	sudo apt-get install -y build-essential gdb libgtest-dev
+	# install build tools, sources for getst, and valgrind
+	sudo apt-get install -y build-essential gdb libgtest-dev valgrind
 	# build the gtest unit test library
 	g++ -c -g -std=c++11 -Wpedantic -Wall -Wextra -Werror -I/usr/src/gtest -pthread /usr/src/gtest/src/gtest-all.cc -o /tmp/gtest-all.o
 	g++ -c -g -std=c++11 -Wpedantic -Wall -Wextra -Werror -I/usr/src/gtest -pthread /usr/src/gtest/src/gtest_main.cc -o /tmp/gtest_main.o
