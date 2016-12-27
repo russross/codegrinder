@@ -291,7 +291,7 @@ func doRequest(path string, params url.Values, method string, upload interface{}
 	}
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("unexpected status from %s: %s", url, resp.Status)
-		io.Copy(os.Stderr, resp.Body)
+		dumpBody(resp)
 		log.Fatalf("giving up")
 	}
 
@@ -400,5 +400,22 @@ func checkVersion() {
 	if grindRecommended.GT(grindCurrent) {
 		log.Printf("this is grind version %s, but the server recommends %s or higher", CurrentVersion.Version, server.GrindVersionRecommended)
 		log.Printf("  please upgrade as soon as possible")
+	}
+}
+
+func dumpBody(resp *http.Response) {
+	if resp.Body == nil {
+		return
+	}
+
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		gz, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			log.Fatalf("failed to decompress gzip result: %v", err)
+		}
+		defer gz.Close()
+		io.Copy(os.Stderr, gz)
+	} else {
+		io.Copy(os.Stderr, resp.Body)
 	}
 }

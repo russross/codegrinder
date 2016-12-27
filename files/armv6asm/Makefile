@@ -18,6 +18,11 @@ test:	unittest.out
 grade:	unittest.out
 	./unittest.out --gtest_output=xml
 
+valgrind:	unittest.out
+	rm -f valgrind.log
+	-valgrind --leak-check=full --track-fds=yes --log-file=valgrind.log ./unittest.out
+	cat valgrind.log
+
 run:	a.out
 	./a.out
 
@@ -37,8 +42,8 @@ unittest.out:	$(UNITOBJECT) $(LIBOBJECT) $(TESTOBJECT)
 	g++ -g -pthread -lgtest -lpthread $(LIBOBJECT) $(TESTOBJECT) $(UNITOBJECT) -lgtest -lpthread -o $@
 
 setup:
-	# install build tools and sources for gtest
-	sudo apt-get install -y build-essential gdb libgtest-dev
+	# install build tools, sources for gtest, and valgrind
+	sudo apt-get install -y build-essential gdb libgtest-dev valgrind
 	# build the gtest unit test library
 	g++ -c -g -std=c++11 -Wpedantic -Wall -Wextra -Werror -I/usr/src/gtest -pthread /usr/src/gtest/src/gtest-all.cc -o /tmp/gtest-all.o
 	g++ -c -g -std=c++11 -Wpedantic -Wall -Wextra -Werror -I/usr/src/gtest -pthread /usr/src/gtest/src/gtest_main.cc -o /tmp/gtest_main.o

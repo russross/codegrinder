@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -443,7 +442,7 @@ func mustConfirmCommitBundle(bundle *CommitBundle, args []string) *CommitBundle 
 	if err != nil {
 		log.Printf("error dialing %s: %v", url, err)
 		if resp != nil && resp.Body != nil {
-			io.Copy(os.Stderr, resp.Body)
+			dumpBody(resp)
 			resp.Body.Close()
 		}
 		log.Fatalf("giving up")

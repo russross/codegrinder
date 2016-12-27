@@ -8,7 +8,8 @@ UNITOBJECT=$(UNITSOURCE:.cpp=.o)
 TESTSOURCE=$(wildcard tests/*.cpp)
 TESTOBJECT=$(TESTSOURCE:.cpp=.o)
 CXXFLAGS=-std=c++11 -Wpedantic -g -Wall -Wextra -Werror -I. -pthread
-LDFLAGS=-lgtest -lpthread
+AOUTLDFLAGS=-lpthread
+UNITLDFLAGS=-lgtest -lpthread
 CXX=g++
 
 all:	test
@@ -21,7 +22,7 @@ grade:	unittest.out
 
 valgrind:	unittest.out
 	rm -f valgrind.log
-	-valgrind --leak-check=full --track-fds=yes --log-file=valgrind.log ./unittest.out --gtest_output=xml
+	-valgrind --leak-check=full --track-fds=yes --log-file=valgrind.log ./unittest.out
 	cat valgrind.log
 
 run:	a.out
@@ -34,13 +35,13 @@ debug:	a.out
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 a.out:	$(AOUTOBJECT)
-        	$(CXX) $(CXXFLAGS) $^ $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) $^ $(AOUTLDFLAGS)
 
 unittest.out:	$(UNITOBJECT) $(TESTOBJECT)
-	$(CXX) $(CXXFLAGS) $^ $(LDFLAGS) -o $@
+	$(CXX) $(CXXFLAGS) $^ $(UNITLDFLAGS) -o $@
 
 setup:
-	# install build tools, sources for getst, and valgrind
+	# install build tools, sources for gtest, and valgrind
 	sudo apt-get install -y build-essential gdb libgtest-dev valgrind
 	# build the gtest unit test library
 	g++ -c -g -std=c++11 -Wpedantic -Wall -Wextra -Werror -I/usr/src/gtest -pthread /usr/src/gtest/src/gtest-all.cc -o /tmp/gtest-all.o

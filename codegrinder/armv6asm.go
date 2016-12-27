@@ -7,10 +7,11 @@ import (
 
 func init() {
 	problemTypeHandlers["armv6asm"] = map[string]nannyHandler{
-		"grade": nannyHandler(armAsGrade),
-		"test":  nannyHandler(armAsTest),
-		"debug": nannyHandler(armAsDebug),
-		"run":   nannyHandler(armAsRun),
+		"grade":    nannyHandler(armAsGrade),
+		"test":     nannyHandler(armAsTest),
+		"valgrind": nannyHandler(armAsValgrind),
+		"debug":    nannyHandler(armAsDebug),
+		"run":      nannyHandler(armAsRun),
 	}
 }
 
@@ -22,6 +23,11 @@ func armAsGrade(n *Nanny, args, options []string, files map[string][]byte, stdin
 func armAsTest(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
 	log.Printf("arm test")
 	n.ExecSimple([]string{"make", "test"}, stdin, true)
+}
+
+func armAsValgrind(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
+	log.Printf("arm valgrind")
+	n.ExecSimple([]string{"make", "valgrind"}, stdin, true)
 }
 
 func armAsDebug(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {

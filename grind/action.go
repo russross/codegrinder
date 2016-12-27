@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -127,7 +128,7 @@ func runInteractiveSession(bundle *CommitBundle, args []string, dir string) {
 	if err != nil {
 		log.Printf("error dialing: %v", err)
 		if resp != nil && resp.Body != nil {
-			io.Copy(os.Stderr, resp.Body)
+			dumpBody(resp)
 			resp.Body.Close()
 		}
 		log.Printf("giving up")
@@ -200,9 +201,9 @@ func runInteractiveSession(bundle *CommitBundle, args []string, dir string) {
 		case reply.Event != nil:
 			switch reply.Event.Event {
 			case "exec", "stdin", "stdout", "exit", "error":
-				fmt.Fprintf(out, "%s", reply.Event.Dump())
+				fmt.Fprintf(out, "%s", strings.Replace(reply.Event.Dump(), "\n", "\r\n", -1))
 			case "stderr":
-				fmt.Fprintf(stderr, "%s", reply.Event.Dump())
+				fmt.Fprintf(stderr, "%s", strings.Replace(reply.Event.Dump(), "\n", "\r\n", -1))
 			case "files":
 				if reply.Event.Files != nil {
 					for name, contents := range reply.Event.Files {
