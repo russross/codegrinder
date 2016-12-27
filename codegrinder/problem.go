@@ -262,17 +262,32 @@ func GetProblemStep(w http.ResponseWriter, tx *sql.Tx, params martini.Params, cu
 //
 // If parameter unique=<...> present, results will be filtered by matching Unique field.
 // If parameter note=<...> present, results will be filtered by case-insensitive substring match on Note field.
+//
+// If parameter search=<...> present (cat be repeated), it will be interpreted as search terms,
+// and results will be filtered by case-insensitive substring match on several fields
+// related to the problem set, including the unique ID, note, tags, and the same fields
+// on each problem in the problem set. The returned problem sets match all search terms.
 func GetProblemSets(w http.ResponseWriter, r *http.Request, tx *sql.Tx, currentUser *User, render render.Render) {
+	if err := r.ParseForm(); err != nil {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "parsing form data: %v", err)
+		return
+	}
+
 	// build search terms
 	where := ""
 	args := []interface{}{}
 
-	if unique := r.FormValue("unique"); unique != "" {
-		where, args = addWhereEq(where, args, "unique_id", unique)
+	// build search terms
+	search := false
+	for _, term := range r.Form["search"] {
+		where, args = addWhereLike(where, args, "problem_set_search_fields.search_text", term)
+		search = true
 	}
-
+	if unique := r.FormValue("unique"); unique != "" {
+		where, args = addWhereEq(where, args, "problem_sets.unique_id", unique)
+	}
 	if name := r.FormValue("note"); name != "" {
-		where, args = addWhereLike(where, args, "note", name)
+		where, args = addWhereLike(where, args, "problem_sets.note", name)
 	}
 
 	// get the problemsets
@@ -280,11 +295,20 @@ func GetProblemSets(w http.ResponseWriter, r *http.Request, tx *sql.Tx, currentU
 	var err error
 
 	if currentUser.Admin || currentUser.Author {
-		err = meddler.QueryAll(tx, &problemSets, `SELECT * FROM problem_sets`+where+` ORDER BY id`, args...)
+		query := `SELECT problem_sets.* FROM problem_sets`
+		if search {
+			query += ` JOIN problem_set_search_fields ON problem_sets.id = problem_set_search_fields.problem_set_id`
+		}
+		query += where + ` ORDER BY problem_sets.id`
+		err = meddler.QueryAll(tx, &problemSets, query, args...)
 	} else {
-		err = meddler.QueryAll(tx, &problemSets, `SELECT problem_sets.* `+
-			`FROM problem_sets JOIN user_problem_sets ON problem_sets.id = problem_set_id`+
-			where+` ORDER BY id`, args...)
+		query := `SELECT problem_sets.* FROM problem_sets ` +
+			`JOIN user_problem_sets ON problem_sets.id = problem_set_id`
+		if search {
+			query += ` JOIN problem_set_search_fields ON problem_sets.id = problem_set_search_fields.problem_set_id`
+		}
+		query += where + ` ORDER BY problem_sets.id`
+		err = meddler.QueryAll(tx, &problemSets, query, args...)
 	}
 
 	if err != nil {

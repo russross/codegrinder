@@ -208,3 +208,15 @@ CREATE VIEW assignment_search_fields AS
     FROM assignments JOIN courses ON assignments.course_id = courses.id
     JOIN users ON assignments.user_id = users.id
     JOIN problem_sets ON assignments.problem_set_id = problem_sets.id);
+
+CREATE VIEW problem_set_search_fields AS
+    (SELECT problem_sets.id AS problem_set_id,
+        problem_sets.unique_id || ',' ||
+        problem_sets.note || ',' ||
+        problem_sets.tags::text || ',' ||
+        string_agg(problems.unique_id, ',') || ',' ||
+        string_agg(problems.note, ',') || ',' ||
+        string_agg(problems.tags::text, ',') AS search_text
+    FROM problem_sets JOIN problem_set_problems ON problem_sets.id = problem_set_problems.problem_set_id
+    JOIN problems ON problem_set_problems.problem_id = problems.id
+    GROUP BY problem_sets.id);
