@@ -175,7 +175,7 @@ func main() {
 
 		cmdProblem := &cobra.Command{
 			Use:   "problem <search terms>",
-			Short: "find a problem set URL (instructors only)",
+			Short: "find a problem set URL (authors only)",
 			Run:   CommandProblem,
 		}
 		cmdGrind.AddCommand(cmdProblem)

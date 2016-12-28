@@ -21,7 +21,7 @@ func CommandProblem(cmd *cobra.Command, args []string) {
 		log.Printf("  terms will match against the problem set name, note,")
 		log.Printf("  and tags, or agains the same attributes of a problem")
 		log.Printf("  in the problem set. All searchs are case-insensitive.")
-		log.Fatalf("  e.g.: '%s problem cs2810 formula", os.Args[0])
+		log.Fatalf("  e.g.: '%s problem cs2810 formula'", os.Args[0])
 	}
 
 	// search for matching problem sets
