@@ -119,7 +119,7 @@ func runInteractiveSession(bundle *CommitBundle, args []string, dir string) {
 	endpoint := &url.URL{
 		Scheme:   "wss",
 		Host:     bundle.Hostname,
-		Path:     "/v2/sockets/" + bundle.Problem.ProblemType + "/" + bundle.Commit.Action,
+		Path:     urlPrefix + "/sockets/" + bundle.Problem.ProblemType + "/" + bundle.Commit.Action,
 		RawQuery: vals.Encode(),
 	}
 

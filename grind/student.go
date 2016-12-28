@@ -42,7 +42,12 @@ func CommandStudent(cmd *cobra.Command, args []string) {
 	if len(assignments) == 0 {
 		log.Fatalf("no assignments found matching the terms you gave")
 	}
-	sort.Sort(ByUserUpdatedAt(assignments))
+	sort.Slice(assignments, func(i, j int) bool {
+		if assignments[i].UserID != assignments[j].UserID {
+			return assignments[i].UserID < assignments[j].UserID
+		}
+		return assignments[i].UpdatedAt.Before(assignments[j].UpdatedAt)
+	})
 
 	// gather related objects and find max lengths for pretty printing
 	users := make(map[int64]*User)
@@ -92,17 +97,6 @@ func CommandStudent(cmd *cobra.Command, args []string) {
 		log.Printf("   or repeat the search with additional terms")
 		log.Fatalf("   to narrow the results")
 	}
-}
-
-type ByUserUpdatedAt []*Assignment
-
-func (a ByUserUpdatedAt) Len() int      { return len(a) }
-func (a ByUserUpdatedAt) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
-func (a ByUserUpdatedAt) Less(i, j int) bool {
-	if a[i].UserID != a[j].UserID {
-		return a[i].UserID < a[j].UserID
-	}
-	return a[i].UpdatedAt.Before(a[j].UpdatedAt)
 }
 
 func downloadStudentAssignment(id int64, assignment *Assignment) {

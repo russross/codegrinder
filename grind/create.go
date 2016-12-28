@@ -145,7 +145,7 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 		psBundle := &ProblemSetBundle{
 			ProblemSet: &ProblemSet{
 				Unique:    final.Problem.Unique,
-				Note:      "set for single problem " + final.Problem.Unique + "\n" + final.Problem.Note,
+				Note:      "Problem set for: " + final.Problem.Note,
 				Tags:      final.Problem.Tags,
 				CreatedAt: now,
 				UpdatedAt: now,
@@ -437,7 +437,7 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 func mustConfirmCommitBundle(bundle *CommitBundle, args []string) *CommitBundle {
 	// create a websocket connection to the server
 	headers := make(http.Header)
-	url := "wss://" + bundle.Hostname + "/v2/sockets/" + bundle.Problem.ProblemType + "/" + bundle.Commit.Action
+	url := "wss://" + bundle.Hostname + urlPrefix + "/sockets/" + bundle.Problem.ProblemType + "/" + bundle.Commit.Action
 	socket, resp, err := websocket.DefaultDialer.Dial(url, headers)
 	if err != nil {
 		log.Printf("error dialing %s: %v", url, err)

@@ -23,6 +23,7 @@ const (
 	perUserDotFile       = ".codegrinderrc"
 	instructorFile       = ".codegrinderinstructor"
 	perProblemSetDotFile = ".grind"
+	urlPrefix            = "/v2"
 )
 
 var Config struct {
@@ -69,12 +70,10 @@ func main() {
 	cmdGrind.AddCommand(cmdVersion)
 
 	cmdLogin := &cobra.Command{
-		Use:   "login",
+		Use:   "login <hostname> <sessionkey>",
 		Short: "login to codegrinder server",
 		Long: fmt.Sprintf("To log in, click on an assignment in Canvas and follow the\n"+
-			"instructions given. You should run a command of the form:\n\n"+
-			"%s login <hostname> <sessionkey>\n\n"+
-			"where <hostname> and <sessionkey> are given in the instructions.\n\n"+
+			"instructions; <hostname> and <sessionkey> will be listed there.\n\n"+
 			"You should normally only need to do this once per semester.", os.Args[0]),
 		Run: CommandLogin,
 	}
@@ -88,7 +87,7 @@ func main() {
 	cmdGrind.AddCommand(cmdList)
 
 	cmdGet := &cobra.Command{
-		Use:   "get",
+		Use:   "get <assignment id>",
 		Short: "download an assignment to work on it locally",
 		Long: fmt.Sprintf("Give either the numeric ID (given at the start of each listing)\n"+
 			"or the course/problem identifier (given in parentheses).\n\n"+
@@ -117,7 +116,7 @@ func main() {
 	cmdGrind.AddCommand(cmdGrade)
 
 	cmdAction := &cobra.Command{
-		Use:   "action",
+		Use:   "action <action name>",
 		Short: "launch a problem-type specific action",
 		Long: fmt.Sprintf("Give the name of the action to be performed.\n"+
 			"Run this with no action to see a list of valid actions.\n"+
@@ -164,7 +163,7 @@ func main() {
 		cmdGrind.AddCommand(cmdCreate)
 
 		cmdStudent := &cobra.Command{
-			Use:   "student",
+			Use:   "student <search terms>",
 			Short: "download a student assignment (instructors only)",
 			Run:   CommandStudent,
 		}
@@ -173,6 +172,13 @@ func main() {
 		cmdStudent.Flags().StringP("problem", "p", "", "search by problem set name")
 		cmdStudent.Flags().StringP("course", "c", "", "search by course name")
 		cmdGrind.AddCommand(cmdStudent)
+
+		cmdProblem := &cobra.Command{
+			Use:   "problem <search terms>",
+			Short: "find a problem set URL (instructors only)",
+			Run:   CommandProblem,
+		}
+		cmdGrind.AddCommand(cmdProblem)
 	}
 
 	cmdGrind.Execute()
@@ -239,7 +245,7 @@ func doRequest(path string, params url.Values, method string, upload interface{}
 	if method != "GET" && method != "POST" && method != "PUT" && method != "DELETE" {
 		log.Panicf("doRequest only recognizes GET, POST, PUT, and DELETE methods")
 	}
-	url := fmt.Sprintf("https://%s/v2%s", Config.Host, path)
+	url := fmt.Sprintf("https://%s%s%s", Config.Host, urlPrefix, path)
 	req, err := http.NewRequest(method, url, nil)
 	if err != nil {
 		log.Fatalf("error creating http request: %v\n", err)
