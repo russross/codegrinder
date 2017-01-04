@@ -10,7 +10,7 @@ This is a rewrite of a tool we use internally at Dixie State
 University in our Computer Science program. This is a work in
 progress, and you should approach it with caution.
 
-CodeGrinder is released under the terms of the GPL. If you would
+CodeGrinder is released under the terms of the AGPL. If you would
 like to use it and these terms are not suitable, please contact the
 author to inquire about alternate licensing.
 
@@ -57,17 +57,17 @@ All instructions here assume a Debian Jessie server environment.
 
 ### Install Go environment (all nodes)
 
-Start with a Go build environment with Go 1.6 or higher. Make sure
+Start with a Go build environment with Go 1.8 or higher. Make sure
 your GOPATH is set correctly.
 
 Get the URL for the latest version of Go here:
 
 * https://golang.org/dl/
 
-Using that URL (this example assumes version 1.7.3), install Go
+Using that URL (this example assumes version 1.8beta2), install Go
 using:
 
-    curl https://storage.googleapis.com/golang/go1.7.3.linux-amd64.tar.gz | sudo tar zxvf - -C /usr/local
+    curl -s https://storage.googleapis.com/golang/go1.8beta2.linux-amd64.tar.gz | sudo tar zxvf - -C /usr/local
     cd /usr/local/bin
     sudo ln -s ../go/bin/* ./
 
@@ -222,6 +222,10 @@ To start it, use:
 
     sudo systemctl start codegrinder
 
+To set it to automatically start at system boot:
+
+    sudo systemctl enable codegrinder
+
 To stop it:
 
     sudo systemctl stop codegrinder
@@ -234,12 +238,16 @@ To review the logs:
 
     sudo journalctl -xeu codegrinder
 
+To follow the logs in real time:
+
+    sudo journalctl -xfu codegrinder
+
 
 License
 =======
 
 CodeGrinder programming exercise system
-Copyright © 2016  Russ Ross
+Copyright © 2016–2017  Russ Ross
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU Affero General Public License as
