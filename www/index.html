@@ -3,6 +3,60 @@
 <head>
   <meta charset="utf-8">
   <title>CodeGrinder</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css?family=Roboto:400,700&subset=latin-ext');
+    body{
+      font-family: 'Roboto', sans-serif;
+      color:#333;
+      font-size:14px;
+    }
+
+    code, tt, pre{
+      font-family: "Courier New", Courier, monospace;
+    }
+
+    tt{
+      color:#ba1c21;
+    }
+
+    pre{
+      color:#000;
+      font-size:1em;
+      line-height: 1.25em;
+      padding: .5em;
+      border: 1px solid #aaa;
+      background: #f6f6f6;
+      border-radius:5px;
+
+      white-space: pre-wrap;       /* css-3 */
+      white-space: -moz-pre-wrap;  /* Mozilla, since 1999 */
+      white-space: -pre-wrap;      /* Opera 4-6 */
+      white-space: -o-pre-wrap;    /* Opera 7 */
+      word-wrap: break-word;       /* Internet Explorer 5.5+ */
+    }
+
+    h3{
+      color:#fff;
+      background-color:#333;
+      padding:10px 15px;
+      border-radius: 10px;
+      cursor: pointer;
+      overflow:auto;
+    }
+
+    h3:after{
+      content:'+';
+      float:right;
+    }
+
+    h3.open:after{
+      content:'-';
+    }
+
+    h3:hover{
+      background-color: #ba1c21;
+    }  
+  </style>
 </head>
 <body>
 
@@ -98,12 +152,17 @@
             var h3 = document.getElementsByTagName('h3');
             for (var i = 0; i < h3.length; i++) {
                 if (h3[i] == e.target) {
-                    if (h3[i].nextElementSibling.style.display == 'none')
+                    if (h3[i].nextElementSibling.style.display == 'none') {
                         h3[i].nextElementSibling.style.display = 'block';
-                    else
+			h3[i].classList.add('open');
+		    }
+                    else {
                         h3[i].nextElementSibling.style.display = 'none';
+			h3[i].classList.remove('open');
+		    }
                 } else {
                     h3[i].nextElementSibling.style.display = 'none';
+		    h3[i].classList.remove('open');
                 }
             }
         };
