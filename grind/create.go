@@ -387,13 +387,28 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 		}
 
 		// copy the solution files into the commit
+		unused := make(map[string]bool)
+		for name := range whitelist {
+			unused[name] = true
+		}
 		for name, contents := range solution {
 			if whitelist[name] {
 				commit.Files[name] = contents
+				delete(unused, name)
 			} else {
 				log.Printf("  warning: skipping solution file %q", name)
 				log.Printf("    because it is not in the starter file set of this or any previous step")
 			}
+		}
+		if len(unused) > 0 {
+			log.Printf("  example solution must include all files in the starter set")
+			if i > 1 {
+				log.Printf("  from this and previous steps")
+			}
+			for name := range unused {
+				log.Printf("    solution is missing file %s", name)
+			}
+			log.Fatalf("solution rejected, please update and try again")
 		}
 
 		unsigned.ProblemSteps = append(unsigned.ProblemSteps, step)
