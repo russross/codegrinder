@@ -544,6 +544,8 @@ func NewNanny(problemType *ProblemType, problem *Problem, interactive bool, args
 		},
 	}
 
+	log.Printf("new container %s with cpu=%d, fd=%d, file=%d, mem=%d, threads=%d",
+		name, limits.maxCPU, limits.maxFD, limits.maxFileSize, limits.maxMemory, limits.maxThreads)
 	container, err := dockerClient.CreateContainer(docker.CreateContainerOptions{Name: name, Config: config, HostConfig: hostConfig})
 	if err != nil {
 		if err == docker.ErrContainerAlreadyExists {
