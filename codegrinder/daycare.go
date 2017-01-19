@@ -540,7 +540,7 @@ func NewNanny(problemType *ProblemType, problem *Problem, interactive bool, args
 			{Name: "memlock", Soft: 0, Hard: 0},
 			{Name: "nofile", Soft: limits.maxFD, Hard: limits.maxFD},
 			{Name: "nproc", Soft: limits.maxThreads, Hard: limits.maxThreads},
-			{Name: "stack", Soft: mem, Hard: mem},
+			//{Name: "stack", Soft: mem, Hard: mem},
 		},
 	}
 
