@@ -73,6 +73,8 @@ var problemTypeHandlers = make(map[string]map[string]nannyHandler)
 const daycareRegistrationInterval = 10 * time.Second
 
 func main() {
+	log.SetFlags(log.Lshortfile)
+
 	// parse command line
 	var configFile string
 	flag.StringVar(&configFile, "config", "/etc/codegrinder/config.json", "Path to the config file")
@@ -122,7 +124,7 @@ func main() {
 	// set up martini
 	r := martini.NewRouter()
 	m := martini.New()
-	m.Logger(log.New(os.Stderr, "", log.LstdFlags))
+	m.Logger(log.New(os.Stderr, "", log.Lshortfile))
 	//m.Use(martini.Logger())
 	m.Use(martini.Recovery())
 	m.MapTo(r, (*martini.Routes)(nil))
@@ -481,7 +483,7 @@ func main() {
 
 		// make sure the request is for the right host name
 		if Config.Hostname != r.Host {
-			loggedHTTPErrorf(w, http.StatusNotFound, "http request to invalid host: %s", r.Host)
+			//loggedHTTPErrorf(w, http.StatusNotFound, "http request to invalid host: %s", r.Host)
 			return
 		}
 		var u url.URL = *r.URL
@@ -612,14 +614,9 @@ func parseID(w http.ResponseWriter, name, s string) (int64, error) {
 func logPrefix() string {
 	prefix := ""
 	if _, file, line, ok := runtime.Caller(2); ok {
-		short := file
-		for i := len(file) - 1; i > 0; i-- {
-			if file[i] == '/' {
-				short = file[i+1:]
-				break
-			}
+		if slash := strings.LastIndex(file, "/"); slash >= 0 {
+			file = file[slash+1:]
 		}
-		file = short
 		prefix = fmt.Sprintf("%s:%d: ", file, line)
 	}
 	return prefix
