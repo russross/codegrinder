@@ -19,5 +19,6 @@ RUN g++ -c -g -std=c++11 -Wpedantic -Wall -Wextra -Werror -I/usr/src/gtest -pthr
     chown root:root /usr/local/lib/libgtest.a
 
 RUN mkdir /home/student && chmod 777 /home/student
+ADD .gdbinit /home/student/
 USER 2000
 WORKDIR /home/student

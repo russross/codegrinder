@@ -117,7 +117,7 @@ func main() {
 
 	cmdAction := &cobra.Command{
 		Use:   "action <action name>",
-		Short: "launch a problem-type specific action",
+		Short: "save your work and run an action on the server",
 		Long: fmt.Sprintf("Give the name of the action to be performed.\n"+
 			"Run this with no action to see a list of valid actions.\n"+
 			"Your code will be uploaded and the action initiated on the server.\n"+

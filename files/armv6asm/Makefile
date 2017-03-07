@@ -54,4 +54,4 @@ setup:
 	sudo chown root:root /usr/local/lib/libgtest.a
 
 clean:
-	rm -f $(UNITOBJECT) $(LIBOBJECT) $(TESTOBJECT) *.out *.xml
+	rm -f $(AOUTOBJECT) $(LIBOBJECT) $(TESTOBJECT) *.out *.xml
