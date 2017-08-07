@@ -167,10 +167,6 @@ func main() {
 			Short: "download a student assignment (instructors only)",
 			Run:   CommandStudent,
 		}
-		cmdStudent.Flags().StringP("email", "e", "", "search by student email")
-		cmdStudent.Flags().StringP("name", "n", "", "search by student name")
-		cmdStudent.Flags().StringP("problem", "p", "", "search by problem set name")
-		cmdStudent.Flags().StringP("course", "c", "", "search by course name")
 		cmdGrind.AddCommand(cmdStudent)
 
 		cmdProblem := &cobra.Command{
