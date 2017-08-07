@@ -1313,8 +1313,8 @@ class Registers(Dashboard.Module):
         try:
             if value.type.code in [gdb.TYPE_CODE_INT, gdb.TYPE_CODE_PTR]:
                 int_value = to_unsigned(value, value.type.sizeof)
-                value_format = '0x{{:0{}x}}'.format(2 * value.type.sizeof)
-                return value_format.format(int_value)
+                value_format = '0x{{:0{}x}} ({{}})'.format(2 * value.type.sizeof)
+                return value_format.format(int_value, int_value)
         except (gdb.error, ValueError):
             # convert to unsigned but preserve code and flags information
             pass
