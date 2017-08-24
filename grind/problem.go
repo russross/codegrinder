@@ -32,7 +32,7 @@ func CommandProblem(cmd *cobra.Command, args []string) {
 	}
 	mustGetObject("/problem_sets", params, &problemSets)
 	if len(problemSets) == 0 {
-		log.Fatalf("no problem sets found matchin the terms you gave")
+		log.Fatalf("no problem sets found matching the terms you gave")
 	}
 	sort.Slice(problemSets, func(i, j int) bool {
 		return strings.ToLower(problemSets[i].Unique) < strings.ToLower(problemSets[j].Unique)
