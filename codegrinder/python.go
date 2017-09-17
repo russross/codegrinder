@@ -14,11 +14,20 @@ func init() {
 	problemTypeHandlers["python34unittest"] = map[string]nannyHandler{
 		"grade":      nannyHandler(python34UnittestGrade),
 		"test":       nannyHandler(python34UnittestTest),
-		"debug":      nannyHandler(python34UnittestDebug),
-		"run":        nannyHandler(python34UnittestRun),
-		"shell":      nannyHandler(python34UnittestShell),
-		"stylecheck": nannyHandler(python34UnittestStyleCheck),
-		"stylefix":   nannyHandler(python34UnittestStyleFix),
+		"debug":      nannyHandler(python34Debug),
+		"run":        nannyHandler(python34Run),
+		"shell":      nannyHandler(python34Shell),
+		"stylecheck": nannyHandler(python34StyleCheck),
+		"stylefix":   nannyHandler(python34StyleFix),
+	}
+	problemTypeHandlers["python34inout"] = map[string]nannyHandler{
+		"grade":      nannyHandler(python34InOutGrade),
+		"test":       nannyHandler(python34InOutTest),
+		"debug":      nannyHandler(python34Debug),
+		"run":        nannyHandler(python34Run),
+		"shell":      nannyHandler(python34Shell),
+		"stylecheck": nannyHandler(python34StyleCheck),
+		"stylefix":   nannyHandler(python34StyleFix),
 	}
 }
 
@@ -27,33 +36,43 @@ func python34UnittestGrade(n *Nanny, args, options []string, files map[string][]
 	runAndParseXUnit(n, []string{"make", "grade"}, nil, "test_detail.xml")
 }
 
+func python34InOutGrade(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
+	log.Printf("python3.4 inout grade")
+	runAndParseXUnit(n, []string{"make", "grade"}, nil, "test_detail.xml")
+}
+
 func python34UnittestTest(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
 	log.Printf("python3.4 unittest test")
 	n.ExecSimple([]string{"make", "test"}, stdin, true)
 }
 
-func python34UnittestDebug(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
-	log.Printf("python3.4 unittest debug")
+func python34InOutTest(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
+	log.Printf("python3.4 inout test")
+	n.ExecSimple([]string{"make", "test"}, stdin, true)
+}
+
+func python34Debug(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
+	log.Printf("python3.4 debug")
 	n.ExecSimple([]string{"make", "debug"}, stdin, true)
 }
 
-func python34UnittestRun(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
-	log.Printf("python3.4 unittest run")
+func python34Run(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
+	log.Printf("python3.4 run")
 	n.ExecSimple([]string{"make", "run"}, stdin, true)
 }
 
-func python34UnittestShell(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
-	log.Printf("python3.4 unittest shell")
+func python34Shell(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
+	log.Printf("python3.4 shell")
 	n.ExecSimple([]string{"make", "shell"}, stdin, true)
 }
 
-func python34UnittestStyleCheck(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
-	log.Printf("python3.4 unittest stylecheck")
+func python34StyleCheck(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
+	log.Printf("python3.4 stylecheck")
 	n.ExecSimple([]string{"make", "stylecheck"}, stdin, true)
 }
 
-func python34UnittestStyleFix(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
-	log.Printf("python3.4 unittest stylefix")
+func python34StyleFix(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
+	log.Printf("python3.4 stylefix")
 	if err := n.ExecSimple([]string{"make", "stylefix"}, stdin, true); err != nil {
 		return
 	}

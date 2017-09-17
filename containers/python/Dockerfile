@@ -8,7 +8,8 @@ RUN apt-get install -y --no-install-recommends \
     python3.4 \
     python-pip \
     python3-six \
-    make
+    make \
+    diff
 
 RUN pip install autopep8
 
