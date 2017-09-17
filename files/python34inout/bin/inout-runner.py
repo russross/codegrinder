@@ -78,7 +78,7 @@ for infile in infiles:
         (output, errout) = proc.communicate(b'')
         if len(output) > 0 and output[-1] == '\n':
             output = output[:-1]
-        msg += output
+        msg += str(output, 'utf-8')
         print(msg)
         body += msg + '\n'
         passed = False
