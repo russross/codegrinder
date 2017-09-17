@@ -10,7 +10,7 @@ import xml.etree.ElementTree as ET
 cmd = sys.argv[1:]
 
 # get the list of input files to process
-infiles = sorted(glob.glob('tests/*.in'))
+infiles = sorted(glob.glob('tests/*.input'))
 
 testsuites = ET.Element('testsuites')
 suite = ET.SubElement(testsuites, 'testsuite')
@@ -22,8 +22,8 @@ for infile in infiles:
     if not prevpassed:
         print()
 
-    outfile = infile[:-len('.in')] + '.out'
-    actualfile = infile[:-len('.in')] + '.actual'
+    outfile = infile[:-len('.input')] + '.output'
+    actualfile = infile[:-len('.input')] + '.actual'
 
     # get the input
     fp = open(infile, 'rb')
