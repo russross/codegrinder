@@ -74,9 +74,13 @@ for infile in infiles:
         msg = '\n!!! output is incorrect:\n'
         diff = ['diff', actualfile, outfile]
         msg += ' '.join(diff)
+        proc = subprocess.Popen(diff, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        (output, errout) = proc.communicate(b'')
+        if len(output) > 0 and output[-1] == '\n':
+            output = output[:-1]
+        msg += output
         print(msg)
         body += msg + '\n'
-        subprocess.run(diff)
         passed = False
 
     tests += 1
