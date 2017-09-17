@@ -9,7 +9,7 @@ RUN apt-get install -y --no-install-recommends \
     python-pip \
     python3-six \
     make \
-    diff
+    diffutils
 
 RUN pip install autopep8
 
