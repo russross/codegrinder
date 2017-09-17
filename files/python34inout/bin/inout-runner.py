@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import glob
+import io
 import subprocess
 import sys
 import time
@@ -43,24 +44,24 @@ for infile in infiles:
     print(body)
     body += '\n'
     start = time.time()
-    res = subprocess.run(cmd, input=input, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    (actual, stderr) = proc.communicate(input)
     seconds = time.time() - start
-    actual = res.stdout
     fp = open(actualfile, 'wb')
     fp.write(actual)
     fp.close()
 
     # check the output
     passed = True
-    if res.returncode != 0:
-        msg = '\n!!! returned non-zero status code {}'.format(res.returncode)
+    if proc.returncode != 0:
+        msg = '\n!!! returned non-zero status code {}'.format(proc.returncode)
         print(msg)
         body += msg + '\n'
         passed = False
 
-    if res.stderr != b'':
+    if stderr != b'':
         msg = '\n!!! stderr should have been empty, but instead the program printed:'
-        lines = res.stderr.split(b'\n')
+        lines = stderr.split(b'\n')
         if len(lines) > 0 and lines[-1] == b'':
             lines = lines[:-1]
         for line in lines:
