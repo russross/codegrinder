@@ -10,7 +10,7 @@ import xml.etree.ElementTree as ET
 cmd = sys.argv[1:]
 
 # get the list of input files to process
-infiles = sorted(glob.glob('tests/*.input'))
+infiles = sorted(glob.glob('inputs/*.input'))
 
 testsuites = ET.Element('testsuites')
 suite = ET.SubElement(testsuites, 'testsuite')
