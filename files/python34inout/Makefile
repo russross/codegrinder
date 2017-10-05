@@ -21,20 +21,23 @@ endif
 all:	test
 
 test:
-	python3.4 bin/inout-runner.py python3.4 $(PYTHONMAIN)
+	python3 bin/inout-runner.py python3 $(PYTHONMAIN)
+
+step:
+	python3 bin/inout-stepall.py python3 $(PYTHONMAIN)
 
 grade:
 	rm -f test_detail.xml
-	python3.4 bin/inout-runner.py python3.4 $(PYTHONMAIN)
+	python3 bin/inout-runner.py python3 $(PYTHONMAIN)
 
 shell:
-	python3.4
+	python3
 
 run:	
-	python3.4 -i $(PYTHONMAIN)
+	python3 -i $(PYTHONMAIN)
 
 debug:
-	pdb3.4 $(PYTHONMAIN)
+	pdb3 $(PYTHONMAIN)
 
 stylecheck:
 	pep8 $(PYTHONSOURCE)
@@ -43,8 +46,8 @@ stylefix:
 	autopep8 -vvaai $(PYTHONSOURCE)
 
 setup:
-	sudo apt-get install -y make python3.4 python-pip python3-six diff
+	sudo apt-get install -y make python3.4 python-pip python3-six diffutils
 	sudo pip install autopep8
 
 clean:
-	rm -rf test_detail.xml $(PYTHONSOURCE:.py=.pyc) tests/*.pyc tests/*.actual
+	rm -rf test_detail.xml $(PYTHONSOURCE:.py=.pyc) tests/*.pyc tests/*.actual __pycache__

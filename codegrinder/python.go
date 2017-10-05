@@ -23,6 +23,7 @@ func init() {
 	problemTypeHandlers["python34inout"] = map[string]nannyHandler{
 		"grade":      nannyHandler(python34InOutGrade),
 		"test":       nannyHandler(python34InOutTest),
+		"step":       nannyHandler(python34InOutStep),
 		"debug":      nannyHandler(python34Debug),
 		"run":        nannyHandler(python34Run),
 		"shell":      nannyHandler(python34Shell),
@@ -49,6 +50,11 @@ func python34UnittestTest(n *Nanny, args, options []string, files map[string][]b
 func python34InOutTest(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
 	log.Printf("python3.4 inout test")
 	n.ExecSimple([]string{"make", "test"}, stdin, true)
+}
+
+func python34InOutStep(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
+	log.Printf("python3.4 inout step")
+	n.ExecSimple([]string{"make", "step"}, stdin, true)
 }
 
 func python34Debug(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {

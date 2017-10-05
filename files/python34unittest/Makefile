@@ -21,20 +21,20 @@ endif
 all:	test
 
 test:
-	python3.4 -m unittest discover -vs tests
+	python3 -m unittest discover -vs tests
 
 grade:
 	rm -f test_detail.xml
-	python3.4 -m xmlrunner discover -vs tests
+	python3 -m xmlrunner discover -vs tests
 
 shell:
-	python3.4
+	python3
 
 run:	
-	python3.4 -i $(PYTHONMAIN)
+	python3 -i $(PYTHONMAIN)
 
 debug:
-	pdb3.4 $(PYTHONMAIN)
+	pdb3 $(PYTHONMAIN)
 
 stylecheck:
 	pep8 $(PYTHONSOURCE)
