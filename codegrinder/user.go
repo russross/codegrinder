@@ -619,26 +619,6 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 		assignment.RawScores = map[string][]float64{}
 	}
 
-	// fill in raw scores for legacy data
-	// TODO: delete this eventually
-	counts := []*ProblemStepCount{}
-	if err := meddler.QueryAll(tx, &counts, `SELECT problems.unique_id AS problem_unique_id, COUNT(problem_steps.step) AS step_count `+
-		`FROM problem_set_problems `+
-		`JOIN problems ON problem_set_problems.problem_id = problems.id `+
-		`JOIN problem_steps ON problems.id = problem_steps.problem_id `+
-		`WHERE problem_set_problems.problem_set_id = $1 GROUP BY problems.id`, assignment.ProblemSetID); err != nil {
-		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error getting problem step counts: %v", err)
-		return
-	}
-
-	for _, elt := range counts {
-		scores := assignment.RawScores[elt.ProblemUnique]
-		for i := int64(len(scores)); i < elt.StepCount; i++ {
-			scores = append(scores, 0.0)
-		}
-		assignment.RawScores[elt.ProblemUnique] = scores
-	}
-
 	// reject commit if a previous step remains incomplete
 	scores := assignment.RawScores[problem.Unique]
 	for i := 0; i < int(commit.Step)-1; i++ {
@@ -749,66 +729,22 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 
 	// save the grade update
 	if !isInstructor && signed.Commit.ReportCard != nil {
-		// TODO: eventually start to assume that RawScores has a full list
-		// of scores including zeros. Can't do it until next DB reset.
-
-		// save the raw score for this problem step
-		scores := assignment.RawScores[problem.Unique]
-		for int(signed.Commit.Step) > len(scores) {
-			scores = append(scores, 0.0)
-		}
-		scores[signed.Commit.Step-1] = signed.Commit.ReportCard.ComputeScore()
-		assignment.RawScores[problem.Unique] = scores
+		assignment.SetMinorScore(problem.Unique, int(signed.Commit.Step-1), signed.Commit.ReportCard.ComputeScore())
 
 		// get the weight of each step in the problem and problem in the set
-		weights := []*StepWeights{}
-		if err := meddler.QueryAll(tx, &weights, `SELECT problems.unique_id, problem_set_problems.weight AS problem_weight, problem_steps.step, problem_steps.weight AS step_weight `+
-			`FROM problem_set_problems JOIN problems ON problem_set_problems.problem_id = problems.id `+
-			`JOIN problem_steps ON problem_steps.problem_id = problems.id `+
-			`WHERE problem_set_problems.problem_set_id = $1 `+
-			`ORDER BY unique_id, step`, assignment.ProblemSetID); err != nil {
-			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
+		majorWeights, minorWeights, err := GetProblemWeights(tx, assignment)
+		if err != nil {
+			loggedHTTPErrorf(w, http.StatusInternalServerError, "%v", err)
 			return
-		}
-		if len(weights) == 0 {
-			loggedHTTPErrorf(w, http.StatusInternalServerError, "no problem step weights found, unable to compute score")
-			return
-		}
-		problemWeights := make(map[string]float64)
-		stepWeights := make(map[string][]float64)
-		for _, elt := range weights {
-			problemWeights[elt.Unique] = elt.ProblemWeight
-			stepWeights[elt.Unique] = append(stepWeights[elt.Unique], elt.StepWeight)
-			if len(stepWeights[elt.Unique]) != int(elt.Step) {
-				loggedHTTPErrorf(w, http.StatusInternalServerError, "step weights do not line up when computing score")
-				return
-			}
 		}
 
 		// compute an overall score
-		setWeightTotal, setScore := 0.0, 0.0
-		for unique, problemWeight := range problemWeights {
-			setWeightTotal += problemWeight
-			scores := assignment.RawScores[unique]
-			problemWeightTotal, problemScore := 0.0, 0.0
-			for i, stepWeight := range stepWeights[unique] {
-				problemWeightTotal += stepWeight
-				if i < len(scores) {
-					problemScore += scores[i] * stepWeight
-				}
-			}
-			if problemWeightTotal == 0.0 {
-				loggedHTTPErrorf(w, http.StatusInternalServerError, "problem %s has no weight", unique)
-				return
-			}
-			problemScore /= problemWeightTotal
-			setScore += problemScore * problemWeight
-		}
-		if setWeightTotal == 0.0 {
-			loggedHTTPErrorf(w, http.StatusInternalServerError, "problem set has no weight")
+		score, err := assignment.ComputeScore(majorWeights, minorWeights)
+		if err != nil {
+			loggedHTTPErrorf(w, http.StatusInternalServerError, "%v", err)
 			return
 		}
-		assignment.Score = setScore / setWeightTotal
+		assignment.Score = score
 
 		// save the updates to the assignment
 		assignment.UpdatedAt = now
@@ -826,9 +762,9 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 
 		// record the grading transcript
 		var report bytes.Buffer
-		if len(problemWeights) > 1 && len(signed.ProblemSteps) > 1 {
+		if len(majorWeights) > 1 && len(signed.ProblemSteps) > 1 {
 			fmt.Fprintf(&report, "<h1>Grading transcript for problem %s step %d</h1>\n", signed.Problem.Unique, signed.Commit.Step)
-		} else if len(problemWeights) > 1 {
+		} else if len(majorWeights) > 1 {
 			fmt.Fprintf(&report, "<h1>Grading transcript for problem %s</h1>\n", signed.Problem.Unique)
 		} else if len(signed.ProblemSteps) > 1 {
 			fmt.Fprintf(&report, "<h1>Grading transcript for step %d</h1>\n", signed.Commit.Step)
@@ -884,11 +820,58 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 	render.JSON(http.StatusOK, &signed)
 }
 
-type StepWeights struct {
-	Unique        string  `meddler:"unique_id"`
-	ProblemWeight float64 `meddler:"problem_weight"`
-	Step          int64   `meddler:"step"`
-	StepWeight    float64 `meddler:"step_weight"`
+type StepWeight struct {
+	MajorKey    string  `meddler:"major_key"`
+	MajorWeight float64 `meddler:"major_weight"`
+	MinorKey    int64   `meddler:"minor_key"`
+	MinorWeight float64 `meddler:"minor_weight"`
+}
+
+func GetProblemWeights(tx *sql.Tx, assignment *Assignment) (majorWeights map[string]float64, minorWeights map[string][]float64, err error) {
+	weights := []*StepWeight{}
+	if err := meddler.QueryAll(tx, &weights, `SELECT problems.unique_id AS major_key, problem_set_problems.weight AS major_weight, problem_steps.step AS minor_key, problem_steps.weight AS minor_weight `+
+		`FROM problem_set_problems JOIN problems ON problem_set_problems.problem_id = problems.id `+
+		`JOIN problem_steps ON problem_steps.problem_id = problems.id `+
+		`WHERE problem_set_problems.problem_set_id = $1 `+
+		`ORDER BY unique_id, step`, assignment.ProblemSetID); err != nil {
+		return nil, nil, fmt.Errorf("db error: %v", err)
+	}
+	if len(weights) == 0 {
+		return nil, nil, fmt.Errorf("no problem step weights found, unable to compute score")
+	}
+	majorWeights = make(map[string]float64)
+	minorWeights = make(map[string][]float64)
+	for _, elt := range weights {
+		majorWeights[elt.MajorKey] = elt.MajorWeight
+		minorWeights[elt.MajorKey] = append(minorWeights[elt.MajorKey], elt.MinorWeight)
+		if len(minorWeights[elt.MajorKey]) != int(elt.MinorKey) {
+			return nil, nil, fmt.Errorf("step weights do not line up when computing score")
+		}
+	}
+	return majorWeights, minorWeights, nil
+}
+
+func GetQuizWeights(tx *sql.Tx, assignment *Assignment) (majorWeights map[string]float64, minorWeights map[string][]float64, err error) {
+	weights := []*StepWeight{}
+	if err := meddler.QueryAll(tx, &weights, `SELECT quizzes.id::text AS major_key, quizzes.weight AS major_weight, questions.question_number AS minor_key, questions.weight AS minor_weight `+
+		`FROM quizzes JOIN questions ON quizzes.id = questions.quiz_id `+
+		`WHERE quizzes.lti_id = $1 `+
+		`ORDER BY quizzes.id, questions.question_number`, assignment.LtiID); err != nil {
+		return nil, nil, fmt.Errorf("db error: %v", err)
+	}
+	if len(weights) == 0 {
+		return nil, nil, fmt.Errorf("no quiz question weights found, unable to compute score")
+	}
+	majorWeights = make(map[string]float64)
+	minorWeights = make(map[string][]float64)
+	for _, elt := range weights {
+		majorWeights[elt.MajorKey] = elt.MajorWeight
+		minorWeights[elt.MajorKey] = append(minorWeights[elt.MajorKey], elt.MinorWeight)
+		if len(minorWeights[elt.MajorKey]) != int(elt.MinorKey) {
+			return nil, nil, fmt.Errorf("question weights do not line up when computing score")
+		}
+	}
+	return majorWeights, minorWeights, nil
 }
 
 type loginRecord struct {

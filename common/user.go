@@ -103,6 +103,41 @@ func (asst *Assignment) IsInstructorRole() bool {
 	return false
 }
 
+func (assignment *Assignment) SetMinorScore(major string, minor int, score float64) {
+	// save the raw score
+	scores := assignment.RawScores[major]
+	for minor >= len(scores) {
+		scores = append(scores, 0.0)
+	}
+	scores[minor] = score
+	assignment.RawScores[major] = scores
+}
+
+func (assignment *Assignment) ComputeScore(majorWeights map[string]float64, minorWeights map[string][]float64) (float64, error) {
+	// compute an overall score
+	majorWeightSum, majorScoreSum := 0.0, 0.0
+	for unique, majorWeight := range majorWeights {
+		majorWeightSum += majorWeight
+		scores := assignment.RawScores[unique]
+		minorWeightSum, minorScoreSum := 0.0, 0.0
+		for i, minorWeight := range minorWeights[unique] {
+			minorWeightSum += minorWeight
+			if i < len(scores) {
+				minorScoreSum += scores[i] * minorWeight
+			}
+		}
+		if minorWeightSum == 0.0 {
+			return 0.0, fmt.Errorf("score group %s has no weight", unique)
+		}
+		minorScoreSum /= minorWeightSum
+		majorScoreSum += minorScoreSum * majorWeight
+	}
+	if majorWeightSum == 0.0 {
+		return 0.0, fmt.Errorf("major score group has no weight")
+	}
+	return majorScoreSum / majorWeightSum, nil
+}
+
 func (commit *Commit) ComputeSignature(secret, problemTypeSignature, problemSignature, daycareHost string, userID int64) string {
 	v := make(url.Values)
 

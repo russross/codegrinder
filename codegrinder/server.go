@@ -412,6 +412,7 @@ func main() {
 		r.Get("/v2/lti/config.xml", counter, GetConfigXML)
 		//r.Post("/v2/lti/problem_sets", counter, gunzip, binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblemSets)
 		r.Post("/v2/lti/problem_sets/:unique", counter, gunzip, binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblemSet)
+		r.Post("/v2/lti/quizzes", counter, gunzip, binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiQuizzes)
 
 		// problem bundles--for problem creation only
 		r.Post("/v2/problem_bundles/unconfirmed", counter, withTx, withCurrentUser, authorOnly, gunzip, binding.Json(ProblemBundle{}), PostProblemBundleUnconfirmed)

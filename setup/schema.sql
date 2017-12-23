@@ -110,7 +110,7 @@ CREATE UNIQUE INDEX users_canvas_id ON users (canvas_id);
 CREATE TABLE assignments (
     id                      bigserial NOT NULL,
     course_id               bigint NOT NULL,
-    problem_set_id          bigint NOT NULL,
+    problem_set_id          bigint,
     user_id                 bigint NOT NULL,
     roles                   text NOT NULL,
     instructor              boolean NOT NULL,
@@ -159,18 +159,22 @@ CREATE UNIQUE INDEX commits_unique_assignment_problem_step ON commits (assignmen
 
 CREATE VIEW user_problem_sets AS
     (SELECT DISTINCT assignments.user_id, problem_sets.id AS problem_set_id FROM
-    assignments JOIN problem_sets ON assignments.problem_set_id = problem_sets.id)
+    assignments JOIN problem_sets ON assignments.problem_set_id = problem_sets.id
+    WHERE assignments.problem_set_id IS NOT NULL)
     UNION
     (SELECT DISTINCT instructors.id AS user_id, assignments.problem_set_id AS problem_set_id FROM
     users AS instructors JOIN assignments AS instructors_assignments ON instructors.id = instructors_assignments.user_id
     JOIN courses ON instructors_assignments.course_id = courses.id
     JOIN assignments ON courses.id = assignments.course_id
-    WHERE instructors_assignments.instructor);
+    WHERE instructors_assignments.instructor
+    AND assignments.problem_set_id IS NOT NULL
+    AND instructors_assignments.problem_set_id IS NOT NULL);
 
 CREATE VIEW user_problems AS
     (SELECT DISTINCT assignments.user_id, problem_set_problems.problem_id FROM
     assignments JOIN problem_sets ON assignments.problem_set_id = problem_sets.id
-    JOIN problem_set_problems ON problem_sets.id = problem_set_problems.problem_set_id)
+    JOIN problem_set_problems ON problem_sets.id = problem_set_problems.problem_set_id
+    WHERE assignments.problem_set_id IS NOT NULL)
     UNION
     (SELECT DISTINCT instructors.id AS user_id, problem_set_problems.problem_id FROM
     users AS instructors JOIN assignments AS instructors_assignments ON instructors.id = instructors_assignments.user_id
@@ -178,7 +182,9 @@ CREATE VIEW user_problems AS
     JOIN assignments ON courses.id = assignments.course_id
     JOIN problem_sets ON assignments.problem_set_id = problem_sets.id
     JOIN problem_set_problems ON problem_sets.id = problem_set_problems.problem_id
-    WHERE instructors_assignments.instructor);
+    WHERE instructors_assignments.instructor
+    AND assignments.problem_set_id IS NOT NULL
+    AND instructors_assignments.problem_set_id IS NOT NULL);
 
 CREATE VIEW user_users AS
     (SELECT DISTINCT instructors.id AS user_id, users.id AS other_user_id FROM
@@ -207,7 +213,8 @@ CREATE VIEW assignment_search_fields AS
         problem_sets.unique_id || ',' || problem_sets.note || ',' || problem_sets.tags::text AS search_text
     FROM assignments JOIN courses ON assignments.course_id = courses.id
     JOIN users ON assignments.user_id = users.id
-    JOIN problem_sets ON assignments.problem_set_id = problem_sets.id);
+    JOIN problem_sets ON assignments.problem_set_id = problem_sets.id
+    WHERE assignments.problem_set_id IS NOT NULL);
 
 CREATE VIEW problem_set_search_fields AS
     (SELECT problem_sets.id AS problem_set_id,
@@ -220,3 +227,51 @@ CREATE VIEW problem_set_search_fields AS
     FROM problem_sets JOIN problem_set_problems ON problem_sets.id = problem_set_problems.problem_set_id
     JOIN problems ON problem_set_problems.problem_id = problems.id
     GROUP BY problem_sets.id);
+
+CREATE TABLE quizzes (
+    id                      bigserial NOT NULL,
+    assignment_id           bigint NOT NULL,
+    lti_id                  text NOT NULL,
+    note                    text NOT NULL,
+    weight                  double precision NOT NULL,
+    participation_points    double precision NOT NULL,
+    participation_percent   double precision NOT NULL,
+    created_at              timestamp with time zone NOT NULL,
+    updated_at              timestamp with time zone NOT NULL,
+
+    PRIMARY KEY (id),
+    FOREIGN KEY (assignment_id) REFERENCES assignments (id) ON DELETE CASCADE
+);
+
+CREATE TABLE questions (
+    id                      bigserial NOT NULL,
+    quiz_id                 bigint NOT NULL,
+    question_number         bigint NOT NULL,
+    note                    text NOT NULL,
+    weight                  double precision NOT NULL,
+    points_for_attempt      double precision NOT NULL,
+    answers                 jsonb NOT NULL,
+    answer_filter_regex     text,
+    created_at              timestamp with time zone NOT NULL,
+    updated_at              timestamp with time zone NOT NULL,
+    opened_at               timestamp with time zone NOT NULL,
+    closed_at               timestamp with time zone NOT NULL,
+
+    PRIMARY KEY (id),
+    FOREIGN KEY (quiz_id) REFERENCES quizzes (id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX questions_quiz_id_index_number ON questions (quiz_id, question_number);
+
+CREATE TABLE responses (
+    id                      bigserial NOT NULL,
+    assignment_id           bigint NOT NULL,
+    question_id             bigint NOT NULL,
+    response                text NOT NULL,
+    created_at              timestamp with time zone NOT NULL,
+    updated_at              timestamp with time zone NOT NULL,
+
+    PRIMARY KEY (id),
+    FOREIGN KEY (assignment_id) REFERENCES assignments (id) ON DELETE CASCADE,
+    FOREIGN KEY (question_id) REFERENCES questions (id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX responses_assignment_id_question_id ON responses (assignment_id, question_id);

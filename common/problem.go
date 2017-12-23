@@ -204,8 +204,8 @@ func (problem *Problem) ComputeSignature(secret string, steps []*ProblemStep) st
 
 // problem files in these directories do not have line endings cleaned up
 var ProblemStepDirectoryWhitelist = map[string]bool{
-	"inputs":  true,
-	"doc": true,
+	"inputs": true,
+	"doc":    true,
 }
 
 // fix line endings

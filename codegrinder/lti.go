@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/go-martini/martini"
-	"github.com/martini-contrib/render"
 	. "github.com/russross/codegrinder/common"
 	"github.com/russross/meddler"
 )
@@ -47,7 +46,7 @@ type LTIRequest struct {
 	ContextTitle                     string  `form:"context_title"`                            // CS-3520-01 FA14
 	ContextLabel                     string  `form:"context_label"`                            // CS-3520
 	ContextID                        string  `form:"context_id"`                               // <opaque>: unique per course
-	ResourceLinkTitle                string  `form:"resource_link_title"`                      // Code Grinder
+	ResourceLinkTitle                string  `form:"resource_link_title"`                      // CodeGrinder
 	ResourceLinkID                   string  `form:"resource_link_id"`                         // <opaque>: unique per course+link, i.e., per-assignment
 	PersonSourcedID                  string  `form:"lis_result_sourcedid"`                     // <opaque>: unique per course+link+user, for grade callback
 	OutcomeServiceURL                string  `form:"lis_outcome_service_url"`                  // https://... to post grade
@@ -378,14 +377,15 @@ func LtiProblemSet(w http.ResponseWriter, r *http.Request, tx *sql.Tx, form LTIR
 	http.Redirect(w, r, fmt.Sprintf("/?assignment=%d&session=%s", asst.ID, key), http.StatusSeeOther)
 }
 
-// LtiProblemSets handles /lti/problem_set requests.
-// It creates the user/course if necessary, creates a session,
-// and redirects the user to the problem set picker UI URL.
-func LtiProblemSets(w http.ResponseWriter, r *http.Request, tx *sql.Tx, form LTIRequest, render render.Render) {
+// LtiQuizzes handles /lti/quizzes requests.
+// It creates the user/course/assignment if necessary, creates a session,
+// and redirects the user to the main UI URL.
+func LtiQuizzes(w http.ResponseWriter, r *http.Request, tx *sql.Tx, form LTIRequest, params martini.Params) {
 	now := time.Now()
 
-	// load the coarse
-	if _, err := getUpdateCourse(tx, &form, now); err != nil {
+	// load the course
+	course, err := getUpdateCourse(tx, &form, now)
+	if err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
 	}
@@ -397,20 +397,19 @@ func LtiProblemSets(w http.ResponseWriter, r *http.Request, tx *sql.Tx, form LTI
 		return
 	}
 
+	// load the assignment
+	asst := new(Assignment)
+	if asst, err = getUpdateAssignment(tx, &form, now, course, nil, user); err != nil {
+		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
+		return
+	}
+
 	// sign the user in
 	session := NewSession(user.ID)
 	session.Save(w)
 
-	u := &url.URL{
-		Path: "/",
-		Fragment: fmt.Sprintf("/problem_sets/%s/%s",
-			url.QueryEscape(form.OAuthConsumerKey),
-			url.QueryEscape(form.LaunchPresentationReturnURL)),
-	}
-
-	log.Printf("problem set picker redirecting to %s", u.String())
-	//http.Redirect(w, r, u.String(), http.StatusSeeOther)
-	http.Redirect(w, r, "/v2/users/me/cookie", http.StatusSeeOther)
+	// redirect to the console
+	http.Redirect(w, r, fmt.Sprintf("/quiz?assignment=%d", asst.ID), http.StatusSeeOther)
 }
 
 // get/create/update this user
@@ -498,53 +497,34 @@ func getUpdateCourse(tx *sql.Tx, form *LTIRequest, now time.Time) (*Course, erro
 	return course, nil
 }
 
-type ProblemStepCount struct {
-	ProblemUnique string `meddler:"problem_unique_id"`
-	StepCount     int64  `meddler:"step_count"`
-}
-
 // get/create/update this assignment
 func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Course, problemSet *ProblemSet, user *User) (*Assignment, error) {
 	asst := new(Assignment)
-	err := meddler.QueryRow(tx, asst, `SELECT * FROM assignments WHERE course_id = $1 AND problem_set_id = $2 AND user_id = $3`,
-		course.ID, problemSet.ID, user.ID)
+	err := meddler.QueryRow(tx, asst, `SELECT * FROM assignments WHERE course_id = $1 AND lti_id = $2 AND user_id = $3`,
+		course.ID, form.ResourceLinkID, user.ID)
 	if err != nil {
 		if err != sql.ErrNoRows {
-			log.Printf("db error loading assignment for course %d, problem set %d, user %d: %v", course.ID, problemSet.ID, user.ID, err)
+			log.Printf("db error loading assignment for course %d, lti id %s, user %d: %v", course.ID, form.ResourceLinkID, user.ID, err)
 			return nil, err
 		}
 
-		log.Printf("creating new assignment %q for course %d (%s), problem set %d, user %d: %s (%s)",
-			form.CanvasAssignmentTitle, course.ID, course.Name, problemSet.ID, user.ID, user.Name, user.Email)
+		log.Printf("creating new assignment %q for course %d (%s), lti id %s, user %d: %s (%s)",
+			form.CanvasAssignmentTitle, course.ID, course.Name, form.ResourceLinkID, user.ID, user.Name, user.Email)
 		asst.ID = 0
 		asst.RawScores = map[string][]float64{}
 		asst.Score = 0.0
 		asst.CreatedAt = now
 		asst.UpdatedAt = now
+	}
 
-		// fill in blanks for the raw scores
-		counts := []*ProblemStepCount{}
-		if err := meddler.QueryAll(tx, &counts, `SELECT problems.unique_id AS problem_unique_id, COUNT(problem_steps.step) AS step_count `+
-			`FROM problem_set_problems `+
-			`JOIN problems ON problem_set_problems.problem_id = problems.id `+
-			`JOIN problem_steps ON problems.id = problem_steps.problem_id `+
-			`WHERE problem_set_problems.problem_set_id = $1 GROUP BY problems.id`, problemSet.ID); err != nil {
-			log.Printf("db error getting problem step counts: %v", err)
-			return nil, err
-		}
-
-		for _, elt := range counts {
-			scores := asst.RawScores[elt.ProblemUnique]
-			for i := int64(len(scores)); i < elt.StepCount; i++ {
-				scores = append(scores, 0.0)
-			}
-			asst.RawScores[elt.ProblemUnique] = scores
-		}
+	problemSetID := int64(0)
+	if problemSet != nil {
+		problemSetID = problemSet.ID
 	}
 
 	// any changes?
 	changed := asst.CourseID != course.ID ||
-		asst.ProblemSetID != problemSet.ID ||
+		asst.ProblemSetID != problemSetID ||
 		asst.UserID != user.ID ||
 		asst.Roles != form.Roles ||
 		(form.PersonSourcedID != "" && asst.GradeID != form.PersonSourcedID) ||
@@ -560,7 +540,7 @@ func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Co
 
 	// make any changes
 	asst.CourseID = course.ID
-	asst.ProblemSetID = problemSet.ID
+	asst.ProblemSetID = problemSetID
 	asst.UserID = user.ID
 	asst.Roles = form.Roles
 
@@ -573,12 +553,6 @@ func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Co
 		// instructor reported for user that is not marked as an author?
 		if !user.Author {
 			log.Printf("user %d (%s) reported as instructor by LTI request, but not marked as author in user record", user.ID, user.Email)
-			// user.Author = true
-			// user.UpdatedAt = now
-			// if err := meddler.Save(tx, "users", user); err != nil {
-			//     log.Printf("db error saving user %d (%s): %v", user.ID, user.Email, err)
-			//     return nil, err
-			// }
 		}
 	}
 
@@ -597,12 +571,15 @@ func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Co
 	if asst.ID < 1 || changed {
 		// if something changed, note the update time and save
 		if asst.ID > 0 {
-			log.Printf("assignment %d (course %d (%s), problem set %d (%s), user %d (%s) updated",
-				asst.ID, course.ID, course.Name, problemSet.ID, problemSet.Note, user.ID, user.Email)
+			log.Printf("assignment %d (course %d (%s), lti id %s, user %d (%s) updated",
+				asst.ID, course.ID, course.Name, form.ResourceLinkID, user.ID, user.Email)
 		}
 		asst.UpdatedAt = now
 		if err := meddler.Save(tx, "assignments", asst); err != nil {
-			log.Printf("db error saving assignment for course %d, problem set %d, user %d: %v", course.ID, problemSet.ID, user.ID, err)
+			log.Printf("db error saving assignment for course %d, user %d: %v", course.ID, user.ID, err)
+			if problemSet != nil {
+				log.Printf("problem set %d (%s)", problemSet.ID, problemSet.Note)
+			}
 			log.Printf("LtiID (resource_link_id) = %v, GradeID = %v", asst.LtiID, asst.GradeID)
 
 			// dump the request to the logs for debugging purposes
@@ -643,7 +620,7 @@ func saveGrade(asst *Assignment, user *User, text string) error {
 	report := &GradeResponse{
 		Namespace: "http://www.imsglobal.org/services/ltiv1p1/xsd/imsoms_v1p0",
 		Version:   "V1.0",
-		Message:   "Grade from Code Grinder",
+		Message:   "Grade from CodeGrinder",
 		SourcedID: asst.GradeID,
 		URL:       gradeURL,
 		Text:      gradeText,
