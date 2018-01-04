@@ -39,6 +39,7 @@ func CommandStudent(cmd *cobra.Command, args []string) {
 		params.Add("search", term)
 	}
 	mustGetObject("/assignments", params, &assignments)
+	assignments = filterOutQuizzes(assignments)
 	if len(assignments) == 0 {
 		log.Fatalf("no assignments found matching the terms you gave")
 	}
@@ -104,6 +105,9 @@ func downloadStudentAssignment(id int64, assignment *Assignment) {
 	if assignment == nil {
 		assignment = new(Assignment)
 		mustGetObject(fmt.Sprintf("/assignments/%d", id), nil, assignment)
+		if assignment.ProblemSetID < 1 {
+			log.Fatalf("cannot download quiz assignments")
+		}
 	}
 	user := new(User)
 	mustGetObject(fmt.Sprintf("/users/%d", assignment.UserID), nil, user)

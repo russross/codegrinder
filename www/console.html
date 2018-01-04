@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>CodeGrinder Quiz Console</title>
+  <link rel="stylesheet" href="jquery-ui/jquery-ui.min.css">
+  <script src="jquery-ui/external/jquery/jquery.js"></script>
+  <script src="jquery-ui/jquery-ui.min.js"></script>
+  <style>
+    label, input { display:block; }
+    input.text { margin-bottom:12px; width:95%; padding: .4em; }
+    fieldset { padding:0; border:0; margin-top:25px; }
+    h1 { font-size: 1.2em; margin: .6em 0; }
+    table { margin: 1em 0; border-collapse: collapse; width: 100%; }
+    td, th { border: 1px solid #eee; padding: .6em 10px; text-align: left; }
+    .ui-dialog .ui-state-error { padding: .3em; }
+  </style>
+</head>
+
+<body>
+
+<script>
+    var QueryString = (function () {
+        // this function is anonymous and is executed immediately
+        // the return value is assigned to QueryString
+        var query_string = {};
+        var query = window.location.search.substring(1);
+        var vars = query.split('&');
+        for (var i = 0; i < vars.length; i++) {
+            var pair = vars[i].split('=');
+            var key = pair[0];
+            var value = decodeURIComponent(pair[1]);
+            var old_value = query_string[key];
+
+            // first entry with this name, store value as a string
+            if (typeof old_value === 'undefined') {
+                query_string[key] = value;
+
+            // second entry with this name, convert into a list
+            } else if (typeof old_value === 'string') {
+                query_string[key] = [ old_value, value ];
+
+            // third or later entry with this name, append to list
+            } else {
+                old_value.push(value);
+            }
+        } 
+        return query_string;
+    })();
+</script>
+
+<h1>CodeGrinder Quiz Console</h1>
+
+<div id="quizzes-container">
+  <table>
+    <thead>
+      <tr>
+        <th>Open</th>
+        <th>Note</th>
+        <th>Created at</th>
+        <th>Weight</th>
+        <th>Participation threshold</th>
+        <th>Participation credit</th>
+        <th>Edit</th>
+      </tr>
+    </thead>
+    <tbody id="quizlist_tbody">
+    </tbody>
+  </table>
+
+  <button id="create-quiz">Create a new quiz</button>
+
+  <div id="quiz-form">
+    <p class="validateTips">All form fields are required.</p>
+    <form>
+      <fieldset>
+        <label for="quiz_note">Note (the name of this quiz, normally the date it was created)</label>
+        <input type="text" name="quiz_note" id="quiz_note" class="text ui-widget-content ui-corner-all">
+        <label for="quiz_weight">Weight relative to other quizzes</label>
+        <input type="number" name="quiz_weight" id="quiz_weight" class="number ui-widget-content ui-corner-all">
+        <label for="quiz_participation_percent">Student gets this percent of points just for participating</label>
+        <input type="number" name="quiz_participationPercent" id="quiz_participationPercent" min="0" max="100" class="number ui-widget-content ui-corner-all">
+        <label for="quiz_participation_threshold">Student must answer this percent of questions to get participation points</label>
+        <input type="number" name="quiz_participationThreshold" id="quiz_participationThreshold" min="0" max="100" class="number ui-widget-content ui-corner-all">
+   
+        <!-- Allow form submission with keyboard without duplicating the dialog button -->
+        <input type="submit" tabindex="-1" style="position:absolute; top:-1000px">
+      </fieldset>
+    </form>
+  </div>
+</div>
+
+<script>
+    jQuery(function ($) {
+        var origin = document.location.origin + '/v2';
+        var quizzes = [];
+
+        var rounded = function (n) {
+            var s = n.toFixed(4);
+            while (s.endsWith('0')) s = s.substring(0, s.length-1);
+            if (s.endsWith('.')) s = s.substring(0, s.length-1);
+            return s;
+        };
+        Date.prototype.toYMD = function() {
+            var pad = function (n) {
+                return n < 10 ? '0' + n : '' + n;
+            };
+            return this.getFullYear() +
+                '-' + pad(this.getMonth() + 1) +
+                '-' + pad(this.getDate());
+        }
+        $(document).ajaxError(function (event, request, settings, thrownError) {
+            if (thrownError) {
+                alert('Sorry, an error occurred while processing a request to:\n' + settings.url + '\n' + thrownError);
+            } else {
+                alert('Sorry, an error occurred while processing a request to:\n' + settings.url + '\n');
+            }
+        });
+
+        var quizToForm = function (quiz) {
+            $('#quiz_note').val(quiz.note);
+            $('#quiz_weight').val(quiz.weight);
+            $('#quiz_participationThreshold').val(rounded(100.0 * quiz.participationThreshold));
+            $('#quiz_participationPercent').val(rounded(100.0 * quiz.participationPercent));
+        };
+        var formToQuiz = function (quiz) {
+            quiz.note = $('#quiz_note').val();
+            quiz.weight = Number($('#quiz_weight').val());
+            quiz.participationThreshold = +rounded(0.01 * $('#quiz_participationThreshold').val());
+            quiz.participationPercent = +rounded(0.01 * $('#quiz_participationPercent').val());
+        };
+        var newQuizObject = function () {
+            var quiz = {};
+            quiz.id = 0;
+            quiz.assignmentID = Number(QueryString.assignment);
+            quiz.note = new Date().toYMD();
+            if (quizzes.length > 0) {
+                quiz.weight = quizzes[0].weight;
+                quiz.participationThreshold = quizzes[0].participationThreshold;
+                quiz.participationPercent = quizzes[0].participationPercent;
+            } else {
+                quiz.weight = 1.0;
+                quiz.participationThreshold = 0.75;
+                quiz.participationPercent = 0.50;
+            }
+            return quiz;
+        };
+        var saveQuizAction = function (quiz) {
+            var changes = {};
+            formToQuiz(changes);
+            var patch = {};
+            var changed = false;
+            if (quiz.note !== changes.note) {
+                patch.note = quiz.note = changes.note;
+                changed = true;
+            }
+            if (quiz.weight !== changes.weight) {
+                patch.weight = quiz.weight = changes.weight;
+                changed = true;
+            }
+            if (quiz.participationThreshold !== changes.participationThreshold) {
+                patch.participationThreshold = quiz.participationThreshold = changes.participationThreshold;
+                changed = true;
+            }
+            if (quiz.participationPercent !== changes.participationPercent) {
+                patch.participationPercent = quiz.participationPercent = changes.participationPercent;
+                changed = true;
+            }
+
+            quiz.assignmentID = Number(QueryString.assignment);
+
+            var saveToTable = function (data) {
+                data.createdAt = new Date(data.createdAt);
+                data.updatedAt = new Date(data.updatedAt);
+                var placed = false
+                var i;
+                for (i = 0; i < quizzes.length; i++) {
+                    if (quizzes[i].id == data.id) {
+                        quizzes[i] = data;
+                        placed = true;
+                        break;
+                    }
+                }
+                if (!placed) {
+                    quizzes.push(data);
+                }
+                populateQuizzesTable();
+            };
+
+            if (quiz.id == 0) {
+                $.ajax({
+                    type: 'POST',
+                    url: origin + '/quizzes',
+                    data: JSON.stringify(quiz),
+                    success: saveToTable,
+                    dataType: 'json'
+                });
+            } else if (changed) {
+                $.ajax({
+                    type: 'PATCH',
+                    url: origin + '/quizzes/' + quiz.id,
+                    data: JSON.stringify(patch),
+                    success: saveToTable,
+                    dataType: 'json'
+                });
+            }
+        };
+        var deleteQuizAction = function (quiz) {
+            $.ajax({
+                type: 'DELETE',
+                url: origin + '/quizzes/' + quiz.id,
+                success: function () {
+                    var i;
+                    for (i = 0; i < quizzes.length; i++) {
+                        if (quizzes[i].id == quiz.id) {
+                            quizzes.splice(i, 1);
+                            break;
+                        }
+                    }
+                    populateQuizzesTable();
+                }
+            });
+        };
+
+        var quizDialog = $('#quiz-form').dialog({
+            autoOpen: false,
+            height: 400,
+            width: 600,
+            modal: true
+        });
+        var openQuizDialog = function (quiz) {
+            quizToForm(quiz);;
+            if (quiz.id == 0) {
+                quizDialog.dialog('option', 'title', 'Create a new quiz');
+                quizDialog.dialog('option', 'buttons', {
+                    'Cancel': function () { quizDialog.dialog('close'); },
+                    'Create': function () { saveQuizAction(quiz); quizDialog.dialog('close'); }
+                });
+            } else {
+                quizDialog.dialog('option', 'title', 'Edit a quiz');
+                quizDialog.dialog('option', 'buttons', {
+                    'Cancel': function () { quizDialog.dialog('close'); },
+                    'Delete': function () { deleteQuizAction(quiz); quizDialog.dialog('close'); },
+                    'Save': function () { saveQuizAction(quiz); quizDialog.dialog('close'); }
+                });
+            }
+            quizDialog.dialog('open');
+        };
+        $('#create-quiz').button().on('click', function () { openQuizDialog(newQuizObject()); });
+
+        var populateQuizzesTable = function () {
+            quizzes.sort(function (a, b) {
+                if (a.createdAt < b.createdAt) return 1;
+                if (a.createdAt > b.createdAt) return -1;
+                return 0;
+            });
+            var $tbody = $('#quizlist_tbody').empty();
+            $.each(quizzes, function (i, elt) {
+                // convert the date strings to javascript dates
+                elt.createdAt = new Date(elt.createdAt);
+                elt.updatedAt = new Date(elt.updatedAt);
+                var $row = $('<tr id="quiz_' + i + '"></tr>');
+                $tbody.append($row);
+                var $button = $('<button>Open</button>').attr('id', 'open-quiz-' + elt.id);
+                $row.append($('<td>').append($button));
+                $row.append($('<td>').text(elt.note));
+                $row.append($('<td>').text(elt.createdAt));
+                $row.append($('<td>').text(rounded(elt.weight)));
+                $row.append($('<td>').text(rounded(100.0 * elt.participationThreshold)));
+                $row.append($('<td>').text(rounded(100.0 * elt.participationPercent)));
+                var $button = $('<button>Edit</button>').attr('id', 'edit-quiz-' + elt.id);
+                $button.bind('click', elt, function () { openQuizDialog(elt); });
+                $row.append($('<td>').append($button));
+            });
+        };
+
+        // populate the list of quizzes
+        $.get(origin + '/assignments/' + QueryString.assignment + '/quizzes', {}, function (data) {
+            quizzes = data;
+            populateQuizzesTable();
+
+            // automatically open the new quiz dialog if no quiz was created within the last 12 hours
+            if (quizzes.length == 0 || new Date().getTime() - quizzes[0].createdAt.getTime() > 1 * 60 * 60 * 1000) {
+                openQuizDialog(newQuizObject());
+            }
+        }, 'json');
+    });
+</script>
+
+</body>
+</html>

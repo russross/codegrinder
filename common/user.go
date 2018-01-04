@@ -56,7 +56,7 @@ type User struct {
 type Assignment struct {
 	ID                 int64                `json:"id" meddler:"id,pk"`
 	CourseID           int64                `json:"courseID" meddler:"course_id"`
-	ProblemSetID       int64                `json:"problemSetID" meddler:"problem_set_id"`
+	ProblemSetID       int64                `json:"problemSetID" meddler:"problem_set_id,zeroisnull"`
 	UserID             int64                `json:"userID" meddler:"user_id"`
 	Roles              string               `json:"roles" meddler:"roles"`
 	Instructor         bool                 `json:"instructor" meddler:"instructor"`

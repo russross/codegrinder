@@ -468,6 +468,24 @@ func main() {
 		// commit bundles
 		r.Post("/v2/commit_bundles/unsigned", counter, withTx, withCurrentUser, gunzip, binding.Json(CommitBundle{}), PostCommitBundlesUnsigned)
 		r.Post("/v2/commit_bundles/signed", counter, withTx, withCurrentUser, gunzip, binding.Json(CommitBundle{}), PostCommitBundlesSigned)
+
+		// quizzes
+		r.Get("/v2/assignments/:assignment_id/quizzes", counter, withTx, withCurrentUser, GetAssignmentQuizzes)
+		r.Get("/v2/quizzes/:quiz_id", counter, withTx, withCurrentUser, GetQuiz)
+		r.Patch("/v2/quizzes/:quiz_id", counter, withTx, withCurrentUser, gunzip, binding.Json(QuizPatch{}), PatchQuiz)
+		r.Post("/v2/quizzes", counter, withTx, withCurrentUser, gunzip, binding.Json(Quiz{}), PostQuiz)
+		r.Delete("/v2/quizzes/:quiz_id", counter, withTx, withCurrentUser, DeleteQuiz)
+
+		// questions
+		r.Get("/v2/quizzes/:quiz_id/questions", counter, withTx, withCurrentUser, GetQuizQuestions)
+		r.Get("/v2/assignments/:assignment_id/questions/open", counter, withTx, withCurrentUser, GetAssignmentQuestionsOpen)
+		r.Get("/v2/questions/:question_id", counter, withTx, withCurrentUser, GetQuestion)
+		r.Patch("/v2/questions/:question_id", counter, withTx, withCurrentUser, gunzip, binding.Json(QuestionPatch{}), PatchQuestion)
+		r.Post("/v2/questions", counter, withTx, withCurrentUser, gunzip, binding.Json(Question{}), PostQuestion)
+
+		// responses
+		r.Get("/v2/questions/:question_id/responses", counter, withTx, withCurrentUser, GetQuestionResponses)
+		r.Post("/v2/responses", counter, withTx, withCurrentUser, gunzip, binding.Json(Response{}), PostResponse)
 	}
 
 	// start redirecting http calls to https

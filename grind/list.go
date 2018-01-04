@@ -22,6 +22,7 @@ func CommandList(cmd *cobra.Command, args []string) {
 	mustGetObject("/users/me", nil, user)
 	assignments := []*Assignment{}
 	mustGetObject(fmt.Sprintf("/users/%d/assignments", user.ID), nil, &assignments)
+	assignments = filterOutQuizzes(assignments)
 	if len(assignments) == 0 {
 		log.Printf("no assignments found")
 		log.Fatalf("you must start each assignment through Canvas before you can access it here")
@@ -57,6 +58,16 @@ func CommandList(cmd *cobra.Command, args []string) {
 		mustGetObject(fmt.Sprintf("/problem_sets/%d", asst.ProblemSetID), nil, problemSet)
 		fmt.Printf("id:%-*d %-*s %3.0f%% (%s/%s)\n", longestID, asst.ID, longestName, asst.CanvasTitle, asst.Score*100.0, course.Label, problemSet.Unique)
 	}
+}
+
+func filterOutQuizzes(assignments []*Assignment) []*Assignment {
+	out := []*Assignment{}
+	for _, elt := range assignments {
+		if elt.ProblemSetID > 0 {
+			out = append(out, elt)
+		}
+	}
+	return out
 }
 
 func dashes(n int) string {

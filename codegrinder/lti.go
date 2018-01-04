@@ -374,7 +374,7 @@ func LtiProblemSet(w http.ResponseWriter, r *http.Request, tx *sql.Tx, form LTIR
 
 	// redirect to the console
 	key := loginRecords.Insert(user.ID)
-	http.Redirect(w, r, fmt.Sprintf("/?assignment=%d&session=%s", asst.ID, key), http.StatusSeeOther)
+	http.Redirect(w, r, fmt.Sprintf("/grind.html?assignment=%d&session=%s", asst.ID, key), http.StatusSeeOther)
 }
 
 // LtiQuizzes handles /lti/quizzes requests.
@@ -409,7 +409,11 @@ func LtiQuizzes(w http.ResponseWriter, r *http.Request, tx *sql.Tx, form LTIRequ
 	session.Save(w)
 
 	// redirect to the console
-	http.Redirect(w, r, fmt.Sprintf("/quiz?assignment=%d", asst.ID), http.StatusSeeOther)
+	if asst.Instructor {
+		http.Redirect(w, r, fmt.Sprintf("/console.html?assignment=%d", asst.ID), http.StatusSeeOther)
+	} else {
+		http.Redirect(w, r, fmt.Sprintf("/quiz.html?assignment=%d", asst.ID), http.StatusSeeOther)
+	}
 }
 
 // get/create/update this user
@@ -597,13 +601,13 @@ func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Co
 	return asst, nil
 }
 
-func saveGrade(asst *Assignment, user *User, text string) error {
+func saveGrade(asst *Assignment, text string) error {
 	if asst.GradeID == "" {
-		log.Printf("cannot post grade for assignment %d user %d (%s) because no grade ID is present", asst.ID, asst.UserID, user.Name)
+		log.Printf("cannot post grade for assignment %d user %d because no grade ID is present", asst.ID, asst.UserID)
 		return nil
 	}
 	if asst.OutcomeURL == "" {
-		log.Printf("cannot post grade for assignment %d user %d (%s) because no outcome URL is present", asst.ID, asst.UserID, user.Name)
+		log.Printf("cannot post grade for assignment %d user %d because no outcome URL is present", asst.ID, asst.UserID)
 		return nil
 	}
 
@@ -653,7 +657,7 @@ func saveGrade(asst *Assignment, user *User, text string) error {
 	}
 	resp.Body.Close()
 	if resp.StatusCode == http.StatusOK {
-		log.Printf("assignment %q grade of %0.5f posted for %s (%s)", asst.CanvasTitle, asst.Score, user.Name, user.Email)
+		log.Printf("assignment %q grade of %0.5f posted for user %d", asst.CanvasTitle, asst.Score, asst.UserID)
 	} else {
 		return loggedErrorf("result status %d (%s) when posting grade for user %d", resp.StatusCode, resp.Status, asst.UserID)
 	}

@@ -391,7 +391,7 @@ func GetAssignment(w http.ResponseWriter, tx *sql.Tx, params martini.Params, cur
 	} else {
 		err = meddler.QueryRow(tx, assignment, `SELECT assignments.* `+
 			`FROM assignments JOIN user_assignments ON assignments.id = user_assignments.assignment_id `+
-			`WHERE id = $1 AND user_assignments.user_id = $2`,
+			`WHERE assignments.id = $1 AND user_assignments.user_id = $2`,
 			assignmentID, currentUser.ID)
 	}
 
@@ -791,14 +791,14 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 
 		// send grade to the LMS in a goroutine
 		// so we can wrap up the transaction and return to the user
-		go func(asst *Assignment, user *User, msg string) {
+		go func(asst *Assignment, msg string) {
 			// try up to 10 times before giving up
 			tries := 10
 			minSleepTime := 10 * time.Second
 			maxSleepTime := 5 * time.Minute
 			sleepTime := minSleepTime
 			for i := 0; i < tries; i++ {
-				err := saveGrade(asst, user, msg)
+				err := saveGrade(asst, msg)
 				if err == nil {
 					return
 				}
@@ -814,7 +814,7 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 					log.Printf("  giving up")
 				}
 			}
-		}(assignment, currentUser, report.String())
+		}(assignment, report.String())
 	}
 
 	render.JSON(http.StatusOK, &signed)
@@ -846,29 +846,6 @@ func GetProblemWeights(tx *sql.Tx, assignment *Assignment) (majorWeights map[str
 		minorWeights[elt.MajorKey] = append(minorWeights[elt.MajorKey], elt.MinorWeight)
 		if len(minorWeights[elt.MajorKey]) != int(elt.MinorKey) {
 			return nil, nil, fmt.Errorf("step weights do not line up when computing score")
-		}
-	}
-	return majorWeights, minorWeights, nil
-}
-
-func GetQuizWeights(tx *sql.Tx, assignment *Assignment) (majorWeights map[string]float64, minorWeights map[string][]float64, err error) {
-	weights := []*StepWeight{}
-	if err := meddler.QueryAll(tx, &weights, `SELECT quizzes.id::text AS major_key, quizzes.weight AS major_weight, questions.question_number AS minor_key, questions.weight AS minor_weight `+
-		`FROM quizzes JOIN questions ON quizzes.id = questions.quiz_id `+
-		`WHERE quizzes.lti_id = $1 `+
-		`ORDER BY quizzes.id, questions.question_number`, assignment.LtiID); err != nil {
-		return nil, nil, fmt.Errorf("db error: %v", err)
-	}
-	if len(weights) == 0 {
-		return nil, nil, fmt.Errorf("no quiz question weights found, unable to compute score")
-	}
-	majorWeights = make(map[string]float64)
-	minorWeights = make(map[string][]float64)
-	for _, elt := range weights {
-		majorWeights[elt.MajorKey] = elt.MajorWeight
-		minorWeights[elt.MajorKey] = append(minorWeights[elt.MajorKey], elt.MinorWeight)
-		if len(minorWeights[elt.MajorKey]) != int(elt.MinorKey) {
-			return nil, nil, fmt.Errorf("question weights do not line up when computing score")
 		}
 	}
 	return majorWeights, minorWeights, nil
