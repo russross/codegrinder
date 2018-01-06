@@ -482,6 +482,7 @@ func main() {
 		r.Get("/v2/questions/:question_id", counter, withTx, withCurrentUser, GetQuestion)
 		r.Patch("/v2/questions/:question_id", counter, withTx, withCurrentUser, gunzip, binding.Json(QuestionPatch{}), PatchQuestion)
 		r.Post("/v2/questions", counter, withTx, withCurrentUser, gunzip, binding.Json(Question{}), PostQuestion)
+		r.Delete("/v2/questions/:question_id", counter, withTx, withCurrentUser, DeleteQuestion)
 
 		// responses
 		r.Get("/v2/questions/:question_id/responses", counter, withTx, withCurrentUser, GetQuestionResponses)

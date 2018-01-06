@@ -49,19 +49,21 @@
     })();
 </script>
 
-<h1>CodeGrinder Quiz Console</h1>
-
 <div id="quizzes-container">
+
+  <h1>CodeGrinder Quiz Console</h1>
+
   <table>
     <thead>
       <tr>
-        <th>Open</th>
+        <th>&nbsp;</th>
         <th>Note</th>
-        <th>Created at</th>
         <th>Weight</th>
         <th>Participation threshold</th>
         <th>Participation credit</th>
-        <th>Edit</th>
+        <th>Created at</th>
+        <th>&nbsp;</th>
+        <th>&nbsp;</th>
       </tr>
     </thead>
     <tbody id="quizlist_tbody">
@@ -78,13 +80,90 @@
         <input type="text" name="quiz_note" id="quiz_note" class="text ui-widget-content ui-corner-all">
         <label for="quiz_weight">Weight relative to other quizzes</label>
         <input type="number" name="quiz_weight" id="quiz_weight" class="number ui-widget-content ui-corner-all">
-        <label for="quiz_participation_percent">Student gets this percent of points just for participating</label>
+        <label for="quiz_participationPercent">Student gets this percent of points just for participating</label>
         <input type="number" name="quiz_participationPercent" id="quiz_participationPercent" min="0" max="100" class="number ui-widget-content ui-corner-all">
-        <label for="quiz_participation_threshold">Student must answer this percent of questions to get participation points</label>
+        <label for="quiz_participationThreshold">Student must answer this percent of questions to get participation points</label>
         <input type="number" name="quiz_participationThreshold" id="quiz_participationThreshold" min="0" max="100" class="number ui-widget-content ui-corner-all">
    
         <!-- Allow form submission with keyboard without duplicating the dialog button -->
         <input type="submit" tabindex="-1" style="position:absolute; top:-1000px">
+      </fieldset>
+    </form>
+  </div>
+</div>
+
+<div id="questions-container">
+
+  <h1>CodeGrinder Question Console</h1>
+
+  <p><button id="back-to-quizzes-button">Back to quizzes</button></p>
+  <p>Quiz: <span id="question-page-quiz-summary"></span></p>
+  <table>
+    <thead>
+      <tr>
+        <th>&nbsp;</th>
+        <th>#</th>
+        <th>Note</th>
+        <th>Weight</th>
+        <th>Points for attempt</th>
+        <th>Choices</th>
+        <th>Created at</th>
+        <th>&nbsp;</th>
+      </tr>
+    </thead>
+    <tbody id="questionlist_tbody">
+    </tbody>
+  </table>
+
+  <button id="create-question">Create a new question</button>
+
+  <div id="question-form">
+    <p class="validateTips">All form fields are required.</p>
+    <form>
+      <fieldset>
+        <label for="question_note">Note</label>
+        <input type="text" name="question_note" id="question_note" class="text ui-widget-content ui-corner-all">
+        <label for="question_weight">Weight relative to other questions</label>
+        <input type="number" name="question_weight" id="question_weight" class="number ui-widget-content ui-corner-all">
+        <label for="question_pointsForAttempt">Points received just for answering</label>
+        <input type="number" name="question_pointsForAttempt" id="question_pointsForAttempt" min="0" max="100" class="number ui-widget-content ui-corner-all">
+        <label for="question_openedAt">Open at</label>
+        <input type="hidden" id="question_now">
+        <input type="datetime-local" name="question_openedAt" id="question_openedAt" class="ui-widget-content ui-corner-all">
+        <label for="question_openSeconds">Seconds to keep the question open</label>
+        <input type="number" name="question_openSeconds" id="question_openSeconds" min="1" max="9999" class="number ui-widget-content ui-corner-all">
+        <label for="question_isMultipleChoice">Is multiple choice?</label>
+        <input type="checkbox" name="question_isMultipleChoice" id="question_isMultipleChoice" class="">
+      </fieldset>
+      <fieldset id="question_choices">
+        <legend>Answers (leave extra answers blank):</legend>
+        <table>
+          <thead>
+            <tr><th>Answer</th><th>Points</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><input type="text" name="question_choice0" id="question_choice0"></td>
+              <td><input type="number" name="question_choicePoints0" id="question_choicePoints0"></td>
+            </tr>
+            <tr>
+              <td><input type="text" name="question_choice1" id="question_choice1"></td>
+              <td><input type="number" name="question_choicePoints1" id="question_choicePoints1"></td>
+            </tr>
+            <tr>
+              <td><input type="text" name="question_choice2" id="question_choice2"></td>
+              <td><input type="number" name="question_choicePoints2" id="question_choicePoints2"></td>
+            </tr>
+            <tr>
+              <td><input type="text" name="question_choice3" id="question_choice3"></td>
+              <td><input type="number" name="question_choicePoints3" id="question_choicePoints3"></td>
+            </tr>
+            <tr>
+              <td><input type="text" name="question_choice4" id="question_choice4"></td>
+              <td><input type="number" name="question_choicePoints4" id="question_choicePointsn"></td>
+            </tr>
+          </tbody>
+        </table>
       </fieldset>
     </form>
   </div>
@@ -109,14 +188,35 @@
                 '-' + pad(this.getMonth() + 1) +
                 '-' + pad(this.getDate());
         }
+        Date.prototype.toYMDT = function() {
+            var pad = function (n) {
+                return n < 10 ? '0' + n : '' + n;
+            };
+            return this.getFullYear() +
+                '-' + pad(this.getMonth() + 1) +
+                '-' + pad(this.getDate()) +
+                'T' + pad(this.getHours()) +
+                ':' + pad(this.getMinutes()) +
+                ':' + pad(this.getSeconds());
+        }
+        var timestamp = function (d) {
+            var stamp = String(d);
+            if (d.toYMD() == new Date().toYMD()) {
+                stamp = d.toLocaleTimeString();
+            }
+            return stamp;
+        };
         $(document).ajaxError(function (event, request, settings, thrownError) {
-            if (thrownError) {
-                alert('Sorry, an error occurred while processing a request to:\n' + settings.url + '\n' + thrownError);
+            if (request.responseText) {
+                alert('Sorry, an error occurred while processing your request:\n\n' + request.responseText);
             } else {
                 alert('Sorry, an error occurred while processing a request to:\n' + settings.url + '\n');
             }
         });
 
+        //
+        // Quizzes page
+        //
         var quizToForm = function (quiz) {
             $('#quiz_note').val(quiz.note);
             $('#quiz_weight').val(quiz.weight);
@@ -124,7 +224,7 @@
             $('#quiz_participationPercent').val(rounded(100.0 * quiz.participationPercent));
         };
         var formToQuiz = function (quiz) {
-            quiz.note = $('#quiz_note').val();
+            quiz.note = $('#quiz_note').val().trim();
             quiz.weight = Number($('#quiz_weight').val());
             quiz.participationThreshold = +rounded(0.01 * $('#quiz_participationThreshold').val());
             quiz.participationPercent = +rounded(0.01 * $('#quiz_participationPercent').val());
@@ -143,30 +243,10 @@
                 quiz.participationThreshold = 0.75;
                 quiz.participationPercent = 0.50;
             }
+            quiz.isGraded = false;
             return quiz;
         };
         var saveQuizAction = function (quiz) {
-            var changes = {};
-            formToQuiz(changes);
-            var patch = {};
-            var changed = false;
-            if (quiz.note !== changes.note) {
-                patch.note = quiz.note = changes.note;
-                changed = true;
-            }
-            if (quiz.weight !== changes.weight) {
-                patch.weight = quiz.weight = changes.weight;
-                changed = true;
-            }
-            if (quiz.participationThreshold !== changes.participationThreshold) {
-                patch.participationThreshold = quiz.participationThreshold = changes.participationThreshold;
-                changed = true;
-            }
-            if (quiz.participationPercent !== changes.participationPercent) {
-                patch.participationPercent = quiz.participationPercent = changes.participationPercent;
-                changed = true;
-            }
-
             quiz.assignmentID = Number(QueryString.assignment);
 
             var saveToTable = function (data) {
@@ -192,14 +272,17 @@
                     type: 'POST',
                     url: origin + '/quizzes',
                     data: JSON.stringify(quiz),
-                    success: saveToTable,
+                    success: function (data) {
+                        saveToTable(data);
+                        switchToQuestions(data);
+                    },
                     dataType: 'json'
                 });
-            } else if (changed) {
+            } else {
                 $.ajax({
                     type: 'PATCH',
                     url: origin + '/quizzes/' + quiz.id,
-                    data: JSON.stringify(patch),
+                    data: JSON.stringify(quiz),
                     success: saveToTable,
                     dataType: 'json'
                 });
@@ -233,15 +316,30 @@
             if (quiz.id == 0) {
                 quizDialog.dialog('option', 'title', 'Create a new quiz');
                 quizDialog.dialog('option', 'buttons', {
-                    'Cancel': function () { quizDialog.dialog('close'); },
-                    'Create': function () { saveQuizAction(quiz); quizDialog.dialog('close'); }
+                    'Cancel': function () {
+                        quizDialog.dialog('close');
+                    },
+                    'Create': function () {
+                        formToQuiz(quiz);
+                        saveQuizAction(quiz);
+                        quizDialog.dialog('close');
+                    }
                 });
             } else {
                 quizDialog.dialog('option', 'title', 'Edit a quiz');
                 quizDialog.dialog('option', 'buttons', {
-                    'Cancel': function () { quizDialog.dialog('close'); },
-                    'Delete': function () { deleteQuizAction(quiz); quizDialog.dialog('close'); },
-                    'Save': function () { saveQuizAction(quiz); quizDialog.dialog('close'); }
+                    'Cancel': function () {
+                        quizDialog.dialog('close');
+                    },
+                    'Delete': function () {
+                        deleteQuizAction(quiz);
+                        quizDialog.dialog('close');
+                    },
+                    'Save': function () {
+                        formToQuiz(quiz);
+                        saveQuizAction(quiz);
+                        quizDialog.dialog('close');
+                    }
                 });
             }
             quizDialog.dialog('open');
@@ -255,35 +353,329 @@
                 return 0;
             });
             var $tbody = $('#quizlist_tbody').empty();
-            $.each(quizzes, function (i, elt) {
-                // convert the date strings to javascript dates
-                elt.createdAt = new Date(elt.createdAt);
-                elt.updatedAt = new Date(elt.updatedAt);
-                var $row = $('<tr id="quiz_' + i + '"></tr>');
-                $tbody.append($row);
-                var $button = $('<button>Open</button>').attr('id', 'open-quiz-' + elt.id);
+            $.each(quizzes, function (i, quiz) {
+                // convert date strings to javascript dates
+                quiz.createdAt = new Date(quiz.createdAt);
+                quiz.updatedAt = new Date(quiz.updatedAt);
+
+                var $row = $('<tr id="quiz_' + i + '"></tr>').appendTo($tbody);
+                var $button = $('<button>Open</button>');
+                $button.bind('click', function () { switchToQuestions(quiz); });
                 $row.append($('<td>').append($button));
-                $row.append($('<td>').text(elt.note));
-                $row.append($('<td>').text(elt.createdAt));
-                $row.append($('<td>').text(rounded(elt.weight)));
-                $row.append($('<td>').text(rounded(100.0 * elt.participationThreshold)));
-                $row.append($('<td>').text(rounded(100.0 * elt.participationPercent)));
-                var $button = $('<button>Edit</button>').attr('id', 'edit-quiz-' + elt.id);
-                $button.bind('click', elt, function () { openQuizDialog(elt); });
+                $row.append($('<td>').text(quiz.note));
+                $row.append($('<td>').text(rounded(quiz.weight)));
+                $row.append($('<td>').text(rounded(100.0 * quiz.participationThreshold)));
+                $row.append($('<td>').text(rounded(100.0 * quiz.participationPercent)));
+                $row.append($('<td>').text(timestamp(quiz.createdAt)));
+                $button = $('<button>Edit</button>');
+                $button.bind('click', function () { openQuizDialog(quiz); });
+                $row.append($('<td>').append($button));
+                if (quiz.isGraded) {
+                    $row.append($('<td>').html('&nbsp;'));
+                } else {
+                    $button = $('<button>Grade</button>');
+                    $button.bind('click', function () {
+                        quiz.isGraded = true;
+                        saveQuizAction(quiz);
+                    });
+                    $row.append($('<td>').append($button));
+                }
+            });
+        };
+
+        //
+        // Questions page
+        //
+        var openQuiz = {};
+        var questions = [];
+
+        var questionToForm = function (question) {
+            $('#question_note').val(question.note);
+            $('#question_weight').val(question.weight);
+            $('#question_pointsForAttempt').val(question.pointsForAttempt);
+            $('#question_openedAt').val(question.openedAt.toYMDT());
+            $('#question_openSeconds').val(question.openSeconds);
+            $('#question_isMultipleChoice').prop('checked', question.isMultipleChoice);
+            var labels = [];
+            $.each(question.answers, function (key, val) {
+                labels.push(key);
+            });
+            labels.sort();
+            var i;
+            for (i = 0; i < 5; i++) {
+                $('#question_choice' + i).val('');
+                $('#question_choicePoints' + i).val('');
+            }
+            $.each(labels, function (i, key) {
+                if (i > 5) return;
+                $('#question_choice' + i).val(key);
+                var pts = question.answers[key];
+                if (pts != 0.0) {
+                    $('#question_choicePoints' + i).val(+rounded(pts));
+                }
+            });
+        };
+        var formToQuestion = function (question) {
+            question.note = $('#question_note').val().trim();
+            question.weight = Number($('#question_weight').val());
+            question.pointsForAttempt = Number($('#question_pointsForAttempt').val());
+            question.openedAt = new Date($('#question_openedAt').val());
+            var now = new Date($('#question_now').val());
+            if (question.openedAt.getTime() == now.getTime()) {
+                // if this is a new question and the instructor did not touch the openedAt time,
+                // bump it forward to the present
+                question.openedAt = new Date()
+            }
+            question.openSeconds = Math.round(Number($('#question_openSeconds').val()));
+            question.isMultipleChoice = $('#question_isMultipleChoice').prop('checked');
+            question.answers = {};
+            var i;
+            for (i = 0; i < 5; i++) {
+                var key = $('#question_choice' + i).val().trim();
+                var val = Number($('#question_choicePoints' + i).val());
+                if (key != '') {
+                    question.answers[key] = val;
+                }
+            }
+        };
+        var newQuestionObject = function() {
+            var question = {};
+            question.id = 0;
+            question.quizID = openQuiz.id;
+            question.number = questions.length + 1;
+            question.note = 'Question #' + question.number;
+            if (questions.length > 0) {
+                var prev = questions[questions.length - 1];
+                question.weight = prev.weight;
+                question.pointsForAttempt = prev.pointsForAttempt;
+                question.isMultipleChoice = prev.isMultipleChoice;
+                question.openSeconds = prev.openSeconds;
+            } else {
+                question.weight = 1.0;
+                question.pointsForAttempt = 0.0;
+                question.isMultipleChoice = true;
+                question.openSeconds = 5*60;
+            }
+            question.answers = {};
+            if (question.isMultipleChoice) {
+                question.answers['(a)'] = 0.0;
+                question.answers['(b)'] = 0.0;
+                question.answers['(c)'] = 0.0;
+                question.answers['(d)'] = 0.0;
+                question.answers['(e)'] = 0.0;
+            }
+            question.answerFilterRegexp = '';
+            question.openedAt = new Date();
+            $('#question_now').val(question.openedAt.toYMDT());
+            return question;
+        };
+        var saveQuestionAction = function (question) {
+            question.quizID = openQuiz.id;
+
+            var saveToTable = function (data) {
+                data.createdAt = new Date(data.createdAt);
+                data.updatedAt = new Date(data.updatedAt);
+                data.openedAt = new Date(data.openedAt);
+                var placed = false;
+                var i;
+                for (i = 0; i < questions.length; i++) {
+                    if (questions[i].id == data.id) {
+                        questions[i] = data;
+                        placed = true;
+                        break;
+                    }
+                }
+                if (!placed) {
+                    questions.push(data);
+                }
+                populateQuestionsTable();
+            };
+
+            if (question.id == 0) {
+                $.ajax({
+                    type: 'POST',
+                    url: origin + '/questions',
+                    data: JSON.stringify(question),
+                    success: saveToTable,
+                    dataType: 'json'
+                });
+            } else {
+                $.ajax({
+                    type: 'PATCH',
+                    url: origin + '/questions/' + question.id,
+                    data: JSON.stringify(question),
+                    success: saveToTable,
+                    dataType: 'json'
+                });
+            }
+        };
+        var deleteQuestionAction = function (question) {
+            $.ajax({
+                type: 'DELETE',
+                url: origin + '/questions/' + question.id,
+                success: function () {
+                    var i;
+                    for (i = 0; i < questions.length; i++) {
+                        if (questions[i].id == question.id) {
+                            questions.splice(i, 1);
+                            break
+                        }
+                    }
+                    switchToQuestions(openQuiz);
+                }
+            });
+        };
+        var questionDialog = $('#question-form').dialog({
+            autoOpen: false,
+            height: 850,
+            width: 600,
+            modal: true
+        });
+        var openQuestionDialog = function (question) {
+            questionToForm(question);
+            if (question.id == 0) {
+                questionDialog.dialog('option', 'title', 'Create a new question');
+                questionDialog.dialog('option', 'buttons', {
+                    'Cancel': function () {
+                        questionDialog.dialog('close');
+                    },
+                    'Create': function () {
+                        formToQuestion(question);
+                        saveQuestionAction(question);
+                        questionDialog.dialog('close');
+                    }
+                });
+            } else {
+                questionDialog.dialog('option', 'title', 'Edit a question');
+                questionDialog.dialog('option', 'buttons', {
+                    'Cancel': function () {
+                        questionDialog.dialog('close');
+                    },
+                    'Delete': function () {
+                        deleteQuestionAction(question);
+                        questionDialog.dialog('close');
+                    },
+                    'Save': function () {
+                        formToQuestion(question);
+                        saveQuestionAction(question);
+                        questionDialog.dialog('close');
+                    }
+                });
+            }
+            questionDialog.dialog('open');
+        };
+        $('#question_isMultipleChoice').change(function () {
+            if (this.checked) {
+                // fill in standard multiple-choice answers
+                $('#question_choice0').val('(a)');
+                $('#question_choice1').val('(b)');
+                $('#question_choice2').val('(c)');
+                $('#question_choice3').val('(d)');
+                $('#question_choice4').val('(e)');
+            } else {
+                $('#question_choice0').val('');
+                $('#question_choice1').val('');
+                $('#question_choice2').val('');
+                $('#question_choice3').val('');
+                $('#question_choice4').val('');
+            }
+            $('#question_choicePoints0').val('');
+            $('#question_choicePoints1').val('');
+            $('#question_choicePoints2').val('');
+            $('#question_choicePoints3').val('');
+            $('#question_choicePoints4').val('');
+        });
+        $('#create-question').button().on('click', function () { openQuestionDialog(newQuestionObject()); });
+
+        var populateQuestionsTable = function () {
+            questions.sort(function (a, b) {
+                if (a.number < b.number) return -1;
+                if (a.number > b.number) return 1;
+                return 0;
+            });
+            var $tbody = $('#questionlist_tbody').empty();
+            $.each(questions, function (i, question) {
+                // convert date strings to javascript dates
+                question.createdAt = new Date(question.createdAt);
+                question.updatedAt = new Date(question.updatedAt);
+                question.openedAt = new Date(question.openedAt);
+
+                var $row = $('<tr id="question_' + i + '"></tr>').appendTo($tbody);
+                var $button = $('<button>Open</button>');
+                $row.append($('<td>').append($button));
+                $row.append($('<td>').text(question.number));
+                $row.append($('<td>').text(question.note));
+                $row.append($('<td>').text(rounded(question.weight)));
+                $row.append($('<td>').text(rounded(question.pointsForAttempt)));
+                var $choices = $('<td>').appendTo($row);
+                if (question.isMultipleChoice) {
+                    var labels = [];
+                    $.each(question.answers, function (key, val) {
+                        labels.push(key);
+                    });
+                    labels.sort();
+                    var i;
+                    for (i = 0; i < labels.length; i++) {
+                        if (i > 0)
+                            $choices.append($('<br>'));
+                        $choices.append($('<span></span>').text(labels[i]));
+                    }
+                } else {
+                    $choices.text('(fill in the blank)');
+                }
+                $row.append($('<td>').text(timestamp(question.createdAt)));
+                $button = $('<button>Edit</button>');
+                $button.bind('click', function () { openQuestionDialog(question); });
                 $row.append($('<td>').append($button));
             });
         };
 
-        // populate the list of quizzes
-        $.get(origin + '/assignments/' + QueryString.assignment + '/quizzes', {}, function (data) {
-            quizzes = data;
+        var switchToQuizzes = function () {
+            $('#quizzes-container').show();
+            $('#questions-container').hide();
+            quizDialog.dialog('close');
+
+            quizzes = [];
             populateQuizzesTable();
 
-            // automatically open the new quiz dialog if no quiz was created within the last 12 hours
-            if (quizzes.length == 0 || new Date().getTime() - quizzes[0].createdAt.getTime() > 1 * 60 * 60 * 1000) {
-                openQuizDialog(newQuizObject());
-            }
-        }, 'json');
+            // populate the list of quizzes
+            $.get(origin + '/assignments/' + QueryString.assignment + '/quizzes', {}, function (data) {
+                quizzes = data;
+                populateQuizzesTable();
+
+                // automatically open the new quiz dialog if no quiz was created within the last 12 hours
+                if (quizzes.length == 0 || new Date().getTime() - quizzes[0].createdAt.getTime() > 12*60*60*1000) {
+                    openQuizDialog(newQuizObject());
+                }
+            }, 'json');
+        };
+
+        $('#back-to-quizzes-button').button().on('click', switchToQuizzes);
+
+        var switchToQuestions = function (quiz) {
+            $('#quizzes-container').hide();
+            $('#questions-container').show();
+            questionDialog.dialog('close');
+
+            openQuiz = quiz;
+            $('#question-page-quiz-summary').text(openQuiz.note + ' created at ' + timestamp(openQuiz.createdAt));
+            questions = [];
+            populateQuestionsTable();
+
+            // populate the list of questions
+            $.get(origin + '/quizzes/' + openQuiz.id + '/questions', {}, function (data) {
+                questions = data;
+                populateQuestionsTable();
+
+                // automatically open the new question dialog if no question was created within the last 12 hours
+                if (questions.length == 0 || new Date().getTime() - questions[questions.length-1].createdAt.getTime() > 12*60*60*1000) {
+                    openQuestionDialog(newQuestionObject());
+                }
+            }, 'json');
+        };
+
+        // start on the quizzes page
+        switchToQuizzes();
     });
 </script>
 

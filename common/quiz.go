@@ -12,6 +12,7 @@ type Quiz struct {
 	Weight                 float64   `json:"weight" meddler:"weight"`
 	ParticipationThreshold float64   `json:"participationThreshold" meddler:"participation_threshold"`
 	ParticipationPercent   float64   `json:"participationPercent" meddler:"participation_percent"`
+	IsGraded               bool      `json:"isGraded" meddler:"is_graded"`
 	CreatedAt              time.Time `json:"createdAt" meddler:"created_at,localtime"`
 	UpdatedAt              time.Time `json:"updatedAt" meddler:"updated_at,localtime"`
 }
@@ -21,6 +22,7 @@ type QuizPatch struct {
 	Weight                 *float64 `json:"weight"`
 	ParticipationThreshold *float64 `json:"participationThreshold"`
 	ParticipationPercent   *float64 `json:"participationPercent"`
+	IsGraded               *bool    `json:"isGraded"`
 }
 
 // Question represents a single interactive quiz question.
@@ -34,11 +36,26 @@ type Question struct {
 	IsMultipleChoice   bool               `json:"isMultipleChoice" meddler:"is_multiple_choice"`
 	Answers            map[string]float64 `json:"answers" meddler:"answers,json"`
 	AnswerFilterRegexp string             `json:"answerFilterRegexp" meddler:"answer_filter_regexp,zeroisnull"`
+	OpenedAt           time.Time          `json:"openedAt" meddler:"opened_at,localtime"`
+	OpenSeconds        int64              `json:"openSeconds" meddler:"open_seconds"`
 	CreatedAt          time.Time          `json:"createdAt" meddler:"created_at,localtime"`
 	UpdatedAt          time.Time          `json:"updatedAt" meddler:"updated_at,localtime"`
-	OpenedAt           time.Time          `json:"openedAt" meddler:"opened_at,localtime"`
-	ClosedAt           time.Time          `json:"closedAt" meddler:"closed_at,localtime"`
-	IsClosed           bool               `json:"isClosed" meddler:"is_closed"`
+}
+
+func (question *Question) ClosedAt() time.Time {
+	return question.OpenedAt.Add(time.Duration(question.OpenSeconds) * time.Second)
+}
+
+func (question *Question) HideAnswersUnlessClosed() {
+	if question.ClosedAt().After(time.Now()) {
+		clean := make(map[string]float64)
+		if question.IsMultipleChoice {
+			for choice := range question.Answers {
+				clean[choice] = 0.0
+			}
+		}
+		question.Answers = clean
+	}
 }
 
 type QuestionPatch struct {
@@ -49,8 +66,7 @@ type QuestionPatch struct {
 	Answers            *map[string]float64 `json:"answers"`
 	AnswerFilterRegexp *string             `json:"answerFilterRegexp"`
 	OpenedAt           *time.Time          `json:"openedAt"`
-	ClosedAt           *time.Time          `json:"closedAt"`
-	IsClosed           *bool               `json:"isClosed"`
+	OpenSeconds        *int64              `json:"openSeconds"`
 }
 
 // Response represents a student response to a single question.

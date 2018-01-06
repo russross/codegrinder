@@ -117,7 +117,6 @@ func (assignment *Assignment) ComputeScore(majorWeights map[string]float64, mino
 	// compute an overall score
 	majorWeightSum, majorScoreSum := 0.0, 0.0
 	for unique, majorWeight := range majorWeights {
-		majorWeightSum += majorWeight
 		scores := assignment.RawScores[unique]
 		minorWeightSum, minorScoreSum := 0.0, 0.0
 		for i, minorWeight := range minorWeights[unique] {
@@ -127,13 +126,16 @@ func (assignment *Assignment) ComputeScore(majorWeights map[string]float64, mino
 			}
 		}
 		if minorWeightSum == 0.0 {
-			return 0.0, fmt.Errorf("score group %s has no weight", unique)
+			// no questions/steps, so just skip this group
+			continue
 		}
+		majorWeightSum += majorWeight
 		minorScoreSum /= minorWeightSum
 		majorScoreSum += minorScoreSum * majorWeight
 	}
 	if majorWeightSum == 0.0 {
-		return 0.0, fmt.Errorf("major score group has no weight")
+		// nothing available to grade, probably empty quizzes
+		return 0.0, nil
 	}
 	return majorScoreSum / majorWeightSum, nil
 }

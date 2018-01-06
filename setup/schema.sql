@@ -236,6 +236,7 @@ CREATE TABLE quizzes (
     weight                  double precision NOT NULL,
     participation_threshold double precision NOT NULL,
     participation_percent   double precision NOT NULL,
+    is_graded               boolean NOT NULL,
     created_at              timestamp with time zone NOT NULL,
     updated_at              timestamp with time zone NOT NULL,
 
@@ -253,11 +254,10 @@ CREATE TABLE questions (
     is_multiple_choice      boolean NOT NULL,
     answers                 jsonb NOT NULL,
     answer_filter_regexp    text,
+    opened_at               timestamp with time zone NOT NULL,
+    open_seconds            bigint NOT NULL,
     created_at              timestamp with time zone NOT NULL,
     updated_at              timestamp with time zone NOT NULL,
-    opened_at               timestamp with time zone NOT NULL,
-    closed_at               timestamp with time zone NOT NULL,
-    is_closed               boolean NOT NULL,
 
     PRIMARY KEY (id),
     FOREIGN KEY (quiz_id) REFERENCES quizzes (id) ON DELETE CASCADE
