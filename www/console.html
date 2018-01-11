@@ -13,6 +13,7 @@
     h1 { font-size: 1.2em; margin: .6em 0; }
     table { margin: 1em 0; border-collapse: collapse; width: 100%; }
     td, th { border: 1px solid #eee; padding: .6em 10px; text-align: left; }
+    .pointer { cursor: pointer; }
     .ui-dialog .ui-state-error { padding: .3em; }
   </style>
 </head>
@@ -66,7 +67,7 @@
         <th>&nbsp;</th>
       </tr>
     </thead>
-    <tbody id="quizlist_tbody">
+    <tbody id="quizlist-tbody">
     </tbody>
   </table>
 
@@ -111,7 +112,7 @@
         <th>&nbsp;</th>
       </tr>
     </thead>
-    <tbody id="questionlist_tbody">
+    <tbody id="questionlist-tbody">
     </tbody>
   </table>
 
@@ -169,9 +170,31 @@
   </div>
 </div>
 
+<div id="moderation-container">
+
+  <h1>CodeGrinder Question Moderation Console</h1>
+
+  <p><button id="back-to-questions-button">Back to questions</button></p>
+  <p>Question: <span id="moderation-page-question-summary"</span></p>
+  <p id="moderation-page-countdown"></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Answer</th>
+        <th>Responses</th>
+      </tr>
+    </thead>
+    <tbody id="moderationlist-tbody">
+    </tbody>
+  </table>
+</div>
+
 <script>
     jQuery(function ($) {
         var origin = document.location.origin + '/v2';
+        var clockDiff = 0;
+        var liveTimes = [];
+        var refreshes = [];
         var quizzes = [];
 
         var rounded = function (n) {
@@ -210,9 +233,48 @@
             if (request.responseText) {
                 alert('Sorry, an error occurred while processing your request:\n\n' + request.responseText);
             } else {
-                alert('Sorry, an error occurred while processing a request to:\n' + settings.url + '\n');
+                alert('Sorry, an error occurred while processing a request to:\n\n' + settings.url + '\n');
             }
         });
+
+        var closedAt = function (question) {
+            return new Date(question.openedAt.getTime() + question.openSeconds * 1000);
+        };
+
+        var makeCountdown = function (time) {
+            var now = new Date();
+            var diff = time.getTime() - (now.getTime() + clockDiff);
+            if (diff <= 0) {
+                return '&nbsp;';
+            }
+            var s = '';
+            var hours = Math.floor(diff / 60 / 60 / 1000);
+            diff -= hours * 60 * 60 * 1000;
+            var minutes = Math.floor(diff / 60 / 1000);
+            diff -= minutes * 60 * 1000;
+            var seconds = Math.floor(diff / 1000);
+            diff -= seconds * 1000;
+            if (hours > 0)
+                s += hours + 'h';
+            if (s || minutes > 0)
+                s += minutes + 'm';
+            s += seconds + 's';
+            return s;
+        };
+        var displayLiveTimes = function () {
+            $.each(liveTimes, function (i, pair) {
+                var $elt = pair[0];
+                var time = pair[1];
+                $elt.html(makeCountdown(time));
+            });
+        };
+        var updateRefreshes = function () {
+            $.each(refreshes, function (i, f) {
+                f();
+            });
+        };
+        window.setInterval(displayLiveTimes, 1000);
+        window.setInterval(updateRefreshes, 4000);
 
         //
         // Quizzes page
@@ -352,12 +414,8 @@
                 if (a.createdAt > b.createdAt) return -1;
                 return 0;
             });
-            var $tbody = $('#quizlist_tbody').empty();
+            var $tbody = $('#quizlist-tbody').empty();
             $.each(quizzes, function (i, quiz) {
-                // convert date strings to javascript dates
-                quiz.createdAt = new Date(quiz.createdAt);
-                quiz.updatedAt = new Date(quiz.updatedAt);
-
                 var $row = $('<tr id="quiz_' + i + '"></tr>').appendTo($tbody);
                 var $button = $('<button>Open</button>');
                 $button.bind('click', function () { switchToQuestions(quiz); });
@@ -424,7 +482,7 @@
             if (question.openedAt.getTime() == now.getTime()) {
                 // if this is a new question and the instructor did not touch the openedAt time,
                 // bump it forward to the present
-                question.openedAt = new Date()
+                question.openedAt = new Date(new Date().getTime() + clockDiff);
             }
             question.openSeconds = Math.round(Number($('#question_openSeconds').val()));
             question.isMultipleChoice = $('#question_isMultipleChoice').prop('checked');
@@ -465,7 +523,7 @@
                 question.answers['(e)'] = 0.0;
             }
             question.answerFilterRegexp = '';
-            question.openedAt = new Date();
+            question.openedAt = new Date(new Date().getTime() + clockDiff);
             $('#question_now').val(question.openedAt.toYMDT());
             return question;
         };
@@ -593,15 +651,11 @@
                 if (a.number > b.number) return 1;
                 return 0;
             });
-            var $tbody = $('#questionlist_tbody').empty();
+            var $tbody = $('#questionlist-tbody').empty();
             $.each(questions, function (i, question) {
-                // convert date strings to javascript dates
-                question.createdAt = new Date(question.createdAt);
-                question.updatedAt = new Date(question.updatedAt);
-                question.openedAt = new Date(question.openedAt);
-
                 var $row = $('<tr id="question_' + i + '"></tr>').appendTo($tbody);
                 var $button = $('<button>Open</button>');
+                $button.bind('click', function () { switchToModeration(question); });
                 $row.append($('<td>').append($button));
                 $row.append($('<td>').text(question.number));
                 $row.append($('<td>').text(question.note));
@@ -630,16 +684,61 @@
             });
         };
 
+        //
+        // Moderation page
+        //
+        var openQuestion = {};
+        var responses = [];
+
+        var populateResponsesTable = function () {
+            var groups = {};
+            var uniqueResponses = [];
+            $.each(responses, function (i, response) {
+                var lst = groups[response.response];
+                if (!lst) {
+                    lst = [];
+                    groups[response.response] = lst;
+                    uniqueResponses.push(response.response);
+                }
+                lst.push(response.name);
+            });
+            uniqueResponses.sort();
+            var $tbody = $('#moderationlist-tbody').empty();
+            $.each(uniqueResponses, function (i, unique) {
+                var $row = $('<tr></tr>').appendTo($tbody);
+                $row.append($('<td></td>').text(unique));
+                var students = '';
+                $.each(groups[unique], function (j, name) {
+                    if (i > 0) {
+                        students += '<br>';
+                    }
+                    students += name;
+                });
+                $row.append($('<td class="pointer"></td>').text(''+groups[unique].length).attr('title', students));
+            });
+        };
+
         var switchToQuizzes = function () {
             $('#quizzes-container').show();
             $('#questions-container').hide();
+            $('#moderation-container').hide();
+            refreshes = [];
             quizDialog.dialog('close');
 
             quizzes = [];
             populateQuizzesTable();
 
             // populate the list of quizzes
-            $.get(origin + '/assignments/' + QueryString.assignment + '/quizzes', {}, function (data) {
+            $.getJSON(origin + '/assignments/' + QueryString.assignment + '/quizzes', function (data, status, xhr) {
+                var serverClock = new Date(xhr.getResponseHeader('Date'));
+                clockDiff = serverClock.getTime() - new Date().getTime();
+
+                $.each(data, function (i, quiz) {
+                    // convert date strings to javascript dates
+                    quiz.createdAt = new Date(quiz.createdAt);
+                    quiz.updatedAt = new Date(quiz.updatedAt);
+                });
+
                 quizzes = data;
                 populateQuizzesTable();
 
@@ -647,7 +746,7 @@
                 if (quizzes.length == 0 || new Date().getTime() - quizzes[0].createdAt.getTime() > 12*60*60*1000) {
                     openQuizDialog(newQuizObject());
                 }
-            }, 'json');
+            });
         };
 
         $('#back-to-quizzes-button').button().on('click', switchToQuizzes);
@@ -655,6 +754,8 @@
         var switchToQuestions = function (quiz) {
             $('#quizzes-container').hide();
             $('#questions-container').show();
+            $('#moderation-container').hide();
+            refreshes = [];
             questionDialog.dialog('close');
 
             openQuiz = quiz;
@@ -663,7 +764,17 @@
             populateQuestionsTable();
 
             // populate the list of questions
-            $.get(origin + '/quizzes/' + openQuiz.id + '/questions', {}, function (data) {
+            $.getJSON(origin + '/quizzes/' + openQuiz.id + '/questions', function (data, status, xhr) {
+                var serverClock = new Date(xhr.getResponseHeader('Date'));
+                clockDiff = serverClock.getTime() - new Date().getTime();
+
+                $.each(data, function (i, question) {
+                    // convert date strings to javascript dates
+                    question.createdAt = new Date(question.createdAt);
+                    question.updatedAt = new Date(question.updatedAt);
+                    question.openedAt = new Date(question.openedAt);
+                });
+
                 questions = data;
                 populateQuestionsTable();
 
@@ -671,7 +782,38 @@
                 if (questions.length == 0 || new Date().getTime() - questions[questions.length-1].createdAt.getTime() > 12*60*60*1000) {
                     openQuestionDialog(newQuestionObject());
                 }
-            }, 'json');
+            });
+        };
+
+        $('#back-to-questions-button').button().on('click', function () { switchToQuestions(openQuiz); });
+
+        var switchToModeration = function (question) {
+            $('#quizzes-container').hide();
+            $('#questions-container').hide();
+            $('#moderation-container').show();
+
+            openQuestion = question;
+            $('#moderation-page-question-summary').text(openQuestion.note + ' created at ' + timestamp(openQuestion.createdAt));
+            liveTimes = [ [ $('#moderation-page-countdown'), closedAt(openQuestion) ] ];
+            responses = [];
+            populateResponsesTable();
+
+            refreshes = [function () {
+                // populate the list of responses
+                $.getJSON(origin + '/questions/' + openQuestion.id + '/responses', function (data, status, xhr) {
+                    var serverClock = new Date(xhr.getResponseHeader('Date'));
+                    clockDiff = serverClock.getTime() - new Date().getTime();
+
+                    $.each(data, function (i, response) {
+                        // convert date strings to javascript dates
+                        response.createdAt = new Date(response.createdAt);
+                        response.updatedAt = new Date(response.updatedAt);
+                    });
+
+                    responses = data;
+                    populateResponsesTable();
+                });
+            }];
         };
 
         // start on the quizzes page

@@ -259,7 +259,8 @@ func GetAssignmentQuestionsOpen(w http.ResponseWriter, tx *sql.Tx, params martin
 	err = meddler.QueryAll(tx, &questions, `SELECT questions.* `+
 		`FROM questions JOIN quizzes ON questions.quiz_id = quizzes.id `+
 		`WHERE quizzes.lti_id = $1 `+
-		`ORDER BY questions.quiz_id, question_number`, assignment.LtiID)
+		`AND (questions.opened_at + (questions.open_seconds * interval '1 second')) > now() `+
+		`ORDER BY questions.quiz_id, questions.question_number`, assignment.LtiID)
 
 	if err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
@@ -480,8 +481,9 @@ func PostResponse(w http.ResponseWriter, tx *sql.Tx, currentUser *User, response
 		return
 	}
 	question := new(Question)
-	if err := meddler.QueryRow(tx, question, `SELECT * FROM questions `+
-		`WHERE id = $1 AND lti_id = $2`, response.QuestionID, assignment.LtiID); err != nil {
+	if err := meddler.QueryRow(tx, question, `SELECT questions.* `+
+		`FROM questions JOIN quizzes ON questions.quiz_id = quizzes.id `+
+		`WHERE questions.id = $1 AND quizzes.lti_id = $2`, response.QuestionID, assignment.LtiID); err != nil {
 		loggedHTTPDBNotFoundError(w, err)
 		return
 	}
@@ -538,17 +540,28 @@ func PostResponse(w http.ResponseWriter, tx *sql.Tx, currentUser *User, response
 	render.JSON(http.StatusOK, &response)
 }
 
+type ResponseWithName struct {
+	ID           int64     `json:"id" meddler:"id"`
+	AssignmentID int64     `json:"assignmentID" meddler:"assignment_id"`
+	QuestionID   int64     `json:"questionID" meddler:"question_id"`
+	Response     string    `json:"response" meddler:"response"`
+	Name         string    `json:"name" meddler:"name"`
+	CreatedAt    time.Time `json:"createdAt" meddler:"created_at,localtime"`
+	UpdatedAt    time.Time `json:"updatedAt" meddler:"updated_at,localtime"`
+}
+
 func GetQuestionResponses(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
 	questionID, err := parseID(w, "question_id", params["question_id"])
 	if err != nil {
 		return
 	}
 
-	responses := []*Response{}
-	err = meddler.QueryAll(tx, &responses, `SELECT responses.* `+
+	responses := []*ResponseWithName{}
+	err = meddler.QueryAll(tx, &responses, `SELECT responses.*, users.name `+
 		`FROM responses JOIN questions ON responses.question_id = questions.id `+
 		`JOIN quizzes ON quizzes.id = questions.quiz_id `+
 		`JOIN assignments ON assignments.lti_id = quizzes.lti_id `+
+		`JOIN users ON users.id = assignments.user_id `+
 		`WHERE responses.question_id = $1 AND assignments.user_id = $2 AND assignments.instructor`, questionID, currentUser.ID)
 	if err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
@@ -749,6 +762,7 @@ func gradeQuizClass(now time.Time, tx *sql.Tx, quizID int64) error {
 	// send grade to the LMS in a goroutine
 	// so we can wrap up the transaction and return to the user
 	go func() {
+		start := time.Now()
 	OUTER:
 		for _, asst := range assignments {
 			msg := messages[asst]
@@ -776,6 +790,7 @@ func gradeQuizClass(now time.Time, tx *sql.Tx, quizID int64) error {
 				}
 			}
 		}
+		log.Printf("posted %d grades to the LMS in %v", len(assignments), time.Since(start))
 	}()
 
 	return nil
