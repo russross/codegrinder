@@ -556,13 +556,21 @@ func GetQuestionResponses(w http.ResponseWriter, tx *sql.Tx, params martini.Para
 		return
 	}
 
+	// make sure this is the instructor
+	var junk int
+	if err = tx.QueryRow(`SELECT 1 `+
+		`FROM questions JOIN quizzes ON questions.quiz_id = quizzes.id `+
+		`JOIN assignments ON assignments.lti_id = quizzes.lti_id `+
+		`WHERE questions.id = $1 AND assignments.user_id = $2 AND assignments.instructor`, questionID, currentUser.ID).Scan(&junk); err != nil {
+		loggedHTTPDBNotFoundError(w, err)
+		return
+	}
+
 	responses := []*ResponseWithName{}
 	err = meddler.QueryAll(tx, &responses, `SELECT responses.*, users.name `+
-		`FROM responses JOIN questions ON responses.question_id = questions.id `+
-		`JOIN quizzes ON quizzes.id = questions.quiz_id `+
-		`JOIN assignments ON assignments.lti_id = quizzes.lti_id `+
+		`FROM responses JOIN assignments ON responses.assignment_id = assignments.id `+
 		`JOIN users ON users.id = assignments.user_id `+
-		`WHERE responses.question_id = $1 AND assignments.user_id = $2 AND assignments.instructor`, questionID, currentUser.ID)
+		`WHERE responses.question_id = $1`, questionID)
 	if err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return

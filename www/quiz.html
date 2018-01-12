@@ -108,7 +108,7 @@
             var now = new Date();
             var diff = time.getTime() - (now.getTime() + clockDiff);
             if (diff <= 0) {
-                return '&nbsp;';
+                return '\u00A0';
             }
             var s = '';
             var hours = Math.floor(diff / 60 / 60 / 1000);

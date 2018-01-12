@@ -245,7 +245,7 @@
             var now = new Date();
             var diff = time.getTime() - (now.getTime() + clockDiff);
             if (diff <= 0) {
-                return '&nbsp;';
+                return '\u00A0';
             }
             var s = '';
             var hours = Math.floor(diff / 60 / 60 / 1000);
@@ -274,7 +274,7 @@
             });
         };
         window.setInterval(displayLiveTimes, 1000);
-        window.setInterval(updateRefreshes, 4000);
+        window.setInterval(updateRefreshes, 2000);
 
         //
         // Quizzes page
@@ -303,7 +303,7 @@
             } else {
                 quiz.weight = 1.0;
                 quiz.participationThreshold = 0.75;
-                quiz.participationPercent = 0.50;
+                quiz.participationPercent = 0.0;
             }
             quiz.isGraded = false;
             return quiz;
@@ -429,7 +429,7 @@
                 $button.bind('click', function () { openQuizDialog(quiz); });
                 $row.append($('<td>').append($button));
                 if (quiz.isGraded) {
-                    $row.append($('<td>').html('&nbsp;'));
+                    $row.append($('<td>').html('\u00A0'));
                 } else {
                     $button = $('<button>Grade</button>');
                     $button.bind('click', function () {
@@ -707,10 +707,11 @@
             $.each(uniqueResponses, function (i, unique) {
                 var $row = $('<tr></tr>').appendTo($tbody);
                 $row.append($('<td></td>').text(unique));
+                groups[unique].sort();
                 var students = '';
                 $.each(groups[unique], function (j, name) {
-                    if (i > 0) {
-                        students += '<br>';
+                    if (j > 0) {
+                        students += '\n';
                     }
                     students += name;
                 });

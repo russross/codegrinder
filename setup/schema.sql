@@ -83,7 +83,6 @@ CREATE TABLE courses (
 
     PRIMARY KEY (id)
 );
-CREATE UNIQUE INDEX courses_lti_label ON courses (lti_label);
 CREATE UNIQUE INDEX courses_lti_id ON courses (lti_id);
 CREATE UNIQUE INDEX courses_canvas_id ON courses (canvas_id);
 
