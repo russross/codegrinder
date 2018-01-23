@@ -233,7 +233,7 @@
             if (request.responseText) {
                 alert('Sorry, an error occurred while processing your request:\n\n' + request.responseText);
             } else {
-                alert('Sorry, an error occurred while processing a request to:\n\n' + settings.url + '\n');
+                alert('Sorry, an error occurred while processing a request to:\n\n' + settings.url);
             }
         });
 
@@ -708,13 +708,7 @@
                 var $row = $('<tr></tr>').appendTo($tbody);
                 $row.append($('<td></td>').text(unique));
                 groups[unique].sort();
-                var students = '';
-                $.each(groups[unique], function (j, name) {
-                    if (j > 0) {
-                        students += '\n';
-                    }
-                    students += name;
-                });
+                var students = groups[unique].join('\n');
                 $row.append($('<td class="pointer"></td>').text(''+groups[unique].length).attr('title', students));
             });
         };
