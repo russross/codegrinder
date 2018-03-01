@@ -117,9 +117,7 @@ func main() {
 	if Config.DaycareSecret == "" {
 		log.Fatalf("cannot run with no daycareSecret in the config file")
 	}
-	if Config.LetsEncryptEmail == "" {
-		log.Fatalf("cannot run with no letsEncryptEmail in the config file")
-	}
+	// Config.LetsEncryptEmail is optional
 
 	// set up martini
 	r := martini.NewRouter()
@@ -533,6 +531,11 @@ func main() {
 			GetCertificate:           lem.GetCertificate,
 		},
 	}
+	go func() {
+		if err := http.ListenAndServe(":http", lem.HTTPHandler(nil)); err != nil {
+			log.Fatalf("ListenAndServe: %v", err)
+		}
+	}()
 	if err := server.ListenAndServeTLS("", ""); err != nil {
 		log.Fatalf("ListenAndServeTLS: %v", err)
 	}
