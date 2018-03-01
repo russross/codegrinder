@@ -487,9 +487,31 @@ func main() {
 		r.Post("/v2/responses", counter, withTx, withCurrentUser, gunzip, binding.Json(Response{}), PostResponse)
 	}
 
-	// start redirecting http calls to https
+	// set up letsencrypt
+	lem := autocert.Manager{
+		Prompt:     autocert.AcceptTOS,
+		Cache:      autocert.DirCache(Config.LetsEncryptCache),
+		HostPolicy: autocert.HostWhitelist(Config.Hostname),
+		Email:      Config.LetsEncryptEmail,
+	}
+
+	// set up the https server
+	log.Printf("accepting https connections")
+	server := &http.Server{
+		Addr:    ":https",
+		Handler: m,
+		TLSConfig: &tls.Config{
+			PreferServerCipherSuites: true,
+			MinVersion:               tls.VersionTLS10,
+			GetCertificate:           lem.GetCertificate,
+		},
+	}
+
+	// set up the http server
+	// it is necessary for LetsEncrypt challenges
+	// it forwards other requests to https, but only if the host name was correct
 	//log.Printf("starting http -> https forwarder")
-	go http.ListenAndServe(":http", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	forwarder := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// get the address of the client
 		addr := r.Header.Get("X-Real-IP")
 		if addr == "" {
@@ -510,29 +532,11 @@ func main() {
 		log.Printf("redirecting http request from %s to %s", addr, u.String())
 		w.Header().Set("Connection", "close")
 		http.Redirect(w, r, u.String(), http.StatusMovedPermanently)
-	}))
+	})
 
-	// set up letsencrypt
-	lem := autocert.Manager{
-		Prompt:     autocert.AcceptTOS,
-		Cache:      autocert.DirCache(Config.LetsEncryptCache),
-		HostPolicy: autocert.HostWhitelist(Config.Hostname),
-		Email:      Config.LetsEncryptEmail,
-	}
-
-	// start the https server
-	log.Printf("accepting https connections")
-	server := &http.Server{
-		Addr:    ":https",
-		Handler: m,
-		TLSConfig: &tls.Config{
-			PreferServerCipherSuites: true,
-			MinVersion:               tls.VersionTLS10,
-			GetCertificate:           lem.GetCertificate,
-		},
-	}
+	// start both servers
 	go func() {
-		if err := http.ListenAndServe(":http", lem.HTTPHandler(nil)); err != nil {
+		if err := http.ListenAndServe(":http", lem.HTTPHandler(forwarder)); err != nil {
 			log.Fatalf("ListenAndServe: %v", err)
 		}
 	}()
