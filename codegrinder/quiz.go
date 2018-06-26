@@ -277,6 +277,44 @@ func GetAssignmentQuestionsOpen(w http.ResponseWriter, tx *sql.Tx, params martin
 	render.JSON(http.StatusOK, questions)
 }
 
+func MockGetAssignmentQuestionsOpen(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
+	assignmentID, err := parseID(w, "assignment_id", params["assignment_id"])
+	if err != nil {
+		return
+	}
+
+	assignment := new(Assignment)
+	if err = meddler.QueryRow(tx, assignment, `SELECT * FROM assignments `+
+		`WHERE id = $1 AND user_id = $2`, assignmentID, currentUser.ID); err != nil {
+		loggedHTTPDBNotFoundError(w, err)
+		return
+	}
+
+	questions := []*Question{}
+	err = meddler.QueryAll(tx, &questions, `SELECT questions.* `+
+		`FROM questions JOIN quizzes ON questions.quiz_id = quizzes.id `+
+		`WHERE quizzes.lti_id = $1 `+
+		`AND quizzes.id IN (16, 17) `+
+		`ORDER BY questions.quiz_id, questions.question_number`, assignment.LtiID)
+
+	if err != nil {
+		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
+		return
+	}
+
+	// hide answers from student for open questions
+	if !assignment.Instructor {
+		now := time.Now()
+		for _, question := range questions {
+			question.OpenedAt = now
+			question.OpenSeconds = 300
+			question.HideAnswersUnlessClosed()
+		}
+	}
+
+	render.JSON(http.StatusOK, questions)
+}
+
 func GetQuestion(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
 	questionID, err := parseID(w, "question_id", params["question_id"])
 	if err != nil {

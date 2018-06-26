@@ -302,7 +302,7 @@
                 quiz.participationPercent = quizzes[0].participationPercent;
             } else {
                 quiz.weight = 1.0;
-                quiz.participationThreshold = 0.75;
+                quiz.participationThreshold = 0.50;
                 quiz.participationPercent = 0.0;
             }
             quiz.isGraded = false;
@@ -512,7 +512,7 @@
                 question.weight = 1.0;
                 question.pointsForAttempt = 0.0;
                 question.isMultipleChoice = true;
-                question.openSeconds = 5*60;
+                question.openSeconds = 90;
             }
             question.answers = {};
             if (question.isMultipleChoice) {
@@ -520,7 +520,6 @@
                 question.answers['(b)'] = 0.0;
                 question.answers['(c)'] = 0.0;
                 question.answers['(d)'] = 0.0;
-                question.answers['(e)'] = 0.0;
             }
             question.answerFilterRegexp = '';
             question.openedAt = new Date(new Date().getTime() + clockDiff);

@@ -89,6 +89,6 @@ func CommandProblem(cmd *cobra.Command, args []string) {
 
 		// report the LTI URL
 		fmt.Println()
-		fmt.Printf("  → https://%s%s/lti/problem_sets/%s\n", Config.Host, urlPrefix, ps.Unique)
+		fmt.Printf("  → https://%s%s/lti/problem_sets/cli/%s\n", Config.Host, urlPrefix, ps.Unique)
 	}
 }

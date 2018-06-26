@@ -409,7 +409,7 @@ func main() {
 		// LTI
 		r.Get("/v2/lti/config.xml", counter, GetConfigXML)
 		//r.Post("/v2/lti/problem_sets", counter, gunzip, binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblemSets)
-		r.Post("/v2/lti/problem_sets/:unique", counter, gunzip, binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblemSet)
+		r.Post("/v2/lti/problem_sets/:ui/:unique", counter, gunzip, binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblemSet)
 		r.Post("/v2/lti/quizzes", counter, gunzip, binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiQuizzes)
 
 		// problem bundles--for problem creation only
@@ -477,6 +477,7 @@ func main() {
 		// questions
 		r.Get("/v2/quizzes/:quiz_id/questions", counter, withTx, withCurrentUser, GetQuizQuestions)
 		r.Get("/v2/assignments/:assignment_id/questions/open", counter, withTx, withCurrentUser, GetAssignmentQuestionsOpen)
+		r.Get("/v2/assignments/:assignment_id/questions/mock", counter, withTx, withCurrentUser, MockGetAssignmentQuestionsOpen)
 		r.Get("/v2/questions/:question_id", counter, withTx, withCurrentUser, GetQuestion)
 		r.Patch("/v2/questions/:question_id", counter, withTx, withCurrentUser, gunzip, binding.Json(QuestionPatch{}), PatchQuestion)
 		r.Post("/v2/questions", counter, withTx, withCurrentUser, gunzip, binding.Json(Question{}), PostQuestion)
@@ -522,7 +523,7 @@ func main() {
 
 		// make sure the request is for the right host name
 		if Config.Hostname != r.Host {
-			http.Error(w, "http request to invalid host", http.StatusNotFound)
+			http.Error(w, "http request to invalid host", http.StatusBadRequest)
 			return
 		}
 		var u url.URL = *r.URL
@@ -535,8 +536,7 @@ func main() {
 
 	// start both servers
 	go func() {
-		_ = forwarder
-		if err := http.ListenAndServe(":http", lem.HTTPHandler(nil)); err != nil {
+		if err := http.ListenAndServe(":http", lem.HTTPHandler(forwarder)); err != nil {
 			log.Fatalf("ListenAndServe: %v", err)
 		}
 	}()
