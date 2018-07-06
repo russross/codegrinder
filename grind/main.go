@@ -269,7 +269,14 @@ func doRequest(path string, params url.Values, method string, upload interface{}
 		req.Header.Add("Content-Encoding", "gzip")
 		payload := new(bytes.Buffer)
 		gw := gzip.NewWriter(payload)
-		jw := json.NewEncoder(gw)
+		uncompressed := new(bytes.Buffer)
+		var jsontarget io.Writer
+		if Config.apiDump {
+			jsontarget = io.MultiWriter(gw, uncompressed)
+		} else {
+			jsontarget = gw
+		}
+		jw := json.NewEncoder(jsontarget)
 		if err := jw.Encode(upload); err != nil {
 			log.Fatalf("doRequest: JSON error encoding object to upload: %v", err)
 		}
@@ -279,7 +286,7 @@ func doRequest(path string, params url.Values, method string, upload interface{}
 		req.Body = ioutil.NopCloser(payload)
 
 		if Config.apiDump {
-			log.Printf("Request data: %s", payload)
+			log.Printf("Request data: %s", uncompressed)
 		}
 	}
 
