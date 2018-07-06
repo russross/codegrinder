@@ -314,10 +314,15 @@ func encode(v url.Values) []byte {
 	return buf.Bytes()
 }
 
-// LtiProblem handles /lti/problem_sets/:unique requests.
+// LtiProblem handles /lti/problem_sets/:ui/:unique requests.
 // It creates the user/course/assignment if necessary, creates a session,
 // and redirects the user to the main UI URL.
 func LtiProblemSet(w http.ResponseWriter, r *http.Request, tx *sql.Tx, form LTIRequest, params martini.Params) {
+	ui := params["ui"]
+	if ui != "web" && ui != "cli" {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "UI type must be web or cli, not %q", ui)
+		return
+	}
 	unique := params["unique"]
 	if unique == "" {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "malformed URL: missing unique ID for problem")
@@ -373,8 +378,12 @@ func LtiProblemSet(w http.ResponseWriter, r *http.Request, tx *sql.Tx, form LTIR
 	session.Save(w)
 
 	// redirect to the console
-	key := loginRecords.Insert(user.ID)
-	http.Redirect(w, r, fmt.Sprintf("/grind.html?assignment=%d&session=%s", asst.ID, key), http.StatusSeeOther)
+	if ui == "cli" {
+		key := loginRecords.Insert(user.ID)
+		http.Redirect(w, r, fmt.Sprintf("/%s/?assignment=%d&session=%s", ui, asst.ID, key), http.StatusSeeOther)
+	} else {
+		http.Redirect(w, r, fmt.Sprintf("/%s/?assignment=%d", ui, asst.ID), http.StatusSeeOther)
+	}
 }
 
 // LtiQuizzes handles /lti/quizzes requests.
@@ -410,9 +419,9 @@ func LtiQuizzes(w http.ResponseWriter, r *http.Request, tx *sql.Tx, form LTIRequ
 
 	// redirect to the console
 	if asst.Instructor {
-		http.Redirect(w, r, fmt.Sprintf("/console.html?assignment=%d", asst.ID), http.StatusSeeOther)
+		http.Redirect(w, r, fmt.Sprintf("/quiz/console.html?assignment=%d", asst.ID), http.StatusSeeOther)
 	} else {
-		http.Redirect(w, r, fmt.Sprintf("/quiz.html?assignment=%d", asst.ID), http.StatusSeeOther)
+		http.Redirect(w, r, fmt.Sprintf("/quiz/?assignment=%d", asst.ID), http.StatusSeeOther)
 	}
 }
 
