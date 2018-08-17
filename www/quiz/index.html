@@ -236,15 +236,10 @@
                     }
                 });
                 var $fieldset = $('#choices-fieldset').empty();
-                var choices = [];
-                $.each(question.answers, function (key, val) {
-                    choices.push(key);
-                });
-                choices.sort();
-                $.each(choices, function (i, choice) {
-                    var $button = $('<button></button>').text(choice);
+                $.each(question.answers, function (i, answer) {
+                    var $button = $('<button></button>').text(answer.answer);
                     $button.bind('click', function () {
-                        submitResponse(question, choice);
+                        submitResponse(question, answer.answer);
                         responseDialog.dialog('close');
                     });
                     $('<p></p>').append($button).appendTo($fieldset);

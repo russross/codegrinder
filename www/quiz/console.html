@@ -250,8 +250,20 @@
     <h1>CodeGrinder Question Moderation Console</h1>
 
     <p><button v-on:click="loadQuestions(openQuiz, false)">Back to questions</button></p>
-    <p>Question: {{ openQuestion.note + ' create at ' + timestamp(openQuestion.createdAt) }}</p>
-    <p>{{ moderationCountdown }}</p>
+    <p>
+      Question: {{ openQuestion.note + ' create at ' + timestamp(openQuestion.createdAt) }}
+      <span v-if="!openQuestion.openedAt">(not started yet)</span>
+    </p>
+    <p>
+      Set countdown to:
+      <button v-on:click="setCountdown(1)">0s</button>
+      <button v-on:click="setCountdown(30)">30s</button>
+      <button v-on:click="setCountdown(90)">90s</button>
+      <button v-on:click="setCountdown(180)">3m</button>
+      <button v-on:click="setCountdown(300)">5m</button>
+      <button v-on:click="setCountdown(500)">10m</button>
+      {{ moderationCountdown }}
+    </p>
     <table>
       <thead>
         <tr>
@@ -465,6 +477,8 @@
                 var that = this;
                 this.currentPage = 'quizzes';
                 this.openQuiz = null;
+                this.refreshes = [];
+                this.liveTimes = [];
                 this.get(this.origin + '/assignments/' + this.assignmentID + '/quizzes', function (lst) {
                     sortQuizzes(lst);
                     that.quizzes = lst;
@@ -546,8 +560,9 @@
                 var that = this;
                 this.openQuestion = null;
                 this.currentPage = 'questions';
-                this.refreshes = [];
                 this.openQuiz = quiz;
+                this.refreshes = [];
+                this.liveTimes = [];
 
                 this.get(this.origin + '/quizzes/' + this.openQuiz.id + '/questions', function (lst) {
                     sortQuestions(lst);
@@ -650,9 +665,8 @@
                 var callback = function (elt) {
                     that.placeQuestion(elt);
 
-                    // TODO: load moderation page?
                     if (!oldID)
-                        return;
+                        that.loadModeration(elt);
                 };
 
                 that.openQuestion = null;
@@ -680,11 +694,13 @@
             loadModeration: function (question) {
                 this.currentPage = 'moderation';
                 this.openQuestion = question;
+                this.moderationCountdown = '';
                 this.responses = [];
                 this.liveTimes = [[ 'moderationCountdown', closedAt(this.openQuestion) ]];
                 this.refreshes = [ 'loadResponses' ];
             },
             loadResponses: function () {
+                var that = this;
                 this.get(this.origin + '/questions/' + this.openQuestion.id + '/responses', function (lst) {
                     var groups = {};
                     var uniqueResponses = [];
@@ -701,14 +717,24 @@
                     }
                     uniqueResponses.sort();
 
-                    var summary = [];
+                    var summaries = [];
                     for (i = 0; i < uniqueResponses.length; i++) {
                         var elt = {};
                         elt.response = uniqueResponses[i];
                         elt.students = groups[elt.response];
                         elt.students.sort();
-                        summary.push(elt);
+                        summaries.push(elt);
                     }
+                    that.responses = summaries;
+                });
+            },
+            setCountdown: function (seconds) {
+                var that = this;
+                this.openQuestion.openSeconds = seconds;
+                this.patch(this.origin + '/questions/' + this.openQuestion.id, this.openQuestion, function (elt) {
+                    that.placeQuestion(elt);
+                    that.openQuestion = elt;
+                    that.liveTimes = [[ 'moderationCountdown', closedAt(elt) ]];
                 });
             },
 
@@ -730,7 +756,7 @@
             },
             makeCountdown: function (time) {
                 var now = new Date();
-                var diff = new Date(time).getTime() - (now.getTime() + clockDiff);
+                var diff = new Date(time).getTime() - (now.getTime() + this.clockDiff);
                 if (diff <= 0) {
                     return '\u00A0';
                 }
@@ -764,7 +790,7 @@
             Vue.set(app, pair[0], app.makeCountdown(pair[1]));
         }
     };
-    window.setInterval(app.displayLiveTimes, 1000);
+    window.setInterval(displayLiveTimes, 1000);
 
     var updateRefreshes = function () {
         for (var i = 0; i < app.refreshes.length; i++) {
