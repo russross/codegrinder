@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -259,6 +258,7 @@ func GetAssignmentQuestionsOpen(w http.ResponseWriter, tx *sql.Tx, params martin
 	err = meddler.QueryAll(tx, &questions, `SELECT questions.* `+
 		`FROM questions JOIN quizzes ON questions.quiz_id = quizzes.id `+
 		`WHERE quizzes.lti_id = $1 `+
+		`AND questions.opened_at < now() `+
 		`AND (questions.opened_at + (questions.open_seconds * interval '1 second')) > now() `+
 		`ORDER BY questions.quiz_id, questions.question_number`, assignment.LtiID)
 
@@ -306,7 +306,7 @@ func MockGetAssignmentQuestionsOpen(w http.ResponseWriter, tx *sql.Tx, params ma
 	if !assignment.Instructor {
 		now := time.Now()
 		for _, question := range questions {
-			question.OpenedAt = now
+			question.OpenedAt = &now
 			question.OpenSeconds = 300
 			question.HideAnswersUnlessClosed()
 		}
@@ -384,22 +384,17 @@ func PostQuestion(w http.ResponseWriter, tx *sql.Tx, currentUser *User, question
 		loggedHTTPErrorf(w, http.StatusBadRequest, "multiple-choice question must have at least two choices")
 		return
 	}
-	if len(question.AnswerFilterRegexp) > 0 {
-		parts := strings.Split(question.AnswerFilterRegexp, RecordSeparator)
-		if len(parts) != 1 && len(parts) != 2 {
-			loggedHTTPErrorf(w, http.StatusBadRequest, "filter must have one or two fields")
-			return
-		}
-		if _, err := regexp.Compile(parts[0]); err != nil {
-			loggedHTTPErrorf(w, http.StatusBadRequest, "filter must contain a valid regular expression")
-			return
-		}
-	}
 	question.CreatedAt = now
 	question.UpdatedAt = now
+	question.OpenedAt = nil
 	if question.OpenSeconds < 0 {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "question cannot be open for negative time")
 		return
+	}
+
+	// a question is opened by posting the length it will be open
+	if question.OpenSeconds > 0 {
+		question.OpenedAt = &now
 	}
 
 	if err := meddler.Save(tx, "questions", &question); err != nil {
@@ -457,28 +452,21 @@ func PatchQuestion(w http.ResponseWriter, tx *sql.Tx, params martini.Params, cur
 		loggedHTTPErrorf(w, http.StatusBadRequest, "multiple-choice question must have at least two choices")
 		return
 	}
-	if patch.AnswerFilterRegexp != nil {
-		question.AnswerFilterRegexp = *patch.AnswerFilterRegexp
-		if len(question.AnswerFilterRegexp) > 0 {
-			parts := strings.Split(question.AnswerFilterRegexp, "\036")
-			if len(parts) != 1 && len(parts) != 2 {
-				loggedHTTPErrorf(w, http.StatusBadRequest, "filter must have one or two fields")
-				return
-			}
-			if _, err := regexp.Compile(parts[0]); err != nil {
-				loggedHTTPErrorf(w, http.StatusBadRequest, "filter must contain a valid regular expression")
-				return
-			}
-		}
-	}
-	if patch.OpenedAt != nil {
-		question.OpenedAt = *patch.OpenedAt
-	}
+
+	// a question is opened by posting the length it will be open
+	// this also re-opens a question and resets its open time
 	if patch.OpenSeconds != nil {
 		question.OpenSeconds = *patch.OpenSeconds
-		if question.OpenSeconds < 0 {
+		switch {
+		case question.OpenSeconds < 0:
 			loggedHTTPErrorf(w, http.StatusBadRequest, "question cannot be open for negative time")
 			return
+
+		case question.OpenSeconds == 0:
+			question.OpenedAt = nil
+
+		case question.OpenSeconds > 0:
+			question.OpenedAt = &now
 		}
 	}
 	question.UpdatedAt = now
@@ -528,7 +516,7 @@ func PostResponse(w http.ResponseWriter, tx *sql.Tx, currentUser *User, response
 
 	// responses cannot be submitted after the response window
 	// or if the question has been closed
-	if now.Before(question.OpenedAt) || now.After(question.ClosedAt()) {
+	if question.OpenedAt == nil || now.Before(*question.OpenedAt) || question.IsClosed() {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "the question is not open for responses")
 		return
 	}
@@ -545,29 +533,6 @@ func PostResponse(w http.ResponseWriter, tx *sql.Tx, currentUser *User, response
 		// updated response
 		response.ID = old.ID
 		response.CreatedAt = old.CreatedAt
-	}
-
-	if len(question.AnswerFilterRegexp) > 0 {
-		parts := strings.Split(question.AnswerFilterRegexp, RecordSeparator)
-		if len(parts) != 1 && len(parts) != 2 {
-			loggedHTTPErrorf(w, http.StatusInternalServerError, "question has invalid answer filter")
-			return
-		}
-		filter, err := regexp.Compile(parts[0])
-		if err != nil {
-			loggedHTTPErrorf(w, http.StatusInternalServerError, "question filter does not compile: %v", err)
-			return
-		}
-
-		// response must match the regexp
-		if !filter.MatchString(response.Response) {
-			loggedHTTPErrorf(w, http.StatusBadRequest, "response is not in the correct format")
-			return
-		}
-		if len(parts) == 2 {
-			// perform regexp substitution
-			response.Response = filter.ReplaceAllString(response.Response, parts[1])
-		}
 	}
 
 	if err := meddler.Save(tx, "responses", &response); err != nil {
@@ -674,14 +639,14 @@ func DeleteQuestion(w http.ResponseWriter, tx *sql.Tx, currentUser *User, params
 }
 
 func gradeResponse(question *Question, response *Response) float64 {
-	// note: response has already been filtered
+	// TODO: response needs to be filtered
 	actual, possible := 0.0, 0.0
-	for answer, points := range question.Answers {
-		if points > possible {
-			possible = points
+	for _, answer := range question.Answers {
+		if answer.Points > possible {
+			possible = answer.Points
 		}
-		if answer == response.Response {
-			actual = points
+		if response.Response == answer.Answer {
+			actual = answer.Points
 		}
 	}
 	actual += question.PointsForAttempt

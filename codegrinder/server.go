@@ -477,7 +477,7 @@ func main() {
 		// questions
 		r.Get("/v2/quizzes/:quiz_id/questions", counter, withTx, withCurrentUser, GetQuizQuestions)
 		r.Get("/v2/assignments/:assignment_id/questions/open", counter, withTx, withCurrentUser, GetAssignmentQuestionsOpen)
-		r.Get("/v2/assignments/:assignment_id/questions/mock", counter, withTx, withCurrentUser, MockGetAssignmentQuestionsOpen)
+		//r.Get("/v2/assignments/:assignment_id/questions/mock", counter, withTx, withCurrentUser, MockGetAssignmentQuestionsOpen)
 		r.Get("/v2/questions/:question_id", counter, withTx, withCurrentUser, GetQuestion)
 		r.Patch("/v2/questions/:question_id", counter, withTx, withCurrentUser, gunzip, binding.Json(QuestionPatch{}), PatchQuestion)
 		r.Post("/v2/questions", counter, withTx, withCurrentUser, gunzip, binding.Json(Question{}), PostQuestion)
