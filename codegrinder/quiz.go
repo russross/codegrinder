@@ -463,7 +463,7 @@ func PatchQuestion(w http.ResponseWriter, tx *sql.Tx, params martini.Params, cur
 			return
 
 		case question.OpenSeconds == 0:
-			question.OpenedAt = nil
+			// zero means leave it as it was
 
 		case question.OpenSeconds > 0:
 			question.OpenedAt = &now

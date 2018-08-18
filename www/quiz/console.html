@@ -5,9 +5,10 @@
   <title>CodeGrinder Quiz Console</title>
   <script src="vue.js"></script>
   <style>
-    label, input { display:block; }
-    input.text { margin-bottom:12px; width:95%; padding: .4em; }
-    fieldset { padding:0; border:0; margin-top:25px; }
+    label, input { display: block; }
+    input.text { margin-bottom: 12px; width: 95%; padding: .4em; }
+    textarea { width: 90%; }
+    fieldset { padding: 0; border: 0; margin-top: 25px; }
     h1 { font-size: 1.2em; margin: .6em 0; }
     table { margin: 1em 0; border-collapse: collapse; width: 100%; }
     td, th { border: 1px solid #eee; padding: .6em 10px; text-align: left; }
@@ -127,7 +128,7 @@
       <form>
         <fieldset>
           <label for="quiz_note">Note (the name of this quiz, normally the date it was created)</label>
-          <input type="text" name="quiz_note" v-model="openQuiz.note">
+          <textarea rows="5" name="quiz_note" v-model="openQuiz.note"></textarea>
           <br>
 
           <label for="quiz_weight">Weight relative to other quizzes</label>
@@ -199,7 +200,7 @@
       <form>
         <fieldset>
           <label for="question_note">Note</label>
-          <input type="text" name="question_note" v-model="openQuestion.note">
+          <textarea rows="5" name="question_note" v-model="openQuestion.note"></textarea>
           <br>
 
           <label for="question_weight">Weight relative to other questions</label>
@@ -222,7 +223,7 @@
             </thead>
             <tbody>
               <tr v-for="answer in openQuestion.answers">
-                <td><input type="text" v-model="answer.answer"></td>
+                <td><textarea rows="2" v-model="answer.answer"></textarea></td>
                 <td><input type="number" v-model.number="answer.points"></td>
               </tr>
             </tbody>
