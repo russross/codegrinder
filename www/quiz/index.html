@@ -4,21 +4,85 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>CodeGrinder Quiz App</title>
-  <link rel="stylesheet" href="jquery-ui/jquery-ui.min.css">
-  <script src="jquery-ui/external/jquery/jquery.js"></script>
-  <script src="jquery-ui/jquery-ui.min.js"></script>
+  <script src="vue.js"></script>
   <style>
-    label, input { display:block; }
-    input.text { margin-bottom:12px; width:95%; padding: .4em; }
-    fieldset { padding:0; border:0; margin-top:25px; }
+    body { font-size: 16px; }
+    label, input, button { display: block; }
+    input.text { margin-bottom: 12px; width: 95%; padding: .4em; }
+    textarea { font-size: inherit; width: 90%; }
+    fieldset { padding: 0; border: 0; margin-top: 25px; }
     h1 { font-size: 1.2em; margin: .6em 0; }
     table { margin: 1em 0; border-collapse: collapse; width: 100%; }
     td, th { border: 1px solid #eee; padding: .6em 10px; text-align: left; }
-    .ui-dialog .ui-state-error { padding: .3em; }
+    button.response { background-color: #0f0; }
   </style>
 </head>
 
 <body>
+
+<div id="app">
+
+  <!------------------------>
+  <!-- Pick question page -->
+  <!------------------------>
+  <div v-if="questions.length > 0 && !openQuestion && !errorMessage">
+    <h1>CodeGrinder Quiz Questions</h1>
+    <table>
+      <thead>
+        <tr>
+          <th>Note</th>
+          <th>Open</th>
+        <tr>
+      </thead>
+      <tbody>
+        <tr v-for="question in questions">
+          <td>{{ question.note }}</td>
+          <td><button v-on:click="openQuestion = question">{{ question.countDown }}</button></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!---------------------------->
+  <!-- Answer question page   -->
+  <!---------------------------->
+  <div v-if="openQuestion && !errorMessage">
+    <p>{{ openQuestion.note }}</p>
+
+    <!-- Multiple choice -->
+    <div v-if="openQuestion.isMultipleChoice">
+      <p v-for="answer in openQuestion.answers">
+        <button v-on:click="saveResponse(openQuestion, answer.answer)" v-bind:class="{ 'response': answer.answer == responses[openQuestion.id] }">{{ answer.answer }}</button>
+      </p>
+    </div>
+
+    <!-- Fill in the blank -->
+    <div v-if="!openQuestion.isMultipleChoice">
+      <textarea rows="5" v-model="responses[openQuestion.id]"></textarea>
+      <button v-on:click="saveResponse(openQuestion, responses[openQuestion.id])">Save</button>
+    </div>
+
+    <p>{{ openQuestion.countDown }}</p>
+  </div>
+
+  <!------------------------>
+  <!-- No questions page  -->
+  <!------------------------>
+  <div v-if="questions.length == 0 && !errorMessage">
+    <h1>No questions currently available</h1>
+    <p>This will automatically refresh when a question opens</p>
+  </div>
+
+  <!------------------------>
+  <!-- Error message page -->
+  <!------------------------>
+  <div v-if="errorMessage">
+    <h1>Something went wrong</h1>
+    <p>{{ errorMessage }}</p>
+    <p><button v-on:click="errorMessage = null">Dismiss</button></p>
+  </div>
+
+</div>
 
 <script>
     var QueryString = (function () {
@@ -48,242 +112,163 @@
         } 
         return query_string;
     })();
-</script>
+    var closedAt = function (question) {
+        if (!question.openedAt)
+            return null;
+        return new Date(new Date(question.openedAt).getTime() + question.openSeconds * 1000);
+    };
+    var makeCountdown = function (time) {
+        var now = new Date();
+        var diff = time.getTime() - (now.getTime() + clockDiff);
+        if (diff <= 0) {
+            return '\u00A0';
+        }
+        var s = '';
+        var hours = Math.floor(diff / 60 / 60 / 1000);
+        diff -= hours * 60 * 60 * 1000;
+        var minutes = Math.floor(diff / 60 / 1000);
+        diff -= minutes * 60 * 1000;
+        var seconds = Math.floor(diff / 1000);
+        diff -= seconds * 1000;
+        if (hours > 0)
+            s += hours + 'h';
+        if (s || minutes > 0)
+            s += minutes + 'm';
+        s += seconds + 's';
+        return s;
+    };
 
-<div id="list-container">
-  <h1>CodeGrinder Quiz Questions</h1>
-  <table>
-    <thead>
-      <tr>
-        <th>&nbsp;</th>
-        <th>Note</th>
-        <th>Opens in</th>
-        <th>Closes in</th>
-      <tr>
-    </thead>
-    <tbody id="list-tbody">
-    </tbody>
-  </table>
-  <button id="list-refresh">Refresh list</button>
-  <div id="feedback"></div>
+    var app = new Vue({
+        el: '#app',
+        data: {
+            origin: document.location.origin + '/v2',
+            assignmentID: Number(QueryString.assignment),
+            clockDiff: 0,
+            errorMessage: null,
+            questions: [],
+            openQuestion: null,
+            responses: {},
+            currentPage: ''
+        },
+        methods: {
+            //
+            // XMLHttpRequest helpers
+            //
+            get: function (url, callback) {
+                var that = this;
+                var req = new XMLHttpRequest();
+                req.open('GET', url);
+                req.setRequestHeader('Accept', 'application/json');
+                req.onload = function () {
+                    that.updateClockDiff(this);
+                    if (req.readyState == 4 && req.status == "200")
+                        callback(JSON.parse(this.response));
+                    else
+                        that.errorMessage = this.response;
+                };
+                req.send(null);
+            },
+            post: function (url, obj, callback) {
+                var that = this;
+                var req = new XMLHttpRequest();
+                req.open('POST', url);
+                req.setRequestHeader('Accept', 'application/json');
+                req.setRequestHeader('Content-Type', 'application/json; charset=utf-8');
+                req.onload = function () {
+                    that.updateClockDiff(this);
+                    if (req.readyState == 4 && req.status == "200")
+                        callback(JSON.parse(this.response));
+                    else
+                        that.errorMessage = this.response;
+                };
+                req.send(JSON.stringify(obj));
+            },
 
-  <div id="response-form">
-    <p id="question-note"></p>
-    <div id="multiple-choice-form">
-      <fieldset id="choices-fieldset">
-      </fieldset>
-    </div>
-    <div id="fill-in-the-blank-form">
-      <fieldset id="fill-in-the-blank-fieldset">
-        <input type="text" name="fill-in-the-blank" id="fill-in-the-blank" class="text ui-widget-content ui-corner-all">
-      </fieldset>
-    </div>
+            //
+            // Pick question page
+            //
+            loadQuestions: function () {
+                var that = this;
+                this.get(this.origin + '/assignments/' + this.assignmentID + '/questions/open', function (lst) {
+                    // update the question list, but preserve the open question if applicable
+                    var openQuestionID = 0;
+                    if (that.openQuestion)
+                        openQuestionID = that.openQuestion.id;
+                    that.openQuestion = null;
+                    for (i = 0; i < lst.length; i++) {
+                        if (lst[i].id == openQuestionID) {
+                            that.openQuestion = lst[i];
+                        }
 
-    <!-- Allow form submission with keyboard without duplicating the dialog button -->
-    <input type="submit> tabindex="-1" style="position:absolute; top:-1000px">
-  </div>
-</div>
-
-<script>
-    jQuery(function ($) {
-        var origin = document.location.origin + '/v2';
-        var clockDiff = 0;
-        var questions = [];
-        var liveTimes = [];
-        var liveTitles = [];
-
-        $(document).ajaxError(function (event, request, settings, thrownError) {
-            if (request.responseText) {
-                alert('Sorry, an error occurred while processing your request:\n\n' + request.responseText);
-            } else {
-                alert('Sorry, an error occurred while processing a request to:\n\n' + settings.url + '\n');
-            }
-        });
-
-        var closedAt = function (question) {
-            return new Date(question.openedAt.getTime() + question.openSeconds * 1000);
-        };
-
-        var makeCountdown = function (time) {
-            var now = new Date();
-            var diff = time.getTime() - (now.getTime() + clockDiff);
-            if (diff <= 0) {
-                return '\u00A0';
-            }
-            var s = '';
-            var hours = Math.floor(diff / 60 / 60 / 1000);
-            diff -= hours * 60 * 60 * 1000;
-            var minutes = Math.floor(diff / 60 / 1000);
-            diff -= minutes * 60 * 1000;
-            var seconds = Math.floor(diff / 1000);
-            diff -= seconds * 1000;
-            if (hours > 0)
-                s += hours + 'h';
-            if (s || minutes > 0)
-                s += minutes + 'm';
-            s += seconds + 's';
-            return s;
-        };
-        var displayLiveTimes = function () {
-            $.each(liveTimes, function (i, pair) {
-                var $elt = pair[0];
-                var time = pair[1];
-                $elt.html(makeCountdown(time));
-            });
-            $.each(liveTitles, function (i, pair) {
-                var $dialog = pair[0];
-                var time = pair[1];
-                $dialog.dialog('option', 'title', makeCountdown(time));
-            });
-        };
-        window.setInterval(displayLiveTimes, 1000);
-
-        var populateList = function () {
-            questions.sort(function (a, b) {
-                if (closedAt(a) < closedAt(b)) return -1;
-                if (closedAt(a) > closedAt(b)) return 1;
-                return 0;
-            });
-            var $tbody = $('#list-tbody').empty();
-            liveTimes = [];
-            $.each(questions, function (i, question) {
-                var $row = $('<tr></tr>').appendTo($tbody);
-                var $button = $('<button>Open</button>');
-                $button.bind('click', function () { openResponseDialog(question); });
-                $row.append($('<td></td>').append($button));
-                $row.append($('<td></td>').append(question.note));
-                liveTimes.push([ $('<td></td>').appendTo($row), question.openedAt ]);
-                liveTimes.push([ $('<td></td>').appendTo($row), closedAt(question) ]);
-            });
-        };
-
-        var submitResponse = function (question, response) {
-            var res = {
-                assignmentID: Number(QueryString.assignment),
-                questionID: question.id,
-                response: response
-            };
-            $.ajax({
-                type: 'POST',
-                url: origin + '/responses',
-                data: JSON.stringify(res),
-                success: function () {
-                    var $div = $('#feedback').empty();
-                    $('<h3></h3>')
-                        .text('Response submitted')
-                        .appendTo($div);
-                    $('<p></p>')
-                        .text('Note: ' + question.note)
-                        .appendTo($div);
-                    $('<p></p>')
-                        .text('Response: ' + response)
-                        .appendTo($div);
-                },
-                dataType: 'json'
-            });
-        };
-
-        var responseDialog = $('#response-form').dialog({
-            autoOpen: false,
-            height: 400,
-            width: 'auto',
-            maxWidth: 600,
-            height: 'auto',
-            fluid: true,
-            modal: true
-        });
-        $(window).resize(function () {
-            fluidDialog();
-        });
-        var fluidDialog = function () {
-            var $visible = $(".ui-dialog:visible");
-            // each open dialog
-            $visible.each(function () {
-                var $this = $(this);
-                var dialog = $this.find(".ui-dialog-content").data("ui-dialog");
-                // if fluid option == true
-                if (dialog.options.fluid) {
-                    var wWidth = $(window).width();
-                    // check window width against dialog width
-                    if (wWidth < (parseInt(dialog.options.maxWidth) + 50))  {
-                        // keep dialog from filling entire screen
-                        $this.css("max-width", "90%");
-                    } else {
-                        // fix maxWidth bug
-                        $this.css("max-width", dialog.options.maxWidth + "px");
+                        // update countdown
+                        lst[i].countDown = that.makeCountdown(closedAt(lst[i]));
                     }
-                    //reposition dialog
-                    dialog.option("position", dialog.options.position);
+
+                    // auto-open if there we go from no questions to one question
+                    if (that.questions.length == 0 && lst.length == 1) {
+                        that.openQuestion = lst[0];
+                    }
+
+                    that.questions = lst;
+                });
+            },
+
+            //
+            // Answer question page
+            //
+            saveResponse: function (question, response) {
+                var that = this;
+                var res = {
+                    assignmentID: this.assignmentID,
+                    questionID: question.id,
+                    response: response
+                };
+                this.post(this.origin + '/responses', res, function (elt) {
+                    that.responses[question.id] = response;
+                    that.openQuestion = null;
+                });
+            },
+
+            makeCountdown: function (time) {
+                var now = new Date();
+                var diff = new Date(time).getTime() - (now.getTime() + this.clockDiff);
+                if (diff <= 0) {
+                    return '\u00A0';
                 }
-            });
-        };
-        // catch dialog if opened within a viewport smaller than the dialog width
-        $(document).on("dialogopen", ".ui-dialog", function (event, ui) {
-            fluidDialog();
-        });
-
-        var openResponseDialog = function (question) {
-            liveTitles = [];
-            $('#question-note').text(question.note);
-            responseDialog.dialog('option', 'title', '');
-            liveTitles.push([responseDialog, closedAt(question)]);
-            if (question.isMultipleChoice) {
-                $('#multiple-choice-form').show();
-                $('#fill-in-the-blank-form').hide();
-                responseDialog.dialog('option', 'buttons', {
-                    'Cancel': function () {
-                        responseDialog.dialog('close');
-                    }
-                });
-                var $fieldset = $('#choices-fieldset').empty();
-                $.each(question.answers, function (i, answer) {
-                    var $button = $('<button></button>').text(answer.answer);
-                    $button.bind('click', function () {
-                        submitResponse(question, answer.answer);
-                        responseDialog.dialog('close');
-                    });
-                    $('<p></p>').append($button).appendTo($fieldset);
-                });
-            } else {
-                $('#multiple-choice-form').hide();
-                $('#fill-in-the-blank-form').show();
-                responseDialog.dialog('option', 'buttons', {
-                    'Cancel': function () {
-                        responseDialog.dialog('close');
-                    },
-                    'Submit': function () {
-                        submitResponse(question, $('#fill-in-the-blank').val());
-                        responseDialog.dialog('close');
-                    }
-                });
-            }
-            responseDialog.dialog('open');
-        };
-
-        var switchToList = function () {
-            $('#list-container').show();
-            $('#question-container').hide();
-
-            populateList();
-
-            if (!QueryString.assignment) return;
-
-            $.getJSON(origin + '/assignments/' + QueryString.assignment + '/questions/open', function (data, status, xhr) {
+                var s = '';
+                var hours = Math.floor(diff / 60 / 60 / 1000);
+                diff -= hours * 60 * 60 * 1000;
+                var minutes = Math.floor(diff / 60 / 1000);
+                diff -= minutes * 60 * 1000;
+                var seconds = Math.floor(diff / 1000);
+                diff -= seconds * 1000;
+                if (hours > 0)
+                    s += hours + 'h';
+                if (s || minutes > 0)
+                    s += minutes + 'm';
+                s += seconds + 's';
+                return s;
+            },
+            updateClockDiff: function (xhr) {
                 var serverClock = new Date(xhr.getResponseHeader('Date'));
-                clockDiff = serverClock.getTime() - new Date().getTime();
-
-                $.each(data, function (i, question) {
-                    question.openedAt = new Date(question.openedAt);
-                });
-                questions = data;
-                populateList();
-            });
-        };
-
-        $('#list-refresh').button().on('click', switchToList);
-
-        switchToList();
+                this.clockDiff = serverClock.getTime() - new Date().getTime();
+            }
+        }
     });
+    app.loadQuestions();
+
+    var updateCountDowns = function () {
+        for (var i = 0; i < app.questions.length; i++) {
+            app.questions[i].countDown = app.makeCountdown(closedAt(app.questions[i]));
+            Vue.set(app.questions, i, app.questions[i]);
+        }
+    };
+    window.setInterval(updateCountDowns, 1000);
+
+    var updateQuestions = function () {
+        app.loadQuestions();
+    };
+    window.setInterval(updateQuestions, 5000);
 </script>
 
 </body>

@@ -777,7 +777,7 @@
             updateClockDiff: function (xhr) {
                 var serverClock = new Date(xhr.getResponseHeader('Date'));
                 this.clockDiff = serverClock.getTime() - new Date().getTime();
-            },
+            }
         }
     });
     app.loadQuizzes(true);
