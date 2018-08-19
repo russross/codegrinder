@@ -35,8 +35,7 @@ type Question struct {
 	PointsForAttempt float64    `json:"pointsForAttempt" meddler:"points_for_attempt"`
 	IsMultipleChoice bool       `json:"isMultipleChoice" meddler:"is_multiple_choice"`
 	Answers          []Answer   `json:"answers" meddler:"answers,json"`
-	OpenedAt         *time.Time `json:"openedAt" meddler:"opened_at,localtime"`
-	OpenSeconds      int64      `json:"openSeconds" meddler:"open_seconds"`
+	ClosedAt         *time.Time `json:"closedAt" meddler:"closed_at,localtime"`
 	CreatedAt        time.Time  `json:"createdAt" meddler:"created_at,localtime"`
 	UpdatedAt        time.Time  `json:"updatedAt" meddler:"updated_at,localtime"`
 }
@@ -47,7 +46,7 @@ type Answer struct {
 }
 
 func (question *Question) IsClosed() bool {
-	return question.OpenedAt != nil && time.Now().After(question.OpenedAt.Add(time.Duration(question.OpenSeconds)*time.Second))
+	return question.ClosedAt != nil && question.ClosedAt.Before(time.Now())
 }
 
 func (question *Question) HideAnswersUnlessClosed() {
@@ -69,8 +68,7 @@ type QuestionPatch struct {
 	PointsForAttempt *float64   `json:"pointsForAttempt"`
 	IsMultipleChoice *bool      `json:"isMultipleChoice"`
 	Answers          *[]Answer  `json:"answers"`
-	OpenedAt         *time.Time `json:"openedAt"`
-	OpenSeconds      *int64     `json:"openSeconds"`
+	ClosedAt         *time.Time `json:"closedAt"`
 }
 
 // Response represents a student response to a single question.

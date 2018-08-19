@@ -112,11 +112,6 @@
         } 
         return query_string;
     })();
-    var closedAt = function (question) {
-        if (!question.openedAt)
-            return null;
-        return new Date(new Date(question.openedAt).getTime() + question.openSeconds * 1000);
-    };
     var makeCountdown = function (time) {
         var now = new Date();
         var diff = time.getTime() - (now.getTime() + clockDiff);
@@ -201,7 +196,7 @@
                         }
 
                         // update countdown
-                        lst[i].countDown = that.makeCountdown(closedAt(lst[i]));
+                        lst[i].countDown = that.makeCountdown(lst[i].closedAt);
                     }
 
                     // auto-open if there we go from no questions to one question
@@ -259,7 +254,7 @@
 
     var updateCountDowns = function () {
         for (var i = 0; i < app.questions.length; i++) {
-            app.questions[i].countDown = app.makeCountdown(closedAt(app.questions[i]));
+            app.questions[i].countDown = app.makeCountdown(app.questions[i].closedAt);
             Vue.set(app.questions, i, app.questions[i]);
         }
     };

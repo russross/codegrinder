@@ -258,8 +258,7 @@ func GetAssignmentQuestionsOpen(w http.ResponseWriter, tx *sql.Tx, params martin
 	err = meddler.QueryAll(tx, &questions, `SELECT questions.* `+
 		`FROM questions JOIN quizzes ON questions.quiz_id = quizzes.id `+
 		`WHERE quizzes.lti_id = $1 `+
-		`AND questions.opened_at < now() `+
-		`AND (questions.opened_at + (questions.open_seconds * interval '1 second')) > now() `+
+		`AND questions.closed_at > now() `+
 		`ORDER BY questions.quiz_id, questions.question_number`, assignment.LtiID)
 
 	if err != nil {
@@ -270,44 +269,6 @@ func GetAssignmentQuestionsOpen(w http.ResponseWriter, tx *sql.Tx, params martin
 	// hide answers from student for open questions
 	if !assignment.Instructor {
 		for _, question := range questions {
-			question.HideAnswersUnlessClosed()
-		}
-	}
-
-	render.JSON(http.StatusOK, questions)
-}
-
-func MockGetAssignmentQuestionsOpen(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
-	assignmentID, err := parseID(w, "assignment_id", params["assignment_id"])
-	if err != nil {
-		return
-	}
-
-	assignment := new(Assignment)
-	if err = meddler.QueryRow(tx, assignment, `SELECT * FROM assignments `+
-		`WHERE id = $1 AND user_id = $2`, assignmentID, currentUser.ID); err != nil {
-		loggedHTTPDBNotFoundError(w, err)
-		return
-	}
-
-	questions := []*Question{}
-	err = meddler.QueryAll(tx, &questions, `SELECT questions.* `+
-		`FROM questions JOIN quizzes ON questions.quiz_id = quizzes.id `+
-		`WHERE quizzes.lti_id = $1 `+
-		`AND quizzes.id IN (16, 17) `+
-		`ORDER BY questions.quiz_id, questions.question_number`, assignment.LtiID)
-
-	if err != nil {
-		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-		return
-	}
-
-	// hide answers from student for open questions
-	if !assignment.Instructor {
-		now := time.Now()
-		for _, question := range questions {
-			question.OpenedAt = &now
-			question.OpenSeconds = 300
 			question.HideAnswersUnlessClosed()
 		}
 	}
@@ -386,15 +347,8 @@ func PostQuestion(w http.ResponseWriter, tx *sql.Tx, currentUser *User, question
 	}
 	question.CreatedAt = now
 	question.UpdatedAt = now
-	question.OpenedAt = nil
-	if question.OpenSeconds < 0 {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "question cannot be open for negative time")
-		return
-	}
-
-	// a question is opened by posting the length it will be open
-	if question.OpenSeconds > 0 {
-		question.OpenedAt = &now
+	if question.ClosedAt != nil && question.ClosedAt.Before(now) {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "cannot create a question that is already closed")
 	}
 
 	if err := meddler.Save(tx, "questions", &question); err != nil {
@@ -452,21 +406,12 @@ func PatchQuestion(w http.ResponseWriter, tx *sql.Tx, params martini.Params, cur
 		loggedHTTPErrorf(w, http.StatusBadRequest, "multiple-choice question must have at least two choices")
 		return
 	}
+	if patch.ClosedAt != nil {
+		question.ClosedAt = patch.ClosedAt
 
-	// a question is opened by posting the length it will be open
-	// this also re-opens a question and resets its open time
-	if patch.OpenSeconds != nil {
-		question.OpenSeconds = *patch.OpenSeconds
-		switch {
-		case question.OpenSeconds < 0:
-			loggedHTTPErrorf(w, http.StatusBadRequest, "question cannot be open for negative time")
-			return
-
-		case question.OpenSeconds == 0:
-			// zero means leave it as it was
-
-		case question.OpenSeconds > 0:
-			question.OpenedAt = &now
+		// it is okay to patch a question to being closed now
+		if question.ClosedAt.Before(now) {
+			question.ClosedAt = &now
 		}
 	}
 	question.UpdatedAt = now
@@ -515,8 +460,8 @@ func PostResponse(w http.ResponseWriter, tx *sql.Tx, currentUser *User, response
 	}
 
 	// responses cannot be submitted after the response window
-	// or if the question has been closed
-	if question.OpenedAt == nil || now.Before(*question.OpenedAt) || question.IsClosed() {
+	// or if the question has not been opened
+	if question.ClosedAt == nil || question.IsClosed() {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "the question is not open for responses")
 		return
 	}
@@ -640,6 +585,7 @@ func DeleteQuestion(w http.ResponseWriter, tx *sql.Tx, currentUser *User, params
 
 func gradeResponse(question *Question, response *Response) float64 {
 	// TODO: response needs to be filtered
+	// to allow case-insensitive matches, etc.
 	actual, possible := 0.0, 0.0
 	for _, answer := range question.Answers {
 		if answer.Points > possible {

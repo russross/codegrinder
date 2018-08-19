@@ -253,16 +253,16 @@
     <p><button v-on:click="loadQuestions(openQuiz, false)">Back to questions</button></p>
     <p>
       Question: {{ openQuestion.note + ' create at ' + timestamp(openQuestion.createdAt) }}
-      <span v-if="!openQuestion.openedAt">(not started yet)</span>
+      <span v-if="!openQuestion.closedAt">(not started yet)</span>
     </p>
     <p>
       Set countdown to:
-      <button v-on:click="setCountdown(1)">0s</button>
+      <button v-on:click="setCountdown(0)">0s</button>
       <button v-on:click="setCountdown(30)">30s</button>
       <button v-on:click="setCountdown(90)">90s</button>
       <button v-on:click="setCountdown(180)">3m</button>
       <button v-on:click="setCountdown(300)">5m</button>
-      <button v-on:click="setCountdown(500)">10m</button>
+      <button v-on:click="setCountdown(600)">10m</button>
       {{ moderationCountdown }}
     </p>
     <table>
@@ -370,11 +370,6 @@
             ':' + pad(this.getMinutes()) +
             ':' + pad(this.getSeconds());
     };
-    var closedAt = function (question) {
-        if (!question.openedAt)
-            return null;
-        return new Date(new Date(question.openedAt).getTime() + question.openSeconds * 1000);
-    };
     var sortQuizzes = function (lst) {
         lst.sort(function (a, b) {
             if (new Date(a.createdAt) < new Date(b.createdAt)) return 1;
@@ -400,7 +395,6 @@
             errorMessage: null,
             liveTimes: [],
             refreshes: [],
-            liveTimes: [],
             quizzes: [],
             openQuiz: null,
             questions: [],
@@ -600,8 +594,7 @@
                 } else {
                     question.answers.push({answer:'', points:1.0});
                 }
-                question.openedAt = null;
-                question.openSeconds = 0;
+                question.closedAt = null;
                 return question;
             },
             questionChoicesSummary: function (question) {
@@ -697,7 +690,7 @@
                 this.openQuestion = question;
                 this.moderationCountdown = '';
                 this.responses = [];
-                this.liveTimes = [[ 'moderationCountdown', closedAt(this.openQuestion) ]];
+                this.liveTimes = [[ 'moderationCountdown', this.openQuestion.closedAt ]];
                 this.refreshes = [ 'loadResponses' ];
             },
             loadResponses: function () {
@@ -731,11 +724,11 @@
             },
             setCountdown: function (seconds) {
                 var that = this;
-                this.openQuestion.openSeconds = seconds;
+                this.openQuestion.closedAt = new Date((new Date().getTime() + this.clockDiff) + 1000 * seconds);
                 this.patch(this.origin + '/questions/' + this.openQuestion.id, this.openQuestion, function (elt) {
                     that.placeQuestion(elt);
                     that.openQuestion = elt;
-                    that.liveTimes = [[ 'moderationCountdown', closedAt(elt) ]];
+                    that.liveTimes = [[ 'moderationCountdown', elt.closedAt ]];
                 });
             },
 
