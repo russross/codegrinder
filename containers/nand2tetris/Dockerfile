@@ -6,6 +6,7 @@ RUN apt update && \
 
 RUN apt install -y --no-install-recommends \
     default-jre-headless \
+    python3 \
     make \
     unzip
 

@@ -222,14 +222,8 @@ else:
     for test in testFiles:
         if test.hdl:
             totaltime += runHardwareTest(test)
-            os.remove(test.test)
-            os.remove(test.compare)
-            os.remove(test.output)
         elif test.asm:
             totaltime += runAssemblyTest(test)
-            os.remove(test.test)
-            os.remove(test.hack)
-            os.remove(test.output)
 
 # clean up
 def rm(name):
