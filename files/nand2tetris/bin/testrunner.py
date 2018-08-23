@@ -143,18 +143,19 @@ def runHardwareTest(test):
     (stdout, stderr) = (stdoutBytes.decode('utf-8'), stderrBytes.decode('utf-8'))
     seconds = time.time() - start
 
+    print(stdout, end='', flush=True)
+    print(stderr, end='', flush=True)
+
     parseResult = hardwareParseFailure.search(stderr)
     compareResult = hardwareCompareFailure.search(stderr)
 
     # was it a pass?
     if len(stderr) == 0 and stdout.endswith(hardwareSuccessMessage) and proc.returncode == 0:
         addResult('passed', 'test file ' + test.test, stdout, seconds)
-        print(stdout, end='')
 
     # anything else is a failure
     else:
         addResult('failure', 'test file ' + test.test, stderr, seconds)
-        print(stderr, end='')
 
     return seconds
 
@@ -173,7 +174,8 @@ def runAssemblyTest(test):
     # did it fail to assemble?
     if len(stderr) != 0 or proc.returncode != 0:
         addResult('failure', 'source file ' + test.test, stderr, seconds)
-        print(stderr, end='')
+        print(stdout, end='', flush=True)
+        print(stderr, end='', flush=True)
         return seconds
 
     # launch the test runner
@@ -187,15 +189,16 @@ def runAssemblyTest(test):
     (stdout, stderr) = (stdoutBytes.decode('utf-8'), stderrBytes.decode('utf-8'))
     seconds = time.time() - start
 
+    print(stdout, end='', flush=True)
+    print(stderr, end='', flush=True)
+
     # was it a pass?
     if len(stderr) == 0 and stdout.endswith(assemblySuccessMessage) and proc.returncode == 0:
         addResult('passed', 'test file ' + test.test, stdout, seconds)
-        print(stdout, end='')
 
     # anything else is a failure
     else:
         addResult('failure', 'test file ' + test.test, stderr, seconds)
-        print(stderr, end='')
 
     return seconds
 

@@ -49,5 +49,5 @@ INSERT INTO problem_type_actions (problem_type, action, button, message, interac
 INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('cppunittest', 'run', 'Run', 'Running‥', true, 60, 1800, 300, 100, 10, 128, 20);
 
 INSERT INTO problem_types (name, image) VALUES ('nand2tetris', 'codegrinder/nand2tetris');
-INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('nand2tetris', 'grade', 'Grade', 'Grading‥', false, 20, 20, 20, 100, 10, 512, 200);
-INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('nand2tetris', 'test', 'Test', 'Testing‥', true, 20, 20, 20, 100, 10, 512, 200);
+INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('nand2tetris', 'grade', 'Grade', 'Grading‥', false, 20, 20, 20, 100, 10, 1024, 200);
+INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('nand2tetris', 'test', 'Test', 'Testing‥', true, 20, 20, 20, 100, 10, 1024, 200);

@@ -629,7 +629,7 @@ func (n *Nanny) PutFiles(files map[string][]byte, mode int64) error {
 	}
 
 	// tar the files
-	now := time.Now()
+	nowish := time.Now().Add(-time.Second)
 	buf := new(bytes.Buffer)
 	writer := tar.NewWriter(buf)
 	dirs := make(map[string]bool)
@@ -643,12 +643,12 @@ func (n *Nanny) PutFiles(files map[string][]byte, mode int64) error {
 				Uid:        int(n.UID),
 				Gid:        int(n.UID),
 				Size:       0,
-				ModTime:    now,
+				ModTime:    nowish,
 				Typeflag:   tar.TypeDir,
 				Uname:      strconv.FormatInt(n.UID, 10),
 				Gname:      strconv.FormatInt(n.UID, 10),
-				AccessTime: now,
-				ChangeTime: now,
+				AccessTime: nowish,
+				ChangeTime: nowish,
 			}
 			if err := writer.WriteHeader(header); err != nil {
 				log.Printf("writing tar header for directory: %v", err)
@@ -661,12 +661,12 @@ func (n *Nanny) PutFiles(files map[string][]byte, mode int64) error {
 			Uid:        int(n.UID),
 			Gid:        int(n.UID),
 			Size:       int64(len(contents)),
-			ModTime:    now,
+			ModTime:    nowish,
 			Typeflag:   tar.TypeReg,
 			Uname:      strconv.FormatInt(n.UID, 10),
 			Gname:      strconv.FormatInt(n.UID, 10),
-			AccessTime: now,
-			ChangeTime: now,
+			AccessTime: nowish,
+			ChangeTime: nowish,
 		}
 		if err := writer.WriteHeader(header); err != nil {
 			log.Printf("writing tar header: %v", err)
