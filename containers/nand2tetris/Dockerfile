@@ -1,11 +1,12 @@
-FROM debian:jessie
+FROM debian:stretch
 MAINTAINER russ@russross.com
 
-RUN apt-get update && \
-    apt-get upgrade -y
+RUN apt update && \
+    apt upgrade -y
 
-RUN apt-get install -y --no-install-recommends \
+RUN apt install -y --no-install-recommends \
     default-jre-headless \
+    make \
     unzip
 
 # install software suite

@@ -1,10 +1,10 @@
-FROM debian:jessie
+FROM debian:stretch
 MAINTAINER russ@russross.com
 
-RUN apt-get update && \
-    apt-get upgrade -y
+RUN apt update && \
+    apt upgrade -y
 
-RUN apt-get install -u --no-install-recommends \
+RUN apt install -y --no-install-recommends \
     make
 
 ADD https://dl.google.com/go/go1.10.3.linux-amd64.tar.gz /tmp/
