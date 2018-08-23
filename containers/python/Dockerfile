@@ -6,7 +6,7 @@ RUN apt update && \
 
 RUN apt install -y --no-install-recommends \
     python3.5 \
-    python-pip \
+    python3-pip \
     python3-six \
     make \
     diffutils
