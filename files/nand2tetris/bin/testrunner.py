@@ -117,10 +117,10 @@ def addResult(result, name, msg, seconds):
     case.set('name', name)
     case.set('time', str(seconds))
     totaltime += seconds
-    case.set('status', result)
     if result == 'passed':
         pass
     elif result == 'failure':
+        case.set('status', 'failure')
         failure = ET.SubElement(case, 'failure')
         failure.set('type', 'failure')
         failure.text = msg
