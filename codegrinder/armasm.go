@@ -49,7 +49,7 @@ func armAsRun(n *Nanny, args, options []string, files map[string][]byte, stdin i
 
 func arm64AsGrade(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
 	log.Printf("arm64 grade")
-	runAndParseCheckXML(n, []string{"make", "grade"}, nil, "test_detail.xml")
+	runAndParseCheckXML(n, []string{"make", "grade"}, nil, "test_results.xml")
 }
 
 func arm64AsTest(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
