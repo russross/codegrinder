@@ -33,7 +33,7 @@
     }
 
     .modal-container {
-      width: 500px;
+      width: 800px;
       margin: 0px auto;
       padding: 20px 30px;
       background-color: #fff;
@@ -252,30 +252,35 @@
 
     <p><button v-on:click="loadQuestions(openQuiz, false)">Back to questions</button></p>
     <p>
-      Question: {{ openQuestion.note + ' create at ' + timestamp(openQuestion.createdAt) }}
-      <span v-if="!openQuestion.closedAt">(not started yet)</span>
-    </p>
-    <p>
       Set countdown to:
       <button v-on:click="setCountdown(0)">0s</button>
       <button v-on:click="setCountdown(30)">30s</button>
+      <button v-on:click="setCountdown(60)">60s</button>
       <button v-on:click="setCountdown(90)">90s</button>
       <button v-on:click="setCountdown(180)">3m</button>
       <button v-on:click="setCountdown(300)">5m</button>
       <button v-on:click="setCountdown(600)">10m</button>
+      <button v-if="!showResponses" v-on:click="showResponses = true">Show counts</button>
+      <button v-if="showResponses" v-on:click="showResponses = false">Hide counts</button>
       {{ moderationCountdown }}
     </p>
+    <h2 v-if="!openQuestion.closedAt" :title="'Question created at ' + timestamp(openQuestion.createdAt) + ' (not started yet)'">
+        {{ openQuestion.note }}
+    </h2>
+    <h2 v-if="openQuestion.closedAt" :title="'Question created at ' + timestamp(openQuestion.createdAt) + ' and closed at ' + timestamp(openQuestion.closedAt)">
+        {{ openQuestion.note }}
+    </h2>
     <table>
       <thead>
         <tr>
           <th>Answer</th>
-          <th>Responses</th>
+          <th v-if="showResponses">Responses</th>
         </tr>
       </thead>
       <tbody>
         <tr v-for="response in responses">
           <td>{{ response.response }}</td>
-          <td class="pointer" :title="response.students.join('\n')">{{ response.students.length }}</td>
+          <td v-if="showResponses" class="pointer" :title="response.students.join('\n')">{{ response.students.length }}</td>
         </tr>
       </tbody>
     </table>
@@ -689,6 +694,7 @@
                 this.currentPage = 'moderation';
                 this.openQuestion = question;
                 this.moderationCountdown = '';
+                this.showResponses = false;
                 this.responses = [];
                 this.liveTimes = [[ 'moderationCountdown', this.openQuestion.closedAt ]];
                 this.refreshes = [ 'loadResponses' ];
@@ -708,6 +714,17 @@
                             uniqueResponses.push(response);
                         }
                         students.push(student);
+                    }
+                    if (that.openQuestion.isMultipleChoice) {
+                        for (var i = 0; i < that.openQuestion.answers.length; i++) {
+                            var response = that.openQuestion.answers[i].answer;
+                            var students = groups[response];
+                            if (!students) {
+                                students = [];
+                                groups[response] = students;
+                                uniqueResponses.push(response);
+                            }
+                        }
                     }
                     uniqueResponses.sort();
 

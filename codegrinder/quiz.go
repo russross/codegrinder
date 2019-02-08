@@ -646,9 +646,10 @@ func gradeQuizClass(now time.Time, tx *sql.Tx, quizID int64) error {
 	}
 
 	// get the questions
+	// note: skip questions that were never closed
 	questions := []*Question{}
 	if err := meddler.QueryAll(tx, &questions, `SELECT * FROM questions `+
-		`WHERE quiz_id = $1 `+
+		`WHERE quiz_id = $1 AND closed_at IS NOT NULL `+
 		`ORDER BY question_number`, quizID); err != nil {
 		return err
 	}
@@ -665,7 +666,7 @@ func gradeQuizClass(now time.Time, tx *sql.Tx, quizID int64) error {
 	responses := []*Response{}
 	if err := meddler.QueryAll(tx, &responses, `SELECT responses.* `+
 		`FROM responses JOIN questions ON responses.question_id = questions.id `+
-		`WHERE questions.quiz_id = $1 `+
+		`WHERE questions.quiz_id = $1 AND questions.closed_at IS NOT NULL `+
 		`ORDER BY responses.assignment_id`, quizID); err != nil {
 		return err
 	}

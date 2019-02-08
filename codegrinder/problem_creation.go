@@ -249,6 +249,15 @@ func PostProblemBundleUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser
 	bundle.ProblemType = problemType
 	bundle.ProblemTypeSignature = problemType.ComputeSignature(Config.DaycareSecret)
 
+	// new problems are created and updated now
+	// existing problems will have their created time verified after loading the old object
+	if bundle.Problem.ID > 0 {
+		bundle.Problem.UpdatedAt = now
+	} else {
+		bundle.Problem.CreatedAt = now
+		bundle.Problem.UpdatedAt = now
+	}
+
 	// clean up basic fields and do some checks
 	if err := bundle.Problem.Normalize(now, bundle.ProblemSteps); err != nil {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "%v", err)
@@ -279,9 +288,6 @@ func PostProblemBundleUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser
 			loggedHTTPErrorf(w, http.StatusBadRequest, "updating a problem cannot change its created time from %v to %v", old.CreatedAt, bundle.Problem.CreatedAt)
 			return
 		}
-	} else {
-		// for new problems, set the created timestamp to now
-		bundle.Problem.CreatedAt = now
 	}
 
 	// make sure the unique ID is unique

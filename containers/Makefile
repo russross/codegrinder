@@ -4,11 +4,17 @@ all:
 
 arm: .proxy-armv6asm
 
+arm64: .proxy-armv8asm
+
 amd64: .proxy-cpp .proxy-go .proxy-nand2tetris .proxy-prolog .proxy-python .proxy-standardml
 
 .proxy-armv6asm: armv6asm/Dockerfile
 	docker build -t codegrinder/armv6asm armv6asm
 	touch .proxy-armv6asm
+
+.proxy-armv8asm: armv8asm/Dockerfile
+	docker build -t codegrinder/armv8asm armv8asm
+	touch .proxy-armv8asm
 
 .proxy-cpp: cpp/Dockerfile
 	docker build -t codegrinder/cpp cpp

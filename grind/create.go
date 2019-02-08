@@ -512,7 +512,7 @@ func createProblemSet(path string, isUpdate bool) {
 			Weight float64
 		}
 	}{}
-	fmt.Printf("reading %s\n", path)
+	fmt.Printf("creating problem set using %s\n", path)
 	if err := gcfg.ReadFileInto(&cfg, path); err != nil {
 		log.Fatalf("failed to parse %s: %v", path, err)
 	}

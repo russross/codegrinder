@@ -171,3 +171,94 @@ func parseXUnit(n *Nanny, contents []byte) {
 		}
 	}
 }
+
+// check XML types
+type CheckXMLProgram struct {
+	XMLName   xml.Name         `xml:"testsuites"`
+	NameSpace string           `xml:"xmlns,attr"`
+	DateTime  string           `xml:"datetime"`
+	Duration  float64          `xml:"duration"`
+	Suites    []*CheckXMLSuite `xml:"suite"`
+}
+
+type CheckXMLSuite struct {
+	Title string          `xml:"title"`
+	Tests []*CheckXMLTest `xml:"test"`
+}
+
+type CheckXMLTest struct {
+	Result      string  `xml:"result,attr"`
+	Path        string  `xml:"path"`
+	Function    string  `xml:"fn"`
+	ID          string  `xml:"id"`
+	Iteration   int     `xml:"iteration"`
+	Duration    float64 `xml:"duration"`
+	Description string  `xml:"description"`
+	Message     string  `xml:"message"`
+}
+
+func runAndParseCheckXML(n *Nanny, cmd []string, stdin io.Reader, filename string) {
+	// run tests with XML output
+	_, _, _, status, err := n.Exec(cmd, stdin, false)
+	if err != nil {
+		n.ReportCard.LogAndFailf("Error running unit tests: %v", err)
+		return
+	}
+
+	// did it end in a segfault?
+	if status > 127 {
+		n.ReportCard.LogAndFailf("Crashed with exit status %d while running unit tests", status)
+		return
+	}
+	n.ReportCard.Passed = status == 0
+
+	// parse the test results
+	xmlfiles, err := n.GetFiles([]string{filename})
+	if err != nil {
+		n.ReportCard.LogAndFailf("Error getting unit test results")
+		return
+	}
+
+	parseCheckXML(n, xmlfiles[filename])
+}
+
+func parseCheckXML(n *Nanny, contents []byte) {
+	if len(contents) == 0 {
+		n.ReportCard.LogAndFailf("No unit test results found")
+		return
+	}
+
+	results := new(CheckXMLProgram)
+	if err := xml.Unmarshal(contents, results); err != nil {
+		n.ReportCard.LogAndFailf("error parsing unit test results: %v", err)
+		return
+	}
+
+	successes, failures, errors := 0, 0, 0
+	for _, suite := range results.Suites {
+		for _, test := range suite.Tests {
+			switch test.Result {
+			case "success":
+				successes++
+				n.ReportCard.AddPassedResult(test.ID, test.Message)
+			case "failure":
+				failures++
+				n.ReportCard.AddFailedResult(test.ID, test.Message, test.Function)
+			case "error":
+				errors++
+				n.ReportCard.AddFailedResult(test.ID, test.Message, test.Function)
+			default:
+				errors++
+				n.ReportCard.AddFailedResult(test.ID, test.Message, test.Function)
+			}
+		}
+	}
+
+	// form a report card
+	n.ReportCard.Passed = successes > 0 && failures == 0 && errors == 0
+	if successes+failures+errors < 1 {
+		n.ReportCard.Note = fmt.Sprintf("No test results found in %v", time.Since(n.Start))
+	} else {
+		n.ReportCard.Note = fmt.Sprintf("Passed %d/%d tests in %v", successes, successes+failures+errors, time.Since(n.Start))
+	}
+}

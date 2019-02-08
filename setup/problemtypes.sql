@@ -5,6 +5,13 @@ INSERT INTO problem_type_actions (problem_type, action, button, message, interac
 INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('armv6asm', 'debug', 'Debug', 'Running gdb‥', true, 60, 1800, 300, 100, 10, 128, 20);
 INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('armv6asm', 'run', 'Run', 'Running‥', true, 60, 1800, 300, 100, 10, 128, 20);
 
+INSERT INTO problem_types (name, image) VALUES ('armv8asm', 'codegrinder/armv8asm');
+INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('armv8asm', 'grade', 'Grade', 'Grading‥', false, 60, 120, 120, 100, 10, 128, 20);
+INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('armv8asm', 'test', 'Test', 'Testing‥', true, 60, 120, 120, 100, 10, 128, 20);
+INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('armv8asm', 'valgrind', 'Valgrind', 'Running valgrind‥', true, 60, 120, 120, 100, 10, 128, 20);
+INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('armv8asm', 'debug', 'Debug', 'Running gdb‥', true, 60, 1800, 300, 100, 10, 128, 20);
+INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('armv8asm', 'run', 'Run', 'Running‥', true, 60, 1800, 300, 100, 10, 128, 20);
+
 INSERT INTO problem_types (name, image) VALUES ('prologunittest', 'codegrinder/prolog');
 INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('prologunittest', 'grade', 'Grade', 'Grading‥', false, 10, 20, 20, 100, 10, 128, 20);
 INSERT INTO problem_type_actions (problem_type, action, button, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('prologunittest', 'test', 'Test', 'Testing‥', true, 10, 20, 20, 100, 10, 128, 20);
