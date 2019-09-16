@@ -246,6 +246,11 @@ To follow the logs in real time:
 License
 =======
 
+CodeGrinder is licenced under the AGPL. I am willing to consider
+re-licensing CodeGrinder under a more permissive license, depending
+on the use case. Please contact me if you wish to discuss this.
+
+
 CodeGrinder programming exercise system
 Copyright © 2016–2017  Russ Ross
 
