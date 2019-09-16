@@ -528,6 +528,7 @@ func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Co
 		asst.Score = 0.0
 		asst.CreatedAt = now
 		asst.UpdatedAt = now
+		asst.DeadlineAt = nil
 	}
 
 	problemSetID := int64(0)
@@ -581,6 +582,8 @@ func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Co
 	asst.OutcomeExtAccepted = form.ExtOutcomeDataValuesAccepted
 	asst.FinishedURL = form.LaunchPresentationReturnURL
 	asst.ConsumerKey = form.OAuthConsumerKey
+	// LTI does not have a deadline, so we always keep the existing value
+
 	if asst.ID < 1 || changed {
 		// if something changed, note the update time and save
 		if asst.ID > 0 {

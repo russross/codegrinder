@@ -1,11 +1,11 @@
 .SUFFIXES:
 .SUFFIXES: .s .o .cpp .out .xml
 
-AOUTSOURCE=$(wildcard *.cpp)
+AOUTSOURCE=$(sort $(wildcard *.cpp))
 AOUTOBJECT=$(AOUTSOURCE:.cpp=.o)
 UNITSOURCE=$(filter-out main.cpp, $(AOUTSOURCE))
 UNITOBJECT=$(UNITSOURCE:.cpp=.o)
-TESTSOURCE=$(wildcard tests/*.cpp)
+TESTSOURCE=$(sort $(wildcard tests/*.cpp))
 TESTOBJECT=$(TESTSOURCE:.cpp=.o)
 CXXFLAGS=-std=c++11 -Wpedantic -g -Wall -Wextra -Werror -I. -pthread
 AOUTLDFLAGS=-lpthread
@@ -24,6 +24,9 @@ valgrind:	unittest.out
 	rm -f valgrind.log
 	-valgrind --leak-check=full --track-fds=yes --log-file=valgrind.log ./unittest.out
 	cat valgrind.log
+
+debug-test: unittest.out
+	gdb ./unittest.out
 
 run:	a.out
 	./a.out

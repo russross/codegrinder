@@ -632,7 +632,7 @@ func parseID(w http.ResponseWriter, name, s string) (int64, error) {
 		return 0, loggedHTTPErrorf(w, http.StatusBadRequest, "error parsing %s from URL: %v", name, err)
 	}
 	if id < 1 {
-		return 0, loggedHTTPErrorf(w, http.StatusBadRequest, "invalid ID in URL: %s must be 1 or greater", name, err)
+		return 0, loggedHTTPErrorf(w, http.StatusBadRequest, "invalid ID in URL: %s must be 1 or greater", name)
 	}
 
 	return id, nil

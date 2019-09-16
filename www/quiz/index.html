@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>CodeGrinder Quiz App</title>
   <script src="vue.js"></script>
+  <script src="commonmark.min.js"></script>
   <style>
     body { font-size: 16px; }
     label, input, button { display: block; }
@@ -14,7 +15,9 @@
     h1 { font-size: 1.2em; margin: .6em 0; }
     table { margin: 1em 0; border-collapse: collapse; width: 100%; }
     td, th { border: 1px solid #eee; padding: .6em 10px; text-align: left; }
+    td > p { margin: 0; }
     button.response { background-color: #0f0; }
+    button > p { margin: 0; }
   </style>
 </head>
 
@@ -36,7 +39,7 @@
       </thead>
       <tbody>
         <tr v-for="question in questions">
-          <td>{{ question.note }}</td>
+          <td v-html="renderMarkdown(question.note)"></td>
           <td><button v-on:click="openQuestion = question">{{ question.countDown }}</button></td>
         </tr>
       </tbody>
@@ -47,12 +50,15 @@
   <!-- Answer question page   -->
   <!---------------------------->
   <div v-if="openQuestion && !errorMessage">
-    <p>{{ openQuestion.note }}</p>
+    <div v-html="renderMarkdown(truncate(openQuestion.note))"></div>
 
     <!-- Multiple choice -->
     <div v-if="openQuestion.isMultipleChoice">
       <p v-for="answer in openQuestion.answers">
-        <button v-on:click="saveResponse(openQuestion, answer.answer)" v-bind:class="{ 'response': answer.answer == responses[openQuestion.id] }">{{ answer.answer }}</button>
+        <button
+            v-html="renderMarkdown(truncate(answer.answer))"
+            v-on:click="saveResponse(openQuestion, answer.answer)"
+            v-bind:class="{ 'response': answer.answer == responses[openQuestion.id] }"></button>
       </p>
     </div>
 
@@ -247,7 +253,27 @@
             updateClockDiff: function (xhr) {
                 var serverClock = new Date(xhr.getResponseHeader('Date'));
                 this.clockDiff = serverClock.getTime() - new Date().getTime();
-            }
+            },
+            renderMarkdown: function (md) {
+                var reader = new commonmark.Parser();
+                var writer = new commonmark.HtmlRenderer();
+                var parsed = reader.parse(md);
+                var result = writer.render(parsed);
+                return result;
+            },
+            truncate: function (text) {
+                var maxlen = 40;
+                if (text.length <= maxlen) {
+                    return text;
+                }
+                var i;
+                for (var i = maxlen; i < text.length; i++) {
+                    if (text[i].trim() === '') {
+                        break;
+                    }
+                }
+                return text.substr(0, i) + '…';
+            },
         }
     });
     app.loadQuestions();

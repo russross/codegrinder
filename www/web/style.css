@@ -1,0 +1,7 @@
+.container.fill-height {
+    padding: 0px;
+}
+
+.inverted {
+	filter: invert(100%);
+}

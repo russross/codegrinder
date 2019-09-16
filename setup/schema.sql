@@ -127,6 +127,7 @@ CREATE TABLE assignments (
     consumer_key            text NOT NULL,
     created_at              timestamp with time zone NOT NULL,
     updated_at              timestamp with time zone NOT NULL,
+    deadline_at             timestamp with time zone,
 
     PRIMARY KEY (id),
     FOREIGN KEY (course_id) REFERENCES courses (id) ON DELETE CASCADE,
@@ -135,6 +136,7 @@ CREATE TABLE assignments (
 );
 CREATE UNIQUE INDEX assignments_unique_user ON assignments (user_id, lti_id);
 CREATE UNIQUE INDEX assignments_grade_id ON assignments (grade_id);
+CREATE INDEX assignments_instructor_lti_id ON assignments (instructor, lti_id);
 
 CREATE TABLE commits (
     id                      bigserial NOT NULL,

@@ -74,6 +74,7 @@ type Assignment struct {
 	ConsumerKey        string               `json:"-" meddler:"consumer_key"`
 	CreatedAt          time.Time            `json:"createdAt" meddler:"created_at,localtime"`
 	UpdatedAt          time.Time            `json:"updatedAt" meddler:"updated_at,localtime"`
+	DeadlineAt         *time.Time           `json:"deadlineAt" meddler:"deadline_at,localtime"`
 }
 
 // Commit defines an attempt at solving one step of a Problem.

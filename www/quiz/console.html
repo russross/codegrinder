@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <title>CodeGrinder Quiz Console</title>
   <script src="vue.js"></script>
+  <script src="commonmark.min.js"></script>
   <style>
     label, input { display: block; }
     input.text { margin-bottom: 12px; width: 95%; padding: .4em; }
@@ -12,6 +13,8 @@
     h1 { font-size: 1.2em; margin: .6em 0; }
     table { margin: 1em 0; border-collapse: collapse; width: 100%; }
     td, th { border: 1px solid #eee; padding: .6em 10px; text-align: left; }
+    td > p { margin: 0; }
+    .question { font-size: 1.5em; }
     .pointer { cursor: pointer; }
     .ui-dialog .ui-state-error { padding: .3em; }
 
@@ -264,12 +267,12 @@
       <button v-if="showResponses" v-on:click="showResponses = false">Hide counts</button>
       {{ moderationCountdown }}
     </p>
-    <h2 v-if="!openQuestion.closedAt" :title="'Question created at ' + timestamp(openQuestion.createdAt) + ' (not started yet)'">
-        {{ openQuestion.note }}
-    </h2>
-    <h2 v-if="openQuestion.closedAt" :title="'Question created at ' + timestamp(openQuestion.createdAt) + ' and closed at ' + timestamp(openQuestion.closedAt)">
-        {{ openQuestion.note }}
-    </h2>
+    <div class=question
+        v-html="renderMarkdown(openQuestion.note)"
+        v-if="!openQuestion.closedAt" :title="'Question created at ' + timestamp(openQuestion.createdAt) + ' (not started yet)'"></div>
+    <div class=question
+        v-html="renderMarkdown(openQuestion.note)"
+        v-if="openQuestion.closedAt" :title="'Question created at ' + timestamp(openQuestion.createdAt) + ' and closed at ' + timestamp(openQuestion.closedAt)"></div>
     <table>
       <thead>
         <tr>
@@ -279,7 +282,7 @@
       </thead>
       <tbody>
         <tr v-for="response in responses">
-          <td>{{ response.response }}</td>
+          <td v-html="renderMarkdown(response.response)"></td>
           <td v-if="showResponses" class="pointer" :title="response.students.join('\n')">{{ response.students.length }}</td>
         </tr>
       </tbody>
@@ -788,6 +791,13 @@
             updateClockDiff: function (xhr) {
                 var serverClock = new Date(xhr.getResponseHeader('Date'));
                 this.clockDiff = serverClock.getTime() - new Date().getTime();
+            },
+            renderMarkdown: function (md) {
+                var reader = new commonmark.Parser();
+                var writer = new commonmark.HtmlRenderer();
+                var parsed = reader.parse(md);
+                var result = writer.render(parsed);
+                return result;
             }
         }
     });

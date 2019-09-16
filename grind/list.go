@@ -22,7 +22,7 @@ func CommandList(cmd *cobra.Command, args []string) {
 	mustGetObject("/users/me", nil, user)
 	assignments := []*Assignment{}
 	mustGetObject(fmt.Sprintf("/users/%d/assignments", user.ID), nil, &assignments)
-	assignments = filterOutQuizzes(assignments)
+	//assignments = filterOutQuizzes(assignments)
 	if len(assignments) == 0 {
 		log.Printf("no assignments found")
 		log.Fatalf("you must start each assignment through Canvas before you can access it here")
@@ -53,10 +53,24 @@ func CommandList(cmd *cobra.Command, args []string) {
 			fmt.Println(dashes(len(course.Name)))
 		}
 
-		// fetch the problem
-		problemSet := new(ProblemSet)
-		mustGetObject(fmt.Sprintf("/problem_sets/%d", asst.ProblemSetID), nil, problemSet)
-		fmt.Printf("id:%-*d %-*s %3.0f%% (%s/%s)\n", longestID, asst.ID, longestName, asst.CanvasTitle, asst.Score*100.0, course.Label, problemSet.Unique)
+		if asst.ProblemSetID > 0 {
+			// fetch the problem
+			problemSet := new(ProblemSet)
+			mustGetObject(fmt.Sprintf("/problem_sets/%d", asst.ProblemSetID), nil, problemSet)
+			fmt.Printf("id:%-*d %-*s %3.0f%% (%s/%s)\n", longestID, asst.ID, longestName, asst.CanvasTitle, asst.Score*100.0, course.Label, problemSet.Unique)
+		} else if asst.Instructor {
+			// fetch the quizzes (instructor)
+			var quizzes []*Quiz
+			mustGetObject(fmt.Sprintf("/assignments/%d/quizzes", asst.ID), nil, &quizzes)
+			s := "zes"
+			if len(quizzes) == 1 {
+				s = ""
+			}
+			fmt.Printf("id:%-*d %-*s      (%d quiz%s)\n", longestID, asst.ID, longestName, asst.CanvasTitle, len(quizzes), s)
+		} else {
+			// report on the quizzes (student)
+			fmt.Printf("id:%-*d %-*s %3.0f%%\n", longestID, asst.ID, longestName, asst.CanvasTitle, asst.Score*100.0)
+		}
 	}
 }
 

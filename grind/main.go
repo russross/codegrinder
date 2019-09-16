@@ -72,9 +72,9 @@ func main() {
 	cmdLogin := &cobra.Command{
 		Use:   "login <hostname> <sessionkey>",
 		Short: "login to codegrinder server",
-		Long: fmt.Sprintf("To log in, click on an assignment in Canvas and follow the\n"+
-			"instructions; <hostname> and <sessionkey> will be listed there.\n\n"+
-			"You should normally only need to do this once per semester.", os.Args[0]),
+		Long: fmt.Sprintf("To log in, click on an assignment in Canvas and follow the\n" +
+			"instructions; <hostname> and <sessionkey> will be listed there.\n\n" +
+			"You should normally only need to do this once per semester."),
 		Run: CommandLogin,
 	}
 	cmdGrind.AddCommand(cmdLogin)
@@ -175,6 +175,24 @@ func main() {
 			Run:   CommandProblem,
 		}
 		cmdGrind.AddCommand(cmdProblem)
+
+		cmdType := &cobra.Command{
+			Use:   "type <problem type>",
+			Short: "download files (Makefile, etc.) for a problem type (authors only)",
+			Run:   CommandType,
+		}
+		cmdGrind.AddCommand(cmdType)
+
+		cmdExportQuizzes := &cobra.Command{
+			Use:   "exportquizzes <assignment id>",
+			Short: "export all of the quizzes and questions for an assignment",
+			Long: fmt.Sprintf("Give the numeric ID (given at the start of each listing)\n\n"+
+				"User '%s list' to see a list of assignments available to you.\n\n"+
+				"The quizzes will be exported into a newly-created directory\n"+
+				"as a series of JSON files, one per quiz and one per question in each quiz.", os.Args[0]),
+			Run: CommandExportQuizzes,
+		}
+		cmdGrind.AddCommand(cmdExportQuizzes)
 	}
 
 	cmdGrind.Execute()

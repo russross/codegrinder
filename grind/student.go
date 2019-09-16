@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"time"
 
 	. "github.com/russross/codegrinder/common"
 	"github.com/spf13/cobra"
@@ -84,7 +85,7 @@ func CommandStudent(cmd *cobra.Command, args []string) {
 			fmt.Println(dashes(len(user.Name) + len(user.Email) + len(" ()")))
 		}
 
-		fmt.Printf("id:%-*d %-*s %3.0f%% (%s)\n", longestID, asst.ID, longestName, asst.CanvasTitle, asst.Score*100.0, courses[asst.CourseID].Name)
+		fmt.Printf("id:%-*d %-*s %3.0f%% (%s)  [%s]\n", longestID, asst.ID, longestName, asst.CanvasTitle, asst.Score*100.0, courses[asst.CourseID].Name, asst.UpdatedAt.Format(time.RFC822))
 	}
 	fmt.Println()
 

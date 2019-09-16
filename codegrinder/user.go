@@ -592,6 +592,28 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 		return
 	}
 
+	// assignment cannot be past the deadline:
+	// * deadlines attached to an instructor are considered course-wide deadlines (the latest one that applies is honored)
+	// * deadlines attached to an individual student only apply to that student (for extensions)
+	// to decide if a submission is past the deadline:
+	// * if there is no course-wide deadline, accept
+	// * else if the course-wide deadline is in the future, accept
+	// * else if the student has a deadline in the future, accept
+	// * else reject
+	var courseWideDeadline time.Time
+	err = tx.QueryRow(`SELECT deadline_at FROM assignments WHERE instructor AND lti_id = $1 AND deadline_at IS NOT NULL ORDER BY deadline_at DESC LIMIT 1`,
+		assignment.LtiID).Scan(&courseWideDeadline)
+	if err != nil && err != sql.ErrNoRows {
+		loggedHTTPDBNotFoundError(w, err)
+		return
+	} else if err == nil {
+		// there is a course-wide deadline, should we reject?
+		if now.After(courseWideDeadline) && (assignment.DeadlineAt == nil || now.After(*assignment.DeadlineAt)) {
+			loggedHTTPErrorf(w, http.StatusForbidden, "a commit cannot be submitted after the assignment deadline")
+			return
+		}
+	}
+
 	// get the problem
 	problem := new(Problem)
 	if err = meddler.QueryRow(tx, problem, `SELECT * FROM problems WHERE id = $1`, commit.ProblemID); err != nil {
