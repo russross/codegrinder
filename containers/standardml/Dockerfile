@@ -10,6 +10,8 @@ RUN apt install -y --no-install-recommends \
     make \
     python3
 
+RUN ln -s /usr/lib/x86_64-linux-gnu/libpolyml.so.9 /usr/lib/x86_64-linux-gnu/libpolyml.so
+
 RUN mkdir /home/student && chmod 777 /home/student
 USER 2000
 WORKDIR /home/student
