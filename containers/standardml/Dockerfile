@@ -1,4 +1,4 @@
-FROM debian:stretch
+FROM debian:buster
 MAINTAINER russ@russross.com
 
 RUN apt update && \
@@ -6,8 +6,9 @@ RUN apt update && \
 
 RUN apt install -y --no-install-recommends \
     polyml \
-    ledit \
-    make
+    rlwrap \
+    make \
+    python3
 
 RUN mkdir /home/student && chmod 777 /home/student
 USER 2000
