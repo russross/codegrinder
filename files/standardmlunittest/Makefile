@@ -1,24 +1,44 @@
 .SUFFIXES:
-.SUFFIXES: .sml .xml
+.SUFFIXES: .sml .out .xml
 
 SMLSOURCE=$(wildcard *.sml)
+TESTSOURCE=$(wildcard tests/*.sml)
+
+# find the main source file
+sml_count := $(shell ls | grep '\.sml$$' | wc -l)
+main_sml_count := $(shell ls | grep '^main\.sml$$' | wc -l)
+fun_main_count := $(shell grep -l '^fun main\b' $(SMLSOURCE) | wc -l)
+
+ifeq ($(sml_count), 1)
+    SMLMAIN := $(shell ls *.sml)
+else ifeq ($(main_sml_count), 1)
+    SMLMAIN := main.sml
+else ifeq ($(fun_main_count), 1)
+    SMLMAIN := $(shell grep -l '^fun main\b' $(SMLSOURCE))
+else
+    SMLMAIN := NO_MAIN_SML_FILE
+endif
 
 all:	test
 
-test:
-	poly -H 16 < tests/tests.sml
+test:	a.out
+	./a.out
 
-grade:
-	poly -H 16 < tests/tests.sml
+grade:	a.out
+	rm -f test_detail.xml
+	./a.out
 
-run:	
-	( cat $(SMLSOURCE) ; echo ';' ; cat ) | rlwrap poly -H 16
+run:
+	rlwrap poly -H 16 --use $(SMLMAIN)
 
 shell:
 	rlwrap poly -H 16
 
+a.out:	$(SMLSOURCE) $(TESTSOURCE)
+	polyc tests/tests.sml
+
 setup:
-	sudo apt-get install -y polyml rlwrap make
+	sudo apt install -y polyml rlwrap make
 
 clean:
-	rm -f test_detail.xml
+	rm -f test_detail.xml a.out
