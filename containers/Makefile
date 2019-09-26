@@ -1,6 +1,7 @@
 all:
 	# run "make amd64" to build all Intel-based containers
-	# run "make arm" to build all ARM-based containers
+	# run "make arm" to build all 32-bit ARM-based containers
+	# run "make arm64" to build all 64-bit ARM-based containers
 
 arm: .proxy-armv6asm
 
