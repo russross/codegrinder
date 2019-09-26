@@ -6,7 +6,7 @@ arm: .proxy-armv6asm
 
 arm64: .proxy-armv8asm
 
-amd64: .proxy-cpp .proxy-go .proxy-nand2tetris .proxy-prolog .proxy-python .proxy-standardml
+amd64: .proxy-cpp .proxy-go .proxy-nand2tetris .proxy-prolog .proxy-python .proxy-standardml .proxy-forth
 
 .proxy-armv6asm: armv6asm/Dockerfile
 	docker build -t codegrinder/armv6asm armv6asm
@@ -39,3 +39,7 @@ amd64: .proxy-cpp .proxy-go .proxy-nand2tetris .proxy-prolog .proxy-python .prox
 .proxy-standardml: standardml/Dockerfile
 	docker build -t codegrinder/standardml standardml
 	touch .proxy-standardml
+
+.proxy-forth: forth/Dockerfile
+	docker build -t codegrinder/forth forth
+	touch .proxy-forth
