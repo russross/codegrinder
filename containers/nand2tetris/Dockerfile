@@ -10,7 +10,7 @@ RUN apt install -y --no-install-recommends \
     unzip
 
 # install software suite
-ADD http://cit.dixie.edu/cs/2810/nand2tetris.zip /tmp/
+ADD https://cit.dixie.edu/cs/2810/nand2tetris.zip /tmp/
 RUN unzip -d /usr/local /tmp/nand2tetris.zip && \
     chmod 755 /usr/local/nand2tetris/tools/*.sh && \
     rm -f /tmp/nand2tetris.zip
