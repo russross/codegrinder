@@ -1,8 +1,7 @@
 FROM debian:buster
 MAINTAINER russ@russross.com
 
-RUN apt update && \
-    apt upgrade -y
+RUN apt update && apt upgrade -y
 
 RUN apt install -y --no-install-recommends \
     polyml \
