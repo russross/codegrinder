@@ -1,12 +1,12 @@
 .SUFFIXES:
 .SUFFIXES: .py .pyc .xml
 
-PYTHONSOURCE=$(wildcard *.py)
+PYTHONSOURCE := $(wildcard *.py)
 
 # find the main source file
-py_count := $(shell ls | grep '\.py$$' | wc -l)
-main_py_count := $(shell ls | grep '^main\.py$$' | wc -l)
-def_main_count := $(shell grep -l '^def main\b' $(PYTHONSOURCE) | wc -l)
+py_count := $(shell ls | grep '\.py$$' | wc -l | tr -d ' ')
+main_py_count := $(shell ls | grep '^main\.py$$' | wc -l | tr -d ' ')
+def_main_count := $(shell grep -l '^def main\b' $(PYTHONSOURCE) | wc -l | tr -d ' ')
 
 ifeq ($(py_count), 1)
     PYTHONMAIN := $(shell ls *.py)
@@ -18,7 +18,7 @@ else
     PYTHONMAIN := NO_MAIN_PYTHON_FILE
 endif
 
-all:	test
+all:	step
 
 test:
 	python3 bin/inout-runner.py python3 $(PYTHONMAIN)
@@ -27,7 +27,7 @@ step:
 	python3 bin/inout-stepall.py python3 $(PYTHONMAIN)
 
 grade:
-	rm -f test_detail.xml
+	rm -f test_detail.xml inputs/*.actual
 	python3 bin/inout-runner.py python3 $(PYTHONMAIN)
 
 shell:

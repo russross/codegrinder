@@ -5,7 +5,7 @@ import selectors
 import subprocess
 import sys
 
-delay = 0.01
+delay = 0.005
 warmupdelay = 1.0
 bufsize = 4096
 
@@ -33,12 +33,13 @@ def main():
 
     # start monitoring the output channels
     sel = selectors.DefaultSelector()
-    sel.register(proc.stdout, selectors.EVENT_READ, 'out')
-    sel.register(proc.stderr, selectors.EVENT_READ, 'err')
+    sel.register(stdout, selectors.EVENT_READ, 'out')
+    sel.register(stderr, selectors.EVENT_READ, 'err')
 
     # the next chunk of input to feed to the process
     # this gets filled when we have a timeout while waiting for output
-    nextInput = None
+    nextInput = ''
+    inputClosed = False
 
     keepGoing = True
     warmup = True
@@ -47,21 +48,25 @@ def main():
     while keepGoing:
         # wait for some output, and if we have input ready
         # check if we can send it
-        if nextInput is not None:
-            sel.register(proc.stdin, selectors.EVENT_WRITE, 'in')
+        if len(nextInput) > 0:
+            sel.register(stdin, selectors.EVENT_WRITE, 'in')
         events = sel.select(timeout=(warmupdelay if warmup else delay))
-        if nextInput is not None:
-            sel.unregister(proc.stdin)
+        if len(nextInput) > 0:
+            sel.unregister(stdin)
         warmup = False
 
         # timeout? prepare some input to feed to the process
-        if len(events) == 0 and len(inputData) > 0:
-            # grab one line, or everything if there are no newlines
-            newline = inputData.find(b'\n')
-            if newline == -1:
-                nextInput = inputData
-            else:
-                nextInput = inputData[:newline+1]
+        if len(events) == 0 and len(nextInput) == 0:
+            if len(inputData) > 0:
+                # grab one line, or everything if there are no newlines
+                newline = inputData.find(b'\n')
+                if newline == -1:
+                    nextInput = inputData
+                else:
+                    nextInput = inputData[:newline+1]
+            elif not inputClosed:
+                os.close(stdin)
+                inputClosed = True
 
         # handle each of the input/output channels that are ready
         for (key, mask) in events:
@@ -119,11 +124,15 @@ def main():
                 print(nextInput[:count].decode('utf-8'), end='')
 
                 inputData = inputData[count:]
-                nextInput = None
+                nextInput = ''
 
     # wait for the child process to end
     proc.kill()
-    proc.communicate()
+    proc.wait()
+    os.close(stdout)
+    os.close(stderr)
+    if not inputClosed:
+        os.close(stdin)
 
     # report an error if we noticed error output, wrong regular output, or
     # any input/output leftover that should have been consumed

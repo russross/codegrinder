@@ -1,12 +1,12 @@
 .SUFFIXES:
 .SUFFIXES: .sml .out .xml
 
-SMLSOURCE=$(wildcard *.sml)
+SMLSOURCE := $(wildcard *.sml)
 
 # find the main source file
-sml_count := $(shell ls | grep '\.sml$$' | wc -l)
-main_sml_count := $(shell ls | grep '^main\.sml$$' | wc -l)
-fun_main_count := $(shell grep -l '^fun main\b' $(SMLSOURCE) | wc -l)
+sml_count := $(shell ls | grep '\.sml$$' | wc -l | tr -d ' ')
+main_sml_count := $(shell ls | grep '^main\.sml$$' | wc -l | tr -d ' ')
+fun_main_count := $(shell grep -l '^fun main\b' $(SMLSOURCE) | wc -l | tr -d ' ')
 
 ifeq ($(sml_count), 1)
     SMLMAIN := $(shell ls *.sml)
@@ -24,7 +24,7 @@ test:	a.out
 	python3 bin/inout-runner.py ./a.out
 
 grade:	a.out
-	rm -f test_detail.xml
+	rm -f test_detail.xml inputs/*.actual
 	python3 bin/inout-runner.py ./a.out
 
 run:	a.out

@@ -83,6 +83,8 @@ for infile in infiles:
         body += msg + '\n'
         passed = False
 
+    os.remove(actualfile)
+
     tests += 1
     totaltime += seconds
     case.set('time', str(time.time() - start))
