@@ -31,8 +31,11 @@ valgrind:	unittest.out
 run:	a.out
 	./a.out
 
-debug:	a.out
+debug:	a.out $(HOME)/.gdbinit
 	gdb ./a.out
+
+$(HOME)/.gdbinit:
+	echo set auto-load safe-path / > $(HOME)/.gdbinit
 
 .s.o:
 	as $(ASFLAGS) $< -o $@

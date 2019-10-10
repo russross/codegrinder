@@ -1,5 +1,5 @@
 .SUFFIXES:
-.SUFFIXES: .s .o .cpp .out .xml
+.SUFFIXES: .s .o .cpp .out .xml *.log
 
 AOUTSOURCE=$(wildcard *.s)
 AOUTOBJECT=$(AOUTSOURCE:.s=.o)
@@ -26,8 +26,11 @@ valgrind:	unittest.out
 run:	a.out
 	./a.out
 
-debug:	a.out
+debug:	a.out $(HOME)/.gdbinit
 	gdb ./a.out
+
+$(HOME)/.gdbinit:
+	echo set auto-load safe-path / > $(HOME)/.gdbinit
 
 .s.o:
 	as -g -march=armv6zk -mcpu=arm1176jzf-s -mfloat-abi=hard -mfpu=vfp $< -o $@

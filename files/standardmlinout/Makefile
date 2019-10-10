@@ -3,6 +3,16 @@
 
 SMLSOURCE := $(wildcard *.sml)
 
+# Debian and Ubuntu are both missing a symlink for libpolyml.so
+# attempt to detect and fix this automatically
+libactual := $(shell find /usr/lib -type f -name libpolyml.so.*)
+libexpected := $(shell find /usr/lib -type f -name libpolyml.so.* | sed 's/\.so.*/.so/')
+libcount := $(shell find /usr/lib -type f -name libpolyml.so.* | wc -l | tr -d ' ')
+
+ifneq ($(libcount), 1)
+    $(error "cannot find the support libraries for polyml -- make sure polyml is installed")
+endif
+
 # find the main source file
 sml_count := $(shell ls | grep '\.sml$$' | wc -l | tr -d ' ')
 main_sml_count := $(shell ls | grep '^main\.sml$$' | wc -l | tr -d ' ')
@@ -36,12 +46,14 @@ step:	a.out
 shell:
 	rlwrap poly -H 16
 
-a.out:	$(SMLSOURCE)
+a.out:	$(SMLSOURCE) $(libexpected)
 	polyc $(SMLMAIN)
+
+$(libexpected):	$(libactual)
+	sudo ln -rsf $(libactual) $(libexpected)
 
 setup:
 	sudo apt install -y polyml rlwrap make python3
-	sudo cp -P /usr/lib/x86_64-linux-gnu/libpolyml.so.9 /usr/lib/x86_64-linux-gnu/libpolyml.so
 
 clean:
 	rm -f test_detail.xml a.out inputs/*.actual

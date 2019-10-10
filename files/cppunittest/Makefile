@@ -1,5 +1,5 @@
 .SUFFIXES:
-.SUFFIXES: .s .o .cpp .out .xml
+.SUFFIXES: .s .o .cpp .out .xml *.log
 
 AOUTSOURCE=$(sort $(wildcard *.cpp))
 AOUTOBJECT=$(AOUTSOURCE:.cpp=.o)
