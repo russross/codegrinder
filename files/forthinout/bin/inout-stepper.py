@@ -81,18 +81,20 @@ def main():
                     else:
                         chunk = data[:newline+1]
                         data = data[len(chunk):]
-                    print(chunk.decode('utf-8'), end='')
 
                     # does it match what we expected?
                     if outputData.startswith(chunk):
+                        print(chunk.decode('utf-8'), end='')
                         outputData = outputData[len(chunk):]
                     else:
-                        print('\n!!INCORRECT OUTPUT!! Expected:')
+                        print('\n!!INCORRECT OUTPUT!! Your next line of output was:')
+                        print(repr(chunk.decode('utf-8')))
+                        print('but the next line of output expected was:')
                         newline = outputData.find(b'\n')
                         if newline < 0:
-                            print(outputData.decode('utf-8'))
+                            print(repr(outputData.decode('utf-8')))
                         else:
-                            print(outputData[:newline].decode('utf-8'))
+                            print(repr(outputData[:newline+1].decode('utf-8')))
                         keepGoing = False
                         error = True
                         break

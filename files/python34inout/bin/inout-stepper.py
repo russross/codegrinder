@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 
 import os
+import selectors
+import subprocess
 import sys
-import signal
-import time
+
+delay = 0.01
+warmupdelay = 1.0
+bufsize = 4096
 
 def main():
     if len(sys.argv) < 4:
@@ -13,91 +17,115 @@ def main():
     inputfile, outputfile = sys.argv[1], sys.argv[2]
     cmd = sys.argv[3:]
 
-    # create the input feeder
-    (stdin, w) = os.pipe()
-    inpid = os.fork()
-    if inpid == 0:
-        os.close(stdin)
-        inputFeeder(w, inputfile)
-        sys.exit(0)
-    os.close(w)
+    # read all of the input
+    with open(inputfile, 'rb') as fp:
+        inputData = fp.read()
 
-    # create the output watcher
-    (r, stdout) = os.pipe()
-    outpid = os.fork()
-    if outpid == 0:
-        os.close(stdout)
-        outputWatcher(r, outputfile)
-        sys.exit(0)
-    os.close(r)
+    # read all of the expected output
+    with open(outputfile, 'rb') as fp:
+        outputData = fp.read()
 
-    # create the stderr watcher
-    (r, stderr) = os.pipe()
-    errpid = os.fork()
-    if errpid == 0:
-        os.close(stderr)
-        stderrWatcher(r)
-        sys.exit(0)
-    os.close(r)
+    # launch the process
+    proc = subprocess.Popen(cmd, bufsize=0, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    stdin = proc.stdin.fileno()
+    stdout = proc.stdout.fileno()
+    stderr = proc.stderr.fileno()
 
-    # launch the main command
-    pid = os.fork()
-    if pid == 0:
-        os.dup2(stdin, 0)
-        os.set_inheritable(0, True)
-        os.close(stdin)
-        os.dup2(stdout, 1)
-        os.set_inheritable(1, True)
-        os.close(stdout)
-        os.dup2(stderr, 2)
-        os.set_inheritable(2, True)
-        os.close(stderr)
-        os.execvp(cmd[0], cmd)
+    # start monitoring the output channels
+    sel = selectors.DefaultSelector()
+    sel.register(proc.stdout, selectors.EVENT_READ, 'out')
+    sel.register(proc.stderr, selectors.EVENT_READ, 'err')
 
-    # wait for a child to exit, then kill the rest
-    (child, status) = os.wait()
-    if child != inpid: os.kill(inpid, signal.SIGTERM)
-    if child != outpid: os.kill(outpid, signal.SIGTERM)
-    if child != errpid: os.kill(errpid, signal.SIGTERM)
-    if child != pid: os.kill(pid, signal.SIGTERM)
+    # the next chunk of input to feed to the process
+    # this gets filled when we have a timeout while waiting for output
+    nextInput = None
 
-def inputFeeder(fd, filename):
-    fp = open(filename)
-    lines = fp.readlines()
-    fp.close()
+    keepGoing = True
+    warmup = True
+    error = False
 
-    fp = os.fdopen(fd, 'w')
-    for line in lines:
-        time.sleep(0.1)
-        print(' in: ' + str(line), end='')
-        fp.write(line)
-        fp.flush()
-    fp.close()
+    while keepGoing:
+        # wait for some output, and if we have input ready
+        # check if we can send it
+        if nextInput is not None:
+            sel.register(proc.stdin, selectors.EVENT_WRITE, 'in')
+        events = sel.select(timeout=(warmupdelay if warmup else delay))
+        if nextInput is not None:
+            sel.unregister(proc.stdin)
+        warmup = False
 
-def outputWatcher(fd, filename):
-    fp = open(filename)
-    lines = fp.readlines()
-    fp.close()
+        # timeout? prepare some input to feed to the process
+        if len(events) == 0 and len(inputData) > 0:
+            # grab one line, or everything if there are no newlines
+            newline = inputData.find(b'\n')
+            if newline == -1:
+                nextInput = inputData
+            else:
+                nextInput = inputData[:newline+1]
 
-    fp = os.fdopen(fd, 'r')
-    for line in lines:
-        input = fp.readline()
-        if line == input:
-            print('out: ' + str(line), end='')
-        else:
-            print('out: ' + str(input), end='')
-            print('!!INCORRECT OUTPUT!! Expected:')
-            print('out: ' + str(line), end='')
-            sys.exit(1)
-    input = fp.readline()
-    if input != '':
-        print('<<<: ' + str(input), end='')
-        print('>>>: <end of file>')
+        # handle each of the input/output channels that are ready
+        for (key, mask) in events:
+            if key.data == 'out':
+                # there is stdout output ready
+                data = os.read(stdout, bufsize)
+                if len(data) == 0:
+                    keepGoing = False
+                    break
+
+                # compare it to the expected output one line at a time
+                while len(data) > 0:
+                    newline = data.find(b'\n')
+                    if newline < 0:
+                        chunk = data
+                        data = b''
+                    else:
+                        chunk = data[:newline+1]
+                        data = data[len(chunk):]
+                    print(chunk.decode('utf-8'), end='')
+
+                    # does it match what we expected?
+                    if outputData.startswith(chunk):
+                        outputData = outputData[len(chunk):]
+                    else:
+                        print('\n!!INCORRECT OUTPUT!! Expected:')
+                        newline = outputData.find(b'\n')
+                        if newline < 0:
+                            print(outputData.decode('utf-8'))
+                        else:
+                            print(outputData[:newline].decode('utf-8'))
+                        keepGoing = False
+                        error = True
+                        break
+
+            if key.data == 'err':
+                # there is stderr output ready
+                data = os.read(stderr, bufsize)
+                if len(data) == 0:
+                    keepGoing = False
+                    break
+                print('\n!!ERROR OUTPUT!!')
+                print(data.decode('utf-8'), end='')
+                keepGoing = False
+                error = True
+
+            if key.data == 'in':
+                # the stdin pipe is ready to receive data
+                count = os.write(stdin, nextInput)
+                if count == 0:
+                    keepGoing = False
+                    break
+                print(nextInput[:count].decode('utf-8'), end='')
+
+                inputData = inputData[count:]
+                nextInput = None
+
+    # wait for the child process to end
+    proc.kill()
+    proc.communicate()
+
+    # report an error if we noticed error output, wrong regular output, or
+    # any input/output leftover that should have been consumed
+    if error or len(inputData) > 0 or len(outputData) > 0:
         sys.exit(1)
-
-def stderrWatcher(fd):
-    fp = os.fdopen(fd, 'r')
-    for line in fp:
-        print('    ERROR:' + str(input), end='')
 
 main()

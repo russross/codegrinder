@@ -44,4 +44,4 @@ setup:
 	sudo cp -P /usr/lib/x86_64-linux-gnu/libpolyml.so.9 /usr/lib/x86_64-linux-gnu/libpolyml.so
 
 clean:
-	rm -f test_detail.xml a.out
+	rm -f test_detail.xml a.out inputs/*.actual
