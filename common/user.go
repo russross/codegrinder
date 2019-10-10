@@ -72,9 +72,11 @@ type Assignment struct {
 	OutcomeExtAccepted string               `json:"-" meddler:"outcome_ext_accepted"`
 	FinishedURL        string               `json:"finishedURL" meddler:"finished_url"`
 	ConsumerKey        string               `json:"-" meddler:"consumer_key"`
+	UnlockAt           *time.Time           `json:"unlockAt" meddler:"unlock_at,localtime"`
+	DueAt              *time.Time           `json:"dueAt" meddler:"due_at,localtime"`
+	LockAt             *time.Time           `json:"lockAt" meddler:"lock_at,localtime"`
 	CreatedAt          time.Time            `json:"createdAt" meddler:"created_at,localtime"`
 	UpdatedAt          time.Time            `json:"updatedAt" meddler:"updated_at,localtime"`
-	DeadlineAt         *time.Time           `json:"deadlineAt" meddler:"deadline_at,localtime"`
 }
 
 // Commit defines an attempt at solving one step of a Problem.

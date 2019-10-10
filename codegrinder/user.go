@@ -592,24 +592,24 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 		return
 	}
 
-	// assignment cannot be past the deadline:
-	// * deadlines attached to an instructor are considered course-wide deadlines (the latest one that applies is honored)
-	// * deadlines attached to an individual student only apply to that student (for extensions)
+	// assignment cannot be past the lock date:
+	// * lock dates attached to an instructor are considered course-wide deadlines (the latest one that applies is honored)
+	// * lock dates attached to an individual student only apply to that student (for extensions)
 	// to decide if a submission is past the deadline:
-	// * if there is no course-wide deadline, accept
-	// * else if the course-wide deadline is in the future, accept
-	// * else if the student has a deadline in the future, accept
+	// * if there is no course-wide lock at, accept
+	// * else if the course-wide lock at is in the future, accept
+	// * else if the student has a lock at in the future, accept
 	// * else reject
-	var courseWideDeadline time.Time
-	err = tx.QueryRow(`SELECT deadline_at FROM assignments WHERE instructor AND lti_id = $1 AND deadline_at IS NOT NULL ORDER BY deadline_at DESC LIMIT 1`,
-		assignment.LtiID).Scan(&courseWideDeadline)
+	var courseWideLockAt time.Time
+	err = tx.QueryRow(`SELECT lock_at FROM assignments WHERE instructor AND lti_id = $1 AND lock_at IS NOT NULL ORDER BY lock_at DESC LIMIT 1`,
+		assignment.LtiID).Scan(&courseWideLockAt)
 	if err != nil && err != sql.ErrNoRows {
 		loggedHTTPDBNotFoundError(w, err)
 		return
 	} else if err == nil {
 		// there is a course-wide deadline, should we reject?
-		if now.After(courseWideDeadline) && (assignment.DeadlineAt == nil || now.After(*assignment.DeadlineAt)) {
-			loggedHTTPErrorf(w, http.StatusForbidden, "a commit cannot be submitted after the assignment deadline")
+		if now.After(courseWideLockAt) && (assignment.LockAt == nil || now.After(*assignment.LockAt)) {
+			loggedHTTPErrorf(w, http.StatusForbidden, "a commit cannot be submitted after the assignment is locked")
 			return
 		}
 	}
