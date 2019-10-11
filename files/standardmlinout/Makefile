@@ -9,10 +9,6 @@ libactual := $(shell find /usr/lib -type f -name libpolyml.so.*)
 libexpected := $(shell find /usr/lib -type f -name libpolyml.so.* | sed 's/\.so.*/.so/')
 libcount := $(shell find /usr/lib -type f -name libpolyml.so.* | wc -l | tr -d ' ')
 
-ifneq ($(libcount), 1)
-    $(error "cannot find the support libraries for polyml -- make sure polyml is installed")
-endif
-
 # find the main source file
 sml_count := $(shell ls | grep '\.sml$$' | wc -l | tr -d ' ')
 main_sml_count := $(shell ls | grep '^main\.sml$$' | wc -l | tr -d ' ')
@@ -50,7 +46,9 @@ a.out:	$(SMLSOURCE) $(libexpected)
 	polyc $(SMLMAIN)
 
 $(libexpected):	$(libactual)
+ifeq ($(libcount), 1)
 	sudo ln -rsf $(libactual) $(libexpected)
+endif
 
 setup:
 	sudo apt install -y polyml rlwrap make python3
