@@ -54,7 +54,7 @@ unittest.out:	$(TESTOBJECT) $(LIBOBJECT) $(UNITOBJECT)
 
 setup:
 	# install build tools, unit test library, and valgrind
-	sudo apt-get install -y build-essential gdb valgrind check pkg-config
+	sudo apt install -y build-essential make gdb valgrind check pkg-config
 
 clean:
 	rm -f $(AOUTOBJECT) $(LIBOBJECT) $(TESTOBJECT) $(TESTSOURCE:.check=.c) *.out *.xml *.log

@@ -46,7 +46,7 @@ unittest.out:	$(UNITOBJECT) $(LIBOBJECT) $(TESTOBJECT)
 
 setup:
 	# install build tools, sources for gtest, and valgrind
-	sudo apt-get install -y build-essential gdb libgtest-dev valgrind
+	sudo apt install -y build-essential make gdb libgtest-dev valgrind
 	# build the gtest unit test library
 	g++ -c -g -std=c++11 -Wpedantic -Wall -Wextra -Werror -I/usr/src/gtest -pthread /usr/src/gtest/src/gtest-all.cc -o /tmp/gtest-all.o
 	g++ -c -g -std=c++11 -Wpedantic -Wall -Wextra -Werror -I/usr/src/gtest -pthread /usr/src/gtest/src/gtest_main.cc -o /tmp/gtest_main.o

@@ -46,7 +46,7 @@ stylefix:
 	autopep8 -vvaai $(PYTHONSOURCE)
 
 setup:
-	sudo apt-get install -y make python3.4 python-pip python3-six diffutils
+	sudo apt install -y python3 make python-pip python3-six diffutils
 	sudo pip install autopep8
 
 clean:

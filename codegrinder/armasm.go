@@ -20,6 +20,14 @@ func init() {
 		"debug":    nannyHandler(arm64AsDebug),
 		"run":      nannyHandler(arm64AsRun),
 	}
+	problemTypeHandlers["arm64inout"] = map[string]nannyHandler{
+		"grade":    nannyHandler(arm64AsGrade),
+		"test":     nannyHandler(arm64AsTest),
+		"valgrind": nannyHandler(arm64AsValgrind),
+		"debug":    nannyHandler(arm64AsDebug),
+		"run":      nannyHandler(arm64AsRun),
+		"step":     nannyHandler(arm64AsStep),
+	}
 }
 
 func armAsGrade(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
@@ -70,4 +78,9 @@ func arm64AsDebug(n *Nanny, args, options []string, files map[string][]byte, std
 func arm64AsRun(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
 	log.Printf("arm64 run")
 	n.ExecSimple([]string{"make", "run"}, stdin, true)
+}
+
+func arm64AsStep(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
+	log.Printf("arm64 step")
+	n.ExecSimple([]string{"make", "step"}, stdin, true)
 }

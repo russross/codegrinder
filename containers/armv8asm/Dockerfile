@@ -8,7 +8,8 @@ RUN apt install -y --no-install-recommends \
     gdb \
     pkg-config \
     check \
-    valgrind
+    valgrind \
+    python3
 
 RUN mkdir /home/student && chmod 777 /home/student
 ADD .gdbinit /home/student/
