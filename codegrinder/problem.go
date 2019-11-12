@@ -51,7 +51,7 @@ func GetProblemType(w http.ResponseWriter, tx *sql.Tx, params martini.Params, re
 
 func getProblemType(tx *sql.Tx, name string) (*ProblemType, error) {
 	problemType := new(ProblemType)
-	err := meddler.QueryRow(tx, problemType, `SELECT * FROM problem_types WHERE name = $1`, name)
+	err := meddler.QueryRow(tx, problemType, `SELECT * FROM problem_types WHERE name = ?`, name)
 	if err != nil {
 		return nil, err
 	}
@@ -90,7 +90,7 @@ func getProblemType(tx *sql.Tx, name string) (*ProblemType, error) {
 	problemType.Actions = make(map[string]*ProblemTypeAction)
 
 	problemTypeActions := []*ProblemTypeAction{}
-	err = meddler.QueryAll(tx, &problemTypeActions, `SELECT * FROM problem_type_actions WHERE problem_type = $1`, name)
+	err = meddler.QueryAll(tx, &problemTypeActions, `SELECT * FROM problem_type_actions WHERE problem_type = ?`, name)
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +163,7 @@ func GetProblem(w http.ResponseWriter, tx *sql.Tx, params martini.Params, curren
 	} else {
 		err = meddler.QueryRow(tx, problem, `SELECT problems.* `+
 			`FROM problems JOIN user_problems ON problems.id = problem_id `+
-			`WHERE user_id = $1 AND problem_id = $2`,
+			`WHERE user_id = ? AND problem_id = ?`,
 			currentUser.ID, problemID)
 	}
 
@@ -186,7 +186,7 @@ func DeleteProblem(w http.ResponseWriter, tx *sql.Tx, params martini.Params, ren
 		return
 	}
 
-	if _, err := tx.Exec(`DELETE FROM problems WHERE id = $1`, problemID); err != nil {
+	if _, err := tx.Exec(`DELETE FROM problems WHERE id = ?`, problemID); err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
 	}
@@ -203,12 +203,12 @@ func GetProblemSteps(w http.ResponseWriter, r *http.Request, tx *sql.Tx, params 
 	problemSteps := []*ProblemStep{}
 
 	if currentUser.Admin || currentUser.Author {
-		err = meddler.QueryAll(tx, &problemSteps, `SELECT * FROM problem_steps WHERE problem_id = $1 ORDER BY step`, problemID)
+		err = meddler.QueryAll(tx, &problemSteps, `SELECT * FROM problem_steps WHERE problem_id = ? ORDER BY step`, problemID)
 
 	} else {
 		err = meddler.QueryAll(tx, &problemSteps, `SELECT problem_steps.* `+
 			`FROM problem_steps JOIN user_problems ON problem_steps.problem_id = user_problems.problem_id `+
-			`WHERE user_problems.user_id = $1 AND user_problems.problem_id = $2 `+
+			`WHERE user_problems.user_id = ? AND user_problems.problem_id = ? `+
 			`ORDER BY step`,
 			currentUser.ID, problemID)
 	}
@@ -241,11 +241,11 @@ func GetProblemStep(w http.ResponseWriter, tx *sql.Tx, params martini.Params, cu
 	problemStep := new(ProblemStep)
 
 	if currentUser.Admin || currentUser.Author {
-		err = meddler.QueryRow(tx, problemStep, `SELECT * FROM problem_steps WHERE problem_id = $1 AND step = $2`, problemID, step)
+		err = meddler.QueryRow(tx, problemStep, `SELECT * FROM problem_steps WHERE problem_id = ? AND step = ?`, problemID, step)
 	} else {
 		err = meddler.QueryRow(tx, problemStep, `SELECT problem_steps.* `+
 			`FROM problem_steps JOIN user_problems ON problem_steps.problem_id = user_problems.problem_id `+
-			`WHERE user_problems.user_id = $1 AND problem_steps.problem_id = $2 AND problem_steps.step = $3`,
+			`WHERE user_problems.user_id = ? AND problem_steps.problem_id = ? AND problem_steps.step = ?`,
 			currentUser.ID, problemID, step)
 	}
 
@@ -334,7 +334,7 @@ func GetProblemSet(w http.ResponseWriter, tx *sql.Tx, params martini.Params, cur
 	} else {
 		err = meddler.QueryRow(tx, problemSet, `SELECT problem_sets.* `+
 			`FROM problem_sets JOIN user_problem_sets ON problem_sets.id = problem_set_id `+
-			`WHERE user_id = $1 AND problem_set_id = $2`,
+			`WHERE user_id = ? AND problem_set_id = ?`,
 			currentUser.ID, problemSetID)
 	}
 
@@ -357,11 +357,11 @@ func GetProblemSetProblems(w http.ResponseWriter, r *http.Request, tx *sql.Tx, p
 	problemSetProblems := []*ProblemSetProblem{}
 
 	if currentUser.Admin || currentUser.Author {
-		err = meddler.QueryAll(tx, &problemSetProblems, `SELECT * FROM problem_set_problems WHERE problem_set_id = $1 ORDER BY problem_id`, problemSetID)
+		err = meddler.QueryAll(tx, &problemSetProblems, `SELECT * FROM problem_set_problems WHERE problem_set_id = ? ORDER BY problem_id`, problemSetID)
 	} else {
 		err = meddler.QueryAll(tx, &problemSetProblems, `SELECT problem_set_problems.* `+
 			`FROM problem_set_problems JOIN user_problem_sets ON problem_set_problems.problem_set_id = user_problem_sets.problem_set_id `+
-			`WHERE user_problem_sets.user_id = $1 AND problem_set_problems.problem_set_id = $2 `+
+			`WHERE user_problem_sets.user_id = ? AND problem_set_problems.problem_set_id = ? `+
 			`ORDER BY problem_id`, currentUser.ID, problemSetID)
 	}
 
@@ -387,7 +387,7 @@ func DeleteProblemSet(w http.ResponseWriter, tx *sql.Tx, params martini.Params, 
 		return
 	}
 
-	if _, err := tx.Exec(`DELETE FROM problem_sets WHERE id = $1`, problemSetID); err != nil {
+	if _, err := tx.Exec(`DELETE FROM problem_sets WHERE id = ?`, problemSetID); err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
 	}

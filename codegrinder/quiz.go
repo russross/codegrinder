@@ -28,7 +28,7 @@ func GetAssignmentQuizzes(w http.ResponseWriter, tx *sql.Tx, params martini.Para
 
 	quizzes := []*Quiz{}
 	err = meddler.QueryAll(tx, &quizzes, `SELECT quizzes.* FROM quizzes JOIN assignments ON quizzes.lti_id = assignments.lti_id `+
-		`WHERE assignments.id = $1 AND assignments.user_id = $2 `+
+		`WHERE assignments.id = ? AND assignments.user_id = ? `+
 		`ORDER BY quizzes.created_at`, assignmentID, currentUser.ID)
 	if err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
@@ -47,7 +47,7 @@ func GetQuiz(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUs
 	quiz := new(Quiz)
 	err = meddler.QueryRow(tx, quiz, `SELECT quizzes.* `+
 		`FROM quizzes JOIN assignments ON quizzes.lti_id = assignments.lti_id `+
-		`WHERE quizzes.id = $1 AND assignments.user_id = $2`,
+		`WHERE quizzes.id = ? AND assignments.user_id = ?`,
 		quizID, currentUser.ID)
 	if err != nil {
 		loggedHTTPDBNotFoundError(w, err)
@@ -66,7 +66,7 @@ func PostQuiz(w http.ResponseWriter, tx *sql.Tx, currentUser *User, quiz Quiz, r
 	}
 
 	assignment := new(Assignment)
-	if err := meddler.QueryRow(tx, assignment, `SELECT * FROM assignments WHERE id = $1 AND user_id = $2`, quiz.AssignmentID, currentUser.ID); err != nil {
+	if err := meddler.QueryRow(tx, assignment, `SELECT * FROM assignments WHERE id = ? AND user_id = ?`, quiz.AssignmentID, currentUser.ID); err != nil {
 		loggedHTTPDBNotFoundError(w, err)
 		return
 	}
@@ -116,7 +116,7 @@ func PatchQuiz(w http.ResponseWriter, tx *sql.Tx, params martini.Params, current
 	quiz := new(Quiz)
 	err = meddler.QueryRow(tx, quiz, `SELECT quizzes.* `+
 		`FROM quizzes JOIN assignments ON quizzes.lti_id = assignments.lti_id `+
-		`WHERE quizzes.id = $1 AND assignments.user_id = $2 AND assignments.instructor`, quizID, currentUser.ID)
+		`WHERE quizzes.id = ? AND assignments.user_id = ? AND assignments.instructor`, quizID, currentUser.ID)
 
 	if err != nil {
 		loggedHTTPDBNotFoundError(w, err)
@@ -180,7 +180,7 @@ func DeleteQuiz(w http.ResponseWriter, tx *sql.Tx, currentUser *User, params mar
 	assignment := new(Assignment)
 	if err = meddler.QueryRow(tx, assignment, `SELECT DISTINCT(assignments.*) `+
 		`FROM assignments JOIN quizzes ON assignments.lti_id = quizzes.lti_id `+
-		`WHERE quizzes.id = $1 AND assignments.user_id = $2`, quizID, currentUser.ID); err != nil {
+		`WHERE quizzes.id = ? AND assignments.user_id = ?`, quizID, currentUser.ID); err != nil {
 		loggedHTTPDBNotFoundError(w, err)
 		return
 	}
@@ -191,12 +191,12 @@ func DeleteQuiz(w http.ResponseWriter, tx *sql.Tx, currentUser *User, params mar
 	}
 
 	var count int
-	err = tx.QueryRow(`SELECT COUNT(1) FROM questions WHERE quiz_id = $1`, quizID).Scan(&count)
+	err = tx.QueryRow(`SELECT COUNT(1) FROM questions WHERE quiz_id = ?`, quizID).Scan(&count)
 	if err == nil && count > 0 {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "cannot delete a quiz with questions: delete all of the questions and try again")
 		return
 	} else if err == nil {
-		_, err = tx.Exec(`DELETE FROM quizzes WHERE id = $1`, quizID)
+		_, err = tx.Exec(`DELETE FROM quizzes WHERE id = ?`, quizID)
 	}
 
 	// TODO: update grades based on quiz deletion?
@@ -216,7 +216,7 @@ func GetQuizQuestions(w http.ResponseWriter, tx *sql.Tx, params martini.Params, 
 	assignment := new(Assignment)
 	if err = meddler.QueryRow(tx, assignment, `SELECT assignments.* `+
 		`FROM assignments JOIN quizzes ON assignments.lti_id = quizzes.lti_id `+
-		`WHERE quizzes.id = $1 AND assignments.user_id = $2`,
+		`WHERE quizzes.id = ? AND assignments.user_id = ?`,
 		quizID, currentUser.ID); err != nil {
 		loggedHTTPDBNotFoundError(w, err)
 	}
@@ -224,7 +224,7 @@ func GetQuizQuestions(w http.ResponseWriter, tx *sql.Tx, params martini.Params, 
 	questions := []*Question{}
 	err = meddler.QueryAll(tx, &questions, `SELECT questions.* from questions `+
 		`JOIN quizzes ON quizzes.id = questions.quiz_id `+
-		`WHERE quizzes.id = $1 AND quizzes.lti_id = $2 `+
+		`WHERE quizzes.id = ? AND quizzes.lti_id = ? `+
 		`ORDER BY questions.question_number`, quizID, assignment.LtiID)
 	if err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
@@ -249,7 +249,7 @@ func GetAssignmentQuestionsOpen(w http.ResponseWriter, tx *sql.Tx, params martin
 
 	assignment := new(Assignment)
 	if err = meddler.QueryRow(tx, assignment, `SELECT * FROM assignments `+
-		`WHERE id = $1 AND user_id = $2`, assignmentID, currentUser.ID); err != nil {
+		`WHERE id = ? AND user_id = ?`, assignmentID, currentUser.ID); err != nil {
 		loggedHTTPDBNotFoundError(w, err)
 		return
 	}
@@ -257,7 +257,7 @@ func GetAssignmentQuestionsOpen(w http.ResponseWriter, tx *sql.Tx, params martin
 	questions := []*Question{}
 	err = meddler.QueryAll(tx, &questions, `SELECT questions.* `+
 		`FROM questions JOIN quizzes ON questions.quiz_id = quizzes.id `+
-		`WHERE quizzes.lti_id = $1 `+
+		`WHERE quizzes.lti_id = ? `+
 		`AND questions.closed_at > now() `+
 		`ORDER BY questions.quiz_id, questions.question_number`, assignment.LtiID)
 
@@ -286,7 +286,7 @@ func GetQuestion(w http.ResponseWriter, tx *sql.Tx, params martini.Params, curre
 	if err = meddler.QueryRow(tx, assignment, `SELECT assignments.* `+
 		`FROM assignments JOIN quizzes ON assignments.lti_id = quizzes.lti_id `+
 		`JOIN questions ON questions.quiz_id = quizzes.id `+
-		`WHERE questions.id = $1 AND assignments.user_id = $2`, questionID, currentUser.ID); err != nil {
+		`WHERE questions.id = ? AND assignments.user_id = ?`, questionID, currentUser.ID); err != nil {
 		loggedHTTPDBNotFoundError(w, err)
 		return
 	}
@@ -316,7 +316,7 @@ func PostQuestion(w http.ResponseWriter, tx *sql.Tx, currentUser *User, question
 	assignment := new(Assignment)
 	if err := meddler.QueryRow(tx, assignment, `SELECT assignments.* `+
 		`FROM assignments JOIN quizzes ON assignments.id = quizzes.assignment_id `+
-		`WHERE quizzes.id = $1 AND assignments.user_id = $2`, question.QuizID, currentUser.ID); err != nil {
+		`WHERE quizzes.id = ? AND assignments.user_id = ?`, question.QuizID, currentUser.ID); err != nil {
 		loggedHTTPDBNotFoundError(w, err)
 		return
 	}
@@ -327,7 +327,7 @@ func PostQuestion(w http.ResponseWriter, tx *sql.Tx, currentUser *User, question
 
 	// figure out the question sequence number
 	var count int64
-	if err := tx.QueryRow(`SELECT COUNT(1) FROM questions WHERE quiz_id = $1`, question.QuizID).Scan(&count); err != nil {
+	if err := tx.QueryRow(`SELECT COUNT(1) FROM questions WHERE quiz_id = ?`, question.QuizID).Scan(&count); err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
 	}
@@ -355,7 +355,7 @@ func PostQuestion(w http.ResponseWriter, tx *sql.Tx, currentUser *User, question
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
 	}
-	if _, err := tx.Exec(`UPDATE quizzes SET is_graded = $1 WHERE id = $2 AND is_graded`, false, question.QuizID); err != nil {
+	if _, err := tx.Exec(`UPDATE quizzes SET is_graded = ? WHERE id = ? AND is_graded`, false, question.QuizID); err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
 	}
@@ -375,7 +375,7 @@ func PatchQuestion(w http.ResponseWriter, tx *sql.Tx, params martini.Params, cur
 	err = meddler.QueryRow(tx, question, `SELECT questions.* `+
 		`FROM questions JOIN quizzes ON questions.quiz_id = quizzes.id `+
 		`JOIN assignments ON assignments.lti_id = quizzes.lti_id `+
-		`WHERE questions.id = $1 AND assignments.user_id = $2`, questionID, currentUser.ID)
+		`WHERE questions.id = ? AND assignments.user_id = ?`, questionID, currentUser.ID)
 	if err != nil {
 		loggedHTTPDBNotFoundError(w, err)
 		return
@@ -420,7 +420,7 @@ func PatchQuestion(w http.ResponseWriter, tx *sql.Tx, params martini.Params, cur
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
 	}
-	if _, err := tx.Exec(`UPDATE quizzes SET is_graded = $1 WHERE id = $2 AND is_graded`, false, question.QuizID); err != nil {
+	if _, err := tx.Exec(`UPDATE quizzes SET is_graded = ? WHERE id = ? AND is_graded`, false, question.QuizID); err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
 	}
@@ -447,14 +447,14 @@ func PostResponse(w http.ResponseWriter, tx *sql.Tx, currentUser *User, response
 	// get the assignment and the question
 	assignment := new(Assignment)
 	if err := meddler.QueryRow(tx, assignment, `SELECT * FROM assignments `+
-		`WHERE id = $1 AND user_id = $2`, response.AssignmentID, currentUser.ID); err != nil {
+		`WHERE id = ? AND user_id = ?`, response.AssignmentID, currentUser.ID); err != nil {
 		loggedHTTPDBNotFoundError(w, err)
 		return
 	}
 	question := new(Question)
 	if err := meddler.QueryRow(tx, question, `SELECT questions.* `+
 		`FROM questions JOIN quizzes ON questions.quiz_id = quizzes.id `+
-		`WHERE questions.id = $1 AND quizzes.lti_id = $2`, response.QuestionID, assignment.LtiID); err != nil {
+		`WHERE questions.id = ? AND quizzes.lti_id = ?`, response.QuestionID, assignment.LtiID); err != nil {
 		loggedHTTPDBNotFoundError(w, err)
 		return
 	}
@@ -469,7 +469,7 @@ func PostResponse(w http.ResponseWriter, tx *sql.Tx, currentUser *User, response
 	// merge with previous response if it exists
 	old := new(Response)
 	if err := meddler.QueryRow(tx, old, `SELECT * FROM responses `+
-		`WHERE assignment_id = $1 AND question_id = $2`, response.AssignmentID, response.QuestionID); err != nil {
+		`WHERE assignment_id = ? AND question_id = ?`, response.AssignmentID, response.QuestionID); err != nil {
 		if err != sql.ErrNoRows {
 			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 			return
@@ -509,7 +509,7 @@ func GetQuestionResponses(w http.ResponseWriter, tx *sql.Tx, params martini.Para
 	if err = tx.QueryRow(`SELECT 1 `+
 		`FROM questions JOIN quizzes ON questions.quiz_id = quizzes.id `+
 		`JOIN assignments ON assignments.lti_id = quizzes.lti_id `+
-		`WHERE questions.id = $1 AND assignments.user_id = $2 AND assignments.instructor`, questionID, currentUser.ID).Scan(&junk); err != nil {
+		`WHERE questions.id = ? AND assignments.user_id = ? AND assignments.instructor`, questionID, currentUser.ID).Scan(&junk); err != nil {
 		loggedHTTPDBNotFoundError(w, err)
 		return
 	}
@@ -518,7 +518,7 @@ func GetQuestionResponses(w http.ResponseWriter, tx *sql.Tx, params martini.Para
 	err = meddler.QueryAll(tx, &responses, `SELECT responses.*, users.name `+
 		`FROM responses JOIN assignments ON responses.assignment_id = assignments.id `+
 		`JOIN users ON users.id = assignments.user_id `+
-		`WHERE responses.question_id = $1`, questionID)
+		`WHERE responses.question_id = ?`, questionID)
 	if err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
@@ -536,7 +536,7 @@ func DeleteQuestion(w http.ResponseWriter, tx *sql.Tx, currentUser *User, params
 	quiz := new(Quiz)
 	if err = meddler.QueryRow(tx, quiz, `SELECT quizzes.* `+
 		`FROM quizzes JOIN questions ON quizzes.id = questions.quiz_id `+
-		`WHERE questions.id = $1`, questionID); err != nil {
+		`WHERE questions.id = ?`, questionID); err != nil {
 		loggedHTTPDBNotFoundError(w, err)
 		return
 	}
@@ -544,7 +544,7 @@ func DeleteQuestion(w http.ResponseWriter, tx *sql.Tx, currentUser *User, params
 	assignment := new(Assignment)
 	if err = meddler.QueryRow(tx, assignment, `SELECT * `+
 		`FROM assignments `+
-		`WHERE lti_id = $1 AND user_id = $2`, quiz.LtiID, currentUser.ID); err != nil {
+		`WHERE lti_id = ? AND user_id = ?`, quiz.LtiID, currentUser.ID); err != nil {
 		loggedHTTPDBNotFoundError(w, err)
 		return
 	}
@@ -553,7 +553,7 @@ func DeleteQuestion(w http.ResponseWriter, tx *sql.Tx, currentUser *User, params
 		return
 	}
 
-	_, err = tx.Exec(`DELETE FROM questions WHERE id = $1`, questionID)
+	_, err = tx.Exec(`DELETE FROM questions WHERE id = ?`, questionID)
 	if err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
@@ -562,7 +562,7 @@ func DeleteQuestion(w http.ResponseWriter, tx *sql.Tx, currentUser *User, params
 	// re-number the remaining questions
 	questions := []*Question{}
 	if err = meddler.QueryAll(tx, &questions, `SELECT * FROM questions `+
-		`WHERE quiz_id = $1 ORDER BY question_number`, quiz.ID); err != nil {
+		`WHERE quiz_id = ? ORDER BY question_number`, quiz.ID); err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
 	}
@@ -577,7 +577,7 @@ func DeleteQuestion(w http.ResponseWriter, tx *sql.Tx, currentUser *User, params
 		}
 	}
 
-	if _, err := tx.Exec(`UPDATE quizzes SET is_graded = $1 WHERE id = $2 AND is_graded`, false, quiz.ID); err != nil {
+	if _, err := tx.Exec(`UPDATE quizzes SET is_graded = ? WHERE id = ? AND is_graded`, false, quiz.ID); err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
 	}
@@ -649,7 +649,7 @@ func gradeQuizClass(now time.Time, tx *sql.Tx, quizID int64) error {
 	// note: skip questions that were never closed
 	questions := []*Question{}
 	if err := meddler.QueryAll(tx, &questions, `SELECT * FROM questions `+
-		`WHERE quiz_id = $1 AND closed_at IS NOT NULL `+
+		`WHERE quiz_id = ? AND closed_at IS NOT NULL `+
 		`ORDER BY question_number`, quizID); err != nil {
 		return err
 	}
@@ -657,7 +657,7 @@ func gradeQuizClass(now time.Time, tx *sql.Tx, quizID int64) error {
 	// get the assignments
 	assignments := []*Assignment{}
 	if err := meddler.QueryAll(tx, &assignments, `SELECT * FROM assignments `+
-		`WHERE lti_id = $1 `+
+		`WHERE lti_id = ? `+
 		`ORDER BY id`, quiz.LtiID); err != nil {
 		return err
 	}
@@ -666,7 +666,7 @@ func gradeQuizClass(now time.Time, tx *sql.Tx, quizID int64) error {
 	responses := []*Response{}
 	if err := meddler.QueryAll(tx, &responses, `SELECT responses.* `+
 		`FROM responses JOIN questions ON responses.question_id = questions.id `+
-		`WHERE questions.quiz_id = $1 AND questions.closed_at IS NOT NULL `+
+		`WHERE questions.quiz_id = ? AND questions.closed_at IS NOT NULL `+
 		`ORDER BY responses.assignment_id`, quizID); err != nil {
 		return err
 	}
@@ -758,7 +758,7 @@ func GetQuizWeights(tx *sql.Tx, ltiID string) (majorWeights map[string]float64, 
 	weights := []*StepWeight{}
 	if err := meddler.QueryAll(tx, &weights, `SELECT quizzes.id::text AS major_key, quizzes.weight AS major_weight, questions.question_number AS minor_key, questions.weight AS minor_weight `+
 		`FROM quizzes JOIN questions ON quizzes.id = questions.quiz_id `+
-		`WHERE quizzes.lti_id = $1 `+
+		`WHERE quizzes.lti_id = ? `+
 		`ORDER BY quizzes.id, questions.question_number`, ltiID); err != nil {
 		return nil, nil, fmt.Errorf("db error: %v", err)
 	}

@@ -237,6 +237,12 @@
 			"revisionTime": "2015-07-07T14:21:08Z"
 		},
 		{
+			"checksumSHA1": "S2+gTFVAZFDhGzK068+PkAvEymE=",
+			"path": "github.com/mattn/go-sqlite3",
+			"revision": "67c1376b46fb54cb953532f136c9b8accefca46b",
+			"revisionTime": "2019-11-05T05:44:21Z"
+		},
+		{
 			"checksumSHA1": "3AoPMXlmVq2+iWMpsdJZkcUKHB8=",
 			"path": "github.com/opencontainers/runc/libcontainer/user",
 			"revision": "8fbe19e0201569321a7398aee39158ae12793ced",
