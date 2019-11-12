@@ -73,7 +73,7 @@ func GetCourse(w http.ResponseWriter, tx *sql.Tx, params martini.Params, current
 	} else {
 		err = meddler.QueryRow(tx, course, `SELECT courses.* `+
 			`FROM courses JOIN assignments ON courses.id = assignments.course_id `+
-			`WHERE assignments.user_id = $1 AND assignments.course_id = $2`,
+			`WHERE assignments.user_id = ? AND assignments.course_id = ?`,
 			currentUser.ID, courseID)
 	}
 
@@ -93,7 +93,7 @@ func DeleteCourse(w http.ResponseWriter, tx *sql.Tx, params martini.Params) {
 		return
 	}
 
-	if _, err := tx.Exec(`DELETE FROM courses WHERE id = $1`, courseID); err != nil {
+	if _, err := tx.Exec(`DELETE FROM courses WHERE id = ?`, courseID); err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
 	}
@@ -204,7 +204,7 @@ func GetUser(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUs
 	} else {
 		err = meddler.QueryRow(tx, user, `SELECT users.* `+
 			`FROM users JOIN user_users ON users.id = user_users.other_user_id `+
-			`WHERE user_users.user_id = $1 AND user_users.other_user_id = $2`,
+			`WHERE user_users.user_id = ? AND user_users.other_user_id = ?`,
 			currentUser.ID, userID)
 	}
 
@@ -228,13 +228,13 @@ func GetCourseUsers(w http.ResponseWriter, tx *sql.Tx, params martini.Params, cu
 	if currentUser.Admin {
 		err = meddler.QueryAll(tx, &users, `SELECT DISTINCT users.* `+
 			`FROM users JOIN assignments ON users.id = assignments.user_id `+
-			`WHERE assignments.course_id = $1 ORDER BY users.id`,
+			`WHERE assignments.course_id = ? ORDER BY users.id`,
 			courseID)
 	} else {
 		err = meddler.QueryAll(tx, &users, `SELECT DISTINCT users.* `+
 			`FROM users JOIN assignments ON users.id = assignments.user_id `+
 			`JOIN user_users ON assignments.user_id = user_users.other_user_id `+
-			`WHERE assignments.course_id = $1 AND user_users.user_id = $2 `+
+			`WHERE assignments.course_id = ? AND user_users.user_id = ? `+
 			`ORDER BY users.id`,
 			courseID, currentUser.ID)
 	}
@@ -261,7 +261,7 @@ func DeleteUser(w http.ResponseWriter, tx *sql.Tx, params martini.Params) {
 		return
 	}
 
-	if _, err := tx.Exec(`DELETE FROM users WHERE id = $1`, userID); err != nil {
+	if _, err := tx.Exec(`DELETE FROM users WHERE id = ?`, userID); err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
 	}
@@ -318,13 +318,13 @@ func GetUserAssignments(w http.ResponseWriter, tx *sql.Tx, params martini.Params
 	assignments := []*Assignment{}
 
 	if currentUser.Admin {
-		err = meddler.QueryAll(tx, &assignments, `SELECT * FROM assignments WHERE user_id = $1 `+
+		err = meddler.QueryAll(tx, &assignments, `SELECT * FROM assignments WHERE user_id = ? `+
 			`ORDER BY course_id, updated_at`,
 			userID)
 	} else {
 		err = meddler.QueryAll(tx, &assignments, `SELECT assignments.* `+
 			`FROM assignments JOIN user_assignments ON assignments.id = user_assignments.assignment_id `+
-			`WHERE assignments.user_id = $1 AND user_assignments.user_id = $2 `+
+			`WHERE assignments.user_id = ? AND user_assignments.user_id = ? `+
 			`ORDER BY course_id, updated_at`,
 			userID, currentUser.ID)
 	}
@@ -353,13 +353,13 @@ func GetCourseUserAssignments(w http.ResponseWriter, tx *sql.Tx, params martini.
 
 	if currentUser.Admin {
 		err = meddler.QueryAll(tx, &assignments, `SELECT * FROM assignments `+
-			`WHERE course_id = $1 AND user_id = $2 `+
+			`WHERE course_id = ? AND user_id = ? `+
 			`ORDER BY updated_at`,
 			courseID, userID)
 	} else {
 		err = meddler.QueryAll(tx, &assignments, `SELECT assignments.* `+
 			`FROM assignments JOIN user_assignments ON assignments.id = user_assignments.assignment_id `+
-			`WHERE course_id = $1 AND assignments.user_id = $2 AND user_assignments.user_id = $3 `+
+			`WHERE course_id = ? AND assignments.user_id = ? AND user_assignments.user_id = ? `+
 			`ORDER BY updated_at`,
 			courseID, userID, currentUser.ID)
 	}
@@ -387,11 +387,11 @@ func GetAssignment(w http.ResponseWriter, tx *sql.Tx, params martini.Params, cur
 	assignment := new(Assignment)
 
 	if currentUser.Admin {
-		err = meddler.QueryRow(tx, assignment, `SELECT * FROM assignments WHERE id = $1`, assignmentID)
+		err = meddler.QueryRow(tx, assignment, `SELECT * FROM assignments WHERE id = ?`, assignmentID)
 	} else {
 		err = meddler.QueryRow(tx, assignment, `SELECT assignments.* `+
 			`FROM assignments JOIN user_assignments ON assignments.id = user_assignments.assignment_id `+
-			`WHERE assignments.id = $1 AND user_assignments.user_id = $2`,
+			`WHERE assignments.id = ? AND user_assignments.user_id = ?`,
 			assignmentID, currentUser.ID)
 	}
 
@@ -411,7 +411,7 @@ func DeleteAssignment(w http.ResponseWriter, tx *sql.Tx, params martini.Params) 
 		return
 	}
 
-	if _, err := tx.Exec(`DELETE FROM assignments WHERE id = $1`, assignmentID); err != nil {
+	if _, err := tx.Exec(`DELETE FROM assignments WHERE id = ?`, assignmentID); err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
 	}
@@ -432,12 +432,12 @@ func GetAssignmentProblemCommitLast(w http.ResponseWriter, tx *sql.Tx, params ma
 	commit := new(Commit)
 
 	if currentUser.Admin {
-		err = meddler.QueryRow(tx, commit, `SELECT * FROM commits WHERE assignment_id = $1 AND problem_id = $2 ORDER BY step DESC, updated_at DESC LIMIT 1`,
+		err = meddler.QueryRow(tx, commit, `SELECT * FROM commits WHERE assignment_id = ? AND problem_id = ? ORDER BY step DESC, updated_at DESC LIMIT 1`,
 			assignmentID, problemID)
 	} else {
 		err = meddler.QueryRow(tx, commit, `SELECT commits.* `+
 			`FROM commits JOIN user_assignments ON commits.assignment_id = user_assignments.assignment_id `+
-			`WHERE commits.assignment_id = $1 AND problem_id = $2 AND user_assignments.user_id = $3 `+
+			`WHERE commits.assignment_id = ? AND problem_id = ? AND user_assignments.user_id = ? `+
 			`ORDER BY step DESC, updated_at DESC LIMIT 1`, assignmentID, problemID, currentUser.ID)
 	}
 
@@ -468,11 +468,11 @@ func GetAssignmentProblemStepCommitLast(w http.ResponseWriter, tx *sql.Tx, param
 	commit := new(Commit)
 
 	if currentUser.Admin {
-		err = meddler.QueryRow(tx, commit, `SELECT * FROM commits WHERE assignment_id = $1 AND problem_id = $2 AND step = $3 ORDER BY updated_at DESC LIMIT 1`, assignmentID, problemID, step)
+		err = meddler.QueryRow(tx, commit, `SELECT * FROM commits WHERE assignment_id = ? AND problem_id = ? AND step = ? ORDER BY updated_at DESC LIMIT 1`, assignmentID, problemID, step)
 	} else {
 		err = meddler.QueryRow(tx, commit, `SELECT commits.* `+
 			`FROM commits JOIN user_assignments ON commits.assignment_id = user_assignments.assignment_id `+
-			`WHERE commits.assignment_id = $1 AND problem_id = $2 AND step = $3 AND user_assignments.user_id = $4 `+
+			`WHERE commits.assignment_id = ? AND problem_id = ? AND step = ? AND user_assignments.user_id = ? `+
 			`ORDER BY updated_at DESC LIMIT 1`,
 			assignmentID, problemID, step, currentUser.ID)
 	}
@@ -493,7 +493,7 @@ func DeleteCommit(w http.ResponseWriter, tx *sql.Tx, params martini.Params) {
 		return
 	}
 
-	if _, err = tx.Exec(`DELETE FROM commits WHERE id = $1`, commitID); err != nil {
+	if _, err = tx.Exec(`DELETE FROM commits WHERE id = ?`, commitID); err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
 	}
@@ -578,11 +578,11 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 	// get the assignment and figure out if this is the student or the instructor
 	isInstructor := false
 	assignment := new(Assignment)
-	err := meddler.QueryRow(tx, assignment, `SELECT * FROM assignments WHERE id = $1 AND user_id = $2`, commit.AssignmentID, currentUser.ID)
+	err := meddler.QueryRow(tx, assignment, `SELECT * FROM assignments WHERE id = ? AND user_id = ?`, commit.AssignmentID, currentUser.ID)
 	if err == sql.ErrNoRows {
 		// try loading it as the instructor
 		err = meddler.QueryRow(tx, assignment, `SELECT assignments.* FROM assignments JOIN user_assignments ON assignments.id = user_assignments.assignment_id `+
-			`WHERE user_assignments.assignment_id = $1 AND user_assignments.user_id = $2`, commit.AssignmentID, currentUser.ID)
+			`WHERE user_assignments.assignment_id = ? AND user_assignments.user_id = ?`, commit.AssignmentID, currentUser.ID)
 		if err == nil {
 			isInstructor = true
 		}
@@ -601,7 +601,7 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 	// * else if the student has a lock at in the future, accept
 	// * else reject
 	var courseWideLockAt time.Time
-	err = tx.QueryRow(`SELECT lock_at FROM assignments WHERE instructor AND lti_id = $1 AND lock_at IS NOT NULL ORDER BY lock_at DESC LIMIT 1`,
+	err = tx.QueryRow(`SELECT lock_at FROM assignments WHERE instructor AND lti_id = ? AND lock_at IS NOT NULL ORDER BY lock_at DESC LIMIT 1`,
 		assignment.LtiID).Scan(&courseWideLockAt)
 	if err != nil && err != sql.ErrNoRows {
 		loggedHTTPDBNotFoundError(w, err)
@@ -616,12 +616,12 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 
 	// get the problem
 	problem := new(Problem)
-	if err = meddler.QueryRow(tx, problem, `SELECT * FROM problems WHERE id = $1`, commit.ProblemID); err != nil {
+	if err = meddler.QueryRow(tx, problem, `SELECT * FROM problems WHERE id = ?`, commit.ProblemID); err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
 	}
 	steps := []*ProblemStep{}
-	if err = meddler.QueryAll(tx, &steps, `SELECT * FROM problem_steps WHERE problem_id = $1 ORDER BY step`, commit.ProblemID); err != nil {
+	if err = meddler.QueryAll(tx, &steps, `SELECT * FROM problem_steps WHERE problem_id = ? ORDER BY step`, commit.ProblemID); err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
 	}
@@ -652,7 +652,7 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 
 	// reject commit if user has started work on a later step
 	var latestStep int64
-	if err = tx.QueryRow(`SELECT step FROM commits WHERE assignment_id = $1 AND problem_id = $2 ORDER BY step DESC LIMIT 1`, commit.AssignmentID, commit.ProblemID).Scan(&latestStep); err != nil {
+	if err = tx.QueryRow(`SELECT step FROM commits WHERE assignment_id = ? AND problem_id = ? ORDER BY step DESC LIMIT 1`, commit.AssignmentID, commit.ProblemID).Scan(&latestStep); err != nil {
 		if err != sql.ErrNoRows {
 			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 			return
@@ -676,7 +676,7 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 	// update an existing commit if it exists
 	// note: this used to include AND action IS NULL AND updated_at > now.Add(-OpenCommitTimeout)
 	openCommit := new(Commit)
-	if err := meddler.QueryRow(tx, openCommit, `SELECT * FROM commits WHERE assignment_id = $1 AND problem_id = $2 AND step = $3 LIMIT 1`, commit.AssignmentID, commit.ProblemID, commit.Step); err != nil {
+	if err := meddler.QueryRow(tx, openCommit, `SELECT * FROM commits WHERE assignment_id = ? AND problem_id = ? AND step = ? LIMIT 1`, commit.AssignmentID, commit.ProblemID, commit.Step); err != nil {
 		if err == sql.ErrNoRows {
 			commit.ID = 0
 		} else {
@@ -854,7 +854,7 @@ func GetProblemWeights(tx *sql.Tx, assignment *Assignment) (majorWeights map[str
 	if err := meddler.QueryAll(tx, &weights, `SELECT problems.unique_id AS major_key, problem_set_problems.weight AS major_weight, problem_steps.step AS minor_key, problem_steps.weight AS minor_weight `+
 		`FROM problem_set_problems JOIN problems ON problem_set_problems.problem_id = problems.id `+
 		`JOIN problem_steps ON problem_steps.problem_id = problems.id `+
-		`WHERE problem_set_problems.problem_set_id = $1 `+
+		`WHERE problem_set_problems.problem_set_id = ? `+
 		`ORDER BY unique_id, step`, assignment.ProblemSetID); err != nil {
 		return nil, nil, fmt.Errorf("db error: %v", err)
 	}

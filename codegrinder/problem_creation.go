@@ -64,14 +64,14 @@ func PutProblemBundle(w http.ResponseWriter, tx *sql.Tx, params martini.Params, 
 	}
 
 	var assignmentCount int
-	if err := tx.QueryRow(`SELECT COUNT(1) FROM assignments INNER JOIN problem_sets ON assignments.problem_set_id = problem_sets.id INNER JOIN problem_set_problems ON problem_sets.id = problem_set_problems.problem_set_id WHERE problem_set_problems.problem_id = $1`, bundle.Problem.ID).Scan(&assignmentCount); err != nil {
+	if err := tx.QueryRow(`SELECT COUNT(1) FROM assignments INNER JOIN problem_sets ON assignments.problem_set_id = problem_sets.id INNER JOIN problem_set_problems ON problem_sets.id = problem_set_problems.problem_set_id WHERE problem_set_problems.problem_id = ?`, bundle.Problem.ID).Scan(&assignmentCount); err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
 	}
 	if assignmentCount > 0 {
 		// count the steps in the old problem
 		var stepCount int
-		if err := tx.QueryRow(`SELECT COUNT(1) FROM problem_steps WHERE problem_id = $1`, bundle.Problem.ID).Scan(&stepCount); err != nil {
+		if err := tx.QueryRow(`SELECT COUNT(1) FROM problem_steps WHERE problem_id = ?`, bundle.Problem.ID).Scan(&stepCount); err != nil {
 			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 			return
 		}
@@ -149,7 +149,7 @@ func saveProblemBundleCommon(w http.ResponseWriter, tx *sql.Tx, currentUser *Use
 		isUpdate = true
 
 		// how many steps did the old version have?
-		if err := tx.QueryRow(`SELECT COUNT(1) FROM problem_steps WHERE problem_id = $1`, problem.ID).Scan(&oldStepCount); err != nil {
+		if err := tx.QueryRow(`SELECT COUNT(1) FROM problem_steps WHERE problem_id = ?`, problem.ID).Scan(&oldStepCount); err != nil {
 			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 			return
 		}
@@ -169,7 +169,7 @@ func saveProblemBundleCommon(w http.ResponseWriter, tx *sql.Tx, currentUser *Use
 				loggedHTTPErrorf(w, http.StatusInternalServerError, "json error: %v", err)
 				return
 			}
-			if _, err = tx.Exec(`UPDATE problem_steps SET note=$1,instructions=$2,weight=$3,files=$4 WHERE problem_id=$5 AND step=$6`,
+			if _, err = tx.Exec(`UPDATE problem_steps SET note=?,instructions=?,weight=?,files=? WHERE problem_id=? AND step=?`,
 				step.Note, step.Instructions, step.Weight, raw, step.ProblemID, step.Step); err != nil {
 				loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 				return
@@ -185,7 +185,7 @@ func saveProblemBundleCommon(w http.ResponseWriter, tx *sql.Tx, currentUser *Use
 
 	// did the old version have extra steps that need to be deleted?
 	if len(steps) < oldStepCount {
-		if _, err := tx.Exec(`DELETE FROM problem_steps WHERE problem_id = $1 AND step > $2`, problem.ID, len(steps)); err != nil {
+		if _, err := tx.Exec(`DELETE FROM problem_steps WHERE problem_id = ? AND step > ?`, problem.ID, len(steps)); err != nil {
 			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 			return
 		}
@@ -292,7 +292,7 @@ func PostProblemBundleUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser
 
 	// make sure the unique ID is unique
 	conflict := new(Problem)
-	if err := meddler.QueryRow(tx, conflict, `SELECT * FROM problems WHERE unique_id = $1`, bundle.Problem.Unique); err != nil {
+	if err := meddler.QueryRow(tx, conflict, `SELECT * FROM problems WHERE unique_id = ?`, bundle.Problem.Unique); err != nil {
 		if err == sql.ErrNoRows {
 			conflict.ID = 0
 		} else {
@@ -444,7 +444,7 @@ func PutProblemSetBundle(w http.ResponseWriter, tx *sql.Tx, bundle ProblemSetBun
 
 	// get the list of problems
 	var oldPSPs []*ProblemSetProblem
-	if err := meddler.QueryAll(tx, &oldPSPs, `SELECT * FROM problem_set_problems WHERE problem_set_id = $1 ORDER BY problem_id`, set.ID); err != nil {
+	if err := meddler.QueryAll(tx, &oldPSPs, `SELECT * FROM problem_set_problems WHERE problem_set_id = ? ORDER BY problem_id`, set.ID); err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
 	}
@@ -462,7 +462,7 @@ func PutProblemSetBundle(w http.ResponseWriter, tx *sql.Tx, bundle ProblemSetBun
 
 	// cannot change the set of problems for a set that is already assigned
 	var assignmentCount int
-	if err := tx.QueryRow(`SELECT COUNT(1) FROM assignments WHERE problem_set_id = $1`, set.ID).Scan(&assignmentCount); err != nil {
+	if err := tx.QueryRow(`SELECT COUNT(1) FROM assignments WHERE problem_set_id = ?`, set.ID).Scan(&assignmentCount); err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
 	}
@@ -495,7 +495,7 @@ func PutProblemSetBundle(w http.ResponseWriter, tx *sql.Tx, bundle ProblemSetBun
 		switch {
 		case oldPSP != nil && (newPSP == nil || newPSP.ProblemID > oldPSP.ProblemID):
 			// delete the old entry
-			if _, err := tx.Exec(`DELETE FROM problem_set_problems WHERE problem_set_id = $1 AND problem_id = $2`, oldPSP.ProblemSetID, oldPSP.ProblemID); err != nil {
+			if _, err := tx.Exec(`DELETE FROM problem_set_problems WHERE problem_set_id = ? AND problem_id = ?`, oldPSP.ProblemSetID, oldPSP.ProblemID); err != nil {
 				loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 				return
 			}
@@ -511,7 +511,7 @@ func PutProblemSetBundle(w http.ResponseWriter, tx *sql.Tx, bundle ProblemSetBun
 		default:
 			// update the entry in place (if it has changed)
 			if oldPSP.Weight != newPSP.Weight {
-				if _, err := tx.Exec(`UPDATE problem_set_problems SET weight = $1 WHERE problem_set_id = $2 AND problem_id = $3`, newPSP.Weight, set.ID, oldPSP.ProblemID); err != nil {
+				if _, err := tx.Exec(`UPDATE problem_set_problems SET weight = ? WHERE problem_set_id = ? AND problem_id = ?`, newPSP.Weight, set.ID, oldPSP.ProblemID); err != nil {
 					loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 					return
 				}

@@ -27,10 +27,10 @@ import (
 
 	"github.com/fsouza/go-dockerclient"
 	"github.com/go-martini/martini"
-	_ "github.com/lib/pq"
 	"github.com/martini-contrib/binding"
 	mgzip "github.com/martini-contrib/gzip"
 	"github.com/martini-contrib/render"
+	_ "github.com/mattn/go-sqlite3"
 	. "github.com/russross/codegrinder/common"
 	"github.com/russross/meddler"
 	"golang.org/x/crypto/acme/autocert"
@@ -56,16 +56,12 @@ var Config struct {
 	ProblemTypes []string `json:"problemTypes"` // List of problem types this daycare host supports: [ "python27unittest", "gotest", ... ]
 
 	// ta-only parameters where the default is usually sufficient
-	ToolName         string      `json:"toolName"`         // LTI human readable name: default "CodeGrinder"
-	ToolID           string      `json:"toolID"`           // LTI unique ID: default "codegrinder"
-	ToolDescription  string      `json:"toolDescription"`  // LTI description: default "Programming exercises with grading"
-	LetsEncryptCache string      `json:"letsEncryptDir"`   // Full path of LetsEncrypt cache file: default "/etc/codegrinder/letsencrypt"
-	PostgresHost     string      `json:"postgresHost"`     // Host parameter for Postgres: default "/var/run/postgresql"
-	PostgresPort     string      `json:"postgresPort"`     // Port parameter for Postgres: default "5432"
-	PostgresUsername string      `json:"postgresUsername"` // Username parameter for Postgres: default $USER
-	PostgresPassword string      `json:"postgresPassword"` // Password parameter for Postgres: default ""
-	PostgresDatabase string      `json:"postgresDatabase"` // Database parameter for Postgres: default $USER
-	SessionsExpire   []time.Time `json:"sessionsExpire"`   // times/dates when sessions should expire (year is ignored)
+	ToolName         string      `json:"toolName"`        // LTI human readable name: default "CodeGrinder"
+	ToolID           string      `json:"toolID"`          // LTI unique ID: default "codegrinder"
+	ToolDescription  string      `json:"toolDescription"` // LTI description: default "Programming exercises with grading"
+	LetsEncryptCache string      `json:"letsEncryptDir"`  // Full path of LetsEncrypt cache file: default "/etc/codegrinder/letsencrypt"
+	SQLite3Path      string      `json:"sqlite3Path"`     // path to the sqlite database file
+	SessionsExpire   []time.Time `json:"sessionsExpire"`  // times/dates when sessions should expire (year is ignored)
 }
 
 var problemTypeHandlers = make(map[string]map[string]nannyHandler)
@@ -92,11 +88,7 @@ func main() {
 	Config.ToolID = "codegrinder"
 	Config.ToolDescription = "Programming exercises with grading"
 	Config.LetsEncryptCache = "/etc/codegrinder/letsencrypt"
-	Config.PostgresHost = "/var/run/postgresql"
-	Config.PostgresPort = ""
-	Config.PostgresUsername = os.Getenv("USER")
-	Config.PostgresPassword = ""
-	Config.PostgresDatabase = os.Getenv("USER")
+	Config.SQLite3Path = ""
 	Config.SessionsExpire = []time.Time{
 		time.Date(2017, 1, 1, 0, 0, 0, 0, time.Local),
 		time.Date(2017, 7, 1, 0, 0, 0, 0, time.Local),
@@ -258,17 +250,24 @@ func main() {
 		if Config.FilesDir == "" {
 			log.Fatalf("cannot run TA role with no filesDir in the config file")
 		}
+		if Config.SQLite3Path == "" {
+			log.Fatalf("cannot run TA role with no sqlite3Path in the config file")
+		}
 
 		m.Use(mgzip.All())
 		m.Use(martini.Static(Config.WWWDir, martini.StaticOptions{SkipLogging: true}))
 		m.Use(render.Renderer(render.Options{IndentJSON: false}))
 
 		// set up the database
-		db := setupDB(Config.PostgresHost, Config.PostgresPort, Config.PostgresUsername, Config.PostgresPassword, Config.PostgresDatabase)
+		db := setupDB(Config.SQLite3Path)
+		var dbMutex sync.Mutex
 
 		// martini service: wrap handler in a transaction
 		withTx := func(c martini.Context, w http.ResponseWriter) {
 			// start a transaction
+			dbMutex.Lock()
+			defer dbMutex.Unlock()
+
 			tx, err := db.Begin()
 			if err != nil {
 				loggedHTTPErrorf(w, http.StatusInternalServerError, "db error starting transaction: %v", err)
@@ -545,37 +544,20 @@ func main() {
 	}
 }
 
-func setupDB(host, port, user, password, database string) *sql.DB {
-	if port == "" {
-		//log.Printf("connecting to database at %s", host)
-	} else {
-		//log.Printf("connecting to database at %s:%s", host, port)
-	}
-	meddler.Default = meddler.PostgreSQL
-	parts := []string{"sslmode=disable"}
-	if host != "" {
-		parts = append(parts, "host="+host)
-	}
-	if port != "" {
-		parts = append(parts, "port="+port)
-	}
-	if database != "" {
-		parts = append(parts, "dbname="+database)
-	}
-	if user != "" {
-		parts = append(parts, "user="+user)
-	}
-	if password != "" {
-		parts = append(parts, "password="+password)
-	}
+func setupDB(path string) *sql.DB {
+	meddler.Default = meddler.SQLite
 
-	pg := strings.Join(parts, " ")
-	db, err := sql.Open("postgres", pg)
+	options :=
+		"?" + "_busy_timeout=10000" +
+			"&" + "_case_sensitive_like=OFF" +
+			"&" + "_foreign_keys=ON" +
+			"&" + "_journal_mode=WAL" +
+			"&" + "_locking_mode=EXCLUSIVE" +
+			"&" + "mode=rw" +
+			"&" + "_synchronous=NORMAL"
+	db, err := sql.Open("sqlite3", path+options)
 	if err != nil {
-		delay := 5 * time.Second
-		log.Printf("error opening database: %v", err)
-		time.Sleep(delay)
-		log.Fatalf("slept for %v", delay)
+		log.Fatalf("error opening database: %v", err)
 	}
 
 	return db
@@ -588,7 +570,7 @@ func addWhereEq(where string, args []interface{}, label string, value interface{
 		where += " AND"
 	}
 	args = append(args, value)
-	where += fmt.Sprintf(" %s = $%d", label, len(args))
+	where += fmt.Sprintf(" %s = ?", label)
 	return where, args
 }
 
@@ -599,7 +581,9 @@ func addWhereLike(where string, args []interface{}, label string, value string) 
 		where += " AND"
 	}
 	args = append(args, "%"+strings.ToLower(value)+"%")
-	where += fmt.Sprintf(" lower(%s) LIKE $%d", label, len(args))
+
+	// sqlite is set to use case insensitive LIKEs
+	where += fmt.Sprintf(" %s LIKE ?", label)
 	return where, args
 }
 

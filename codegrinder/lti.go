@@ -357,7 +357,7 @@ func LtiProblemSet(w http.ResponseWriter, r *http.Request, tx *sql.Tx, form LTIR
 	problemSet := new(ProblemSet)
 
 	if unique != bootstrapAssignmentName {
-		if err := meddler.QueryRow(tx, problemSet, `SELECT * FROM problem_sets WHERE unique_id = $1`, unique); err != nil {
+		if err := meddler.QueryRow(tx, problemSet, `SELECT * FROM problem_sets WHERE unique_id = ?`, unique); err != nil {
 			loggedHTTPDBNotFoundError(w, err)
 			return
 		}
@@ -442,7 +442,7 @@ func LtiQuizzes(w http.ResponseWriter, r *http.Request, tx *sql.Tx, form LTIRequ
 // get/create/update this user
 func getUpdateUser(tx *sql.Tx, form *LTIRequest, now time.Time) (*User, error) {
 	user := new(User)
-	if err := meddler.QueryRow(tx, user, `SELECT * FROM users WHERE lti_id = $1`, form.UserID); err != nil {
+	if err := meddler.QueryRow(tx, user, `SELECT * FROM users WHERE lti_id = ?`, form.UserID); err != nil {
 		if err != sql.ErrNoRows {
 			log.Printf("db error loading user %s (%s): %v", form.UserID, form.PersonContactEmailPrimary, err)
 			return nil, err
@@ -487,7 +487,7 @@ func getUpdateUser(tx *sql.Tx, form *LTIRequest, now time.Time) (*User, error) {
 // get/create/update this course
 func getUpdateCourse(tx *sql.Tx, form *LTIRequest, now time.Time) (*Course, error) {
 	course := new(Course)
-	if err := meddler.QueryRow(tx, course, `SELECT * FROM courses WHERE lti_id = $1`, form.ContextID); err != nil {
+	if err := meddler.QueryRow(tx, course, `SELECT * FROM courses WHERE lti_id = ?`, form.ContextID); err != nil {
 		if err != sql.ErrNoRows {
 			log.Printf("db error loading course %s (%s): %v", form.ContextID, form.ContextTitle, err)
 			return nil, err
@@ -527,7 +527,7 @@ func getUpdateCourse(tx *sql.Tx, form *LTIRequest, now time.Time) (*Course, erro
 // get/create/update this assignment
 func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Course, problemSet *ProblemSet, user *User) (*Assignment, error) {
 	asst := new(Assignment)
-	err := meddler.QueryRow(tx, asst, `SELECT * FROM assignments WHERE course_id = $1 AND lti_id = $2 AND user_id = $3`,
+	err := meddler.QueryRow(tx, asst, `SELECT * FROM assignments WHERE course_id = ? AND lti_id = ? AND user_id = ?`,
 		course.ID, form.ResourceLinkID, user.ID)
 	if err != nil {
 		if err != sql.ErrNoRows {
