@@ -7,21 +7,21 @@ import (
 
 func init() {
 	problemTypeHandlers["armv6asm"] = map[string]nannyHandler{
-		"grade":    nannyHandler(armGradeDetail),
+		"grade":    nannyHandler(armGrade),
 		"test":     nannyHandler(armTest),
 		"valgrind": nannyHandler(armValgrind),
 		"debug":    nannyHandler(armDebug),
 		"run":      nannyHandler(armRun),
 	}
 	problemTypeHandlers["armv8asm"] = map[string]nannyHandler{
-		"grade":    nannyHandler(armGradeResults),
+		"grade":    nannyHandler(armGrade),
 		"test":     nannyHandler(armTest),
 		"valgrind": nannyHandler(armValgrind),
 		"debug":    nannyHandler(armDebug),
 		"run":      nannyHandler(armRun),
 	}
 	problemTypeHandlers["arm64inout"] = map[string]nannyHandler{
-		"grade":    nannyHandler(armGradeDetail),
+		"grade":    nannyHandler(armGrade),
 		"test":     nannyHandler(armTest),
 		"valgrind": nannyHandler(armValgrind),
 		"debug":    nannyHandler(armDebug),
@@ -30,14 +30,9 @@ func init() {
 	}
 }
 
-func armGradeDetail(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
+func armGrade(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
 	log.Printf("arm grade")
 	runAndParseXUnit(n, []string{"make", "grade"}, nil, "test_detail.xml")
-}
-
-func armGradeResults(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
-	log.Printf("arm grade")
-	runAndParseXUnit(n, []string{"make", "grade"}, nil, "test_results.xml")
 }
 
 func armTest(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
