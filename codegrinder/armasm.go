@@ -7,21 +7,21 @@ import (
 
 func init() {
 	problemTypeHandlers["armv6asm"] = map[string]nannyHandler{
-		"grade":    nannyHandler(armGrade),
+		"grade":    nannyHandler(armGradeDetail),
 		"test":     nannyHandler(armTest),
 		"valgrind": nannyHandler(armValgrind),
 		"debug":    nannyHandler(armDebug),
 		"run":      nannyHandler(armRun),
 	}
 	problemTypeHandlers["armv8asm"] = map[string]nannyHandler{
-		"grade":    nannyHandler(armGrade),
+		"grade":    nannyHandler(armGradeResults),
 		"test":     nannyHandler(armTest),
 		"valgrind": nannyHandler(armValgrind),
 		"debug":    nannyHandler(armDebug),
 		"run":      nannyHandler(armRun),
 	}
 	problemTypeHandlers["arm64inout"] = map[string]nannyHandler{
-		"grade":    nannyHandler(armGrade),
+		"grade":    nannyHandler(armGradeDetail),
 		"test":     nannyHandler(armTest),
 		"valgrind": nannyHandler(armValgrind),
 		"debug":    nannyHandler(armDebug),
@@ -30,12 +30,12 @@ func init() {
 	}
 }
 
-func arm32Grade(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
+func armGradeDetail(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
 	log.Printf("arm grade")
 	runAndParseXUnit(n, []string{"make", "grade"}, nil, "test_detail.xml")
 }
 
-func arm64Grade(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
+func armGradeResults(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
 	log.Printf("arm grade")
 	runAndParseXUnit(n, []string{"make", "grade"}, nil, "test_results.xml")
 }
