@@ -14,7 +14,7 @@ func init() {
 		"run":      nannyHandler(armRun),
 	}
 	problemTypeHandlers["armv8asm"] = map[string]nannyHandler{
-		"grade":    nannyHandler(armGrade),
+		"grade":    nannyHandler(armGradeCheck),
 		"test":     nannyHandler(armTest),
 		"valgrind": nannyHandler(armValgrind),
 		"debug":    nannyHandler(armDebug),
@@ -33,6 +33,11 @@ func init() {
 func armGrade(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
 	log.Printf("arm grade")
 	runAndParseXUnit(n, []string{"make", "grade"}, nil, "test_detail.xml")
+}
+
+func armGradeCheck(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
+	log.Printf("arm grade")
+	runAndParseCheckXML(n, []string{"make", "grade"}, nil, "test_detail.xml")
 }
 
 func armTest(n *Nanny, args, options []string, files map[string][]byte, stdin io.Reader) {
