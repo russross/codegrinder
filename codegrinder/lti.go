@@ -556,6 +556,9 @@ func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Co
 		if old == nil {
 			return in != ""
 		}
+		if in == "" {
+			return true
+		}
 
 		// parse the new date to see if it matches
 		if when, err := time.Parse(canvasDateFormat, in); err == nil {
