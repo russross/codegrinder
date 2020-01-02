@@ -26,14 +26,23 @@ CREATE TABLE problem_type_actions (
 );
 
 CREATE TABLE problems (
+<<<<<<< HEAD
     id                      integer PRIMARY KEY,
+=======
+    id                      integer NOT NULL,
+>>>>>>> 43d0cc5de9e0d35a00fb93f0eed7218cca31edc2
     unique_id               text NOT NULL,
     note                    text NOT NULL,
     problem_type            text NOT NULL,
     tags                    text NOT NULL,
     options                 text NOT NULL,
+<<<<<<< HEAD
     created_at              datetime NOT NULL,
     updated_at              datetime NOT NULL,
+=======
+    created_at              text NOT NULL,
+    updated_at              text NOT NULL,
+>>>>>>> 43d0cc5de9e0d35a00fb93f0eed7218cca31edc2
 
     FOREIGN KEY (problem_type) REFERENCES problem_types (name) ON DELETE CASCADE
 );
@@ -52,12 +61,23 @@ CREATE TABLE problem_steps (
 );
 
 CREATE TABLE problem_sets (
+<<<<<<< HEAD
     id                      integer PRIMARY KEY,
     unique_id               text NOT NULL,
     note                    text NOT NULL,
     tags                    text NOT NULL,
     created_at              datetime NOT NULL,
     updated_at              datetime NOT NULL
+=======
+    id                      integer NOT NULL,
+    unique_id               text NOT NULL,
+    note                    text NOT NULL,
+    tags                    text NOT NULL,
+    created_at              text NOT NULL,
+    updated_at              text NOT NULL,
+
+    PRIMARY KEY (id)
+>>>>>>> 43d0cc5de9e0d35a00fb93f0eed7218cca31edc2
 );
 CREATE UNIQUE INDEX problem_sets_unique_id ON problem_sets (unique_id);
 
@@ -72,19 +92,34 @@ CREATE TABLE problem_set_problems (
 );
 
 CREATE TABLE courses (
+<<<<<<< HEAD
     id                      integer PRIMARY KEY,
+=======
+    id                      integer NOT NULL,
+>>>>>>> 43d0cc5de9e0d35a00fb93f0eed7218cca31edc2
     name                    text NOT NULL,
     lti_label               text NOT NULL,
     lti_id                  text NOT NULL,
     canvas_id               integer NOT NULL,
+<<<<<<< HEAD
     created_at              datetime NOT NULL,
     updated_at              datetime NOT NULL
+=======
+    created_at              text NOT NULL,
+    updated_at              text NOT NULL,
+
+    PRIMARY KEY (id)
+>>>>>>> 43d0cc5de9e0d35a00fb93f0eed7218cca31edc2
 );
 CREATE UNIQUE INDEX courses_lti_id ON courses (lti_id);
 CREATE UNIQUE INDEX courses_canvas_id ON courses (canvas_id);
 
 CREATE TABLE users (
+<<<<<<< HEAD
     id                      integer PRIMARY KEY,
+=======
+    id                      integer NOT NULL,
+>>>>>>> 43d0cc5de9e0d35a00fb93f0eed7218cca31edc2
     name                    text NOT NULL,
     email                   text NOT NULL,
     lti_id                  text NOT NULL,
@@ -93,16 +128,28 @@ CREATE TABLE users (
     canvas_id               integer NOT NULL,
     author                  boolean NOT NULL,
     admin                   boolean NOT NULL,
+<<<<<<< HEAD
     created_at              datetime NOT NULL,
     updated_at              datetime NOT NULL,
     last_signed_in_at       datetime NOT NULL
+=======
+    created_at              text NOT NULL,
+    updated_at              text NOT NULL,
+    last_signed_in_at       text NOT NULL,
+
+    PRIMARY KEY (id)
+>>>>>>> 43d0cc5de9e0d35a00fb93f0eed7218cca31edc2
 );
 CREATE UNIQUE INDEX users_lti_id ON users (lti_id);
 CREATE UNIQUE INDEX users_canvas_login ON users (canvas_login);
 CREATE UNIQUE INDEX users_canvas_id ON users (canvas_id);
 
 CREATE TABLE assignments (
+<<<<<<< HEAD
     id                      integer PRIMARY KEY,
+=======
+    id                      integer NOT NULL,
+>>>>>>> 43d0cc5de9e0d35a00fb93f0eed7218cca31edc2
     course_id               integer NOT NULL,
     problem_set_id          integer,
     user_id                 integer NOT NULL,
@@ -120,11 +167,19 @@ CREATE TABLE assignments (
     outcome_ext_accepted    text NOT NULL,
     finished_url            text NOT NULL,
     consumer_key            text NOT NULL,
+<<<<<<< HEAD
     unlock_at               datetime,
     due_at                  datetime,
     lock_at                 datetime,
     created_at              datetime NOT NULL,
     updated_at              datetime NOT NULL,
+=======
+    unlock_at               text,
+    due_at                  text,
+    lock_at                 text,
+    created_at              text NOT NULL,
+    updated_at              text NOT NULL,
+>>>>>>> 43d0cc5de9e0d35a00fb93f0eed7218cca31edc2
 
     FOREIGN KEY (course_id) REFERENCES courses (id) ON DELETE CASCADE,
     FOREIGN KEY (problem_set_id) REFERENCES problem_sets (id) ON DELETE CASCADE,
@@ -135,7 +190,11 @@ CREATE UNIQUE INDEX assignments_grade_id ON assignments (grade_id);
 CREATE INDEX assignments_instructor_lti_id ON assignments (instructor, lti_id);
 
 CREATE TABLE commits (
+<<<<<<< HEAD
     id                      integer PRIMARY KEY,
+=======
+    id                      integer NOT NULL,
+>>>>>>> 43d0cc5de9e0d35a00fb93f0eed7218cca31edc2
     assignment_id           integer NOT NULL,
     problem_id              integer NOT NULL,
     step                    integer NOT NULL,
@@ -145,8 +204,13 @@ CREATE TABLE commits (
     transcript              text NOT NULL,
     report_card             text NOT NULL,
     score                   real,
+<<<<<<< HEAD
     created_at              datetime NOT NULL,
     updated_at              datetime NOT NULL,
+=======
+    created_at              text NOT NULL,
+    updated_at              text NOT NULL,
+>>>>>>> 43d0cc5de9e0d35a00fb93f0eed7218cca31edc2
 
     FOREIGN KEY (assignment_id) REFERENCES assignments (id) ON DELETE CASCADE,
     FOREIGN KEY (problem_id, step) REFERENCES problem_steps (problem_id, step) ON DELETE CASCADE
@@ -225,7 +289,11 @@ CREATE VIEW problem_set_search_fields AS
     GROUP BY problem_sets.id;
 
 CREATE TABLE quizzes (
+<<<<<<< HEAD
     id                      integer PRIMARY KEY,
+=======
+    id                      integer NOT NULL,
+>>>>>>> 43d0cc5de9e0d35a00fb93f0eed7218cca31edc2
     assignment_id           integer NOT NULL,
     lti_id                  text NOT NULL,
     note                    text NOT NULL,
@@ -233,14 +301,23 @@ CREATE TABLE quizzes (
     participation_threshold real NOT NULL,
     participation_percent   real NOT NULL,
     is_graded               boolean NOT NULL,
+<<<<<<< HEAD
     created_at              datetime NOT NULL,
     updated_at              datetime NOT NULL,
+=======
+    created_at              text NOT NULL,
+    updated_at              text NOT NULL,
+>>>>>>> 43d0cc5de9e0d35a00fb93f0eed7218cca31edc2
 
     FOREIGN KEY (assignment_id) REFERENCES assignments (id) ON DELETE CASCADE
 );
 
 CREATE TABLE questions (
+<<<<<<< HEAD
     id                      integer PRIMARY KEY,
+=======
+    id                      integer NOT NULL,
+>>>>>>> 43d0cc5de9e0d35a00fb93f0eed7218cca31edc2
     quiz_id                 integer NOT NULL,
     question_number         integer NOT NULL,
     note                    text NOT NULL,
@@ -248,21 +325,36 @@ CREATE TABLE questions (
     points_for_attempt      real NOT NULL,
     is_multiple_choice      boolean NOT NULL,
     answers                 text NOT NULL,
+<<<<<<< HEAD
     closed_at               datetime,
     created_at              datetime NOT NULL,
     updated_at              datetime NOT NULL,
+=======
+    closed_at               text,
+    created_at              text NOT NULL,
+    updated_at              text NOT NULL,
+>>>>>>> 43d0cc5de9e0d35a00fb93f0eed7218cca31edc2
 
     FOREIGN KEY (quiz_id) REFERENCES quizzes (id) ON DELETE CASCADE
 );
 CREATE UNIQUE INDEX questions_quiz_id_index_number ON questions (quiz_id, question_number);
 
 CREATE TABLE responses (
+<<<<<<< HEAD
     id                      integer PRIMARY KEY,
     assignment_id           integer NOT NULL,
     question_id             integer NOT NULL,
     response                text NOT NULL,
     created_at              datetime NOT NULL,
     updated_at              datetime NOT NULL,
+=======
+    id                      integer NOT NULL,
+    assignment_id           integer NOT NULL,
+    question_id             integer NOT NULL,
+    response                text NOT NULL,
+    created_at              text NOT NULL,
+    updated_at              text NOT NULL,
+>>>>>>> 43d0cc5de9e0d35a00fb93f0eed7218cca31edc2
 
     FOREIGN KEY (assignment_id) REFERENCES assignments (id) ON DELETE CASCADE,
     FOREIGN KEY (question_id) REFERENCES questions (id) ON DELETE CASCADE
