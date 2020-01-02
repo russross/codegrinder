@@ -552,7 +552,7 @@ func setupDB(path string) *sql.DB {
 			"&" + "_case_sensitive_like=OFF" +
 			"&" + "_foreign_keys=ON" +
 			"&" + "_journal_mode=WAL" +
-			"&" + "_locking_mode=EXCLUSIVE" +
+			"&" + "_locking_mode=NORMAL" +
 			"&" + "mode=rw" +
 			"&" + "_synchronous=NORMAL"
 	db, err := sql.Open("sqlite3", path+options)

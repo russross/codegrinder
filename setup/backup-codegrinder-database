@@ -3,7 +3,8 @@
 DIR=/home/russ/backup
 DAY=`date '+%Y-%m-%d'`
 MONTH=`date '+%Y-%m'`
+SOURCE=/home/russ/src/github.com/russross/codegrinder/db/codegrinder.db
 FILE=database_$DAY.sql.xz
 
-/usr/bin/sudo -u russ /usr/bin/pg_dump --data-only russ | /usr/bin/xz > $DIR/$FILE
+/usr/bin/sudo -u russ /usr/bin/sqlite3 $SOURCE .dump | /usr/bin/xz > $DIR/$FILE
 /bin/chown russ.russ $DIR/$FILE
