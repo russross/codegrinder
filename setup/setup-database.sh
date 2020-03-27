@@ -2,15 +2,23 @@
 
 set -e
 
-echo Deleting old database and user
-sudo -u postgres psql -c "drop database if exists $USER;"
-sudo -u postgres psql -c "drop user if exists $USER;"
+CGPATH=$GOPATH/src/github.com/russross/codegrinder
+DBFILE=$CGPATH/db/codegrinder.db
 
-echo Creating database and user
-sudo -u postgres psql -c "create user $USER;"
-sudo -u postgres psql -c "create database $USER;"
-sudo -u postgres psql -c "grant all privileges on database $USER to $USER;"
+if [ ! -f "$HOME/.sqliterc" ]; then
+    echo WARNING! You should set up ~/.sqliterc before running this command
+    echo Use: cp $CGPATH/setup/sqliterc ~/.sqliterc
+    echo continuing anyway... you should set up .sqliterc and then re-run this command
+fi
 
-echo Creating tables
-psql < $GOPATH/src/github.com/russross/codegrinder/setup/schema.sql
-psql < $GOPATH/src/github.com/russross/codegrinder/setup/problemtypes.sql
+echo Creating directory if needed
+mkdir -p $CGPATH/db
+
+echo Deleting old database if it exists
+rm -f $DBFILE
+
+echo Creating database tables
+sqlite3 $DBFILE < $CGPATH/setup/schema.sql
+
+echo Creating problem types
+sqlite3 $DBFILE < $CGPATH/setup/problemtypes.sql

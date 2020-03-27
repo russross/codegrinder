@@ -1,5 +1,3 @@
-PRAGMA encoding = 'UTF-8';
-
 CREATE TABLE problem_types (
     name                    text NOT NULL,
     image                   text NOT NULL,

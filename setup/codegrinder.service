@@ -1,6 +1,5 @@
 [Unit]
 Description=CodeGrinder main service
-After=postgresql.service
 After=docker.service
 
 [Service]
