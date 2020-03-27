@@ -1,4 +1,4 @@
-FROM debian:stretch
+FROM debian:buster
 MAINTAINER russ@russross.com
 
 RUN apt update && apt upgrade -y
