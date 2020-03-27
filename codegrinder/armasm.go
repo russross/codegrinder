@@ -6,14 +6,14 @@ import (
 )
 
 func init() {
-	problemTypeHandlers["armv6asm"] = map[string]nannyHandler{
+	problemTypeHandlers["arm32unittest"] = map[string]nannyHandler{
 		"grade":    nannyHandler(armGrade),
 		"test":     nannyHandler(armTest),
 		"valgrind": nannyHandler(armValgrind),
 		"debug":    nannyHandler(armDebug),
 		"run":      nannyHandler(armRun),
 	}
-	problemTypeHandlers["armv8asm"] = map[string]nannyHandler{
+	problemTypeHandlers["arm64unittest"] = map[string]nannyHandler{
 		"grade":    nannyHandler(armGradeCheck),
 		"test":     nannyHandler(armTest),
 		"valgrind": nannyHandler(armValgrind),
