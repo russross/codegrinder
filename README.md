@@ -6,9 +6,10 @@ an LMS such as Canvas using the LTI protocol.
 Project status
 ==============
 
-This is a rewrite of a tool we use internally at Dixie State
-University in our Computer Science program. This is a work in
-progress, and you should approach it with caution.
+This is a tool we use internally at Dixie State University in our
+Computer Science program. It is pretty stable and we have been using
+it for years, but it is mostly an internal project. I recommend
+getting in touch if you would like to use it.
 
 CodeGrinder is released under the terms of the AGPL. If you would
 like to use it and these terms are not suitable, please contact the
@@ -26,7 +27,7 @@ This repository currently hosts two tools:
     TA service and one or more daycare services.
 
     1.  The TA service: this manages bookkeeping and runs on top of
-        PostgreSQL. It interfaces with an LMS by acting as an LTI
+        SQLite 3. It interfaces with an LMS by acting as an LTI
         tool provider. An LMS such as Canvas hosts an assignment
         page, and directs students to the TA service complete with
         basic credentials, login information, and information about
@@ -47,27 +48,22 @@ This repository currently hosts two tools:
 Installation
 ============
 
-In my dev environment, I run CodeGrinder and PostgreSQL on the same
-server and connect to PostgreSQL using Unix-domain sockets with
-ident authentication. These instructions assume you are doing the
-same. You may need to adjust if you have a different setup.
-
-All instructions here assume a Debian Jessie server environment.
+All instructions here assume a Debian Buster server environment.
 
 
 ### Install Go environment (all nodes)
 
 Start with a Go build environment with Go 1.8 or higher. Make sure
-your GOPATH is set correctly.
+your GOPATH is set correctly. I usually set GOPATH to match HOME.
 
 Get the URL for the latest version of Go here:
 
 * https://golang.org/dl/
 
-Using that URL (this example assumes version 1.8beta2), install Go
+Using that URL (this example assumes version 1.14.1), install Go
 using:
 
-    curl -s https://storage.googleapis.com/golang/go1.8beta2.linux-amd64.tar.gz | sudo tar zxvf - -C /usr/local
+    curl -s https://storage.googleapis.com/golang/go1.14.1.linux-amd64.tar.gz | sudo tar zxvf - -C /usr/local
     cd /usr/local/bin
     sudo ln -s ../go/bin/* ./
 
@@ -80,28 +76,6 @@ Be sure to set your `GOPATH` variable. I add this line to
     export GOPATH=$HOME
 
 Then log out and log back in so it will take effect.
-
-
-### Install database (TA node only)
-
-Install PostgreSQL version 9.4 or higher. Note that you only need
-PostgreSQL on the TA node:
-
-* http://wiki.postgresql.org/wiki/Apt
-
-Run the database setup script. Warning: this will delete an existing
-installation, so use this with caution.
-
-    $GOPATH/src/github.com/russross/codegrinder/setup/setup-database.sh
-
-
-### Install Docker (daycare nodes only)
-
-Install and configure Docker, and add your CodeGrinder user to the
-`docker` group so it can manage containers without being root. Note
-that you only need this on daycare nodes:
-
-* https://docs.docker.com/engine/installation/linux/debian/
 
 
 ### Install CodeGrinder
@@ -130,6 +104,28 @@ This only builds and installs the server. Both of these scripts
 also give the `codegrinder` binary the capability to bind to
 low-numbered ports, so CodeGrinder does not need any other special
 privileges to run. It should NOT be run as root.
+
+
+### Install database (TA node only)
+
+Install SQLite 3. Note that you only need this on the TA node:
+
+    sudo apt install sqlite3
+    cp $GOPATH/src/github.com/russross/setup/sqliterc $HOME/.sqliterc
+
+Run the database setup script. Warning: this will delete an existing
+installation, so use this with caution.
+
+    $GOPATH/src/github.com/russross/codegrinder/setup/setup-database.sh
+
+
+### Install Docker (daycare nodes only)
+
+Install and configure Docker, and add your CodeGrinder user to the
+`docker` group so it can manage containers without being root. Note
+that you only need this on daycare nodes:
+
+* https://docs.docker.com/engine/installation/linux/debian/
 
 
 ### Configure CodeGrinder
@@ -162,7 +158,7 @@ and for nodes running the daycare role, you should add these keys:
         "taHostname": "your.ta.domain.name",
         "capacity": 1,
         "problemTypes": [
-            "python27unittest"
+            "python3unittest"
         ],
 
 Put in your domain name and the contact email to use when
@@ -193,9 +189,9 @@ host the student code:
 
     make -C $GOPATH/src/github.com/russross/codegrinder/containers amd64
 
-Or if you are running on a Raspberry Pi and need the ARM images:
+Or if you are running on a Raspberry Pi and need the ARM64 images:
 
-    make -C $GOPATH/src/github.com/russross/codegrinder/containers arm
+    make -C $GOPATH/src/github.com/russross/codegrinder/containers arm64
 
 At this point, you should be able to run the server. To run it with
 only the TA service, use:
@@ -214,9 +210,8 @@ For normal use, you will want systemd to manage it:
 
 Then edit the file you have copied to customize it. In particular,
 set the options in the executable to run as -ta, -daycare, or both,
-and in the dependencies section, comment out the postgresql
-dependency if this is not a TA role, and the docker dependency if
-this is not a daycare role.
+and in the dependencies section comment out the docker dependency
+if this is not a daycare role.
 
 To start it, use:
 
@@ -241,6 +236,10 @@ To review the logs:
 To follow the logs in real time:
 
     sudo journalctl -xfu codegrinder
+
+There is also a script in the setup directory to take daily backups
+of the database. Copy it to `/etc/cron.daily/` and edit it so that
+it uses the correct user and directories.
 
 
 License
