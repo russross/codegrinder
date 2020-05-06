@@ -87,13 +87,14 @@ func main() {
 	cmdGrind.AddCommand(cmdList)
 
 	cmdGet := &cobra.Command{
-		Use:   "get <assignment id>",
+		Use:   "get <assignment id> [assignment root directory]",
 		Short: "download an assignment to work on it locally",
 		Long: fmt.Sprintf("Give either the numeric ID (given at the start of each listing)\n"+
 			"or the course/problem identifier (given in parentheses).\n\n"+
 			"Use '%s list' to see a list of assignments available to you.\n\n"+
-			"The assignment will be stored in a directory matching the\n"+
-			"course/problem name.\n\n"+
+			"The assignment will be stored in a directory hierarchy with the\n"+
+			"assignment root directory (your home directory by default)\n"+
+			"followed by a course directory, then the assignment directories.\n\n"+
 			"   Example: '%s get 342'\n\n"+
 			"   Example: '%s get CS-1400/cs1400-loops'\n\n"+
 			"Note: you must load an assignment through Canvas before you can access it.", os.Args[0], os.Args[0], os.Args[0]),

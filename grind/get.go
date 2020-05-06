@@ -18,16 +18,24 @@ import (
 func CommandGet(cmd *cobra.Command, args []string) {
 	mustLoadConfig(cmd)
 
+	rootDir := os.Getenv("HOME")
+	if rootDir == "" {
+		rootDir = os.Getenv("USERPROFILE")
+	}
+
 	if len(args) == 0 {
 		cmd.Help()
 		os.Exit(1)
-	} else if len(args) > 1 {
+	} else if len(args) > 2 {
 		log.Printf("you must specify the assignment to download")
 		log.Printf("   run '%s list' to see your assignments", os.Args[0])
 		log.Printf("   you must give the assignment number (displayed on the left of the list)")
 		log.Fatalf("   or a name in the form COURSE/problem-set-id (displayed in parentheses)")
 	}
 	name := args[0]
+	if len(args) == 2 {
+		rootDir = args[1]
+	}
 
 	user := new(User)
 	mustGetObject("/users/me", nil, user)
@@ -73,7 +81,7 @@ func CommandGet(cmd *cobra.Command, args []string) {
 	if assignment.UserID != user.ID {
 		log.Fatalf("you do not have an assignment with number %d", assignment.ID)
 	}
-	getAssignment(assignment, ".")
+	getAssignment(assignment, rootDir)
 }
 
 func getAssignment(assignment *Assignment, rootDir string) string {
