@@ -20,7 +20,7 @@ CREATE TABLE problem_type_actions (
     max_threads             integer NOT NULL,
 
     PRIMARY KEY (problem_type, action),
-    FOREIGN KEY (problem_type) REFERENCES problem_types (name) ON DELETE CASCADE
+    FOREIGN KEY (problem_type) REFERENCES problem_types (name) ON DELETE CASCADE ON UPDATE CASCADE
 );
 
 CREATE TABLE problems (
@@ -33,7 +33,7 @@ CREATE TABLE problems (
     created_at              datetime NOT NULL,
     updated_at              datetime NOT NULL,
 
-    FOREIGN KEY (problem_type) REFERENCES problem_types (name) ON DELETE CASCADE
+    FOREIGN KEY (problem_type) REFERENCES problem_types (name) ON DELETE CASCADE ON UPDATE CASCADE
 );
 CREATE UNIQUE INDEX problems_unique_id ON problems (unique_id);
 
@@ -46,7 +46,7 @@ CREATE TABLE problem_steps (
     files                   text NOT NULL,
 
     PRIMARY KEY (problem_id, step),
-    FOREIGN KEY (problem_id) REFERENCES problems (id) ON DELETE CASCADE
+    FOREIGN KEY (problem_id) REFERENCES problems (id) ON DELETE CASCADE ON UPDATE CASCADE
 );
 
 CREATE TABLE problem_sets (
@@ -65,8 +65,8 @@ CREATE TABLE problem_set_problems (
     weight                  real NOT NULL,
 
     PRIMARY KEY (problem_set_id, problem_id),
-    FOREIGN KEY (problem_set_id) REFERENCES problem_sets (id) ON DELETE CASCADE,
-    FOREIGN KEY (problem_id) REFERENCES problems (id) ON DELETE CASCADE
+    FOREIGN KEY (problem_set_id) REFERENCES problem_sets (id) ON DELETE CASCADE ON UPDATE CASCADE,
+    FOREIGN KEY (problem_id) REFERENCES problems (id) ON DELETE CASCADE ON UPDATE CASCADE
 );
 
 CREATE TABLE courses (
@@ -124,9 +124,9 @@ CREATE TABLE assignments (
     created_at              datetime NOT NULL,
     updated_at              datetime NOT NULL,
 
-    FOREIGN KEY (course_id) REFERENCES courses (id) ON DELETE CASCADE,
-    FOREIGN KEY (problem_set_id) REFERENCES problem_sets (id) ON DELETE CASCADE,
-    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+    FOREIGN KEY (course_id) REFERENCES courses (id) ON DELETE CASCADE ON UPDATE CASCADE,
+    FOREIGN KEY (problem_set_id) REFERENCES problem_sets (id) ON DELETE CASCADE ON UPDATE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE ON UPDATE CASCADE
 );
 CREATE UNIQUE INDEX assignments_unique_user ON assignments (user_id, lti_id);
 CREATE UNIQUE INDEX assignments_grade_id ON assignments (grade_id);
@@ -146,8 +146,8 @@ CREATE TABLE commits (
     created_at              datetime NOT NULL,
     updated_at              datetime NOT NULL,
 
-    FOREIGN KEY (assignment_id) REFERENCES assignments (id) ON DELETE CASCADE,
-    FOREIGN KEY (problem_id, step) REFERENCES problem_steps (problem_id, step) ON DELETE CASCADE
+    FOREIGN KEY (assignment_id) REFERENCES assignments (id) ON DELETE CASCADE ON UPDATE CASCADE,
+    FOREIGN KEY (problem_id, step) REFERENCES problem_steps (problem_id, step) ON DELETE CASCADE ON UPDATE CASCADE
 );
 CREATE UNIQUE INDEX commits_unique_assignment_problem_step ON commits (assignment_id, problem_id, step);
 
@@ -234,7 +234,7 @@ CREATE TABLE quizzes (
     created_at              datetime NOT NULL,
     updated_at              datetime NOT NULL,
 
-    FOREIGN KEY (assignment_id) REFERENCES assignments (id) ON DELETE CASCADE
+    FOREIGN KEY (assignment_id) REFERENCES assignments (id) ON DELETE CASCADE ON UPDATE CASCADE
 );
 
 CREATE TABLE questions (
@@ -250,7 +250,7 @@ CREATE TABLE questions (
     created_at              datetime NOT NULL,
     updated_at              datetime NOT NULL,
 
-    FOREIGN KEY (quiz_id) REFERENCES quizzes (id) ON DELETE CASCADE
+    FOREIGN KEY (quiz_id) REFERENCES quizzes (id) ON DELETE CASCADE ON UPDATE CASCADE
 );
 CREATE UNIQUE INDEX questions_quiz_id_index_number ON questions (quiz_id, question_number);
 
@@ -262,7 +262,7 @@ CREATE TABLE responses (
     created_at              datetime NOT NULL,
     updated_at              datetime NOT NULL,
 
-    FOREIGN KEY (assignment_id) REFERENCES assignments (id) ON DELETE CASCADE,
-    FOREIGN KEY (question_id) REFERENCES questions (id) ON DELETE CASCADE
+    FOREIGN KEY (assignment_id) REFERENCES assignments (id) ON DELETE CASCADE ON UPDATE CASCADE,
+    FOREIGN KEY (question_id) REFERENCES questions (id) ON DELETE CASCADE ON UPDATE CASCADE
 );
 CREATE UNIQUE INDEX responses_assignment_id_question_id ON responses (assignment_id, question_id);
