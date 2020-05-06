@@ -51,44 +51,24 @@ Installation
 All instructions here assume a Debian Buster server environment.
 
 
-### Install Go environment (all nodes)
+### Install prerequisites
 
-Start with a Go build environment with Go 1.8 or higher. Make sure
-your GOPATH is set correctly. I usually set GOPATH to match HOME.
+Install a few basic tools:
 
-Get the URL for the latest version of Go here:
-
-* https://golang.org/dl/
-
-Using that URL (this example assumes version 1.14.1), install Go
-using:
-
-    curl -s https://storage.googleapis.com/golang/go1.14.1.linux-amd64.tar.gz | sudo tar zxvf - -C /usr/local
-    cd /usr/local/bin
-    sudo ln -s ../go/bin/* ./
-
-If you are upgrading Go, first delete the old version (delete
-`/usr/local/go`) and skip the `sudo ln -s ../go/bin/* ./` part.
-
-Be sure to set your `GOPATH` variable. I add this line to
-`~/.profile`:
-
-    export GOPATH=$HOME
-
-Then log out and log back in so it will take effect.
+    sudo apt install golang git sqlite3
 
 
 ### Install CodeGrinder
 
 Fetch the CodeGrinder repository:
 
-    mkdir -p $GOPATH/src/github.com/russross
-    cd $GOPATH/src/github.com/russross
+    mkdir -p `go env GOPATH`/src/github.com/russross
+    cd `go env GOPATH`/src/github.com/russross
     git clone https://github.com/russross/codegrinder.git
 
 Build and install CodeGrinder. For a TA node, use:
 
-    $GOPATH/src/github.com/russross/codegrinder/all.sh
+    `go env GOPATH`/src/github.com/russross/codegrinder/all.sh
 
 This creates two executables for the local machine, `codegrinder`
 (the server) and `grind` (the command-line tool) and installs them
@@ -98,7 +78,7 @@ to download.
 
 For a daycare node that is not also a TA node, use:
 
-    $GOPATH/src/github.com/russross/codegrinder/build.sh
+    `go env GOPATH`/src/github.com/russross/codegrinder/build.sh
 
 This only builds and installs the server. Both of these scripts
 also give the `codegrinder` binary the capability to bind to
@@ -106,17 +86,12 @@ low-numbered ports, so CodeGrinder does not need any other special
 privileges to run. It should NOT be run as root.
 
 
-### Install database (TA node only)
-
-Install SQLite 3. Note that you only need this on the TA node:
-
-    sudo apt install sqlite3
-    cp $GOPATH/src/github.com/russross/setup/sqliterc $HOME/.sqliterc
+### Setup database (TA node only)
 
 Run the database setup script. Warning: this will delete an existing
 installation, so use this with caution.
 
-    $GOPATH/src/github.com/russross/codegrinder/setup/setup-database.sh
+    `go env GOPATH`/src/github.com/russross/codegrinder/setup/setup-database.sh
 
 
 ### Install Docker (daycare nodes only)
@@ -187,11 +162,11 @@ the config file.
 For daycare nodes, you must also build the Docker images that will
 host the student code:
 
-    make -C $GOPATH/src/github.com/russross/codegrinder/containers amd64
+    make -C `go env GOPATH`/src/github.com/russross/codegrinder/containers amd64
 
 Or if you are running on a Raspberry Pi and need the ARM64 images:
 
-    make -C $GOPATH/src/github.com/russross/codegrinder/containers arm64
+    make -C `go env GOPATH`/src/github.com/russross/codegrinder/containers arm64
 
 At this point, you should be able to run the server. To run it with
 only the TA service, use:
@@ -206,7 +181,7 @@ Leave it running in a terminal so you can watch the log output.
 
 For normal use, you will want systemd to manage it:
 
-    sudo cp $GOPATH/src/github.com/russross/codegrinder/setup/codegrinder.service /lib/systemd/system/
+    sudo cp `go env GOPATH`/src/github.com/russross/codegrinder/setup/codegrinder.service /lib/systemd/system/
 
 Then edit the file you have copied to customize it. In particular,
 set the options in the executable to run as -ta, -daycare, or both,
