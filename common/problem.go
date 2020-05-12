@@ -132,9 +132,9 @@ func (problem *Problem) Normalize(now time.Time, steps []*ProblemStep) error {
 			return err
 		}
 
-		// carry whitelist forward
 		step.Whitelist = make(map[string]bool)
 		if n > 0 {
+			// carry whitelist forward
 			for name := range steps[n-1].Whitelist {
 				step.Whitelist[name] = true
 			}

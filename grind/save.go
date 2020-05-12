@@ -113,12 +113,6 @@ func gatherStudent(now time.Time, startDir string) (*ProblemType, *Problem, *Ass
 	mustGetObject(fmt.Sprintf("/problems/%d/steps/%d", problem.ID, info.Step), nil, step)
 	for name, contents := range step.Files {
 		if filepath.Dir(filepath.FromSlash(name)) == "." {
-			// add to the whitelist in case it is a new file
-			if !info.Whitelist[name] {
-				info.Whitelist[name] = true
-				dotfileChanged = true
-			}
-
 			// in main directory, skip files that exist (but write files that are missing)
 			path := filepath.Join(problemDir, name)
 			if _, err := os.Stat(path); err == nil {
@@ -169,7 +163,7 @@ func gatherStudent(now time.Time, startDir string) (*ProblemType, *Problem, *Ass
 			}
 		}
 
-		if info.Whitelist[name] {
+		if step.Whitelist[name] {
 			contents, err := ioutil.ReadFile(path)
 			if err != nil {
 				return err
@@ -183,9 +177,9 @@ func gatherStudent(now time.Time, startDir string) (*ProblemType, *Problem, *Ass
 	if err != nil {
 		log.Fatalf("walk error: %v", err)
 	}
-	if len(files) != len(info.Whitelist) {
+	if len(files) != len(step.Whitelist) {
 		log.Printf("did not find all the expected files")
-		for name := range info.Whitelist {
+		for name := range step.Whitelist {
 			if _, ok := files[name]; !ok {
 				log.Printf("  %s not found", name)
 			}

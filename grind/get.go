@@ -118,27 +118,14 @@ func getAssignment(assignment *Assignment, rootDir string) string {
 		if getObject(fmt.Sprintf("/assignments/%d/problems/%d/commits/last", assignment.ID, problem.ID), nil, commit) {
 			info.ID = problem.ID
 			info.Step = commit.Step
-			info.Whitelist = make(map[string]bool)
-
-			// assume whatever was saved last time is an accurate whitelist
-			for name := range commit.Files {
-				info.Whitelist[name] = true
-			}
 		} else {
 			// if there is no commit for this problem, we're starting from step one
 			commit = nil
 			info.ID = problem.ID
 			info.Step = 1
-			info.Whitelist = make(map[string]bool)
 		}
 
 		mustGetObject(fmt.Sprintf("/problems/%d/steps/%d", problem.ID, info.Step), nil, step)
-		for name := range step.Files {
-			// starter files are added to the whitelist
-			if filepath.Dir(filepath.FromSlash(name)) == "." {
-				info.Whitelist[name] = true
-			}
-		}
 		infos[problem.Unique] = info
 		commits[problem.Unique] = commit
 		steps[problem.Unique] = step
@@ -312,11 +299,6 @@ func nextStep(dir string, info *ProblemInfo, problem *Problem, commit *Commit) b
 		}
 		if err := ioutil.WriteFile(path, contents, 0644); err != nil {
 			log.Fatalf("error saving file %s: %v", path, err)
-		}
-
-		// add the file to the whitelist as well if it is in the root directory
-		if filepath.Dir(filepath.FromSlash(name)) == "." {
-			info.Whitelist[name] = true
 		}
 	}
 	if len(newStep.Instructions) > 0 {

@@ -40,9 +40,8 @@ type DotFileInfo struct {
 }
 
 type ProblemInfo struct {
-	ID        int64           `json:"id"`
-	Step      int64           `json:"step"`
-	Whitelist map[string]bool `json:"whitelist"`
+	ID   int64 `json:"id"`
+	Step int64 `json:"step"`
 }
 
 func main() {
