@@ -9,7 +9,6 @@ import (
 	"io"
 	"log"
 	"net/url"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -217,20 +216,11 @@ func (commit *Commit) FilterIncoming(whitelist map[string]bool) {
 	clean := make(map[string][]byte)
 	for name, contents := range commit.Files {
 		// normalize line endings
-		if whitelist == nil {
-			// only keep files not in a subdirectory
-			if len(filepath.SplitList(name)) == 1 {
-				clean[name] = fixLineEndings(contents)
-			} else {
-				log.Printf("filtered out %s, which is in a subdirectory", name)
-			}
+		// only keep files on the whitelist
+		if whitelist[name] {
+			clean[name] = fixLineEndings(contents)
 		} else {
-			// only keep files on the whitelist
-			if whitelist[name] {
-				clean[name] = fixLineEndings(contents)
-			} else {
-				log.Printf("filtered out %s, which is not on the problem step whitelist", name)
-			}
+			log.Printf("filtered out %s, which is not on the problem step whitelist", name)
 		}
 	}
 	commit.Files = clean

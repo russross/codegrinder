@@ -18,9 +18,9 @@ import (
 func CommandGet(cmd *cobra.Command, args []string) {
 	mustLoadConfig(cmd)
 
-	rootDir := os.Getenv("HOME")
-	if rootDir == "" {
-		rootDir = os.Getenv("USERPROFILE")
+	rootDir, err := os.UserHomeDir()
+	if err != nil {
+		log.Fatalf("unable to find home directory: %v", err)
 	}
 
 	if len(args) == 0 {
@@ -234,7 +234,7 @@ func getAssignment(assignment *Assignment, rootDir string) string {
 		for name, contents := range problemType.Files {
 			path := filepath.Join(target, filepath.FromSlash(name))
 			//log.Printf("writing problem type file %s", name)
-			if dir := filepath.Dir(path); dir != "" {
+			if dir := filepath.Dir(path); dir != "." {
 				if err := os.MkdirAll(dir, 0755); err != nil {
 					log.Fatalf("error create directory %s: %v", dir, err)
 				}

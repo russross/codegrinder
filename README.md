@@ -55,7 +55,7 @@ All instructions here assume a Debian Buster server environment.
 
 Install a few basic tools:
 
-    sudo apt install golang git sqlite3
+    sudo apt install build-essential golang git sqlite3
 
 
 ### Install CodeGrinder

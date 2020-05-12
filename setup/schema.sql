@@ -44,6 +44,7 @@ CREATE TABLE problem_steps (
     instructions            text NOT NULL,
     weight                  real NOT NULL,
     files                   text NOT NULL,
+    whitelist               text NOT NULL,
 
     PRIMARY KEY (problem_id, step),
     FOREIGN KEY (problem_id) REFERENCES problems (id) ON DELETE CASCADE ON UPDATE CASCADE

@@ -8,5 +8,5 @@ go install github.com/russross/codegrinder/codegrinder &
 wait
 
 echo installing codegrinder server
-sudo mv $GOPATH/bin/codegrinder /usr/local/bin/
+sudo mv `go env GOPATH`/bin/codegrinder /usr/local/bin/
 sudo setcap cap_net_bind_service=+ep /usr/local/bin/codegrinder

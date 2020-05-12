@@ -321,7 +321,6 @@ func PostProblemBundleUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser
 	bundle.Hostname = host
 
 	// check the commits
-	whitelists := bundle.Problem.GetStepWhitelists(bundle.ProblemSteps)
 	bundle.CommitSignatures = nil
 
 	for n, commit := range bundle.Commits {
@@ -338,7 +337,7 @@ func PostProblemBundleUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser
 		commit.Score = 0.0
 		commit.CreatedAt = now
 		commit.UpdatedAt = now
-		if err := commit.Normalize(now, whitelists[n]); err != nil {
+		if err := commit.Normalize(now, bundle.ProblemSteps[n].Whitelist); err != nil {
 			loggedHTTPErrorf(w, http.StatusBadRequest, "commit %d: %v", n, err)
 			return
 		}

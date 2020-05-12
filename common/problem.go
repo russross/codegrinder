@@ -70,6 +70,7 @@ type ProblemStep struct {
 	Instructions string            `json:"instructions" meddler:"instructions"`
 	Weight       float64           `json:"weight" meddler:"weight"`
 	Files        map[string][]byte `json:"files" meddler:"files,json"`
+	Whitelist    map[string]bool   `json:"whitelist" meddler:"whitelist,json"`
 }
 
 type ProblemSet struct {
@@ -122,13 +123,28 @@ func (problem *Problem) Normalize(now time.Time, steps []*ProblemStep) error {
 	}
 	sort.Strings(problem.Tags)
 
-	// check steps
+	// check steps and build whitelists
 	if len(steps) == 0 {
 		return fmt.Errorf("problem must have at least one step")
 	}
 	for n, step := range steps {
 		if err := step.Normalize(int64(n) + 1); err != nil {
 			return err
+		}
+
+		// carry whitelist forward
+		step.Whitelist = make(map[string]bool)
+		if n > 0 {
+			for name := range steps[n-1].Whitelist {
+				step.Whitelist[name] = true
+			}
+		}
+
+		// add files defined in the root directory of the problem step
+		for name := range step.Files {
+			if filepath.Dir(filepath.FromSlash(name)) == "." {
+				step.Whitelist[name] = true
+			}
 		}
 	}
 
@@ -191,6 +207,9 @@ func (problem *Problem) ComputeSignature(secret string, steps []*ProblemStep) st
 		for name, contents := range step.Files {
 			v.Add(fmt.Sprintf("step-%d-file-%s", step.Step, name), string(contents))
 		}
+		for name := range step.Whitelist {
+			v.Add(fmt.Sprintf("step-%d-whitelist-%s", step.Step, name), "true")
+		}
 	}
 
 	// compute signature
@@ -243,31 +262,6 @@ func (step *ProblemStep) Normalize(n int64) error {
 	}
 	step.Files = clean
 	return nil
-}
-
-func (problem *Problem) GetStepWhitelists(steps []*ProblemStep) []map[string]bool {
-	var lists []map[string]bool
-
-	// compute the white list of commit files for each step
-	for _, step := range steps {
-		// carry everything forward
-		m := make(map[string]bool)
-		if len(lists) > 0 {
-			for name := range lists[len(lists)-1] {
-				m[name] = true
-			}
-		}
-
-		// add files defined in the root directory of the problem step
-		for name := range step.Files {
-			if filepath.Dir(filepath.FromSlash(name)) == "." {
-				m[name] = true
-			}
-		}
-		lists = append(lists, m)
-	}
-
-	return lists
 }
 
 // buildInstructions builds the instructions for a problem step as a single

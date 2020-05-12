@@ -353,24 +353,21 @@ func doRequest(path string, params url.Values, method string, upload interface{}
 }
 
 func hasInstructorFile() bool {
-	home := os.Getenv("HOME")
-	if home == "" {
-		home = os.Getenv("USERPROFILE")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Fatalf("unable to find home directory: %v", err)
 	}
-	if home == "" {
-		log.Fatalf("Unable to locate home directory, giving up\n")
-	}
-	_, err := os.Stat(filepath.Join(home, instructorFile))
+	_, err = os.Stat(filepath.Join(home, instructorFile))
 	return err == nil
 }
 
 func mustLoadConfig(cmd *cobra.Command) {
-	home := os.Getenv("HOME")
-	if home == "" {
-		home = os.Getenv("USERPROFILE")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Fatalf("unable to find home directory: %v", err)
 	}
 	if home == "" {
-		log.Fatalf("Unable to locate home directory, giving up\n")
+		log.Fatalf("home directory is not setn")
 	}
 	configFile := filepath.Join(home, perUserDotFile)
 
@@ -388,12 +385,12 @@ func mustLoadConfig(cmd *cobra.Command) {
 }
 
 func mustWriteConfig() {
-	home := os.Getenv("HOME")
-	if home == "" {
-		home = os.Getenv("USERPROFILE")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Fatalf("unable to find home directory: %v", err)
 	}
 	if home == "" {
-		log.Fatalf("Unable to locate home directory, giving up\n")
+		log.Fatalf("home directory is not setn")
 	}
 	configFile := filepath.Join(home, perUserDotFile)
 

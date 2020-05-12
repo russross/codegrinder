@@ -667,8 +667,7 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 		loggedHTTPErrorf(w, http.StatusBadRequest, "commit has step number %d, but there are only %d steps in the problem", commit.Step, len(steps))
 		return
 	}
-	whitelists := problem.GetStepWhitelists(steps)
-	if err := commit.Normalize(now, whitelists[commit.Step-1]); err != nil {
+	if err := commit.Normalize(now, steps[commit.Step-1].Whitelist); err != nil {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "%v", err)
 		return
 	}
