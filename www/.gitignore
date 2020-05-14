@@ -1,4 +1,4 @@
-grind.arm
+grind.linux_amd64
+grind.linux_arm
+grind.darwin_amd64
 grind.exe
-grind.linux
-grind.macos

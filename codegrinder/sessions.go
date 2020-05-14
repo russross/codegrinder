@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/gorilla/securecookie"
-	. "github.com/russross/codegrinder/common"
+	. "github.com/russross/codegrinder/types"
 )
 
 type CookieSession struct {

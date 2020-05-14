@@ -18,7 +18,7 @@ import (
 	"github.com/fsouza/go-dockerclient"
 	"github.com/go-martini/martini"
 	"github.com/gorilla/websocket"
-	. "github.com/russross/codegrinder/common"
+	. "github.com/russross/codegrinder/types"
 )
 
 var dockerClient *docker.Client
@@ -531,7 +531,7 @@ func NewNanny(problemType *ProblemType, problem *Problem, interactive bool, args
 			"KILL",
 			"SYS_CHROOT",
 		},
-		PidsLimit: limits.maxThreads,
+		PidsLimit: &limits.maxThreads,
 		Ulimits: []docker.ULimit{
 			{Name: "core", Soft: 0, Hard: 0},
 			{Name: "cpu", Soft: limits.maxCPU, Hard: limits.maxCPU},
@@ -546,7 +546,11 @@ func NewNanny(problemType *ProblemType, problem *Problem, interactive bool, args
 
 	log.Printf("new container %s with cpu=%d, fd=%d, file=%d, mem=%d, threads=%d",
 		name, limits.maxCPU, limits.maxFD, limits.maxFileSize, limits.maxMemory, limits.maxThreads)
-	container, err := dockerClient.CreateContainer(docker.CreateContainerOptions{Name: name, Config: config, HostConfig: hostConfig})
+	container, err := dockerClient.CreateContainer(docker.CreateContainerOptions{
+		Name: name,
+		Config: config,
+		HostConfig: hostConfig,
+	})
 	if err != nil {
 		if err == docker.ErrContainerAlreadyExists {
 			// container already exists with that name--try killing it

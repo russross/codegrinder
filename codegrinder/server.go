@@ -31,7 +31,7 @@ import (
 	mgzip "github.com/martini-contrib/gzip"
 	"github.com/martini-contrib/render"
 	_ "github.com/mattn/go-sqlite3"
-	. "github.com/russross/codegrinder/common"
+	. "github.com/russross/codegrinder/types"
 	"github.com/russross/meddler"
 	"golang.org/x/crypto/acme/autocert"
 )

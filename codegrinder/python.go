@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	. "github.com/russross/codegrinder/common"
+	. "github.com/russross/codegrinder/types"
 )
 
 func init() {

@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"time"
 
-	. "github.com/russross/codegrinder/common"
+	. "github.com/russross/codegrinder/types"
 	"github.com/spf13/cobra"
 )
 

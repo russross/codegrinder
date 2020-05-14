@@ -48,7 +48,8 @@ This repository currently hosts two tools:
 Installation
 ============
 
-All instructions here assume a Debian Buster server environment.
+All instructions here assume a Debian Buster or Ubuntu Server 20.04
+server environment.
 
 
 ### Install prerequisites
@@ -62,23 +63,21 @@ Install a few basic tools:
 
 Fetch the CodeGrinder repository:
 
-    mkdir -p `go env GOPATH`/src/github.com/russross
-    cd `go env GOPATH`/src/github.com/russross
+    cd
     git clone https://github.com/russross/codegrinder.git
 
 Build and install CodeGrinder. For a TA node, use:
 
-    `go env GOPATH`/src/github.com/russross/codegrinder/all.sh
+    ~/codegrinder/all.sh
 
-This creates two executables for the local machine, `codegrinder`
-(the server) and `grind` (the command-line tool) and installs them
-both in `/usr/local/bin`. It also builds the `grind` tool for
-several architectures and puts them in the `www` directory for users
-to download.
+This builds `codegrinder` (the server) and installs it in
+`/usr/local/bin`. It also builds the `grind` tool for several
+architectures and puts them in the `www` directory for users to
+download.
 
 For a daycare node that is not also a TA node, use:
 
-    `go env GOPATH`/src/github.com/russross/codegrinder/build.sh
+    ~/codegrinder/build.sh
 
 This only builds and installs the server. Both of these scripts
 also give the `codegrinder` binary the capability to bind to
@@ -91,7 +90,7 @@ privileges to run. It should NOT be run as root.
 Run the database setup script. Warning: this will delete an existing
 installation, so use this with caution.
 
-    `go env GOPATH`/src/github.com/russross/codegrinder/setup/setup-database.sh
+    ~/codegrinder/setup/setup-database.sh
 
 
 ### Install Docker (daycare nodes only)
@@ -100,7 +99,8 @@ Install and configure Docker, and add your CodeGrinder user to the
 `docker` group so it can manage containers without being root. Note
 that you only need this on daycare nodes:
 
-* https://docs.docker.com/engine/installation/linux/debian/
+    sudo apt install docker.io
+    sudo usermod -aG docker $USER
 
 
 ### Configure CodeGrinder
@@ -125,8 +125,8 @@ For the node running the TA role, you should add these keys:
 
         "ltiSecret": "",
         "sessionSecret": "",
-        "wwwDir": "/home/username/src/github.com/russross/codegrinder/www",
-        "filesDir": "/home/username/src/github.com/russross/codegrinder/files",
+        "wwwDir": "/home/username/codegrinder/www",
+        "filesDir": "/home/username/codegrinder/files",
 
 and for nodes running the daycare role, you should add these keys:
 
@@ -162,11 +162,11 @@ the config file.
 For daycare nodes, you must also build the Docker images that will
 host the student code:
 
-    make -C `go env GOPATH`/src/github.com/russross/codegrinder/containers amd64
+    make -C ~/codegrinder/containers amd64
 
 Or if you are running on a Raspberry Pi and need the ARM64 images:
 
-    make -C `go env GOPATH`/src/github.com/russross/codegrinder/containers arm64
+    make -C ~/codegrinder/containers arm64
 
 At this point, you should be able to run the server. To run it with
 only the TA service, use:
@@ -181,12 +181,12 @@ Leave it running in a terminal so you can watch the log output.
 
 For normal use, you will want systemd to manage it:
 
-    sudo cp `go env GOPATH`/src/github.com/russross/codegrinder/setup/codegrinder.service /lib/systemd/system/
+    sudo cp ~/codegrinder/setup/codegrinder.service /lib/systemd/system/
 
 Then edit the file you have copied to customize it. In particular,
 set the options in the executable to run as -ta, -daycare, or both,
 and in the dependencies section comment out the docker dependency
-if this is not a daycare role.
+if this is not a daycare node.
 
 To start it, use:
 

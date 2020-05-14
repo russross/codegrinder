@@ -16,7 +16,7 @@ import (
 
 	"github.com/go-martini/martini"
 	"github.com/martini-contrib/render"
-	. "github.com/russross/codegrinder/common"
+	. "github.com/russross/codegrinder/types"
 	"github.com/russross/meddler"
 )
 

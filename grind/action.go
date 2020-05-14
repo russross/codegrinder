@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	. "github.com/russross/codegrinder/common"
+	. "github.com/russross/codegrinder/types"
 	"github.com/russross/codegrinder/term"
 	"github.com/russross/codegrinder/tty"
 	"github.com/spf13/cobra"

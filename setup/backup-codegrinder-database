@@ -5,7 +5,7 @@ set -e
 DIR=/home/russ/backup
 DAY=`date '+%Y-%m-%d'`
 MONTH=`date '+%Y-%m'`
-SOURCE=/home/russ/src/github.com/russross/codegrinder/db/codegrinder.db
+SOURCE=/home/russ/codegrinder/db/codegrinder.db
 DBFILE=database_$DAY.db
 
 /usr/bin/sudo -u russ /usr/bin/sqlite3 $SOURCE "vacuum;"
