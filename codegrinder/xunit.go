@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/xml"
 	"fmt"
-	"io"
 	"regexp"
 	"time"
 )
@@ -67,11 +66,11 @@ type XUnitSkipped struct {
 	Body    string `xml:",chardata"`
 }
 
-func runAndParseXUnit(n *Nanny, cmd []string, stdin io.Reader) {
+func runAndParseXUnit(n *Nanny, cmd []string) {
 	filename := "test_detail.xml"
 
 	// run tests with XML output
-	_, _, _, status, err := n.Exec(cmd, stdin, false)
+	_, _, _, status, err := n.Exec(cmd, nil, false)
 	if err != nil {
 		n.ReportCard.LogAndFailf("Error running unit tests: %v", err)
 		return
@@ -199,11 +198,11 @@ type CheckXMLTest struct {
 	Message     string  `xml:"message"`
 }
 
-func runAndParseCheckXML(n *Nanny, cmd []string, stdin io.Reader) {
+func runAndParseCheckXML(n *Nanny, cmd []string) {
 	filename := "test_detail.xml"
 
 	// run tests with XML output
-	_, _, _, status, err := n.Exec(cmd, stdin, false)
+	_, _, _, status, err := n.Exec(cmd, nil, false)
 	if err != nil {
 		n.ReportCard.LogAndFailf("Error running unit tests: %v", err)
 		return

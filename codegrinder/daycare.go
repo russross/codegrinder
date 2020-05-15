@@ -392,10 +392,10 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	cmd := []string{"make", action.Action}
 	switch {
 	case action.Parser == "xunit":
-		runAndParseXUnit(n, cmd, stdin)
+		runAndParseXUnit(n, cmd)
 
 	case action.Parser == "check":
-		runAndParseCheckXML(n, cmd, stdin)
+		runAndParseCheckXML(n, cmd)
 
 	case action.Parser != "":
 		n.ReportCard.LogAndFailf("unknown parser %q for problem type %s action %s",
@@ -403,7 +403,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		return
 
 	default:
-		_, _, _, status, err := n.Exec(cmd, stdin, action.Interactive)
+		_, _, _, status, err := n.Exec(cmd, stdin, true)
 		if err != nil {
 			n.ReportCard.LogAndFailf("%q exec error: %v", strings.Join(cmd, " "), err)
 		}
