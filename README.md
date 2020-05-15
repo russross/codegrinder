@@ -65,10 +65,13 @@ Fetch the CodeGrinder repository:
 
     cd
     git clone https://github.com/russross/codegrinder.git
+    cd ~/codegrinder
+
+The rest of these instructions assume you are in the project root
+directory.
 
 Build and install CodeGrinder. For a TA node, use:
 
-    cd ~/codegrinder
     ./all.sh
 
 This builds `codegrinder` (the server) and installs it in
@@ -78,7 +81,6 @@ download.
 
 For a daycare node that is not also a TA node, use:
 
-    cd ~/codegrinder
     ./build.sh
 
 This only builds and installs the server. Both of these scripts
@@ -92,7 +94,7 @@ privileges to run. It should NOT be run as root.
 Run the database setup script. Warning: this will delete an existing
 installation, so use this with caution.
 
-    ~/codegrinder/setup/setup-database.sh
+    ./setup/setup-database.sh
 
 
 ### Install Docker (daycare nodes only)
@@ -119,9 +121,11 @@ the following:
 
     {
         "hostname": "your.domain.name",
-        "daycareSecret": "",
-        "letsEncryptEmail": "yourname@domain.com"
+        "daycareSecret": ""
     }
+
+Put in your domain name to use when registering TLS certificates
+with LetsEncrypt.
 
 For the node running the TA role, you should add these keys:
 
@@ -136,11 +140,12 @@ and for nodes running the daycare role, you should add these keys:
         "capacity": 1,
         "problemTypes": [
             "python3unittest"
-        ],
+        ]
 
-Put in your domain name and the contact email to use when
-registering TLS certificates with LetsEncrypt. For the secrets,
-generate each one using:
+making sure to list all of the problem types this daycare will
+process.
+
+For the secrets, generate each one using:
 
     head -c 32 /dev/urandom | base64
 
@@ -164,11 +169,11 @@ the config file.
 For daycare nodes, you must also build the Docker images that will
 host the student code:
 
-    make -C ~/codegrinder/containers amd64
+    make -C ./containers amd64
 
 Or if you are running on a Raspberry Pi and need the ARM64 images:
 
-    make -C ~/codegrinder/containers arm64
+    make -C ./containers arm64
 
 At this point, you should be able to run the server. To run it with
 only the TA service, use:
@@ -183,7 +188,7 @@ Leave it running in a terminal so you can watch the log output.
 
 For normal use, you will want systemd to manage it:
 
-    sudo cp ~/codegrinder/setup/codegrinder.service /lib/systemd/system/
+    sudo cp ./setup/codegrinder.service /lib/systemd/system/
 
 Then edit the file you have copied to customize it. In particular,
 set the options in the executable to run as -ta, -daycare, or both,
@@ -228,7 +233,7 @@ on the use case. Please contact me if you wish to discuss this.
 
 
 CodeGrinder programming exercise system
-Copyright © 2016–2017  Russ Ross
+Copyright © 2016–2020  Russ Ross
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU Affero General Public License as
