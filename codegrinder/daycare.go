@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fsouza/go-dockerclient"
+	docker "github.com/fsouza/go-dockerclient"
 	"github.com/go-martini/martini"
 	"github.com/gorilla/websocket"
 	. "github.com/russross/codegrinder/types"
@@ -240,13 +240,6 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		files[name] = contents
 	}
 
-	// fill in the handler
-	if pt := problemTypeHandlers[problemType.Name]; pt != nil {
-		if handler := pt[action.Action]; handler != nil {
-			action.Handler = handler
-		}
-	}
-
 	// launch a nanny process
 	nannyName := fmt.Sprintf("nanny-%d", req.CommitBundle.UserID)
 	log.Printf("launching container for %s", nannyName)
@@ -390,13 +383,36 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		return
 	}
 
-	// run the problem-type specific handler
-	handler, ok := action.Handler.(nannyHandler)
-	if ok {
-		handler(n, args, problem.Options, files, rw)
-	} else {
-		logAndTransmitErrorf("handler for action %s is of wrong type", commit.Action)
+	// run the action
+	log.Printf("%s: %s", action.ProblemType, action.Message)
+	var stdin io.Reader
+	if action.Interactive {
+		stdin = rw
 	}
+	cmd := []string{"make", action.Action}
+	switch {
+	case action.Parser == "xunit":
+		runAndParseXUnit(n, cmd, stdin)
+
+	case action.Parser == "check":
+		runAndParseCheckXML(n, cmd, stdin)
+
+	case action.Parser != "":
+		n.ReportCard.LogAndFailf("unknown parser %q for problem type %s action %s",
+			action.Parser, action.ProblemType, action.Action)
+		return
+
+	default:
+		_, _, _, status, err := n.Exec(cmd, stdin, action.Interactive)
+		if err != nil {
+			n.ReportCard.LogAndFailf("%q exec error: %v", strings.Join(cmd, " "), err)
+		}
+		if status != 0 {
+			err := fmt.Errorf("%q failed with exit status %d", strings.Join(cmd, " "), status)
+			n.ReportCard.LogAndFailf("%v", err)
+		}
+	}
+
 	commit.ReportCard = n.ReportCard
 
 	// download any files?
@@ -465,8 +481,6 @@ type Nanny struct {
 	Closed     bool
 	Files      map[string][]byte
 }
-
-type nannyHandler func(nanny *Nanny, args, options []string, files map[string][]byte, stdin io.Reader)
 
 var getContainerIDRE = regexp.MustCompile(`The name .* is already in use by container (.*)\. You have to delete \(or rename\) that container to be able to reuse that name`)
 
@@ -547,8 +561,8 @@ func NewNanny(problemType *ProblemType, problem *Problem, interactive bool, args
 	log.Printf("new container %s with cpu=%d, fd=%d, file=%d, mem=%d, threads=%d",
 		name, limits.maxCPU, limits.maxFD, limits.maxFileSize, limits.maxMemory, limits.maxThreads)
 	container, err := dockerClient.CreateContainer(docker.CreateContainerOptions{
-		Name: name,
-		Config: config,
+		Name:       name,
+		Config:     config,
 		HostConfig: hostConfig,
 	})
 	if err != nil {
@@ -890,20 +904,6 @@ func (n *Nanny) Exec(cmd []string, stdin io.Reader, useTTY bool) (stdout, stderr
 	}
 
 	return &out.stdout, &out.stderr, &out.script, inspect.ExitCode, nil
-}
-
-func (n *Nanny) ExecSimple(cmd []string, stdin io.Reader, useTTY bool) error {
-	_, _, _, status, err := n.Exec(cmd, stdin, useTTY)
-	if err != nil {
-		n.ReportCard.LogAndFailf("%s exec error: %v", cmd[0], err)
-		return err
-	}
-	if status != 0 {
-		err := fmt.Errorf("%s failed with exit status %d", cmd[0], status)
-		n.ReportCard.LogAndFailf("%v", err)
-		return err
-	}
-	return nil
 }
 
 var uidsInUse map[int64]bool = make(map[int64]bool)

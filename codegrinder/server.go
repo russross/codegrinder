@@ -25,7 +25,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fsouza/go-dockerclient"
+	docker "github.com/fsouza/go-dockerclient"
 	"github.com/go-martini/martini"
 	"github.com/martini-contrib/binding"
 	mgzip "github.com/martini-contrib/gzip"
@@ -63,8 +63,6 @@ var Config struct {
 	SQLite3Path      string      `json:"sqlite3Path"`     // path to the sqlite database file
 	SessionsExpire   []time.Time `json:"sessionsExpire"`  // times/dates when sessions should expire (year is ignored)
 }
-
-var problemTypeHandlers = make(map[string]map[string]nannyHandler)
 
 const daycareRegistrationInterval = 10 * time.Second
 

@@ -67,7 +67,9 @@ type XUnitSkipped struct {
 	Body    string `xml:",chardata"`
 }
 
-func runAndParseXUnit(n *Nanny, cmd []string, stdin io.Reader, filename string) {
+func runAndParseXUnit(n *Nanny, cmd []string, stdin io.Reader) {
+	filename := "test_detail.xml"
+
 	// run tests with XML output
 	_, _, _, status, err := n.Exec(cmd, stdin, false)
 	if err != nil {
@@ -197,7 +199,9 @@ type CheckXMLTest struct {
 	Message     string  `xml:"message"`
 }
 
-func runAndParseCheckXML(n *Nanny, cmd []string, stdin io.Reader, filename string) {
+func runAndParseCheckXML(n *Nanny, cmd []string, stdin io.Reader) {
+	filename := "test_detail.xml"
+
 	// run tests with XML output
 	_, _, _, status, err := n.Exec(cmd, stdin, false)
 	if err != nil {

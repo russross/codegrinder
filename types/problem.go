@@ -30,22 +30,22 @@ type ProblemType struct {
 	Actions map[string]*ProblemTypeAction `json:"actions" meddler:"-"`
 }
 
-// ProblemTypeAction defines the label, button, UI classes, and handler for a
+// ProblemTypeAction defines the labels, parser, interactivity, and handler for a
 // single problem type action.
 type ProblemTypeAction struct {
-	ProblemType string      `json:"problemType" meddler:"problem_type"`
-	Action      string      `json:"action,omitempty" meddler:"action"`
-	Button      string      `json:"button,omitempty" meddler:"button"`
-	Message     string      `json:"message,omitempty" meddler:"message"`
-	Interactive bool        `json:"interactive,omitempty" meddler:"interactive"`
-	MaxCPU      int64       `json:"maxCPU" meddler:"max_cpu"`
-	MaxSession  int64       `json:"maxSession" meddler:"max_session"`
-	MaxTimeout  int64       `json:"maxTimeout" meddler:"max_timeout"`
-	MaxFD       int64       `json:"maxFD" meddler:"max_fd"`
-	MaxFileSize int64       `json:"maxFileSize" meddler:"max_file_size"`
-	MaxMemory   int64       `json:"maxMemory" meddler:"max_memory"`
-	MaxThreads  int64       `json:"maxThreads" meddler:"max_threads"`
-	Handler     interface{} `json:"-" meddler:"-"`
+	ProblemType string `json:"problemType" meddler:"problem_type"`
+	Action      string `json:"action,omitempty" meddler:"action"`
+	Parser      string `json:"parser,omitempty" meddler:"parser,zeroisnull"`
+	Message     string `json:"message,omitempty" meddler:"message"`
+	Interactive bool   `json:"interactive,omitempty" meddler:"interactive"`
+
+	MaxCPU      int64 `json:"maxCPU" meddler:"max_cpu"`
+	MaxSession  int64 `json:"maxSession" meddler:"max_session"`
+	MaxTimeout  int64 `json:"maxTimeout" meddler:"max_timeout"`
+	MaxFD       int64 `json:"maxFD" meddler:"max_fd"`
+	MaxFileSize int64 `json:"maxFileSize" meddler:"max_file_size"`
+	MaxMemory   int64 `json:"maxMemory" meddler:"max_memory"`
+	MaxThreads  int64 `json:"maxThreads" meddler:"max_threads"`
 }
 
 type Problem struct {
@@ -169,7 +169,7 @@ func (problemType *ProblemType) ComputeSignature(secret string) string {
 		v.Add(fmt.Sprintf("file-%s", name), string(contents))
 	}
 	for name, action := range problemType.Actions {
-		v.Add(fmt.Sprintf("action-%s-button", name), action.Button)
+		v.Add(fmt.Sprintf("action-%s-parser", name), action.Parser)
 		v.Add(fmt.Sprintf("action-%s-message", name), action.Message)
 		v.Add(fmt.Sprintf("action-%s-interactive", name), strconv.FormatBool(action.Interactive))
 		v.Add(fmt.Sprintf("action-%s-max-cpu", name), strconv.FormatInt(action.MaxCPU, 10))

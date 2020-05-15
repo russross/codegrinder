@@ -57,7 +57,7 @@ func getProblemType(tx *sql.Tx, name string) (*ProblemType, error) {
 	}
 
 	// gather files
-	files := make(map[string][]byte)
+	problemType.Files = make(map[string][]byte)
 	dir := filepath.Join(Config.FilesDir, name)
 	dirInfo, err := os.Lstat(dir)
 	if err == nil && dirInfo.IsDir() {
@@ -77,7 +77,7 @@ func getProblemType(tx *sql.Tx, name string) (*ProblemType, error) {
 			if err != nil {
 				return err
 			}
-			files[relpath] = raw
+			problemType.Files[relpath] = raw
 
 			return nil
 		})
@@ -86,20 +86,14 @@ func getProblemType(tx *sql.Tx, name string) (*ProblemType, error) {
 		}
 	}
 
-	problemType.Files = files
-	problemType.Actions = make(map[string]*ProblemTypeAction)
-
 	problemTypeActions := []*ProblemTypeAction{}
 	err = meddler.QueryAll(tx, &problemTypeActions, `SELECT * FROM problem_type_actions WHERE problem_type = ?`, name)
 	if err != nil {
 		return nil, err
 	}
-	handlers := problemTypeHandlers[name]
-	if handlers == nil {
-		handlers = make(map[string]nannyHandler)
-	}
+
+	problemType.Actions = make(map[string]*ProblemTypeAction)
 	for _, elt := range problemTypeActions {
-		elt.Handler = handlers[elt.Action]
 		problemType.Actions[elt.Action] = elt
 	}
 

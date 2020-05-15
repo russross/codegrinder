@@ -8,9 +8,10 @@ CREATE TABLE problem_types (
 CREATE TABLE problem_type_actions (
     problem_type            text NOT NULL,
     action                  text NOT NULL,
-    button                  text NOT NULL,
+    parser                  text CHECK(parser IS NULL OR parser IN ('xunit', 'check')),
     message                 text NOT NULL,
     interactive             boolean NOT NULL,
+
     max_cpu                 integer NOT NULL,
     max_session             integer NOT NULL,
     max_timeout             integer NOT NULL,

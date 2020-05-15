@@ -68,7 +68,8 @@ Fetch the CodeGrinder repository:
 
 Build and install CodeGrinder. For a TA node, use:
 
-    ~/codegrinder/all.sh
+    cd ~/codegrinder
+    ./all.sh
 
 This builds `codegrinder` (the server) and installs it in
 `/usr/local/bin`. It also builds the `grind` tool for several
@@ -77,7 +78,8 @@ download.
 
 For a daycare node that is not also a TA node, use:
 
-    ~/codegrinder/build.sh
+    cd ~/codegrinder
+    ./build.sh
 
 This only builds and installs the server. Both of these scripts
 also give the `codegrinder` binary the capability to bind to
