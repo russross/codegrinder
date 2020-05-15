@@ -121,7 +121,7 @@ the following:
 
     {
         "hostname": "your.domain.name",
-        "daycareSecret": ""
+        "daycareSecret": "",
     }
 
 Put in your domain name to use when registering TLS certificates
@@ -140,10 +140,13 @@ and for nodes running the daycare role, you should add these keys:
         "capacity": 1,
         "problemTypes": [
             "python3unittest"
-        ]
+        ],
 
 making sure to list all of the problem types this daycare will
 process.
+
+Note that this is a JSON file, so every entry should have a trailing
+comma except for the last one, which must *not* end with a comma.
 
 For the secrets, generate each one using:
 
