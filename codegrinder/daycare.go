@@ -558,6 +558,7 @@ func NewNanny(problemType *ProblemType, problem *Problem, interactive bool, args
 		},
 		Tmpfs: map[string]string{
 			"/home/student": fmt.Sprintf("rw,exec,nosuid,nodev,size=%dk,uid=%d,gid=%d", disk/1024, uid, uid),
+			"/tmp":          fmt.Sprintf("rw,exec,nosuid,nodev,size=%dk,uid=%d,gid=%d", disk/1024, uid, uid),
 		},
 		ReadonlyRootfs: true,
 	}
