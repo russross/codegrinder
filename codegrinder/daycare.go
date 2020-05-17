@@ -556,6 +556,10 @@ func NewNanny(problemType *ProblemType, problem *Problem, interactive bool, args
 			{Name: "nproc", Soft: limits.maxThreads, Hard: limits.maxThreads},
 			//{Name: "stack", Soft: mem, Hard: mem},
 		},
+		Tmpfs: map[string]string{
+			"/home/student": fmt.Sprintf("rw,exec,nosuid,nodev,size=%dk,uid=%d,gid=%d", disk/1024, uid, uid),
+		},
+		ReadonlyRootfs: true,
 	}
 
 	log.Printf("new container %s with cpu=%d, fd=%d, file=%d, mem=%d, threads=%d",
@@ -700,17 +704,38 @@ func (n *Nanny) PutFiles(files map[string][]byte, mode int64) error {
 		return err
 	}
 
-	// upload the archive
-	err := dockerClient.UploadToContainer(n.Container.ID, docker.UploadToContainerOptions{
-		InputStream:          buf,
-		Path:                 "/home/student",
-		NoOverwriteDirNonDir: true,
+	// exec tar in the container
+	exec, err := dockerClient.CreateExec(docker.CreateExecOptions{
+		AttachStdin:  true,
+		AttachStdout: true,
+		AttachStderr: true,
+		Tty:          false,
+		Cmd:          []string{"/bin/tar", "xf", "-", "-C", "/home/student"},
+		Container:    n.Container.ID,
+		User:         uidgid(n.UID),
 	})
-
 	if err != nil {
-		log.Printf("unloading files to container: %v", err)
+		log.Printf("creating tar command to upload files: %v", err)
 		return err
 	}
+	out := new(bytes.Buffer)
+	err = dockerClient.StartExec(exec.ID, docker.StartExecOptions{
+		Detach:       false,
+		Tty:          false,
+		InputStream:  buf,
+		OutputStream: out,
+		ErrorStream:  out,
+		RawTerminal:  false,
+	})
+	if err != nil {
+		log.Printf("running tar command to upload files: %v", err)
+		return err
+	}
+	if out.Len() != 0 {
+		log.Printf("tar output: %q", out.String())
+		return fmt.Errorf("tar gave non-empty output when extracting files into container")
+	}
+
 	return nil
 }
 
@@ -732,21 +757,42 @@ func (n *Nanny) GetFiles(filenames []string) (map[string][]byte, error) {
 			return nil, nil
 		}
 
-		n.Files = make(map[string][]byte)
-
-		// download the entire student directory
-		buf := new(bytes.Buffer)
-		err := dockerClient.DownloadFromContainer(n.Container.ID, docker.DownloadFromContainerOptions{
-			OutputStream: buf,
-			Path:         "/home/student/.",
+		// exec tar in the container
+		exec, err := dockerClient.CreateExec(docker.CreateExecOptions{
+			AttachStdin:  false,
+			AttachStdout: true,
+			AttachStderr: true,
+			Tty:          false,
+			Cmd:          []string{"/bin/tar", "cf", "-", "-C", "/home/student", "."},
+			Container:    n.Container.ID,
+			User:         uidgid(n.UID),
 		})
 		if err != nil {
-			log.Printf("failed to download tar file from container: %v", err)
+			log.Printf("createing tar command to download files: %v", err)
+			return nil, err
+		}
+		tarFile := new(bytes.Buffer)
+		tarErr := new(bytes.Buffer)
+		err = dockerClient.StartExec(exec.ID, docker.StartExecOptions{
+			Detach:       false,
+			Tty:          false,
+			InputStream:  nil,
+			OutputStream: tarFile,
+			ErrorStream:  tarErr,
+			RawTerminal:  false,
+		})
+		if err != nil {
+			log.Printf("running tar command to download files: %v", err)
+			return nil, err
+		}
+		if tarErr.Len() != 0 {
+			log.Printf("tar gave non-empty error output when gathering files from container: %q", tarErr.String())
 			return nil, err
 		}
 
 		// extract the files
-		reader := tar.NewReader(bytes.NewReader(buf.Bytes()))
+		n.Files = make(map[string][]byte)
+		reader := tar.NewReader(bytes.NewReader(tarFile.Bytes()))
 		for {
 			header, err := reader.Next()
 			if err == io.EOF {
