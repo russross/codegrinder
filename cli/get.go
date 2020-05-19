@@ -198,7 +198,7 @@ func getAssignment(assignment *Assignment, rootDir string) string {
 		if commit != nil {
 			if commit.UpdatedAt.After(mostRecentTime) {
 				// when an instructor is downloading a student assignment,
-				// change to the dir for the problem with the most recent commit
+				// change to the directory for the problem with the most recent commit
 				mostRecentTime = commit.UpdatedAt
 				changeTo = target
 			}
@@ -221,9 +221,9 @@ func getAssignment(assignment *Assignment, rootDir string) string {
 		for name, contents := range problemType.Files {
 			path := filepath.Join(target, filepath.FromSlash(name))
 			//log.Printf("writing problem type file %s", name)
-			if dir := filepath.Dir(path); dir != "." {
-				if err := os.MkdirAll(dir, 0755); err != nil {
-					log.Fatalf("error create directory %s: %v", dir, err)
+			if directory := filepath.Dir(path); directory != "." {
+				if err := os.MkdirAll(directory, 0755); err != nil {
+					log.Fatalf("error create directory %s: %v", directory, err)
 				}
 			}
 			if _, err := os.Lstat(path); err == nil {
@@ -243,7 +243,7 @@ func getAssignment(assignment *Assignment, rootDir string) string {
 	return changeTo
 }
 
-func nextStep(dir string, info *ProblemInfo, problem *Problem, commit *Commit) bool {
+func nextStep(directory string, info *ProblemInfo, problem *Problem, commit *Commit) bool {
 	log.Printf("step %d passed", commit.Step)
 
 	// advance to the next step
@@ -257,17 +257,8 @@ func nextStep(dir string, info *ProblemInfo, problem *Problem, commit *Commit) b
 
 	// delete all the files from the old step
 	if len(oldStep.Instructions) > 0 {
-		// TODO: temporary while index.html moves to doc dir
-		name := "index.html"
-		path := filepath.Join(dir, name)
-		if _, err := os.Stat(path); err == nil {
-			//log.Printf("deleting %s from old step", name)
-			if err := os.Remove(path); err != nil {
-				log.Fatalf("error deleting %s: %v", name, err)
-			}
-		}
-		name = filepath.Join("doc", "index.html")
-		path = filepath.Join(dir, name)
+		name := filepath.Join("doc", "index.html")
+		path := filepath.Join(directory, name)
 		if _, err := os.Stat(path); err == nil {
 			//log.Printf("deleting %s from old step", name)
 			if err := os.Remove(path); err != nil {
@@ -279,7 +270,7 @@ func nextStep(dir string, info *ProblemInfo, problem *Problem, commit *Commit) b
 		if filepath.Dir(filepath.FromSlash(name)) == "." {
 			continue
 		}
-		path := filepath.Join(dir, filepath.FromSlash(name))
+		path := filepath.Join(directory, filepath.FromSlash(name))
 		//log.Printf("deleting %s from old step", path)
 		if err := os.Remove(path); err != nil {
 			log.Fatalf("error deleting %s: %v", path, err)
@@ -292,7 +283,7 @@ func nextStep(dir string, info *ProblemInfo, problem *Problem, commit *Commit) b
 
 	// write files from new step and update the whitelist
 	for name, contents := range newStep.Files {
-		path := filepath.Join(dir, filepath.FromSlash(name))
+		path := filepath.Join(directory, filepath.FromSlash(name))
 		//log.Printf("writing %s from new step", path)
 		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 			log.Fatalf("error creating directory %s: %v", filepath.Dir(path), err)
@@ -303,7 +294,7 @@ func nextStep(dir string, info *ProblemInfo, problem *Problem, commit *Commit) b
 	}
 	if len(newStep.Instructions) > 0 {
 		name := filepath.Join("doc", "index.html")
-		path := filepath.Join(dir, name)
+		path := filepath.Join(directory, name)
 		//log.Printf("writing %s from new step", name)
 		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 			log.Fatalf("error creating directory %s: %v", filepath.Dir(path), err)

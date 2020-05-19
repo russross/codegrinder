@@ -8,7 +8,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	. "github.com/russross/codegrinder/types"
@@ -128,54 +127,14 @@ func gatherStudent(now time.Time, startDir string) (*ProblemType, *Problem, *Ass
 
 	// gather the commit files from the file system
 	files := make(map[string][]byte)
-	blacklist := []string{"~", ".swp", ".o", ".pyc", ".out", ".DS_Store"}
-	err := filepath.Walk(problemDir, func(path string, stat os.FileInfo, err error) error {
-		// skip errors, directories, non-regular files
+	for name := range step.Whitelist {
+		path := filepath.Join(problemDir, name)
+		contents, err := ioutil.ReadFile(path)
 		if err != nil {
-			return err
+			// the error will be reported below as a missing file
+			continue
 		}
-		if path == problemDir {
-			// descend into the main directory
-			return nil
-		}
-		if stat.IsDir() {
-			return filepath.SkipDir
-		}
-		if !stat.Mode().IsRegular() {
-			return nil
-		}
-		name := filepath.Base(path)
-
-		// skip our config file
-		if name == perProblemSetDotFile {
-			return nil
-		}
-
-		// skip files from the problem type
-		if _, exists := problemType.Files[name]; exists {
-			return nil
-		}
-
-		// silently skip some blacklisted file suffixes
-		for _, suffix := range blacklist {
-			if strings.HasSuffix(name, suffix) {
-				return nil
-			}
-		}
-
-		if step.Whitelist[name] {
-			contents, err := ioutil.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			files[name] = contents
-		} else {
-			//log.Printf("skipping %q which is not distributed with the problem", name)
-		}
-		return nil
-	})
-	if err != nil {
-		log.Fatalf("walk error: %v", err)
+		files[name] = contents
 	}
 	if len(files) != len(step.Whitelist) {
 		log.Printf("did not find all the expected files")
@@ -206,32 +165,31 @@ func findDotFile(startDir string) (dotfile *DotFileInfo, problemSetDir, problemD
 	problemSetDir, problemDir = startDir, ""
 	for {
 		path := filepath.Join(problemSetDir, perProblemSetDotFile)
-		if _, err := os.Stat(path); err != nil {
-			if os.IsNotExist(err) {
-				if !abs {
-					abs = true
-					path, err := filepath.Abs(problemSetDir)
-					if err != nil {
-						log.Fatalf("error finding absolute path of %s: %v", problemSetDir, err)
-					}
-					problemSetDir = path
-				}
-
-				// try moving up a directory
-				problemDir = problemSetDir
-				problemSetDir = filepath.Dir(problemSetDir)
-				if problemSetDir == problemDir {
-					log.Printf("unable to find %s in %s or an ancestor directory", perProblemSetDotFile, startDir)
-					log.Printf("   you must run this in a problem directory")
-					log.Fatalf("   or supply the directory name as an argument")
-				}
-				// log.Printf("could not find %s in %s, trying %s", perProblemSetDotFile, problemDir, problemSetDir)
-				continue
-			}
-
+		_, err := os.Stat(path)
+		if err == nil {
+			break
+		}
+		if !os.IsNotExist(err) {
 			log.Fatalf("error searching for %s in %s: %v", perProblemSetDotFile, problemSetDir, err)
 		}
-		break
+		if !abs {
+			abs = true
+			path, err := filepath.Abs(problemSetDir)
+			if err != nil {
+				log.Fatalf("error finding absolute path of %s: %v", problemSetDir, err)
+			}
+			problemSetDir = path
+		}
+
+		// try moving up a directory
+		problemDir = problemSetDir
+		problemSetDir = filepath.Dir(problemSetDir)
+		if problemSetDir == problemDir {
+			log.Printf("unable to find %s in %s or an ancestor directory", perProblemSetDotFile, startDir)
+			log.Printf("   you must run this in a problem directory")
+			log.Fatalf("   or supply the directory name as an argument")
+		}
+		// log.Printf("could not find %s in %s, trying %s", perProblemSetDotFile, problemDir, problemSetDir)
 	}
 
 	// read the .grind file

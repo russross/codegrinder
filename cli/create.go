@@ -165,29 +165,29 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 
 func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) (*ProblemBundle, string, int) {
 	// find the absolute directory so we can walk up the tree if needed
-	dir, err := filepath.Abs(".")
+	directory, err := filepath.Abs(".")
 	if err != nil {
 		log.Fatalf("error finding directory: %v", err)
 	}
 
 	// find the problem.cfg file
-	stepDir, stepDirN := dir, 0
+	stepDir, stepDirN := directory, 0
 	for {
-		path := filepath.Join(dir, ProblemConfigName)
+		path := filepath.Join(directory, ProblemConfigName)
 		if _, err := os.Stat(path); err != nil {
 			if os.IsNotExist(err) {
 				// try moving up a directory
-				stepDir = dir
-				dir = filepath.Dir(dir)
-				if dir == stepDir {
+				stepDir = directory
+				directory = filepath.Dir(directory)
+				if directory == stepDir {
 					log.Printf("unable to find %s in current directory or one of its ancestors", ProblemConfigName)
 					log.Fatalf("   you must run this in a problem directory")
 				}
-				// log.Printf("could not find %s in %s, trying %s", ProblemConfigName, old, dir)
+				// log.Printf("could not find %s in %s, trying %s", ProblemConfigName, old, directory)
 				continue
 			}
 
-			log.Fatalf("error searching for %s in %s: %v", ProblemConfigName, dir, err)
+			log.Fatalf("error searching for %s in %s: %v", ProblemConfigName, directory, err)
 		}
 		break
 	}
@@ -206,7 +206,7 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 			Weight float64
 		}
 	}{}
-	configPath := filepath.Join(dir, ProblemConfigName)
+	configPath := filepath.Join(directory, ProblemConfigName)
 	fmt.Printf("reading %s\n", configPath)
 	if err = gcfg.ReadFileInto(&cfg, configPath); err != nil {
 		log.Fatalf("failed to parse %s: %v", configPath, err)
@@ -222,7 +222,7 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 	}
 
 	// require the directory name to match the unique ID
-	if filepath.Base(dir) != problem.Unique {
+	if filepath.Base(directory) != problem.Unique {
 		log.Fatalf("the problem directory name must match the problem unique ID")
 	}
 
@@ -305,7 +305,7 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 
 		// read files
 		starter, solution, root := make(map[string][]byte), make(map[string][]byte), make(map[string][]byte)
-		stepdir := filepath.Join(dir, strconv.FormatInt(i, 10))
+		stepdir := filepath.Join(directory, strconv.FormatInt(i, 10))
 		err := filepath.Walk(stepdir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				log.Fatalf("walk error for %s: %v", path, err)
@@ -422,7 +422,7 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 
 	if action != "" {
 		// figure out the step number
-		if stepDir == dir {
+		if stepDir == directory {
 			log.Fatalf("to run an action, you must be in the step directory")
 		}
 		stepName := filepath.Base(stepDir)

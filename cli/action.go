@@ -75,7 +75,7 @@ func CommandAction(cmd *cobra.Command, args []string) {
 	runInteractiveSession(signed, nil, ".")
 }
 
-func runInteractiveSession(bundle *CommitBundle, args []string, dir string) {
+func runInteractiveSession(bundle *CommitBundle, args []string, directory string) {
 	stdin, stdout, stderr := term.StdStreams()
 
 	// initialize the input terminal
@@ -207,7 +207,7 @@ func runInteractiveSession(bundle *CommitBundle, args []string, dir string) {
 				if reply.Event.Files != nil {
 					for name, contents := range reply.Event.Files {
 						log.Printf("downloading file %s\r", name)
-						if err := ioutil.WriteFile(filepath.Join(dir, filepath.FromSlash(name)), contents, 0644); err != nil {
+						if err := ioutil.WriteFile(filepath.Join(directory, filepath.FromSlash(name)), contents, 0644); err != nil {
 							log.Printf("error saving file: %v\r", err)
 						}
 					}
