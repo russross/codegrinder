@@ -58,7 +58,7 @@ func getProblemType(tx *sql.Tx, name string) (*ProblemType, error) {
 
 	// gather files
 	problemType.Files = make(map[string][]byte)
-	dir := filepath.Join(Config.FilesDir, name)
+	dir := filepath.Join(root, "files", name)
 	dirInfo, err := os.Lstat(dir)
 	if err == nil && dirInfo.IsDir() {
 		err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {

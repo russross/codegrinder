@@ -5,7 +5,7 @@ PRAGMA case_sensitive_like = OFF;
 PRAGMA foreign_keys = ON;
 PRAGMA journal_mode = WAL;
 PRAGMA locking_mode = NORMAL;
-PRAGMA synchronous = NORMAL;
+PRAGMA synchronous = FULL;
 .headers on
 .mode column
 .output stdout

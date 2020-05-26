@@ -2,12 +2,15 @@
 
 set -e
 
-DIR=/home/russ/backup
+if [ -z "$CODEGRINDERROOT"]; then
+    CODEGRINDERROOT="$HOME"/codegrinder
+fi
+
+BACKUPDIR="$HOME"/backup
 DAY=`date '+%Y-%m-%d'`
-MONTH=`date '+%Y-%m'`
-SOURCE=/home/russ/codegrinder/db/codegrinder.db
+SOURCE="$CODEGRINDERROOT"/db/codegrinder.db
 DBFILE=database_$DAY.db
 
-/usr/bin/sudo -u russ /usr/bin/sqlite3 $SOURCE "vacuum;"
-/usr/bin/sudo -u russ /usr/bin/sqlite3 $SOURCE ".backup $DIR/$DBFILE"
-/usr/bin/sudo -u russ /usr/bin/xz $DIR/$DBFILE
+/usr/bin/sqlite3 $SOURCE vacuum
+/usr/bin/sqlite3 $SOURCE .backup\ "$BACKUPDIR"/$DBFILE
+/usr/bin/xz "$BACKUPDIR"/$DBFILE

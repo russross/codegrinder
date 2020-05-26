@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
@@ -47,31 +48,38 @@ var Config struct {
 	// ta-only required parameters
 	LTISecret     string `json:"ltiSecret"`     // LTI authentication shared secret. Must match that given to Canvas course: `head -c 32 /dev/urandom | base64`
 	SessionSecret string `json:"sessionSecret"` // Random string used to sign cookie sessions: `head -c 32 /dev/urandom | base64`
-	WWWDir        string `json:"wwwDir"`        // Full path of directory holding static files to serve: "/home/foo/codegrinder/www"
-	FilesDir      string `json:"filesDir"`      // Full path of directory holding problem-type files: "/home/foo/codegrinder/files"
 
 	// daycare-only required parameters
 	TAHostname   string   `json:"taHostname"`   // Hostname for the TA: "your.host.goes.here". Defaults to Hostname
 	Capacity     int      `json:"capacity"`     // Relative capacity of this daycare for containers: 1
-	ProblemTypes []string `json:"problemTypes"` // List of problem types this daycare host supports: [ "python27unittest", "gotest", ... ]
+	ProblemTypes []string `json:"problemTypes"` // List of problem types this daycare host supports: [ "python3unittest", "gotest", ... ]
 
 	// ta-only parameters where the default is usually sufficient
 	ToolName         string      `json:"toolName"`        // LTI human readable name: default "CodeGrinder"
 	ToolID           string      `json:"toolID"`          // LTI unique ID: default "codegrinder"
 	ToolDescription  string      `json:"toolDescription"` // LTI description: default "Programming exercises with grading"
-	LetsEncryptCache string      `json:"letsEncryptDir"`  // Full path of LetsEncrypt cache file: default "/etc/codegrinder/letsencrypt"
-	SQLite3Path      string      `json:"sqlite3Path"`     // path to the sqlite database file
+	LetsEncryptCache string      `json:"letsEncryptDir"`  // Full path of LetsEncrypt cache file: default "$CODEGRINDERROOT/letsencrypt"
+	SQLite3Path      string      `json:"sqlite3Path"`     // path to the sqlite database file: default "$CODEGRINDERROOT/db/codegrinder.db"
 	SessionsExpire   []time.Time `json:"sessionsExpire"`  // times/dates when sessions should expire (year is ignored)
 }
+var root string
 
 const daycareRegistrationInterval = 10 * time.Second
 
 func main() {
 	log.SetFlags(log.Lshortfile)
 
+	root = os.Getenv("CODEGRINDERROOT")
+	if root == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			log.Fatalf("CODEGRINDERROOT is not set, and cannot find user's home directory")
+		}
+		root = filepath.Join(home, "codegrinder")
+	}
+	log.Printf("CODEGRINDERROOT set to %s", root)
+
 	// parse command line
-	var configFile string
-	flag.StringVar(&configFile, "config", "/etc/codegrinder/config.json", "Path to the config file")
 	var ta, daycare bool
 	flag.BoolVar(&ta, "ta", false, "Serve the TA role")
 	flag.BoolVar(&daycare, "daycare", false, "Serve the daycare role")
@@ -85,14 +93,15 @@ func main() {
 	Config.ToolName = "CodeGrinder"
 	Config.ToolID = "codegrinder"
 	Config.ToolDescription = "Programming exercises with grading"
-	Config.LetsEncryptCache = "/etc/codegrinder/letsencrypt"
-	Config.SQLite3Path = ""
+	Config.LetsEncryptCache = filepath.Join(root, "letsencrypt")
+	Config.SQLite3Path = filepath.Join(root, "db", "codegrinder.db")
 	Config.SessionsExpire = []time.Time{
-		time.Date(2017, 1, 1, 0, 0, 0, 0, time.Local),
-		time.Date(2017, 7, 1, 0, 0, 0, 0, time.Local),
+		time.Date(2020, 1, 1, 0, 0, 0, 0, time.Local),
+		time.Date(2020, 7, 1, 0, 0, 0, 0, time.Local),
 	}
 
 	// load config file
+	configFile := filepath.Join(root, "config.json")
 	if raw, err := ioutil.ReadFile(configFile); err != nil {
 		log.Fatalf("failed to load config file %q: %v", configFile, err)
 	} else if err := json.Unmarshal(raw, &Config); err != nil {
@@ -242,18 +251,12 @@ func main() {
 		if Config.SessionSecret == "" {
 			log.Fatalf("cannot run TA role with no sessionSecret in the config file")
 		}
-		if Config.WWWDir == "" {
-			log.Fatalf("cannot run TA role with no wwwDir in the config file")
-		}
-		if Config.FilesDir == "" {
-			log.Fatalf("cannot run TA role with no filesDir in the config file")
-		}
 		if Config.SQLite3Path == "" {
 			log.Fatalf("cannot run TA role with no sqlite3Path in the config file")
 		}
 
 		m.Use(mgzip.All())
-		m.Use(martini.Static(Config.WWWDir, martini.StaticOptions{SkipLogging: true}))
+		m.Use(martini.Static(filepath.Join(root, "www"), martini.StaticOptions{SkipLogging: true}))
 		m.Use(render.Renderer(render.Options{IndentJSON: false}))
 
 		// set up the database
@@ -552,7 +555,7 @@ func setupDB(path string) *sql.DB {
 			"&" + "_journal_mode=WAL" +
 			"&" + "_locking_mode=NORMAL" +
 			"&" + "mode=rw" +
-			"&" + "_synchronous=NORMAL"
+			"&" + "_synchronous=FULL"
 	db, err := sql.Open("sqlite3", path+options)
 	if err != nil {
 		log.Fatalf("error opening database: %v", err)

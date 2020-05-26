@@ -1,5 +1,6 @@
 [Unit]
-Description=CodeGrinder main service
+Description=CodeGrinder server
+Requires=docker.service
 After=docker.service
 
 [Service]

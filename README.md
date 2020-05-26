@@ -58,6 +58,8 @@ Install a few basic tools:
 
     sudo apt install build-essential golang git sqlite3
 
+The host must have port 443 open to serve the API over https, and it
+must also have port 80 open so LetsEncrypt can issue certificates.
 
 ### Install CodeGrinder
 
@@ -65,7 +67,7 @@ Fetch the CodeGrinder repository:
 
     cd
     git clone https://github.com/russross/codegrinder.git
-    cd ~/codegrinder
+    cd codegrinder
 
 The rest of these instructions assume you are in the project root
 directory.
@@ -109,13 +111,8 @@ that you only need this on daycare nodes:
 
 ### Configure CodeGrinder
 
-Next, configure CodeGrinder:
-
-    sudo mkdir /etc/codegrinder
-    sudo chown $USER.$USER /etc/codegrinder
-
-Create a config file that is customized for your installation. It
-should be saved as `/etc/codegrinder/config.json` and its contents
+Next, create a config file that is customized for your installation.
+It should be saved as `~/codegrinder/config.json` and its contents
 depend on what role this node will take. All nodes should contain
 the following:
 
@@ -131,8 +128,6 @@ For the node running the TA role, you should add these keys:
 
         "ltiSecret": "",
         "sessionSecret": "",
-        "wwwDir": "/home/username/codegrinder/www",
-        "filesDir": "/home/username/codegrinder/files",
 
 and for nodes running the daycare role, you should add these keys:
 
@@ -156,12 +151,6 @@ Run that command once and copy the output into the `ltiSecret`, then
 run it again and copy the output to `sessionSecret`, then run it a
 third time and copy the output to `daycareSecret`. The
 `daycareSecret` value must be shared by all nodes.
-
-The `wwwDir` field is where the client code resides. There is a
-placeholder page that helps students set up the `grind` tool in the
-`www` directory of the distribution, so I suggest pointing it there.
-The CodeGrinder TA server will serve any static files in the given
-directory.
 
 Note that there are other settings available that allow you to
 customize the installation, but they are not documented here. If you
@@ -223,8 +212,20 @@ To follow the logs in real time:
     sudo journalctl -xfu codegrinder
 
 There is also a script in the setup directory to take daily backups
-of the database. Copy it to `/etc/cron.daily/` and edit it so that
-it uses the correct user and directories.
+of the database. Create a directory to hold the daily backups and
+set the script to run daily using cron:
+
+    mkdir -p ~/backup
+    crontab -e
+
+Then add a line like this to the end of the file:
+
+    7 5 * * * /home/russ/codegrinder/setup/backup-codegrinder-database
+
+with the directory set to match your installation location. This
+will create a daily snapshot of the database in ~/backup. You should
+probably copy this to a different machine on a regular basis and
+also clear out old backups periodically.
 
 
 License

@@ -1,8 +1,6 @@
 package main
 
 import (
-	"encoding/json"
-	"io/ioutil"
 	"log"
 	"os"
 	"time"
@@ -56,15 +54,8 @@ func CommandGrade(cmd *cobra.Command, args []string) {
 
 	if commit.ReportCard != nil && commit.ReportCard.Passed && commit.Score == 1.0 {
 		if nextStep(".", dotfile.Problems[problem.Unique], problem, commit) {
-			// save the updated dotfile with whitelist updates and new step number
-			contents, err := json.MarshalIndent(dotfile, "", "    ")
-			if err != nil {
-				log.Fatalf("JSON error encoding %s: %v", dotfile.Path, err)
-			}
-			contents = append(contents, '\n')
-			if err := ioutil.WriteFile(dotfile.Path, contents, 0644); err != nil {
-				log.Fatalf("error saving file %s: %v", dotfile.Path, err)
-			}
+			// save the updated dotfile with new step number
+			saveDotFile(dotfile)
 		}
 	} else {
 		// solution failed

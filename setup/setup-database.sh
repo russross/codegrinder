@@ -2,21 +2,24 @@
 
 set -e
 
-CGPATH="$HOME"/codegrinder
-DBFILE="$CGPATH"/db/codegrinder.db
+if [ -z "$CODEGRINDERROOT"]; then
+    CODEGRINDERROOT="$HOME"/codegrinder
+fi
+
+DBFILE="$CODEGRINDERROOT"/db/codegrinder.db
 
 if [ ! -f "$HOME"/.sqliterc ]; then
-    cp "$CGPATH"/setup/sqliterc "$HOME"/.sqliterc
+    cp "$CODEGRINDERROOT"/setup/sqliterc "$HOME"/.sqliterc
 fi
 
 echo Creating directory if needed
-mkdir -p "$CGPATH"/db
+mkdir -p "$CODEGRINDERROOT"/db
 
 echo Deleting old database if it exists
 rm -f "$DBFILE"
 
 echo Creating database tables
-sqlite3 "$DBFILE" < "$CGPATH"/setup/schema.sql
+sqlite3 "$DBFILE" < "$CODEGRINDERROOT"/setup/schema.sql
 
 echo Creating problem types
-sqlite3 "$DBFILE" < "$CGPATH"/setup/problemtypes.sql
+sqlite3 "$DBFILE" < "$CODEGRINDERROOT"/setup/problemtypes.sql
