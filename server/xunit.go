@@ -104,29 +104,30 @@ func parseXUnit(n *Nanny, contents []byte) {
 
 	results := new(XUnitProgram)
 	if err := xml.Unmarshal(contents, results); err != nil {
-		// try parsing as a list of testsuite entries
+		// try parsing as a list of testsuite into the outer container
 		results.Suites = nil
 		err := xml.Unmarshal(contents, &results.Suites)
 		if err != nil {
 			n.ReportCard.LogAndFailf("error parsing unit test results: %v", err)
 			return
 		}
+	}
 
-		results.Tests = 0
-		results.Failures = 0
-		results.Disabled = 0
-		results.Skipped = 0
-		results.Errors = 0
-		results.Time = 0
+	// build summary results
+	results.Tests = 0
+	results.Failures = 0
+	results.Disabled = 0
+	results.Skipped = 0
+	results.Errors = 0
+	results.Time = 0
 
-		for _, elt := range results.Suites {
-			results.Tests += elt.Tests
-			results.Failures += elt.Failures
-			results.Disabled += elt.Disabled
-			results.Skipped += elt.Skipped
-			results.Errors += elt.Errors
-			results.Time += elt.Time
-		}
+	for _, elt := range results.Suites {
+		results.Tests += elt.Tests
+		results.Failures += elt.Failures
+		results.Disabled += elt.Disabled
+		results.Skipped += elt.Skipped
+		results.Errors += elt.Errors
+		results.Time += elt.Time
 	}
 
 	// form a report card

@@ -1,5 +1,5 @@
 .SUFFIXES:
-.SUFFIXES: .py .pyc .xml
+.SUFFIXES: .py .xml
 
 PYTHONSOURCE := $(wildcard *.py)
 
@@ -46,8 +46,8 @@ stylefix:
 	autopep8 -vvaai $(PYTHONSOURCE)
 
 setup:
-	sudo apt install -y python3 make python-pip python3-six diffutils
-	sudo pip install autopep8
+	sudo apt install -y make python3 python3-pip python3-six diffutils
+	sudo pip3 install autopep8 unittest-xml-reporting
 
 clean:
-	rm -rf test_detail.xml $(PYTHONSOURCE:.py=.pyc) tests/*.pyc tests/*.actual __pycache__
+	rm -rf __pycache__ tests/__pycache__ tests/*.actual test_detail.xml

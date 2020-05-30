@@ -1,12 +1,12 @@
 .SUFFIXES:
-.SUFFIXES: .py .pyc .xml
+.SUFFIXES: .py .xml
 
 PYTHONSOURCE=$(wildcard *.py)
 
 # find the main source file
-py_count := $(shell ls | grep '\.py$$' | wc -l)
-main_py_count := $(shell ls | grep '^main\.py$$' | wc -l)
-def_main_count := $(shell grep -l '^def main\b' $(PYTHONSOURCE) | wc -l)
+py_count := $(shell ls | grep '\.py$$' | wc -l | tr -d ' ')
+main_py_count := $(shell ls | grep '^main\.py$$' | wc -l | tr -d ' ')
+def_main_count := $(shell grep -l '^def main\b' $(PYTHONSOURCE) | wc -l | tr -d ' ')
 
 ifeq ($(py_count), 1)
     PYTHONMAIN := $(shell ls *.py)
@@ -25,7 +25,7 @@ test:
 
 grade:
 	rm -f test_detail.xml
-	python3 -m xmlrunner discover -vs tests
+	python3 -m xmlrunner discover -vs tests --output-file test_detail.xml
 
 shell:
 	python3
@@ -43,8 +43,8 @@ stylefix:
 	autopep8 -vvaai $(PYTHONSOURCE)
 
 setup:
-	sudo apt-get install -y make python3.4 python-pip python3-six
-	sudo pip install autopep8
+	sudo apt install -y make python3 python3-pip python3-six diffutils
+	sudo pip3 install autopep8 unittest-xml-reporting
 
 clean:
-	rm -rf test_detail.xml $(PYTHONSOURCE:.py=.pyc) tests/*.pyc xmlrunner/__pycache__
+	rm -rf __pycache__ tests/__pycache__ tests/*.actual test_detail.xml

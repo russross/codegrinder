@@ -223,9 +223,9 @@ Then add a line like this to the end of the file:
     7 5 * * * /home/russ/codegrinder/setup/backup-codegrinder-database
 
 with the directory set to match your installation location. This
-will create a daily snapshot of the database in ~/backup. You should
-probably copy this to a different machine on a regular basis and
-also clear out old backups periodically.
+will create a daily snapshot of the database in `~/backup`. You
+should probably copy this to a different machine on a regular basis
+and also clear out old backups periodically.
 
 
 License
