@@ -1,4 +1,5 @@
-config.json
-letsencrypt
+backup
 db
+letsencrypt
+config.json
 *.swp

@@ -211,11 +211,11 @@ To follow the logs in real time:
 
     sudo journalctl -xfu codegrinder
 
-There is also a script in the setup directory to take daily backups
-of the database. Create a directory to hold the daily backups and
-set the script to run daily using cron:
+There is also a script in the setup directory to take daily backups of the
+database. It will keep seven days worth of backups, along with four weekly
+backups, twelve monthly backups, and a backup at the end of each semester.
+Set the script to run daily using cron:
 
-    mkdir -p ~/backup
     crontab -e
 
 Then add a line like this to the end of the file:
@@ -223,9 +223,10 @@ Then add a line like this to the end of the file:
     7 5 * * * /home/russ/codegrinder/setup/backup-codegrinder-database
 
 with the directory set to match your installation location. This
-will create a daily snapshot of the database in `~/backup`. You
-should probably copy this to a different machine on a regular basis
-and also clear out old backups periodically.
+will create a snapshots of the database in `~/codegrinder/backup`.
+I have a cron job on a different machine run a little while after
+the backup that uses `rsync` to clone the backup directory on that
+other machine.
 
 
 License

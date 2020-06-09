@@ -2,15 +2,48 @@
 
 set -e
 
-if [ -z "$CODEGRINDERROOT"]; then
+if [ -z "$CODEGRINDERROOT" ]; then
     CODEGRINDERROOT="$HOME"/codegrinder
 fi
 
-BACKUPDIR="$HOME"/backup
-DAY=`date '+%Y-%m-%d'`
-SOURCE="$CODEGRINDERROOT"/db/codegrinder.db
-DBFILE=database_$DAY.db
+BACKUPDIR="$CODEGRINDERROOT"/backup
 
-/usr/bin/sqlite3 $SOURCE vacuum
-/usr/bin/sqlite3 $SOURCE .backup\ "$BACKUPDIR"/$DBFILE
-/usr/bin/xz "$BACKUPDIR"/$DBFILE
+# make sure all the backup directories exist
+mkdir -p "$BACKUPDIR"
+mkdir -p "$BACKUPDIR/yearly"
+mkdir -p "$BACKUPDIR/monthly"
+mkdir -p "$BACKUPDIR/weekly"
+mkdir -p "$BACKUPDIR/daily"
+
+SOURCE="$CODEGRINDERROOT/db/codegrinder.db"
+DBFILE=codegrinder_`date '+%Y-%m-%d'`.db
+
+/usr/bin/sqlite3 "$SOURCE" vacuum 2> /dev/null
+/usr/bin/sqlite3 "$SOURCE" .backup\ "$BACKUPDIR/$DBFILE" 2> /dev/null
+/usr/bin/xz "$BACKUPDIR/$DBFILE"
+
+COMPRESSED="$BACKUPDIR/$DBFILE.xz"
+
+# keep a backup at the end of each semester: Dec 31, May 7, Jul 31
+DAY=`date '+%m-%d'`
+if [ "$DAY" = "12-31" ] || [ "$DAY" = "05-07" ] || [ "$DAY" = "07-31" ]; then
+    ln "$COMPRESSED" "$BACKUPDIR/yearly/"
+fi
+
+# keep a monthly backup going back 12 months
+if [ `date +%-d` -eq 1 ]; then
+    ln "$COMPRESSED" "$BACKUPDIR/monthly/"
+    rm -f `find "$BACKUPDIR/monthly/" -type f -name \*.db.xz | sort -r | tail -n +13`
+fi
+
+# keep a weekly backup going back 4 weeks
+if [ `date +%w` -eq 1 ] ; then
+    ln "$COMPRESSED" "$BACKUPDIR/weekly/"
+    rm -f `find "$BACKUPDIR/weekly/" -type f -name \*.db.xz | sort -r | tail -n +5`
+fi
+
+# keep a daily backup going back 7 days
+ln "$COMPRESSED" "$BACKUPDIR/daily/"
+rm -f `find "$BACKUPDIR/daily/" -type f -name \*.db.xz | sort -r | tail -n +8`
+
+rm "$COMPRESSED"
