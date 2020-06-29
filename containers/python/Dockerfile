@@ -1,4 +1,4 @@
-FROM debian:buster
+FROM arm64v8/debian:buster
 MAINTAINER russ@russross.com
 
 RUN apt update && apt upgrade -y
