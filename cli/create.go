@@ -277,17 +277,34 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 		log.Fatalf("error: server found multiple problems with matching unique ID %q", problem.Unique)
 	}
 
+	// for single-step problems, the step can be in the main directory with problem.cfg
+	single := false
+	if cfg.Step == nil || len(cfg.Step) == 0 {
+		single = true
+		info, err := os.Stat(filepath.Join(directory, "1"))
+		if err == nil && info.IsDir() {
+			log.Printf("%s is set up for a single-step problem with the step files in", ProblemConfigName)
+			log.Printf("  the same directory as %s, but there is also a directory named '1'", ProblemConfigName)
+			log.Printf("  Please add a [step \"1\"] entry to %s or move the step files", ProblemConfigName)
+			log.Fatalf("  into the main directory and delete the '1' directory")
+		}
+	}
+
 	// generate steps
 	whitelist := make(map[string]bool)
 	blacklist := []string{"~", ".swp", ".o", ".pyc", ".out", ".DS_Store"}
 	blacklistDir := []string{"__pycache__"}
-	for i := int64(1); cfg.Step[strconv.FormatInt(i, 10)] != nil; i++ {
+	for i := int64(1); single && i == 1 || cfg.Step[strconv.FormatInt(i, 10)] != nil; i++ {
 		log.Printf("gathering step %d", i)
-		s := cfg.Step[strconv.FormatInt(i, 10)]
+		note, weight := problem.Note, 1.0
+		if !single {
+			s := cfg.Step[strconv.FormatInt(i, 10)]
+			note, weight = s.Note, s.Weight
+		}
 		step := &ProblemStep{
 			Step:   i,
-			Note:   s.Note,
-			Weight: s.Weight,
+			Note:   note,
+			Weight: weight,
 			Files:  make(map[string][]byte),
 		}
 		commit := &Commit{
@@ -305,7 +322,10 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 
 		// read files
 		starter, solution, root := make(map[string][]byte), make(map[string][]byte), make(map[string][]byte)
-		stepdir := filepath.Join(directory, strconv.FormatInt(i, 10))
+		stepdir := directory
+		if !single {
+			stepdir = filepath.Join(directory, strconv.FormatInt(i, 10))
+		}
 		err := filepath.Walk(stepdir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				log.Fatalf("walk error for %s: %v", path, err)
@@ -322,6 +342,10 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 						return filepath.SkipDir
 					}
 				}
+				return nil
+			}
+			if single && relpath == ProblemConfigName {
+				// skip problem.cfg silently
 				return nil
 			}
 			if _, exists := problemType.Files[filepath.ToSlash(relpath)]; exists {
@@ -416,23 +440,27 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 		log.Printf("  found %d problem definition file%s and %d solution file%s", len(step.Files), plural(len(step.Files)), len(commit.Files), plural(len(commit.Files)))
 	}
 
-	if len(unsigned.ProblemSteps) != len(cfg.Step) {
+	if !single && len(unsigned.ProblemSteps) != len(cfg.Step) {
 		log.Fatalf("expected to find %d step%s, but only found %d", len(cfg.Step), plural(len(cfg.Step)), len(unsigned.ProblemSteps))
 	}
 
 	if action != "" {
-		// figure out the step number
-		if stepDir == directory {
-			log.Fatalf("to run an action, you must be in the step directory")
-		}
-		stepName := filepath.Base(stepDir)
-		stepN, err := strconv.Atoi(stepName)
-		if err != nil {
-			log.Fatalf("to run an action, you must be in the step directory, not %s", stepName)
-		}
-		stepDirN = stepN
-		if stepDirN < 1 {
-			log.Fatalf("step directory must be > 0, not %d", stepDirN)
+		if single {
+			stepDirN = 1
+		} else {
+			// figure out the step number
+			if stepDir == directory {
+				log.Fatalf("to run an action, you must be in the step directory")
+			}
+			stepName := filepath.Base(stepDir)
+			stepN, err := strconv.Atoi(stepName)
+			if err != nil {
+				log.Fatalf("to run an action, you must be in the step directory, not %s", stepName)
+			}
+			stepDirN = stepN
+			if stepDirN < 1 {
+				log.Fatalf("step directory must be > 0, not %d", stepDirN)
+			}
 		}
 
 		// if the user requested an interactive action, it must be valid for the problem type
