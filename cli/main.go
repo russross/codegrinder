@@ -177,10 +177,12 @@ func main() {
 		cmdGrind.AddCommand(cmdProblem)
 
 		cmdType := &cobra.Command{
-			Use:   "type <problem type>",
+			Use:   "type [<problem type>]",
 			Short: "download files (Makefile, etc.) for a problem type (authors only)",
 			Run:   CommandType,
 		}
+		cmdType.Flags().BoolP("remove", "r", false, "remove problem type files")
+		cmdType.Flags().BoolP("list", "l", false, "list known problem types and then quit")
 		cmdGrind.AddCommand(cmdType)
 
 		cmdExportQuizzes := &cobra.Command{

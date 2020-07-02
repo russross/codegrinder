@@ -20,6 +20,20 @@ import (
 
 const ProblemConfigName string = "problem.cfg"
 
+type ConfigFile struct {
+	Problem struct {
+		Unique string
+		Note   string
+		Type   string
+		Tag    []string
+		Option []string
+	}
+	Step map[string]*struct {
+		Note   string
+		Weight float64
+	}
+}
+
 func CommandCreate(cmd *cobra.Command, args []string) {
 	mustLoadConfig(cmd)
 	pset := ""
@@ -67,7 +81,7 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 
 	// run an interactive action for a single step?
 	if action != "" {
-		if step < 1 || stepDir == "" {
+		if step < 1 {
 			log.Fatalf("to use --action, you must run from within a step directory")
 		}
 		log.Printf("running interactive session for action %q on step %d", action, step)
@@ -163,49 +177,35 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 	}
 }
 
-func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) (*ProblemBundle, string, int) {
+func findProblemCfg(now time.Time, startDir string) (string, string, int, *Problem, []*ProblemStep, bool) {
 	// find the absolute directory so we can walk up the tree if needed
-	directory, err := filepath.Abs(".")
+	directory, err := filepath.Abs(startDir)
 	if err != nil {
 		log.Fatalf("error finding directory: %v", err)
 	}
 
 	// find the problem.cfg file
-	stepDir, stepDirN := directory, 0
+	stepDir, stepN := directory, 0
 	for {
 		path := filepath.Join(directory, ProblemConfigName)
-		if _, err := os.Stat(path); err != nil {
-			if os.IsNotExist(err) {
-				// try moving up a directory
-				stepDir = directory
-				directory = filepath.Dir(directory)
-				if directory == stepDir {
-					log.Printf("unable to find %s in current directory or one of its ancestors", ProblemConfigName)
-					log.Fatalf("   you must run this in a problem directory")
-				}
-				// log.Printf("could not find %s in %s, trying %s", ProblemConfigName, old, directory)
-				continue
-			}
-
+		_, err := os.Stat(path)
+		if err == nil {
+			break
+		}
+		if !os.IsNotExist(err) {
 			log.Fatalf("error searching for %s in %s: %v", ProblemConfigName, directory, err)
 		}
-		break
+
+		// try moving up a directory
+		stepDir = directory
+		directory = filepath.Dir(directory)
+		if directory == stepDir {
+			return "", "", 0, nil, nil, false
+		}
 	}
 
 	// parse problem.cfg to create the problem object
-	cfg := struct {
-		Problem struct {
-			Unique string
-			Note   string
-			Type   string
-			Tag    []string
-			Option []string
-		}
-		Step map[string]*struct {
-			Note   string
-			Weight float64
-		}
-	}{}
+	var cfg ConfigFile
 	configPath := filepath.Join(directory, ProblemConfigName)
 	fmt.Printf("reading %s\n", configPath)
 	if err = gcfg.ReadFileInto(&cfg, configPath); err != nil {
@@ -219,6 +219,61 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 		Options:     cfg.Problem.Option,
 		CreatedAt:   now,
 		UpdatedAt:   now,
+	}
+
+	// create skeleton steps
+	var steps []*ProblemStep
+	single := cfg.Step == nil || len(cfg.Step) == 0
+	if single {
+		steps = append(steps, &ProblemStep{
+			Step:   1,
+			Note:   problem.Note,
+			Weight: 1.0,
+			Files:  make(map[string][]byte),
+		})
+		stepN = 1
+	} else {
+		for i := int64(1); cfg.Step[strconv.FormatInt(i, 10)] != nil; i++ {
+			elt := cfg.Step[strconv.FormatInt(i, 10)]
+			step := &ProblemStep{
+				Step:   i,
+				Note:   elt.Note,
+				Weight: elt.Weight,
+				Files:  make(map[string][]byte),
+			}
+			steps = append(steps, step)
+		}
+		if len(steps) != len(cfg.Step) {
+			log.Fatalf("expected to find %d step%s, but only found %d", len(cfg.Step), plural(len(cfg.Step)), len(steps))
+		}
+		if stepDir != directory {
+			stepName := filepath.Base(stepDir)
+			n, err := strconv.Atoi(stepName)
+			if err == nil && n > 0 && n <= len(steps) {
+				stepN = n
+			}
+		}
+	}
+
+	return directory, stepDir, stepN, problem, steps, single
+}
+
+func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) (*ProblemBundle, string, int) {
+	directory, stepDir, stepN, problem, steps, single := findProblemCfg(now, startDir)
+	if problem == nil {
+		log.Printf("unable to find %s in current directory or one of its ancestors", ProblemConfigName)
+		log.Fatalf("   you must run this in a problem directory")
+	}
+
+	// for single-step problems, the step can be in the main directory with problem.cfg
+	if single {
+		info, err := os.Stat(filepath.Join(directory, "1"))
+		if err == nil && info.IsDir() {
+			log.Printf("%s is set up for a single-step problem with the step files in", ProblemConfigName)
+			log.Printf("  the same directory as %s, but there is also a directory named '1'", ProblemConfigName)
+			log.Printf("  Please add a [step \"1\"] entry to %s or move the step files", ProblemConfigName)
+			log.Fatalf("  into the main directory and delete the '1' directory")
+		}
 	}
 
 	// require the directory name to match the unique ID
@@ -277,36 +332,13 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 		log.Fatalf("error: server found multiple problems with matching unique ID %q", problem.Unique)
 	}
 
-	// for single-step problems, the step can be in the main directory with problem.cfg
-	single := false
-	if cfg.Step == nil || len(cfg.Step) == 0 {
-		single = true
-		info, err := os.Stat(filepath.Join(directory, "1"))
-		if err == nil && info.IsDir() {
-			log.Printf("%s is set up for a single-step problem with the step files in", ProblemConfigName)
-			log.Printf("  the same directory as %s, but there is also a directory named '1'", ProblemConfigName)
-			log.Printf("  Please add a [step \"1\"] entry to %s or move the step files", ProblemConfigName)
-			log.Fatalf("  into the main directory and delete the '1' directory")
-		}
-	}
-
 	// generate steps
 	whitelist := make(map[string]bool)
 	blacklist := []string{"~", ".swp", ".o", ".pyc", ".out", ".DS_Store"}
 	blacklistDir := []string{"__pycache__"}
-	for i := int64(1); single && i == 1 || cfg.Step[strconv.FormatInt(i, 10)] != nil; i++ {
+	for index, step := range steps {
+		i := int64(index + 1)
 		log.Printf("gathering step %d", i)
-		note, weight := problem.Note, 1.0
-		if !single {
-			s := cfg.Step[strconv.FormatInt(i, 10)]
-			note, weight = s.Note, s.Weight
-		}
-		step := &ProblemStep{
-			Step:   i,
-			Note:   note,
-			Weight: weight,
-			Files:  make(map[string][]byte),
-		}
 		commit := &Commit{
 			Step:      i,
 			Action:    "grade",
@@ -440,41 +472,19 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 		log.Printf("  found %d problem definition file%s and %d solution file%s", len(step.Files), plural(len(step.Files)), len(commit.Files), plural(len(commit.Files)))
 	}
 
-	if !single && len(unsigned.ProblemSteps) != len(cfg.Step) {
-		log.Fatalf("expected to find %d step%s, but only found %d", len(cfg.Step), plural(len(cfg.Step)), len(unsigned.ProblemSteps))
-	}
-
 	if action != "" {
-		if single {
-			stepDirN = 1
-		} else {
-			// figure out the step number
-			if stepDir == directory {
-				log.Fatalf("to run an action, you must be in the step directory")
-			}
-			stepName := filepath.Base(stepDir)
-			stepN, err := strconv.Atoi(stepName)
-			if err != nil {
-				log.Fatalf("to run an action, you must be in the step directory, not %s", stepName)
-			}
-			stepDirN = stepN
-			if stepDirN < 1 {
-				log.Fatalf("step directory must be > 0, not %d", stepDirN)
-			}
+		// must be in a valid step directory
+		if !single && (stepDir == directory  || stepN < 1) {
+			log.Fatalf("to run an action, you must be in a step directory")
 		}
 
 		// if the user requested an interactive action, it must be valid for the problem type
 		if _, exists := problemType.Actions[action]; !exists {
 			log.Fatalf("action %q does not exist for problem type %s", action, problemType.Name)
 		}
-
-		// make sure the user was in a directory for a valid step number
-		if stepDirN > len(unsigned.ProblemSteps) {
-			log.Fatalf("must run action from within a valid step directory, not %d", stepDirN)
-		}
 	}
 
-	return unsigned, stepDir, stepDirN
+	return unsigned, stepDir, stepN
 }
 
 func mustConfirmCommitBundle(bundle *CommitBundle, args []string) *CommitBundle {
