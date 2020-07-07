@@ -1,3 +1,7 @@
+'''Thonny plugin to integrate with CodeGrinder for coding practice'''
+
+__version__ = '2.5.0.dev1'
+
 import base64
 import collections
 import datetime
@@ -9,6 +13,7 @@ import os.path
 import pathlib
 import re
 import requests
+import semver
 import shlex
 import thonny
 import thonny.common
@@ -21,7 +26,6 @@ import websocket
 perUserDotFile = '.codegrinderrc'
 perProblemSetDotFile = '.grind'
 urlPrefix = '/v2'
-grindVersion = '2.5.0'
 
 Config = { 'host': '', 'cookie': 'codegrinder=not_logged_in' }
 
@@ -73,18 +77,15 @@ def mustWriteConfig():
 def checkVersion():
     global failedState
     server = mustGetNamedTuple('/version', None)
-    grindCurrent = tuple( int(s) for s in grindVersion.split('.') )
-    grindRequired = tuple( int(s) for s in server.grindVersionRequired.split('.') )
-    if grindRequired > grindCurrent:
+    if semver.compare(server.grindVersionRequired, __version__) > 0:
         failedState = True
         tkinter.messagebox.showerror('CodeGrinder upgrade required',
-            f'This is version {grindVersion} of the CodeGrinder plugin,\n' +
+            f'This is version {__version__} of the CodeGrinder plugin,\n' +
             'but the server requires {server.grindVersionRequired} or higher.\n\n' +
             'You must upgrade to continue')
-    grindRecommended = tuple( int(s) for s in server.grindVersionRecommended.split('.') )
-    if grindRecommended > grindCurrent:
+    if semver.compare(server.grindVersionRecommended, __version__) > 0:
         tkinter.messagebox.showwarning('CodeGrinder upgrade recommended',
-            f'This is version {grindVersion} of the CodeGrinder plugin,\n' +
+            f'This is version {__version__} of the CodeGrinder plugin,\n' +
             'but the server recommends {server.grindVersionRecommended} or higher.\n\n' +
             'Please upgrade as soon as possible')
 
