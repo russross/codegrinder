@@ -1,6 +1,6 @@
 '''Thonny plugin to integrate with CodeGrinder for coding practice'''
 
-__version__ = '2.5.0.dev1'
+__version__ = '2.5.0'
 
 import base64
 import collections
@@ -13,96 +13,508 @@ import os.path
 import pathlib
 import re
 import requests
-import semver
 import shlex
 import thonny
 import thonny.common
 import tkinter.messagebox
 import tkinter.simpledialog
-import webbrowser
 import websocket
+
+#
+# inject the CodeGrinder menu items into Thonny
+#
+
+def load_plugin():
+    wb = thonny.get_workbench()
+    wb.add_command(command_id='CodeGrinder-test',
+                   menu_name='CodeGrinder',
+                   command_label='Run tests',
+                   tester=_codegrinder_run_tests_enabled,
+                   handler=_codegrinder_run_tests_handler,
+                   group=20)
+    wb.add_command(command_id='CodeGrinder-doc',
+                   menu_name='CodeGrinder',
+                   command_label='Show instructions',
+                   tester=_codegrinder_in_project,
+                   handler=_codegrinder_show_instructions_handler,
+                   group=20)
+    wb.add_command(command_id='CodeGrinder-grade',
+                   menu_name='CodeGrinder',
+                   command_label='Submit for grading',
+                   tester=_codegrinder_in_project,
+                   handler=_codegrinder_grade_handler,
+                   group=50)
+    wb.add_command(command_id='CodeGrinder-download',
+                   menu_name='CodeGrinder',
+                   command_label='Download new assignments',
+                   tester=_codegrinder_logout_enabled,
+                   handler=_codegrinder_download_handler,
+                   group=70)
+    wb.add_command(command_id='CodeGrinder-save',
+                   menu_name='CodeGrinder',
+                   command_label='Save and sync this assignment',
+                   tester=_codegrinder_in_project,
+                   handler=_codegrinder_save_and_sync_handler,
+                   group=70)
+    wb.add_command(command_id='CodeGrinder-login',
+                   menu_name='CodeGrinder',
+                   command_label='Login...',
+                   tester=_codegrinder_login_enabled,
+                   handler=_codegrinder_login_handler,
+                   group=90)
+    wb.add_command(command_id='CodeGrinder-logout',
+                   menu_name='CodeGrinder',
+                   command_label='Logout',
+                   tester=_codegrinder_logout_enabled,
+                   handler=_codegrinder_logout_handler,
+                   group=90)
+    wb.add_view(InstructionsView, "CodeGrinder instructions", "ne", default_position_key="zzz")
+
+#
+# These functions are predicates to decide if menu items should be enabled
+#
+
+def _codegrinder_login_enabled():
+    try:
+        check_config_file_present()
+        return False
+    except SilentException:
+        return True
+    except DialogException:
+        return False
+
+def _codegrinder_logout_enabled():
+    try:
+        check_config_file_present()
+        return True
+    except SilentException:
+        return False
+    except DialogException:
+        return False
+
+def _codegrinder_in_project():
+    try:
+        check_config_file_present()
+        get_codegrinder_project_info()
+        return True
+    except SilentException:
+        return False
+    except DialogException:
+        return False
+
+def _codegrinder_run_tests_enabled():
+    try:
+        check_config_file_present()
+        (filename, dotfile, problemSetDir, problemDir) = get_codegrinder_project_info()
+        if os.path.exists(os.path.join(problemDir, 'tests')):
+            return True
+        if os.path.exists(os.path.join(problemDir, 'inputs')):
+            return True
+        return False
+    except SilentException:
+        return False
+    except DialogException:
+        return False
+
+#
+# These functions are invoked directly from the menu
+#
+
+def _codegrinder_login_handler():
+    try:
+        code = tkinter.simpledialog.askstring(
+            'Login to CodeGrinder',
+            'Please paste the login code from a Canvas assignment page.' +
+            'It should look something like:\n\n' +
+            'grind login some.servername.edu 8chrcode\n\n' +
+            'Note: this is normally only necessary once per semester')
+        if code is None:
+            return
+
+        # sanity check
+        fields = code.split()
+        if len(fields) != 4 or fields[0] != 'grind' or fields[1] != 'login':
+            raise DialogException('Login failed',
+                'The login code you supplied does not look right.\n\n' +
+                'Copy the login code directly from a Canvas assignment page.')
+
+        # get a session key
+        CONFIG['host'] = fields[2]
+        session = get_named_tuple('/users/session', {'key':fields[3]})
+        if session is None:
+            raise DialogException('Login failed',
+                str(err) + '\n\n' +
+                'Make sure you use a fresh login code (no more than 5 minutes old).')
+
+        cookie = session.Cookie
+
+        # set up config
+        CONFIG['cookie'] = cookie
+
+        # see if they need an upgrade
+        check_version()
+
+        # try it out by fetching a user record
+        user = must_get_named_tuple('/users/me', None)
+
+        # save config for later use
+        must_write_config()
+
+        tkinter.messagebox.showinfo('Login successful',
+            f'Login successful; welcome {user.name}')
+
+    except SilentException:
+        pass
+    except DialogException as dialog:
+        dialog.show_dialog()
+
+def _codegrinder_logout_handler():
+    try:
+        home = get_home()
+        configFile = os.path.join(home, perUserDotFile)
+        os.remove(configFile)
+        tkinter.messagebox.showinfo('Logged out',
+            'Note that when you are on your own machine '+
+            'or are logged into your own account, '+
+            'you can normally leave yourself logged in '+
+            'for the entire semester')
+    except SilentException:
+        pass
+    except DialogException as dialog:
+        dialog.show_dialog()
+
+def _codegrinder_show_instructions_handler():
+    try:
+        (filename, dotfile, problemSetDir, problemDir) = get_codegrinder_project_info()
+        show_instructions(problemDir)
+    except SilentException:
+        pass
+    except DialogException as dialog:
+        dialog.show_dialog()
+
+def show_instructions(problemDir):
+    with open(os.path.join(problemDir, 'doc', 'doc.md')) as fp:
+        doc = fp.read()
+
+    iv = thonny.get_workbench().get_view('InstructionsView')
+    iv.set_content(doc)
+    thonny.get_workbench().show_view('InstructionsView', set_focus=False)
+
+def _codegrinder_run_tests_handler():
+    try:
+        thonny.get_workbench().get_editor_notebook().save_all_named_editors()
+        (filename, dotfile, problemSetDir, problemDir) = get_codegrinder_project_info()
+
+        # run the commands
+        cmd_line = '%cd ' + shlex.quote(problemDir) + '\n'
+        if os.path.exists(os.path.join(problemDir, 'tests')):
+            cmd_line += '!python3 -m unittest discover -vs tests\n'
+        elif os.path.exists(os.path.join(problemDir, 'inputs')):
+            # find main
+            py_files = [ os.path.basedname(s) for s in glob.glob(f'{problemDir}/*.py')]
+            for name in py_files:
+                count = 0
+                with open(os.path.join(problemDir, name)) as fp:
+                    contents = fp.read()
+                    if re.search('^def main\b', contents):
+                        main = name
+                        count += 1
+            if len(py_files) == 1:
+                main = py_files[0]
+            elif 'main.py' in py_files:
+                main = 'main.py'
+            elif count == 1:
+                pass
+            else:
+                main = filename
+            cmd_line += '!python3 bin/inout-stepall.py python3 {main}'
+        else:
+            raise DialogException('Unknown problem type',
+                'I do not know how to run the tests for this problem.',
+                True)
+        thonny.get_workbench().get_view('ShellView').clear_shell()
+        thonny.get_workbench().get_view('ShellView').submit_magic_command(cmd_line)
+
+    except SilentException:
+        pass
+    except DialogException as dialog:
+        dialog.show_dialog()
+
+def _codegrinder_download_handler():
+    try:
+        home = get_home()
+        must_load_config()
+        user = must_get_named_tuple('/users/me', None)
+        assignments = must_get_named_tuple_list(f'/users/{user.id}/assignments', None)
+        if len(assignments) == 0:
+            tkinter.messagebox.showinfo('No assignments found',
+                'Remember that you must click on each assignment in Canvas once ' +
+                'before you can access it here.')
+            return
+
+        # cache the course downloads
+        courses = {}
+
+        downloads = []
+        for assignment in assignments:
+            # ignore quizzes
+            if assignment.problemSetID <= 0:
+                continue
+
+            # get the course
+            if assignment.courseID not in courses:
+                courses[assignment.courseID] = must_get_named_tuple(f'/courses/{assignment.courseID}', None)
+            course = courses[assignment.courseID]
+
+            # download the assignment
+            problemDir = get_assignment(assignment, course, home)
+            if problemDir is not None:
+                downloads.append(problemDir)
+
+        if len(downloads) == 0:
+            tkinter.messagebox.showinfo('No new assignments found',
+                'Remember that you must click on each assignment in Canvas once ' +
+                'before you can access it here.')
+        else:
+            msg = f'Downloaded {len(downloads)} new assignment{"" if len(downloads) == 1 else "s"}'
+            if len(downloads) > 0:
+                msg += ':\n\n' + '\n'.join(downloads)
+            tkinter.messagebox.showinfo('Assignments downloaded', msg)
+
+    except SilentException:
+        pass
+    except DialogException as dialog:
+        dialog.show_dialog()
+
+def _codegrinder_save_and_sync_handler():
+    try:
+        thonny.get_workbench().get_editor_notebook().save_all_named_editors()
+        (filename, dotfile, problemSetDir, problemDir) = get_codegrinder_project_info()
+
+        must_load_config()
+        now = datetime.datetime.utcnow()
+
+        user = must_get_named_tuple('/users/me', None)
+
+        (problemType, problem, assignment, commit, dotfile) = gather_student(now, problemDir)
+        commit['action'] = ''
+        commit['node'] = 'saving from thonny plugin'
+        unsigned = {
+            'userID': user.id,
+            'commit': commit,
+        }
+        signed = must_post_object('/commit_bundles/unsigned', None, unsigned)
+
+        msg = 'A copy of your current work has been saved '
+        msg += 'to the CodeGrinder server where your instructor '
+        msg += 'can access it.\n\n'
+        msg += 'You should always select this option '
+        msg += 'before contacting your instructor for help.'
+        tkinter.messagebox.showinfo('Saved successfully', msg)
+
+    except SilentException:
+        pass
+    except DialogException as dialog:
+        dialog.show_dialog()
+
+def _codegrinder_grade_handler():
+    try:
+        thonny.get_workbench().get_editor_notebook().save_all_named_editors()
+        (filename, dotfile, problemSetDir, problemDir) = get_codegrinder_project_info()
+
+        must_load_config()
+        now = datetime.datetime.utcnow()
+
+        # get the user ID
+        user = must_get_named_tuple('/users/me', None)
+
+        (problemType, problem, assignment, commit, dotfile) = gather_student(now, problemDir)
+        commit['action'] = 'grade'
+        commit['node'] = 'grading from thonny plugin'
+        unsigned = {
+            'userID': user.id,
+            'commit': commit,
+        }
+
+        # send the commit bundle to the server
+        signed = must_post_object('/commit_bundles/unsigned', None, unsigned)
+
+        # send it to the daycare for grading
+        if 'hostname' not in signed or not signed['hostname']:
+            raise DialogException('Server error',
+                'The server was unable to find a suitable grader for this problem type.\n\n' +
+                'Please try again later or contact your instructor for help.')
+        graded = must_confirm_commit_bundle(signed, None)
+
+        # save the commit with report card
+        toSave = {
+            'hostname':         graded['hostname'],
+            'userID':           graded['userID'],
+            'commit':           graded['commit'],
+            'commitSignature':  graded['commitSignature'],
+        }
+        saved = must_post_object('/commit_bundles/signed', None, toSave)
+        commit = saved['commit']
+
+        shell = thonny.get_workbench().get_view('ShellView')
+        shell.clear_shell()
+        if 'reportCard' in commit and commit['reportCard'] and \
+                commit['reportCard']['passed'] is True and commit['score'] == 1.0:
+
+            # peek ahead to see if there is another step
+            newStep = get_named_tuple(f'/problems/{problem.id}/steps/{commit["step"]+1}', None)
+            if newStep is not None:
+                tkinter.messagebox.showinfo('Step complete',
+                    'You have completed this step successfully ' +
+                    'and your updated grade was submitted to Canvas.\n\n' +
+                    'This problem has another step, so the files and instructions ' +
+                    'will now be updated for the next step.\n\n' +
+                    'Thonny may notice that files are changing and prompt you to see ' +
+                    'if you want to update to the "External Modification".\n\n' +
+                    'You should select "Yes" if you see that prompt.')
+
+            if next_step(problemDir, dotfile['problems'][problem.unique], problem, commit):
+                # save the updated dotfile with the new step number
+                save_dot_file(dotfile)
+
+                step = commit['step']
+                msg = f'reportCard = "Completed step {step}, moving on to step {step+1}"\n'
+                shell.submit_python_code(msg)
+
+                show_instructions(problemDir)
+            else:
+                msg = 'reportCard = "You have completed this problem successfully ' + \
+                    'and your updated grade was submitted to Canvas"\n'
+                shell.submit_python_code(msg)
+
+        else:
+            # solution failed
+            def escape(s):
+                return s.replace('"""', '\\"\\"\\"')
+
+            msg = 'reportCard = """\n'
+            # play the transcript
+            if 'transcript' in commit and commit['transcript']:
+                for elt in commit['transcript']:
+                    msg += escape(dump_event_message(elt))
+
+            if 'reportCard' in commit and commit['reportCard']:
+                msg += '\n\n'
+                msg += escape(commit['reportCard']['note'])
+
+            msg += '\n"""\n'
+            shell.submit_python_code(msg)
+
+    except SilentException:
+        pass
+    except DialogException as dialog:
+        dialog.show_dialog()
+
+#
+# This implements the instructions panel
+#
+
+class InstructionsView(thonny.tktextext.TextFrame):
+    def __init__(self, master):
+        super().__init__(master,
+                text_class=thonny.rst_utils.RstText,
+                read_only=True,
+                horizontal_scrollbar_class=thonny.ui_utils.AutoScrollbar)
+        self.text.edit_reset()
+    
+    def set_content(self, doc):
+        self.text.clear()
+        self.text.direct_insert("end", doc)
+
+#
+# The rest are helper functions, mostly ported from the grind CLI tool
+#
 
 # constants
 perUserDotFile = '.codegrinderrc'
 perProblemSetDotFile = '.grind'
 urlPrefix = '/v2'
 
-Config = { 'host': '', 'cookie': 'codegrinder=not_logged_in' }
+CONFIG = { 'host': '', 'cookie': 'codegrinder=not_logged_in' }
 
-failedState = False
+class SilentException(Exception):
+    pass
 
-def fromSlash(name):
+class DialogException(Exception):
+    def __init__(self, title, message, warning=False):
+        self.title = title
+        self.message = message
+        self.warning = warning
+
+    def show_dialog(self):
+        if self.warning:
+            tkinter.messagebox.showwarning(self.title, self.message)
+        else:
+            tkinter.messagebox.showerror(self.title, self.message)
+
+def from_slash(name):
     parts = name.split('/')
     return os.path.join(*parts)
 
-def mustLoadConfig():
-    global Config
-    global failedState
-
+def get_home():
     home = pathlib.Path.home()
     if home == '':
-        failedState = True
-        raise RuntimeError('Unable to locate home directory, giving up')
+        raise DialogException('Fatal error', 'Unable to locate home directory, giving up')
+    return home
 
+def must_load_config():
+    global CONFIG
+
+    home = get_home()
     configFile = os.path.join(home, perUserDotFile)
     with open(configFile) as fp:
-        Config = json.load(fp)
+        CONFIG = json.load(fp)
 
-    checkVersion()
+    check_version()
 
-def isConfigFilePresent():
-    global failedState
-    home = pathlib.Path.home()
-    if home == '':
-        failedState = True
-        raise RuntimeError('Unable to locate home directory, giving up')
-
+def check_config_file_present():
+    home = get_home()
     configFile = os.path.join(home, perUserDotFile)
-    return os.path.exists(configFile)
+    if not os.path.exists(configFile):
+        raise SilentException()
 
-def mustWriteConfig():
-    global Config
-    global failedState
+def must_write_config():
+    global CONFIG
 
-    home = pathlib.Path.home()
-    if home == '':
-        failedState = True
-        raise RuntimeError('Unable to locate home directory, giving up')
-
+    home = get_home()
     configFile = os.path.join(home, perUserDotFile)
     with open(configFile, 'w') as fp:
-        json.dump(Config, fp, indent=4)
+        json.dump(CONFIG, fp, indent=4)
         print('', file=fp)
 
-def checkVersion():
-    global failedState
-    server = mustGetNamedTuple('/version', None)
-    if semver.compare(server.grindVersionRequired, __version__) > 0:
-        failedState = True
-        tkinter.messagebox.showerror('CodeGrinder upgrade required',
-            f'This is version {__version__} of the CodeGrinder plugin,\n' +
+def version_tuple(s):
+    return tuple(int(elt) for elt in s.split('.'))
+
+def check_version():
+    server = must_get_named_tuple('/version', None)
+    if version_tuple(server.grindVersionRequired) > version_tuple(__version__):
+        raise DialogException('CodeGrinder upgrade required',
+            f'This is version {__version__} of the CodeGrinder plugin,' +
             'but the server requires {server.grindVersionRequired} or higher.\n\n' +
             'You must upgrade to continue')
-    if semver.compare(server.grindVersionRecommended, __version__) > 0:
-        tkinter.messagebox.showwarning('CodeGrinder upgrade recommended',
-            f'This is version {__version__} of the CodeGrinder plugin,\n' +
+    elif version_tuple(server.grindVersionRecommended) > version_tuple(__version__):
+        raise DialogException('CodeGrinder upgrade recommended',
+            f'This is version {__version__} of the CodeGrinder plugin,' +
             'but the server recommends {server.grindVersionRecommended} or higher.\n\n' +
-            'Please upgrade as soon as possible')
+            'Please upgrade as soon as possible',
+            True)
 
 # send an API request and gather the result
 # returns (result object, error string)
-def doRequest(path, params, method, upload=None, notfoundokay=False):
-    global failedState
+def do_request(path, params, method, upload=None, notfoundokay=False):
     if not path.startswith('/'):
-        failedState = True
-        raise TypeError('doRequest path must start with /')
+        raise TypeError('do_request path must start with /')
 
     if method not in ('GET', 'POST', 'PUT', 'DELETE'):
-        failedState = True
-        raise TypeError('doRequest only recognizes GET, POST, PUT, and DELETE methods')
+        raise TypeError('do_request only recognizes GET, POST, PUT, and DELETE methods')
 
-    url = f'https://{Config["host"]}{urlPrefix}{path}'
-    (ck, cv) = Config['cookie'].split('=', 1)
+    url = f'https://{CONFIG["host"]}{urlPrefix}{path}'
+    (ck, cv) = CONFIG['cookie'].split('=', 1)
     headers = {
         'Accept': 'application/json',
         'Accept-Encoding': 'gzip',
@@ -118,43 +530,50 @@ def doRequest(path, params, method, upload=None, notfoundokay=False):
     if notfoundokay and resp.status_code == 404:
         return None
     if resp.status_code != 200:
-        tkinter.messagebox.showerror('Unexpected status from server',
-            f'Received unexpected status from {url}: {resp.text}')
-        return None
+        raise DialogException('Unexpected status from server',
+            f'Received unexpected status from {url}:\n\n{resp.text}')
 
     return json.loads(resp.content.decode(encoding='utf-8'))
 
-def mustGetNamedTuple(path, params):
-    elt = doRequest(path, params, 'GET')
+def must_get_named_tuple(path, params):
+    elt = do_request(path, params, 'GET', notfoundokay=True)
+    if elt is None:
+        raise DialogException('Server error',
+            f'Unable to download a needed object from the server. ' +
+            'Please make sure your internet connection is working.\n\n' +
+            'URL was {path}')
     return collections.namedtuple('x', elt.keys())(**elt)
 
-def mustGetNamedTupleList(path, params):
-    lst = []
-    for elt in doRequest(path, params, 'GET'):
-        lst.append(collections.namedtuple('x', elt.keys())(**elt))
-    return lst
+def must_get_named_tuple_list(path, params):
+    lst = do_request(path, params, 'GET')
+    if lst is None:
+        raise DialogException('Server error',
+            f'Unable to download a needed object from the server. ' +
+            'Please make sure your internet connection is working.\n\n' +
+            'URL was {path}')
+    return [ collections.namedtuple('x', elt.keys())(**elt) for elt in lst ]
 
-def getNamedTuple(path, params):
-    elt = doRequest(path, params, 'GET', notfoundokay=True)
+def get_named_tuple(path, params):
+    elt = do_request(path, params, 'GET', notfoundokay=True)
     if elt is None:
         return None
     return collections.namedtuple('x', elt.keys())(**elt)
 
-def mustGetObject(path, params):
-    return doRequest(path, params, 'GET')
+def must_get_object(path, params):
+    return do_request(path, params, 'GET')
 
-def getObject(path, params):
-    return doRequest(path, params, 'GET', notfoundokay=True)
+def get_object(path, params):
+    return do_request(path, params, 'GET', notfoundokay=True)
 
-def mustPostObject(path, params, upload):
-    return doRequest(path, params, 'POST', upload=upload)
+def must_post_object(path, params, upload):
+    return do_request(path, params, 'POST', upload=upload)
 
-def mustPutObject(path, params, upload):
-    return doRequest(path, params, 'PUT', upload=upload)
+def must_put_object(path, params, upload):
+    return do_request(path, params, 'PUT', upload=upload)
 
-def getAssignment(assignment, course, rootDir):
+def get_assignment(assignment, course, rootDir):
     # get the problem set
-    problemSet = mustGetNamedTuple(f'/problem_sets/{assignment.problemSetID}', None)
+    problemSet = must_get_named_tuple(f'/problem_sets/{assignment.problemSetID}', None)
 
     # if the target directory exists, skip this assignment
     rootDir = os.path.join(rootDir, course.label, problemSet.unique)
@@ -162,7 +581,7 @@ def getAssignment(assignment, course, rootDir):
         return None
 
     # get the list of problems in the problem set
-    problemSetProblems = mustGetNamedTupleList(f'/problem_sets/{assignment.problemSetID}/problems', None)
+    problemSetProblems = must_get_named_tuple_list(f'/problem_sets/{assignment.problemSetID}/problems', None)
 
     # for each problem get the problem, the most recent commit (or create one),
     # and the corresponding step
@@ -172,16 +591,16 @@ def getAssignment(assignment, course, rootDir):
     steps = {}
     types = {}
     for elt in problemSetProblems:
-        problem = mustGetNamedTuple(f'/problems/{elt.problemID}', None)
+        problem = must_get_named_tuple(f'/problems/{elt.problemID}', None)
         problems[problem.unique] = problem
 
         # get the problem type if we do not already have it
         if problem.problemType not in types:
-            problemType = mustGetNamedTuple(f'/problem_types/{problem.problemType}', None)
+            problemType = must_get_named_tuple(f'/problem_types/{problem.problemType}', None)
             types[problem.problemType] = problemType
 
         # get the commit and create a problem info based on it
-        commit = getObject(f'/assignments/{assignment.id}/problems/{problem.id}/commits/last', None)
+        commit = get_object(f'/assignments/{assignment.id}/problems/{problem.id}/commits/last', None)
         if commit:
             info = {
                 'id': problem.id,
@@ -196,7 +615,7 @@ def getAssignment(assignment, course, rootDir):
             }
 
         # get the step
-        step = mustGetNamedTuple(f'/problems/{problem.id}/steps/{info["step"]}', None)
+        step = must_get_named_tuple(f'/problems/{problem.id}/steps/{info["step"]}', None)
         infos[problem.unique] = info
         commits[problem.unique] = commit
         steps[problem.unique] = step
@@ -216,7 +635,7 @@ def getAssignment(assignment, course, rootDir):
 
         # save the step files
         for (name, contents) in step.files.items():
-            path = os.path.join(target, fromSlash(name))
+            path = os.path.join(target, from_slash(name))
             os.makedirs(os.path.dirname(path), mode=0o755, exist_ok=True)
             with open(path, 'wb') as fp:
                 fp.write(base64.b64decode(contents, validate=True))
@@ -232,19 +651,19 @@ def getAssignment(assignment, course, rootDir):
         # commit files overwrite step files
         if commit is not None:
             for (name, contents) in commit['files'].items():
-                path = os.path.join(target, fromSlash(name))
+                path = os.path.join(target, from_slash(name))
                 with open(path, 'wb') as fp:
                     fp.write(base64.b64decode(contents, validate=True))
 
             # does this commit indicate the step was finished and needs to advance?
             if 'reportCard' in commit and commit['reportCard'] and \
                     commit['reportCard']['passed'] is True and commit['score'] == 1.0:
-                nextStep(target, infos[unique], problem, commit)
+                next_step(target, infos[unique], problem, commit)
 
         # save any problem type files
         problemType = types[problem.problemType]
         for (name, contents) in problemType.files.items():
-            path = os.path.join(target, fromSlash(name))
+            path = os.path.join(target, from_slash(name))
             directory = os.path.dirname(path)
             if directory != '':
                 os.makedirs(directory, mode=0o755, exist_ok=True)
@@ -256,18 +675,20 @@ def getAssignment(assignment, course, rootDir):
         'problems': infos,
         'path': os.path.join(rootDir, perProblemSetDotFile),
     }
-    saveDotFile(dotfile)
+    save_dot_file(dotfile)
 
     return os.path.join(course.label, problemSet.unique)
 
-def nextStep(directory, info, problem, commit):
+def next_step(directory, info, problem, commit):
     # log.Printf("step %d passed", commit['step'])
 
     # advance to the next step
-    newStep = getNamedTuple(f'/problems/{problem.id}/steps/{commit["step"]+1}', None)
+    newStep = get_named_tuple(f'/problems/{problem.id}/steps/{commit["step"]+1}', None)
     if newStep is None:
         return False
-    oldStep = mustGetNamedTuple(f'/problems/{problem.id}/steps/{commit["step"]}', None)
+    oldStep = must_get_named_tuple(f'/problems/{problem.id}/steps/{commit["step"]}', None)
+    if oldStep is None:
+        return False
     # log.Printf("moving to step %d", newStep.Step)
 
     # delete all the files from the old step
@@ -277,9 +698,9 @@ def nextStep(directory, info, problem, commit):
         if os.path.exists(path):
             os.remove(path)
     for name in oldStep.files.keys():
-        if os.path.dirname(fromSlash(name)) == '':
+        if os.path.dirname(from_slash(name)) == '':
             continue
-        path = os.path.join(directory, fromSlash(name))
+        path = os.path.join(directory, from_slash(name))
         os.remove(path)
         dirpath = os.path.dirname(path)
         try:
@@ -288,7 +709,7 @@ def nextStep(directory, info, problem, commit):
         except (FileNotFoundError, OSError):
             pass
     for (name, contents) in newStep.files.items():
-        path = os.path.join(directory, fromSlash(name))
+        path = os.path.join(directory, from_slash(name))
         os.makedirs(os.path.dirname(path), mode=0o755, exist_ok=True)
         with open(path, 'wb') as fp:
             fp.write(base64.b64decode(contents, validate=True))
@@ -302,7 +723,7 @@ def nextStep(directory, info, problem, commit):
     info['step'] += 1
     return True
 
-def saveDotFile(dotfile):
+def save_dot_file(dotfile):
     path = dotfile['path']
     del dotfile['path']
     with open(path, 'w') as fp:
@@ -310,15 +731,12 @@ def saveDotFile(dotfile):
         fp.write('\n')
     dotfile['path'] = path
 
-def gatherStudent(now, startDir):
+def gather_student(now, startDir):
     # find the .grind file containing the problem set info
-    res = findDotFile(startDir)
-    if res is None:
-        raise RuntimeError('unable to locate problem set metadata file')
-    (dotfile, problemSetDir, problemDir) = res
+    (dotfile, problemSetDir, problemDir) = find_dot_file(startDir)
 
     # get the assignment
-    assignment = mustGetNamedTuple(f'/assignments/{dotfile["assignmentID"]}', None)
+    assignment = must_get_named_tuple(f'/assignments/{dotfile["assignmentID"]}', None)
 
     # get the problem
     unique = ''
@@ -335,11 +753,11 @@ def gatherStudent(now, startDir):
     info = dotfile['problems'][unique]
     if not info:
         raise RuntimeError('unable to recognize the problem based on the directory name of ' + unique)
-    problem = mustGetNamedTuple(f'/problems/{info["id"]}', None)
+    problem = must_get_named_tuple(f'/problems/{info["id"]}', None)
 
     # check that the on-disk file matches the expected contents
     # and update as needed
-    def checkAndUpdate(name, contents):
+    def check_and_update(name, contents):
         path = os.path.join(problemDir, name)
         if os.path.exists(path):
             with open(path, 'rb') as fp:
@@ -353,20 +771,20 @@ def gatherStudent(now, startDir):
                 fp.write(contents)
 
     # get the problem type and verify local files match
-    problemType = mustGetNamedTuple(f'/problem_types/{problem.problemType}', None)
+    problemType = must_get_named_tuple(f'/problem_types/{problem.problemType}', None)
     for (name, contents) in problemType.files.items():
-        checkAndUpdate(fromSlash(name), base64.b64decode(contents, validate=True))
+        check_and_update(from_slash(name), base64.b64decode(contents, validate=True))
 
     # get the problem step and verify local files match
-    step = mustGetNamedTuple(f'/problems/{problem.id}/steps/{info["step"]}', None)
+    step = must_get_named_tuple(f'/problems/{problem.id}/steps/{info["step"]}', None)
     for (name, contents) in step.files.items():
-        if os.path.dirname(fromSlash(name)) == '':
+        if os.path.dirname(from_slash(name)) == '':
             # in main directory, skip files that exist (but write files that are missing)
             path = os.path.join(problemDir, name)
             if os.path.exists(path):
                 continue
-        checkAndUpdate(fromSlash(name), base64.b64decode(contents, validate=True))
-    checkAndUpdate(os.path.join('doc', 'index.html'), step.instructions.encode())
+        check_and_update(from_slash(name), base64.b64decode(contents, validate=True))
+    check_and_update(os.path.join('doc', 'index.html'), step.instructions.encode())
 
     # gather the commit files from the file system
     files = {}
@@ -390,7 +808,7 @@ def gatherStudent(now, startDir):
 
     return (problemType, problem, assignment, commit, dotfile)
 
-def mustConfirmCommitBundle(bundle, args):
+def must_confirm_commit_bundle(bundle, args):
     # create a websocket connection to the server
     url = 'wss://' + bundle['hostname'] + urlPrefix + '/sockets/' + \
         bundle['problem']['problemType'] + '/' + bundle['commit']['action']
@@ -408,10 +826,9 @@ def mustConfirmCommitBundle(bundle, args):
 
         if 'error' in reply and reply['error']:
             socket.close()
-            tkinter.messagebox.showinfo('Server error',
+            raise DialogException('Server error',
                 f'The server reported an unexpected error:\n\n' +
                 '{reply["error"]}')
-            return None
 
         if 'commitBundle' in reply and reply['commitBundle']:
             socket.close()
@@ -423,15 +840,13 @@ def mustConfirmCommitBundle(bundle, args):
 
         else:
             socket.close()
-            tkinter.messagebox.showinfo('Server error',
-                f'The server returned an unexpected message type.')
-            return None
+            raise DialogException('Server error',
+                'The server returned an unexpected message type.')
 
     socket.close()
-    tkinter.messagebox.showerror('No result returned from server',
+    raise DialogException('No result returned from server',
         'The server did not return the graded code, ' +
         'so the grading process cannot continue.')
-    return None
 
 # returns None or (filename, dotfile, problemSetDir, problemDir)
 def get_codegrinder_project_info():
@@ -439,23 +854,24 @@ def get_codegrinder_project_info():
 
     current = notebook.get_current_editor()
     if not current:
-        return None
+        raise DialogException('Not a CodeGrinder project',
+                'This command should only be run when editing ' +
+                'a file that is part of a CodeGrinder assignment.')
     filename = current.get_filename()
     if not filename:
-        return None
+        raise DialogException('Not a CodeGrinder project',
+                'This command should only be run when editing ' +
+                'a file that is part of a CodeGrinder assignment.')
     filename = os.path.realpath(filename)
 
     # see if this file is part of a codegrinder project
-    res = findDotFile(os.path.dirname(filename))
-    if res is None:
-        return None
-    (dotfile, problemSetDir, problemDir) = res
-    if problemDir == '':
+    (dotfile, problemSetDir, problemDir) = find_dot_file(os.path.dirname(filename))
+    if len(dotfile['problems']) == 1:
         problemDir = problemSetDir
 
     return (os.path.basename(filename), dotfile, problemSetDir, problemDir)
 
-def findDotFile(startDir):
+def find_dot_file(startDir):
     isAbs = False
     problemSetDir, problemDir = startDir, ''
     while True:
@@ -472,7 +888,9 @@ def findDotFile(startDir):
         problemDir = problemSetDir
         problemSetDir = os.path.dirname(problemSetDir)
         if problemSetDir == problemDir:
-            return None
+            raise DialogException('Not a CodeGrinder project',
+                'This command should only be run when editing ' +
+                'a file that is part of a CodeGrinder assignment.')
 
     # read the .grind file
     with open(path) as fp:
@@ -481,255 +899,28 @@ def findDotFile(startDir):
 
     return (dotfile, problemSetDir, problemDir)
 
-def _codegrinder_login_handler():
-    code = tkinter.simpledialog.askstring(
-        'Login to CodeGrinder',
-        'Please paste the login code from a Canvas assignment page.\n' +
-        'It should look something like:\n\n' +
-        'grind login some.servername.edu 8chrcode\n\n' +
-        'Note: this is normally only necessary once per semester')
-    if code is None:
-        return
+def dump_event_message(e):
+    if e['event'] == 'exec':
+        return f'$ {" ".join(e["execcommand"])}\n'
 
-    # sanity check
-    fields = code.split()
-    if len(fields) != 4 or fields[0] != 'grind' or fields[1] != 'login':
-        tkinter.messagebox.showerror('Login failed',
-            'Copy the login code from a Canvas assignment page.')
-        return
+    if e['event'] == 'exit':
+        if e['exitstatus'] == 0:
+            return ''
 
-    # get a session key
-    try:
-        Config['host'] = fields[2]
-        session = mustGetNamedTuple('/users/session', {'key':fields[3]})
-        cookie = session.Cookie
+        n = e['exitstatus'] - 128
+        if n in signals:
+            sig = signals[n]
+            return f'exit status {e["exitstatus"]} (killed by {sig})\n'
 
-        # set up config
-        Config['cookie'] = cookie
+        return f'exit status {e["exitstatus"]}\n'
 
-        # see if they need an upgrade
-        checkVersion()
+    if e['event'] in ('stdin', 'stdout', 'stderr'):
+        return base64.b64decode(e['streamdata'], validate=True).decode('utf-8')
 
-        # try it out by fetching a user record
-        user = mustGetNamedTuple('/users/me', None)
+    if e['event'] == 'error':
+        return f'Error: {e["error"]}\n'
 
-        # save config for later use
-        mustWriteConfig()
-
-        tkinter.messagebox.showinfo('Login successful',
-            f'Login successful; welcome {user.name}')
-
-    except RuntimeError as err:
-        tkinter.messagebox.showerror('Login failed', str(err))
-        tkinter.messagebox.showerror('Login failed', str(err) + '\n\n' +
-            'Make sure you use a fresh login code\n(no more than 5 minutes old).')
-
-def _codegrinder_run_tests_handler():
-    global failedState
-    thonny.get_workbench().get_editor_notebook().save_all_named_editors()
-    res = get_codegrinder_project_info()
-    if res is None:
-        tkinter.messagebox.showwarning('Not a CodeGrinder project',
-            'This command should only be run when editing\n' +
-            'a file that is part of a CodeGrinder assignment.')
-        return
-    (filename, dotfile, problemSetDir, problemDir) = res
-
-    # run the commands
-    cmd_line = '%cd ' + shlex.quote(problemDir) + '\n'
-    if os.path.exists(os.path.join(problemDir, 'tests')):
-        cmd_line += '!python3 -m unittest discover -vs tests\n'
-    elif os.path.exists(os.path.join(problemDir, 'inputs')):
-        # find main
-        py_files = [ os.path.basedname(s) for s in glob.glob(f'{problemDir}/*.py')]
-        for name in py_files:
-            count = 0
-            with open(os.path.join(problemDir, name)) as fp:
-                contents = fp.read()
-                if re.search('^def main\b', contents):
-                    main = name
-                    count += 1
-        if len(py_files) == 1:
-            main = py_files[0]
-        elif 'main.py' in py_files:
-            main = 'main.py'
-        elif count == 1:
-            pass
-        else:
-            main = filename
-        cmd_line += '!python3 bin/inout-stepall.py python3 {main}'
-    else:
-        failedState = True
-        raise RuntimeError('Unknown problem type--I do not know how to run the tests')
-    thonny.get_workbench().get_view('ShellView').clear_shell()
-    thonny.get_workbench().get_view('ShellView').submit_magic_command(cmd_line)
-
-def _codegrinder_download_handler():
-    global failedState
-    home = pathlib.Path.home()
-    if home == '':
-        failedState = True
-        raise RuntimeError('Unable to locate home directory, giving up')
-
-    mustLoadConfig()
-    user = mustGetNamedTuple('/users/me', None)
-    assignments = mustGetNamedTupleList(f'/users/{user.id}/assignments', None)
-    if len(assignments) == 0:
-        tkinter.messagebox.showerror('No assignments found',
-            'Remember that you must click on each assignment in Canvas once ' +
-            'before you can access it here.')
-        return
-
-    # cache the course downloads
-    courses = {}
-
-    downloads = []
-    for assignment in assignments:
-        # ignore quizzes
-        if assignment.problemSetID <= 0:
-            continue
-
-        # get the course
-        if assignment.courseID not in courses:
-            course = mustGetNamedTuple(f'/courses/{assignment.courseID}', None)
-            courses[assignment.courseID] = course
-        course = courses[assignment.courseID]
-
-        # download the assignment
-        problemDir = getAssignment(assignment, course, home)
-        if problemDir is not None:
-            downloads.append(problemDir)
-
-    if len(downloads) == 0:
-        tkinter.messagebox.showerror('No new assignments found',
-            'Remember that you must click on each assignment in Canvas once ' +
-            'before you can access it here.')
-    else:
-        msg = f'Downloaded {len(downloads)} new assignment{"" if len(downloads) == 1 else "s"}'
-        if len(downloads) > 0:
-            msg += ':\n\n' + '\n'.join(downloads)
-        tkinter.messagebox.showinfo('Assignments downloaded', msg)
-
-def _codegrinder_save_and_sync_handler():
-    thonny.get_workbench().get_editor_notebook().save_all_named_editors()
-    res = get_codegrinder_project_info()
-    if res is None:
-        tkinter.messagebox.showwarning('Not a CodeGrinder project',
-            'This command should only be run when editing\n' +
-            'a file that is part of a CodeGrinder assignment.')
-        return
-    (filename, dotfile, problemSetDir, problemDir) = res
-
-    mustLoadConfig()
-    now = datetime.datetime.utcnow()
-
-    user = mustGetNamedTuple('/users/me', None)
-
-    (problemType, problem, assignment, commit, dotfile) = gatherStudent(now, problemDir)
-    commit['action'] = ''
-    commit['node'] = 'saving from thonny plugin'
-    unsigned = {
-        'userID': user.id,
-        'commit': commit,
-    }
-    signed = mustPostObject('/commit_bundles/unsigned', None, unsigned)
-
-    msg = 'A copy of your current work has been saved '
-    msg += 'to the CodeGrinder server where your instructor '
-    msg += 'can access it.\n\n'
-    msg += 'You should always select this option '
-    msg += 'before contacting your instructor for help.'
-    tkinter.messagebox.showinfo('Saved successfully', msg)
-
-def _codegrinder_grade_handler():
-    thonny.get_workbench().get_editor_notebook().save_all_named_editors()
-    res = get_codegrinder_project_info()
-    if res is None:
-        tkinter.messagebox.showwarning('Not a CodeGrinder project',
-            'This command should only be run when editing\n' +
-            'a file that is part of a CodeGrinder assignment.')
-        return
-    (filename, dotfile, problemSetDir, problemDir) = res
-
-    mustLoadConfig()
-    now = datetime.datetime.utcnow()
-
-    # get the user ID
-    user = mustGetNamedTuple('/users/me', None)
-
-    (problemType, problem, assignment, commit, dotfile) = gatherStudent(now, problemDir)
-    commit['action'] = 'grade'
-    commit['node'] = 'grading from thonny plugin'
-    unsigned = {
-        'userID': user.id,
-        'commit': commit,
-    }
-
-    # send the commit bundle to the server
-    signed = mustPostObject('/commit_bundles/unsigned', None, unsigned)
-
-    # send it to the daycare for grading
-    if 'hostname' not in signed or not signed['hostname']:
-        tkinter.messagebox.showerror('Server error',
-            'The server was unable to find a suitable grader\n' +
-            'for this problem type.\n\n' +
-            'Please try again later or contact your instructor\n' +
-            'for help.')
-        return
-    graded = mustConfirmCommitBundle(signed, None)
-
-    # save the commit with report card
-    toSave = {
-        'hostname':         graded['hostname'],
-        'userID':           graded['userID'],
-        'commit':           graded['commit'],
-        'commitSignature':  graded['commitSignature'],
-    }
-    saved = mustPostObject('/commit_bundles/signed', None, toSave)
-    commit = saved['commit']
-
-    shell = thonny.get_workbench().get_view('ShellView')
-    shell.clear_shell()
-    if 'reportCard' in commit and commit['reportCard'] and \
-            commit['reportCard']['passed'] is True and commit['score'] == 1.0:
-        tkinter.messagebox.showinfo('Step complete',
-            'You have completed this step successfully ' +
-            'and your updated grade was submitted to Canvas.\n\n' +
-            'If there are additional steps, the files and instructions ' +
-            'will be updated for the new step and Thonny may prompt you ' +
-            'to see if you want to update to the "External Modification".\n\n' +
-            'You should select "Yes" if you see that prompt and begin ' +
-            'working on the next step.')
-
-        if nextStep(problemDir, dotfile['problems'][problem.unique], problem, commit):
-            # save the updated dotfile with the new step number
-            saveDotFile(dotfile)
-
-            step = commit['step']
-            msg = f'reportCard = "Completed step {step}, moving on to step {step+1}"\n'
-            shell.submit_python_code(msg)
-            webbrowser.open_new_tab(f'file://{problemDir}/doc/index.html')
-        else:
-            msg = 'reportCard = "You have completed this problem successfully"\n'
-            shell.submit_python_code(msg)
-
-    else:
-        # solution failed
-        def escape(s):
-            return s.replace('"""', '\\"\\"\\"')
-
-        msg = 'reportCard = """\n'
-        # play the transcript
-        if 'transcript' in commit and commit['transcript']:
-            for elt in commit['transcript']:
-                msg += escape(dumpEventMessage(elt))
-
-        if 'reportCard' in commit and commit['reportCard']:
-            msg += '\n\n'
-            msg += escape(commit['reportCard']['note'])
-
-        msg += '\n"""\n'
-        shell.submit_python_code(msg)
+    return ''
 
 signals = {
         1:  "SIGHUP",
@@ -795,126 +986,3 @@ signals = {
         63: "SIGRTMAX-1",
         64: "SIGRTMAX",
 }
-
-def dumpEventMessage(e):
-    if e['event'] == 'exec':
-        return f'$ {" ".join(e["execcommand"])}\n'
-
-    if e['event'] == 'exit':
-        if e['exitstatus'] == 0:
-            return ''
-
-        n = e['exitstatus'] - 128
-        if n in signals:
-            sig = signals[n]
-            return f'exit status {e["exitstatus"]} (killed by {sig})\n'
-
-        return f'exit status {e["exitstatus"]}\n'
-
-    if e['event'] in ('stdin', 'stdout', 'stderr'):
-        return base64.b64decode(e['streamdata'], validate=True).decode('utf-8')
-
-    if e['event'] == 'error':
-        return f'Error: {e["error"]}\n'
-
-    return ''
-
-
-def _codegrinder_show_instructions_handler():
-    res = get_codegrinder_project_info()
-    if res is None:
-        tkinter.messagebox.showwarning('Not a CodeGrinder project',
-            'This command should only be run when editing\n' +
-            'a file that is part of a CodeGrinder assignment.')
-        return
-    (filename, dotfile, problemSetDir, problemDir) = res
-
-    webbrowser.open_new_tab(f'file://{problemDir}/doc/index.html')
-
-def _codegrinder_logout_handler():
-    global failedState
-    home = pathlib.Path.home()
-    if home == '':
-        failedState = True
-        raise RuntimeError('Unable to locate home directory, giving up')
-
-    configFile = os.path.join(home, perUserDotFile)
-    os.remove(configFile)
-
-def _codegrinder_login_enabled():
-    if failedState:
-        return False
-    return not isConfigFilePresent()
-
-def _codegrinder_in_project():
-    if failedState:
-        return False
-    if not isConfigFilePresent():
-        return False
-    res = get_codegrinder_project_info()
-    return res is not None
-
-def _codegrinder_run_tests_enabled():
-    if failedState:
-        return False
-    if not isConfigFilePresent():
-        return False
-    res = get_codegrinder_project_info()
-    if res is None:
-        return False
-    (filename, dotfile, problemSetDir, problemDir) = res
-    if os.path.exists(os.path.join(problemDir, 'tests')):
-        return True
-    if os.path.exists(os.path.join(problemDir, 'inputs')):
-        return True
-    return False
-
-def _codegrinder_logout_enabled():
-    if failedState:
-        return False
-    return isConfigFilePresent()
-
-def load_plugin():
-    wb = thonny.get_workbench()
-    wb.add_command(command_id='CodeGrinder-test',
-                   menu_name='CodeGrinder',
-                   command_label='Run tests',
-                   tester=_codegrinder_run_tests_enabled,
-                   handler=_codegrinder_run_tests_handler,
-                   group=20)
-    wb.add_command(command_id='CodeGrinder-doc',
-                   menu_name='CodeGrinder',
-                   command_label='Show instructions',
-                   tester=_codegrinder_in_project,
-                   handler=_codegrinder_show_instructions_handler,
-                   group=20)
-    wb.add_command(command_id='CodeGrinder-grade',
-                   menu_name='CodeGrinder',
-                   command_label='Submit for grading',
-                   tester=_codegrinder_in_project,
-                   handler=_codegrinder_grade_handler,
-                   group=50)
-    wb.add_command(command_id='CodeGrinder-download',
-                   menu_name='CodeGrinder',
-                   command_label='Download new assignments',
-                   tester=_codegrinder_logout_enabled,
-                   handler=_codegrinder_download_handler,
-                   group=70)
-    wb.add_command(command_id='CodeGrinder-save',
-                   menu_name='CodeGrinder',
-                   command_label='Save and sync this assignment',
-                   tester=_codegrinder_in_project,
-                   handler=_codegrinder_save_and_sync_handler,
-                   group=70)
-    wb.add_command(command_id='CodeGrinder-login',
-                   menu_name='CodeGrinder',
-                   command_label='Login...',
-                   tester=_codegrinder_login_enabled,
-                   handler=_codegrinder_login_handler,
-                   group=90)
-    wb.add_command(command_id='CodeGrinder-logout',
-                   menu_name='CodeGrinder',
-                   command_label='Logout',
-                   tester=_codegrinder_logout_enabled,
-                   handler=_codegrinder_logout_handler,
-                   group=90)

@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup (
         name="thonny-codegrinder-plugin",
-        version="2.5.0.dev1",
+        version="2.5.0.dev9",
         description="Thonny plugin to integrate with CodeGrinder for coding practice",
         long_description="""Thonny plugin to integrate with CodeGrinder.
     This is for students enrolled in Python programming classes
@@ -24,7 +24,6 @@ setup (
         python_requires=">=3.6",
         install_requires = [
             "requests >=2.21",
-            "semver >=2.10",
             "thonny >=3.0",
             "websocket-client >=0.57",
         ],
