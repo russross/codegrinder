@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup (
         name="thonny-codegrinder-plugin",
-        version="2.5.0.dev9",
+        version="2.5.1.1",
         description="Thonny plugin to integrate with CodeGrinder for coding practice",
         long_description="""Thonny plugin to integrate with CodeGrinder.
     This is for students enrolled in Python programming classes

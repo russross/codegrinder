@@ -18,6 +18,7 @@ import thonny
 import thonny.common
 import tkinter.messagebox
 import tkinter.simpledialog
+import tkinter.ttk
 import websocket
 
 #
@@ -68,7 +69,7 @@ def load_plugin():
                    tester=_codegrinder_logout_enabled,
                    handler=_codegrinder_logout_handler,
                    group=90)
-    wb.add_view(InstructionsView, "CodeGrinder instructions", "ne", default_position_key="zzz")
+    wb.add_view(InstructionsView, "Instructions", "ne", default_position_key="zzz")
 
 #
 # These functions are predicates to decide if menu items should be enabled
@@ -124,7 +125,7 @@ def _codegrinder_login_handler():
     try:
         code = tkinter.simpledialog.askstring(
             'Login to CodeGrinder',
-            'Please paste the login code from a Canvas assignment page.' +
+            'Please paste the login code from a Canvas assignment page. ' +
             'It should look something like:\n\n' +
             'grind login some.servername.edu 8chrcode\n\n' +
             'Note: this is normally only necessary once per semester')
@@ -318,6 +319,7 @@ def _codegrinder_save_and_sync_handler():
         dialog.show_dialog()
 
 def _codegrinder_grade_handler():
+    bar = None
     try:
         thonny.get_workbench().get_editor_notebook().save_all_named_editors()
         (filename, dotfile, problemSetDir, problemDir) = get_codegrinder_project_info()
@@ -338,13 +340,16 @@ def _codegrinder_grade_handler():
 
         # send the commit bundle to the server
         signed = must_post_object('/commit_bundles/unsigned', None, unsigned)
-
-        # send it to the daycare for grading
         if 'hostname' not in signed or not signed['hostname']:
             raise DialogException('Server error',
                 'The server was unable to find a suitable grader for this problem type.\n\n' +
                 'Please try again later or contact your instructor for help.')
-        graded = must_confirm_commit_bundle(signed, None)
+
+        # send it to the daycare for grading
+        # with a progress spinner popup
+        bar = Progress(thonny.get_workbench().winfo_toplevel())
+        graded = must_confirm_commit_bundle(signed, None, bar)
+        bar.stop()
 
         # save the commit with report card
         toSave = {
@@ -410,6 +415,9 @@ def _codegrinder_grade_handler():
     except DialogException as dialog:
         dialog.show_dialog()
 
+    if bar:
+        bar.stop()
+
 #
 # This implements the instructions panel
 #
@@ -436,6 +444,7 @@ perProblemSetDotFile = '.grind'
 urlPrefix = '/v2'
 
 CONFIG = { 'host': '', 'cookie': 'codegrinder=not_logged_in' }
+VERSION_WARNING = False
 
 class SilentException(Exception):
     pass
@@ -451,6 +460,40 @@ class DialogException(Exception):
             tkinter.messagebox.showwarning(self.title, self.message)
         else:
             tkinter.messagebox.showerror(self.title, self.message)
+
+class Progress(tkinter.simpledialog.SimpleDialog):
+    def __init__(self, parent):
+        super().__init__(
+                parent,
+                title='Grading your solution...',
+                text='Your solution is being tested on a CodeGrinder server')
+        self.parent = parent
+        self.default = None
+        self.cancel = None
+        self.bar = tkinter.ttk.Progressbar(
+                self.root, orient='horizontal', length=200, mode='indeterminate')
+        self.bar.pack(expand=True, fill=tkinter.X, side=tkinter.BOTTOM)
+        self.bar.start()
+        self.root.attributes('-topmost', True)
+        self.inc = 10
+        self.val = 0
+        self.active = True
+
+    def update(self):
+        if self.active:
+            self.bar['value'] = self.val
+            self.parent.update_idletasks()
+            self.val += self.inc
+            if self.val == 0:
+                self.inc = 10
+            if self.val == 100:
+                self.inc = -10
+
+    def stop(self):
+        if self.active:
+            self.bar.stop()
+            self.root.destroy()
+            self.active = False
 
 def from_slash(name):
     parts = name.split('/')
@@ -491,17 +534,29 @@ def version_tuple(s):
     return tuple(int(elt) for elt in s.split('.'))
 
 def check_version():
+    global VERSION_WARNING
     server = must_get_named_tuple('/version', None)
     if version_tuple(server.grindVersionRequired) > version_tuple(__version__):
         raise DialogException('CodeGrinder upgrade required',
-            f'This is version {__version__} of the CodeGrinder plugin,' +
-            'but the server requires {server.grindVersionRequired} or higher.\n\n' +
-            'You must upgrade to continue')
-    elif version_tuple(server.grindVersionRecommended) > version_tuple(__version__):
+            f'This is version {__version__} of the CodeGrinder plugin, ' +
+            f'but the server requires {server.grindVersionRequired} or higher.\n\n' +
+            'You must upgrade to continue\n\n' +
+            'To upgrade:\n' +
+            '1. Select the menu item "Tools" -> "Manage plug-ins..."\n' +
+            '2. Find "thonny-codegrinder-plugin" in the list on the left and click on it\n' +
+            '3. Click the "Upgrade" button at the bottom\n' +
+            '4. After it finishes upgrading, quit Thonny and restart it')
+    elif version_tuple(server.grindVersionRecommended) > version_tuple(__version__) and not VERSION_WARNING:
+        VERSION_WARNING = True
         raise DialogException('CodeGrinder upgrade recommended',
-            f'This is version {__version__} of the CodeGrinder plugin,' +
-            'but the server recommends {server.grindVersionRecommended} or higher.\n\n' +
-            'Please upgrade as soon as possible',
+            f'This is version {__version__} of the CodeGrinder plugin, ' +
+            f'but the server recommends {server.grindVersionRecommended} or higher.\n\n' +
+            'Please upgrade as soon as possible\n\n' +
+            'To upgrade:\n' +
+            '1. Select the menu item "Tools" -> "Manage plug-ins..."\n' +
+            '2. Find "thonny-codegrinder-plugin" in the list on the left and click on it\n' +
+            '3. Click the "Upgrade" button at the bottom\n' +
+            '4. After it finishes upgrading, quit Thonny and restart it',
             True)
 
 # send an API request and gather the result
@@ -808,7 +863,7 @@ def gather_student(now, startDir):
 
     return (problemType, problem, assignment, commit, dotfile)
 
-def must_confirm_commit_bundle(bundle, args):
+def must_confirm_commit_bundle(bundle, args, bar):
     # create a websocket connection to the server
     url = 'wss://' + bundle['hostname'] + urlPrefix + '/sockets/' + \
         bundle['problem']['problemType'] + '/' + bundle['commit']['action']
@@ -822,6 +877,8 @@ def must_confirm_commit_bundle(bundle, args):
 
     # start listening for events
     while True:
+        bar.update()
+
         reply = json.loads(socket.recv())
 
         if 'error' in reply and reply['error']:
