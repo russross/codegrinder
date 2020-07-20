@@ -24,9 +24,9 @@ DBFILE=codegrinder_`date '+%Y-%m-%d'`.db
 
 COMPRESSED="$BACKUPDIR/$DBFILE.xz"
 
-# keep a backup at the end of each semester: Dec 31, May 7, Jul 31
+# keep a backup at the end of each semester: Dec 31, May 14, Aug 14
 DAY=`date '+%m-%d'`
-if [ "$DAY" = "12-31" ] || [ "$DAY" = "05-07" ] || [ "$DAY" = "07-31" ]; then
+if [ "$DAY" = "12-31" ] || [ "$DAY" = "05-14" ] || [ "$DAY" = "08-14" ]; then
     ln "$COMPRESSED" "$BACKUPDIR/yearly/"
 fi
 

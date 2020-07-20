@@ -473,25 +473,17 @@ class Progress(tkinter.simpledialog.SimpleDialog):
         self.bar = tkinter.ttk.Progressbar(
                 self.root, orient='horizontal', length=200, mode='indeterminate')
         self.bar.pack(expand=True, fill=tkinter.X, side=tkinter.BOTTOM)
-        self.bar.start()
         self.root.attributes('-topmost', True)
-        self.inc = 10
-        self.val = 0
+        self.parent.update_idletasks()
         self.active = True
 
-    def update(self):
+    def show_progress(self):
         if self.active:
-            self.bar['value'] = self.val
+            self.bar.step(10)
             self.parent.update_idletasks()
-            self.val += self.inc
-            if self.val == 0:
-                self.inc = 10
-            if self.val == 100:
-                self.inc = -10
 
     def stop(self):
         if self.active:
-            self.bar.stop()
             self.root.destroy()
             self.active = False
 
@@ -877,7 +869,7 @@ def must_confirm_commit_bundle(bundle, args, bar):
 
     # start listening for events
     while True:
-        bar.update()
+        bar.show_progress()
 
         reply = json.loads(socket.recv())
 

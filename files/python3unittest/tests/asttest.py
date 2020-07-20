@@ -3,7 +3,7 @@ import unittest
 
 class ASTTest(unittest.TestCase):
 
-    def setUp(self, filename):
+    def setUp(self, filename, parse_file=True):
         """Stores the raw text of the student submission, the lines that were
         printed when executing the student submission, and the AST tree of the
         submission."""
@@ -11,7 +11,8 @@ class ASTTest(unittest.TestCase):
         f = open(filename)
         text = f.read()
         self.file = text
-        self.tree = ast.parse(text)
+        if parse_file:
+            self.tree = ast.parse(text)
         f.close()
 
     def find_all(self, node_type):
