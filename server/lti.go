@@ -333,8 +333,8 @@ func encode(v url.Values) []byte {
 // and redirects the user to the main UI URL.
 func LtiProblemSet(w http.ResponseWriter, r *http.Request, tx *sql.Tx, form LTIRequest, params martini.Params) {
 	ui := params["ui"]
-	if ui != "web" && ui != "cli" {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "UI type must be web or cli, not %q", ui)
+	if ui != "cli" {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "UI type must be cli, not %q", ui)
 		return
 	}
 	unique := params["unique"]
@@ -392,12 +392,8 @@ func LtiProblemSet(w http.ResponseWriter, r *http.Request, tx *sql.Tx, form LTIR
 	session.Save(w)
 
 	// redirect to the console
-	if ui == "cli" {
-		key := loginRecords.Insert(user.ID)
-		http.Redirect(w, r, fmt.Sprintf("/%s/?assignment=%d&session=%s", ui, asst.ID, key), http.StatusSeeOther)
-	} else {
-		http.Redirect(w, r, fmt.Sprintf("/%s/?assignment=%d", ui, asst.ID), http.StatusSeeOther)
-	}
+	key := loginRecords.Insert(user.ID)
+	http.Redirect(w, r, fmt.Sprintf("/%s/?assignment=%d&session=%s", ui, asst.ID, key), http.StatusSeeOther)
 }
 
 // LtiQuizzes handles /lti/quizzes requests.

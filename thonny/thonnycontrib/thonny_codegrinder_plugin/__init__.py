@@ -1,6 +1,6 @@
 '''Thonny plugin to integrate with CodeGrinder for coding practice'''
 
-__version__ = '2.5.0'
+__version__ = '2.5.2'
 
 import base64
 import collections
@@ -39,6 +39,12 @@ def load_plugin():
                    tester=_codegrinder_in_project,
                    handler=_codegrinder_show_instructions_handler,
                    group=20)
+    wb.add_command(command_id='CodeGrinder-progress',
+                   menu_name='CodeGrinder',
+                   command_label='Show assignment progress',
+                   tester=_codegrinder_in_project,
+                   handler=_codegrinder_progress_handler,
+                   group=50)
     wb.add_command(command_id='CodeGrinder-grade',
                    menu_name='CodeGrinder',
                    command_label='Submit for grading',
@@ -208,8 +214,11 @@ def _codegrinder_run_tests_handler():
 
         # run the commands
         cmd_line = '%cd ' + shlex.quote(problemDir) + '\n'
+        python = 'python3'
+        if os.name == 'nt':
+            python = 'python'
         if os.path.exists(os.path.join(problemDir, 'tests')):
-            cmd_line += '!python3 -m unittest discover -vs tests\n'
+            cmd_line += f'!{python} -m unittest discover -vs tests\n'
         elif os.path.exists(os.path.join(problemDir, 'inputs')):
             # find main
             py_files = [ os.path.basedname(s) for s in glob.glob(f'{problemDir}/*.py')]
@@ -228,7 +237,7 @@ def _codegrinder_run_tests_handler():
                 pass
             else:
                 main = filename
-            cmd_line += '!python3 bin/inout-stepall.py python3 {main}'
+            cmd_line += f'!{python} bin/inout-stepall.py {python} {main}'
         else:
             raise DialogException('Unknown problem type',
                 'I do not know how to run the tests for this problem.',
@@ -312,6 +321,77 @@ def _codegrinder_save_and_sync_handler():
         msg += 'You should always select this option '
         msg += 'before contacting your instructor for help.'
         tkinter.messagebox.showinfo('Saved successfully', msg)
+
+    except SilentException:
+        pass
+    except DialogException as dialog:
+        dialog.show_dialog()
+
+def _codegrinder_progress_handler():
+    try:
+        (filename, dotfile, problemSetDir, problemDir) = get_codegrinder_project_info()
+
+        must_load_config()
+        now = datetime.datetime.utcnow()
+
+        # get the assignment
+        assignment = must_get_named_tuple(f'/assignments/{dotfile["assignmentID"]}', None)
+
+        # get the course
+        course = must_get_named_tuple(f'/courses/{assignment.courseID}', None)
+
+        # get the problems
+        problem_set = must_get_named_tuple(f'/problem_sets/{assignment.problemSetID}', None)
+        problem_set_problems = must_get_named_tuple_list(f'/problem_sets/{assignment.problemSetID}/problems', None)
+        msg = f'{assignment.canvasTitle}\n'
+        if len(problem_set_problems) == 0:
+            raise DialogException('No problems found',
+                'Could not find any problems as part of this assignment.')
+
+        if len(problem_set_problems) > 1:
+            msg += f'This assignment has {len(problem_set_problems)} problems:\n\n'
+        else:
+            msg += '\n'
+
+        for psp in problem_set_problems:
+            problem = must_get_named_tuple(f'/problems/{psp.problemID}', None)
+            msg += f'{problem.note}\n'
+            if len(problem_set_problems) == 1:
+                directory = os.path.join(course.label, problem_set.unique)
+            else:
+                directory = os.path.join(course.label, problem_set.unique, problem.unique)
+            msg += f'   Location: {directory}\n'
+
+            # get the steps
+            steps = must_get_named_tuple_list(f'/problems/{problem.id}/steps', None)
+            if problem.unique in assignment.rawScores:
+                scores = assignment.rawScores[problem.unique]
+            else:
+                scores = []
+            weightSum, scoreSum = 0.0, 0.0
+            completed = 0
+
+            # compute a weighted score for this problem
+            for (i, step) in enumerate(steps):
+                weightSum += step.weight
+                if i < len(scores):
+                    scoreSum += scores[i] * step.weight
+                    if scores[i] == 1:
+                        completed += 1
+            if weightSum == 0:
+                stepScore = 0.0
+            else:
+                stepScore = scoreSum / weightSum
+
+            msg += f'   Score: {stepScore * 100.0:.0f}%'
+            if len(steps) > 1:
+                msg += f' (completed {completed}/{len(steps)} steps)'
+            msg += '\n'
+
+        if len(problem_set_problems) > 1:
+            msg += f'\nOverall score: {assignment.score * 100.0:.0f}%'
+
+        tkinter.messagebox.showinfo('Assignment progress report', msg)
 
     except SilentException:
         pass
@@ -897,7 +977,7 @@ def must_confirm_commit_bundle(bundle, args, bar):
         'The server did not return the graded code, ' +
         'so the grading process cannot continue.')
 
-# returns None or (filename, dotfile, problemSetDir, problemDir)
+# returns (filename, dotfile, problemSetDir, problemDir)
 def get_codegrinder_project_info():
     notebook = thonny.get_workbench().get_editor_notebook()
 

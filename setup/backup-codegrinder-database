@@ -24,6 +24,13 @@ DBFILE=codegrinder_`date '+%Y-%m-%d'`.db
 
 COMPRESSED="$BACKUPDIR/$DBFILE.xz"
 
+# delete all but the top $1 files from $2 when reverse sorted
+keep_top () {
+    name_pattern='*.db.xz'
+    tailn=`expr $1 + 1`
+    rm -f `find $2 -type f -name $name_pattern | sort -r | tail -n +$tailn`
+}
+
 # keep a backup at the end of each semester: Dec 31, May 14, Aug 14
 DAY=`date '+%m-%d'`
 if [ "$DAY" = "12-31" ] || [ "$DAY" = "05-14" ] || [ "$DAY" = "08-14" ]; then
@@ -33,17 +40,17 @@ fi
 # keep a monthly backup going back 12 months
 if [ `date +%-d` -eq 1 ]; then
     ln "$COMPRESSED" "$BACKUPDIR/monthly/"
-    rm -f `find "$BACKUPDIR/monthly/" -type f -name \*.db.xz | sort -r | tail -n +13`
+    keep_top 12 "$BACKUPDIR/monthly/"
 fi
 
 # keep a weekly backup going back 4 weeks
 if [ `date +%w` -eq 1 ] ; then
     ln "$COMPRESSED" "$BACKUPDIR/weekly/"
-    rm -f `find "$BACKUPDIR/weekly/" -type f -name \*.db.xz | sort -r | tail -n +5`
+    keep_top 4 "$BACKUPDIR/weekly/"
 fi
 
 # keep a daily backup going back 7 days
 ln "$COMPRESSED" "$BACKUPDIR/daily/"
-rm -f `find "$BACKUPDIR/daily/" -type f -name \*.db.xz | sort -r | tail -n +8`
+keep_top 7 "$BACKUPDIR/daily/"
 
 rm "$COMPRESSED"
