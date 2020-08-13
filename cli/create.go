@@ -474,7 +474,7 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 
 	if action != "" {
 		// must be in a valid step directory
-		if !single && (stepDir == directory  || stepN < 1) {
+		if !single && (stepDir == directory || stepN < 1) {
 			log.Fatalf("to run an action, you must be in a step directory")
 		}
 

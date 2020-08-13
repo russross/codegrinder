@@ -1,6 +1,6 @@
 '''Thonny plugin to integrate with CodeGrinder for coding practice'''
 
-__version__ = '2.5.2'
+__version__ = '2.5.3'
 
 import base64
 import collections
@@ -348,6 +348,7 @@ def _codegrinder_progress_handler():
             raise DialogException('No problems found',
                 'Could not find any problems as part of this assignment.')
 
+        msg += f'Location: {problemSetDir}\n'
         if len(problem_set_problems) > 1:
             msg += f'This assignment has {len(problem_set_problems)} problems:\n\n'
         else:
@@ -355,12 +356,9 @@ def _codegrinder_progress_handler():
 
         for psp in problem_set_problems:
             problem = must_get_named_tuple(f'/problems/{psp.problemID}', None)
-            msg += f'{problem.note}\n'
-            if len(problem_set_problems) == 1:
-                directory = os.path.join(course.label, problem_set.unique)
-            else:
-                directory = os.path.join(course.label, problem_set.unique, problem.unique)
-            msg += f'   Location: {directory}\n'
+            msg += f'[*] {problem.note}\n'
+            if len(problem_set_problems) > 1:
+                msg += f'    Location: {problem.unique}\n'
 
             # get the steps
             steps = must_get_named_tuple_list(f'/problems/{problem.id}/steps', None)
@@ -383,13 +381,13 @@ def _codegrinder_progress_handler():
             else:
                 stepScore = scoreSum / weightSum
 
-            msg += f'   Score: {stepScore * 100.0:.0f}%'
+            msg += f'    Score: {stepScore * 100.0:.0f}%'
             if len(steps) > 1:
                 msg += f' (completed {completed}/{len(steps)} steps)'
-            msg += '\n'
+            msg += '\n\n'
 
         if len(problem_set_problems) > 1:
-            msg += f'\nOverall score: {assignment.score * 100.0:.0f}%'
+            msg += f'Overall score: {assignment.score * 100.0:.0f}%'
 
         tkinter.messagebox.showinfo('Assignment progress report', msg)
 
@@ -608,21 +606,21 @@ def version_tuple(s):
 def check_version():
     global VERSION_WARNING
     server = must_get_named_tuple('/version', None)
-    if version_tuple(server.grindVersionRequired) > version_tuple(__version__):
+    if version_tuple(server.thonnyVersionRequired) > version_tuple(__version__):
         raise DialogException('CodeGrinder upgrade required',
             f'This is version {__version__} of the CodeGrinder plugin, ' +
-            f'but the server requires {server.grindVersionRequired} or higher.\n\n' +
+            f'but the server requires {server.thonnyVersionRequired} or higher.\n\n' +
             'You must upgrade to continue\n\n' +
             'To upgrade:\n' +
             '1. Select the menu item "Tools" -> "Manage plug-ins..."\n' +
             '2. Find "thonny-codegrinder-plugin" in the list on the left and click on it\n' +
             '3. Click the "Upgrade" button at the bottom\n' +
             '4. After it finishes upgrading, quit Thonny and restart it')
-    elif version_tuple(server.grindVersionRecommended) > version_tuple(__version__) and not VERSION_WARNING:
+    elif version_tuple(server.thonnyVersionRecommended) > version_tuple(__version__) and not VERSION_WARNING:
         VERSION_WARNING = True
         raise DialogException('CodeGrinder upgrade recommended',
             f'This is version {__version__} of the CodeGrinder plugin, ' +
-            f'but the server recommends {server.grindVersionRecommended} or higher.\n\n' +
+            f'but the server recommends {server.thonnyVersionRecommended} or higher.\n\n' +
             'Please upgrade as soon as possible\n\n' +
             'To upgrade:\n' +
             '1. Select the menu item "Tools" -> "Manage plug-ins..."\n' +
@@ -698,12 +696,19 @@ def must_post_object(path, params, upload):
 def must_put_object(path, params, upload):
     return do_request(path, params, 'PUT', upload=upload)
 
+def course_directory(label):
+    match = re.match(r'^([A-Za-z]+[- ]*\d+\w*)\b', label)
+    if match:
+        return match.group(1)
+    else:
+        return label
+
 def get_assignment(assignment, course, rootDir):
     # get the problem set
     problemSet = must_get_named_tuple(f'/problem_sets/{assignment.problemSetID}', None)
 
     # if the target directory exists, skip this assignment
-    rootDir = os.path.join(rootDir, course.label, problemSet.unique)
+    rootDir = os.path.join(rootDir, course_directory(course.label), problemSet.unique)
     if os.path.exists(rootDir):
         return None
 
@@ -804,7 +809,7 @@ def get_assignment(assignment, course, rootDir):
     }
     save_dot_file(dotfile)
 
-    return os.path.join(course.label, problemSet.unique)
+    return os.path.join(course_directory(course.label), problemSet.unique)
 
 def next_step(directory, info, problem, commit):
     # log.Printf("step %d passed", commit['step'])

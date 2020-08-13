@@ -15,11 +15,14 @@ class ASTTest(unittest.TestCase):
             self.tree = ast.parse(text)
         f.close()
 
-    def find_all(self, node_type):
-        """Returns all of the AST nodes matching the given node type. TODO:
-        list common node types here for easy access."""
+    def find_all(self, node_type, start_node=None):
+        """Returns all of the AST nodes matching the given node type. Optional
+        start_node parameter allows walking a specific portion of the original
+        tree. TODO: list common node types here for easy access."""
+        if start_node is None:
+            start_node = self.tree
         nodes = []
-        for node in ast.walk(self.tree):
+        for node in ast.walk(start_node):
             if isinstance(node, node_type):
                 nodes.append(node)
         return nodes
@@ -43,5 +46,27 @@ class ASTTest(unittest.TestCase):
         """Helper to find all of the function calls in the submission."""
         names = []
         for func in self.find_all(ast.Call):
-            names.append(func.func.id)
+            if isinstance(func.func, ast.Name):
+                names.append(func.func.id)
         return names
+
+    def get_method_calls(self):
+        """Helper to find all of the function calls in the submission."""
+        names = []
+        for func in self.find_all(ast.Call):
+            if isinstance(func.func, ast.Attribute):
+                names.append(func.func.attr)
+        return names
+
+    def match_signature(self, funcname, argc):
+        """Finds and returns the function definition statement that matches the
+        given function name and argument count. If it can't find a
+        corresponding function definition, it returns None."""
+        for func in self.find_all(ast.FunctionDef):
+            if func.name == funcname and len(func.args.args) == argc:
+                return func
+        return None
+
+    def assert_prints(self, lines=1, msg="You are not printing anything!"):
+        """Assert helper testing the number of printed lines."""
+        self.assertGreaterEqual(len(self.printed_lines), 1, msg)

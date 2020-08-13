@@ -70,7 +70,7 @@ type Assignment struct {
 	OutcomeExtURL      string               `json:"-" meddler:"outcome_ext_url"`
 	OutcomeExtAccepted string               `json:"-" meddler:"outcome_ext_accepted"`
 	FinishedURL        string               `json:"finishedURL" meddler:"finished_url"`
-	ConsumerKey        string               `json:"-" meddler:"consumer_key"`
+	ConsumerKey        string               `json:"consumerKey" meddler:"consumer_key"`
 	UnlockAt           *time.Time           `json:"unlockAt" meddler:"unlock_at,localtime"`
 	DueAt              *time.Time           `json:"dueAt" meddler:"due_at,localtime"`
 	LockAt             *time.Time           `json:"lockAt" meddler:"lock_at,localtime"`

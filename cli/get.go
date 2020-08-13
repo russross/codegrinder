@@ -132,7 +132,7 @@ func getAssignment(assignment *Assignment, rootDir string) string {
 	}
 
 	// check if the target directory exists
-	rootDir = filepath.Join(rootDir, course.Label, problemSet.Unique)
+	rootDir = filepath.Join(rootDir, courseDirectory(course.Label), problemSet.Unique)
 	if _, err := os.Stat(rootDir); err == nil {
 		log.Printf("directory %s already exists", rootDir)
 		log.Fatalf("delete it first if you want to re-download the assignment")

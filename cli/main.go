@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/blang/semver"
@@ -351,6 +352,15 @@ func doRequest(path string, params url.Values, method string, upload interface{}
 		return true
 	}
 	return false
+}
+
+func courseDirectory(label string) string {
+	re := regexp.MustCompile(`^([A-Za-z]+[- ]*\d+\w*)\b`)
+	groups := re.FindStringSubmatch(label)
+	if len(groups) == 2 {
+		return groups[1]
+	}
+	return label
 }
 
 func hasInstructorFile() bool {
