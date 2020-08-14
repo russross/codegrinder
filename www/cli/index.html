@@ -4,19 +4,22 @@
   <meta charset="utf-8">
   <title>CodeGrinder</title>
   <style>
-    @import url('https://fonts.googleapis.com/css?family=Roboto:400,700&subset=latin-ext');
     body{
-      font-family: 'Roboto', sans-serif;
+      font-family:"Lato","Helvetica Neue",Helvetica,Arial,sans-serif;
       color:#333;
       font-size:14px;
     }
 
     code, tt, pre{
-      font-family: "Courier New", Courier, monospace;
+      font-family: monospace;
     }
 
     tt{
-      color:#ba1c21;
+      background-color: #f6f6f6;
+      color:#000;
+      border: 1px solid #aaa;
+      border-radius:5px;
+      padding: .1em;
     }
 
     pre{
@@ -85,7 +88,7 @@
             var value = decodeURIComponent(pair[1]);
             var old_value = query_string[key];
 
-			// first entry with this name, store value as a string
+            // first entry with this name, store value as a string
             if (typeof old_value === 'undefined') {
                 query_string[key] = value;
 
@@ -93,7 +96,7 @@
             } else if (typeof old_value === 'string') {
                 query_string[key] = [ old_value, value ];
 
-			// third or later entry with this name, append to list
+            // third or later entry with this name, append to list
             } else {
                 old_value.push(value);
             }
@@ -103,62 +106,115 @@
 </script>
 
 <h1>CodeGrinder</h1>
-<p>You must have the <tt>grind</tt> command installed on your machine (see “Downloading the grind tool” below). You must also log in once each semester (see “Logging in” below).</p>
-<h2>Getting started on this assignment</h2>
-<p>You are now ready to access this problem from the <tt>grind</tt> tool. If you already have it set up, go to your project directory and use the following command to download this problem set:</p>
-<p><pre>grind get <script>document.write(QueryString.assignment)</script></pre></p>
+<p>This assignment is now ready to use. If you already know how to use the <tt>grind</tt> command-line tool, or you already have Thonny set up with the CodeGrinder plugin, you can go directly to those tools, download the assignment, and begin working.</p>
+<p>If you need more help, click on one of the options below.</p>
 
-<h2>Downloading the <tt>grind</tt> tool</h2>
-<p>Follow these instructions if you are installing <tt>grind</tt> for the first time, or if you are upgrading it to a new version. Click on the name of your operating system to open the instructions:</p>
-<h3>Linux on your machine where you have <tt>sudo</tt> privileges (including Windows 10 using Bash for Windows)</h3>
-  <div>
-    <p>Type the following commands to download the <tt>grind</tt> tool. These instructions apply to downloading it for the first time, and also for upgrading it to a new version:</p>
-    <pre>sudo curl --compressed -o /usr/local/bin/grind <script>document.write(document.location.origin)</script>/grind.linux_amd64<br>sudo chmod 755 /usr/local/bin/grind</pre>
-    <p>Type <tt>grind</tt> and hit enter to make sure the command is recognized. If not (if you see the message "grind: command not found"), get help.</p>
-    <p>Note: if it is not working for you, please seek help! Do not fall behind on your assignments just because you ran into problems getting the tools set up. Your instructor will be happy to sit down with you and help you get it running.</p>
-  </div>
+<h2>For students using Thonny (CS 1400 and CS 1410)</h2>
+<p>Thonny is an Integrated Development Environment (IDE) designed for students learning to program in Python. You must install it on your computer and set it up with the CodeGrinder plugin in order to complete this assignment.</p>
 
-<h3>Linux on a shared machine where you do NOT have <tt>sudo</tt> privileges</h3>
-  <div>
-    <p>Type the following commands to download the <tt>grind</tt> tool. These instructions apply to downloading it for the first time, and also for upgrading it to a new version:</p>
-    <pre>curl --compressed --create-dirs -o ~/bin/grind <script>document.write(document.location.origin)</script>/grind.linux_amd64<br>chmod 755 ~/bin/grind</pre>
-    <p>Type <tt>grind</tt> and hit enter to make sure the command is recognized. If not (if you see the message "grind: command not found"), try logging out and back in again.</p>
-    <p>If it still does not work (you still see the message "grind: command not found"), run the following command:</p>
-    <pre>echo 'export PATH=$PATH:$HOME/bin' &gt;&gt; ~/.bashrc</pre>
-    <p>Then log out and log in again. Type <tt>grind</tt> and hit enter to make sure the command is recognized.</p>
-    <p>Note: if it is still not working for you, please seek help! Do not fall behind on your assignments just because you ran into problems getting the tools set up. Your instructor will be happy to sit down with you and help you get it running.</p>
-  </div>
-<h3>Raspbian on Raspberry Pi</h3>
-  <div>
-    <p>Note: you can ignore this if you are working on leghorn. It already has the <tt>grind</tt> command installed.</p>
-    <p>Type the following commands to download the <tt>grind</tt> tool. These instructions apply to downloading it for the first time, and also for upgrading it to a new version:</p>
-    <pre>sudo curl --compressed -o /usr/local/bin/grind <script>document.write(document.location.origin)</script>/grind.linux_arm<br>sudo chmod 755 /usr/local/bin/grind</pre>
-    <p>Type <tt>grind</tt> and hit enter to make sure the command is recognized. If not (if you see the message "grind: command not found"), get help.</p>
-    <p>Note: if it is not working for you, please seek help! Do not fall behind on your assignments just because you ran into problems getting the tools set up. Your instructor will be happy to sit down with you and help you get it running.</p>
-  </div>
-<h3>macOS</h3>
-  <div>
-    <p>Type the following commands to download the <tt>grind</tt> tool. These instructions apply to downloading it for the first time, and also for upgrading it to a new version:</p>
-    <pre>sudo curl --compressed -o /usr/local/bin/grind <script>document.write(document.location.origin)</script>/grind.darwin_amd64<br>sudo chmod 755 /usr/local/bin/grind</pre>
-    <p>Type <tt>grind</tt> and hit enter to make sure the command is recognized. If not (if you see the message "grind: command not found"), get help.</p>
-    <p>Note: if it is not working for you, please seek help! Do not fall behind on your assignments just because you ran into problems getting the tools set up. Your instructor will be happy to sit down with you and help you get it running.</p>
-  </div>
-<h3>Windows</h3>
-  <div>
-    <p>Note: if you are using Windows 10, <a href="http://www.howtogeek.com/249966/how-to-install-and-use-the-linux-bash-shell-on-windows-10/" target="_blank">install Bash for Windows</a> and then use the Linux instructions from a Bash shell. This is simpler and works better than the normal Windows method.</p>
-    <p>Follow these steps to set up CodeGrinder. To upgrade <tt>grind</tt>, you only need to repeat the 3rd step.</p>
-    <ol>
-    <li>Make a folder on your U: drive called <tt>winbin</tt> (or pick your own location and remember it)</li>
-    <li>Add this directory to your <tt>Path</tt> using the Control Panel. Search online for help if you do not know how to do this</li>
-    <li>Download the <tt>grind.exe</tt> tool <a href="grind.exe" download="grind.exe">by right-clicking here</a> and selecting “Save link as” or “Save target as” to save it to that directory.</li>
-    </ol>
-    <p>Note: if it is still not working for you, please seek help! Do not fall behind on your assignments just because you ran into problems getting the tools set up. Your instructor will be happy to sit down with you and help you get it running.</p>
-  </div>
+<h3>Installing Thonny</h3>
+<div>
+  <p>To install Thonny on a machine that does not already have it, <a href="https://thonny.org/" target="_blank">click here to go to the Thonny website</a> and follow the instructions near the top of the page. You will need Thonny version 3.0 or higher.</p>
+</div>
 
-<h2>Logging in</h2>
-<p>After you install <tt>grind</tt> you must log in. You will normally only need to do this once per semester. To do so, type this command:</p>
-<pre>grind login <script>document.write(document.location.hostname + ' ' + QueryString.session)</script></pre>
-<p>Note that the command given above is custom to you, and will expire 5 minutes from when you first loaded this page. If you need a fresh login token, reload this page.</p>
+<h3>Installing the CodeGrinder plugin in Thonny</h3>
+<div>
+  <p>To install the CodeGrinder plugin, launch Thonny and follow these steps:</p>
+  <ol>
+    <li>Click on the “Tools” menu</li>
+    <li>Select the “Manage plug-ins…” option in the menu</li>
+    <li>Type “thonny_codegrinder_plugin” into the search box and click “Find package from PyPI”</li>
+    <li>Once it finds the plugin, click the “Install” button</li>
+    <li>Close the “Thonny plug-ins” dialog box, quit Thonny, and then reload Thonny</li>
+  </ol>
+  <p>If it was successful, there will now be a “CodeGrinder” menu in the menu bar.</p>
+</div>
+
+<h3>Logging in</h3>
+<div>
+  <p>You should normally only need to log in once a semester. To login follow these steps:</p>
+  <ol>
+    <li>Open Thonny</li>
+    <li>Click on the “CodeGrinder” menu (if you do not see it, you may need to install the CodeGrinder plugin)</li>
+    <li>Select the “Login…” option in the menu (if you cannot select it, you may already be logged in. In that case, select “Logout” and then try again)</li>
+    <li>Copy the following and paste it into the box: <pre>grind login <script>document.write(document.location.hostname + ' ' + QueryString.session)</script></pre></li>
+    <li>If it does not accept your login credentials, you may need to refresh this page. The login token is only valid for 5 minutes, and can only be used once.</li>
+  </ol>
+</div>
+
+<h3>Starting a new assignment</h3>
+<div>
+    <p>You have to click on each assignment in Canvas one time to activate it in CodeGrinder. After that, you can select the “Download new assignments” option from the “CodeGrinder” menu in Thonny to download the assignment to your computer. Make note of the directory where the assignment is downloaded (it assumes you are starting from your home directory) and then open the files directly in Thonny. Your instructor will demonstrate this in class.</p>
+    <p>If you have already downloaded an assignment, “Download new assignments” will not do anything.</p>
+</div>
+
+<h2>For students using the command-line tool</h2>
+<p>You must install the <tt>grind</tt> command-line tool to interact with CodeGrinder and complete this assignment.</p>
+
+<h3>Installing/upgrading <tt>grind</tt> on Linux (including Windows 10 with WSL/Bash for Windows) where you have <tt>sudo</tt> privileges</h3>
+<div>
+  <p>Type the following commands to download the <tt>grind</tt> tool. These instructions apply to downloading it for the first time, and also to upgrading it to a new version:</p>
+  <pre>sudo curl --compressed -o /usr/local/bin/grind <script>document.write(document.location.origin)</script>/grind.linux_amd64<br>sudo chmod 755 /usr/local/bin/grind</pre>
+  <p>Type <tt>grind</tt> and hit enter to make sure the command is recognized. If not (if you see the message “grind: command not found”), get help.</p>
+  <p>Note: if it is not working for you, please seek help! Do not fall behind on your assignments just because you ran into problems getting the tools set up. Your instructor will be happy to sit down with you and help you get it running.</p>
+</div>
+
+<h3>Installing/upgrading <tt>grind</tt> on Linux where you do NOT have <tt>sudo</tt> privileges</h3>
+<div>
+  <p>Type the following commands to download the <tt>grind</tt> tool. These instructions apply to downloading it for the first time, and also to upgrading it to a new version:</p>
+  <pre>curl --compressed --create-dirs -o ~/bin/grind <script>document.write(document.location.origin)</script>/grind.linux_amd64<br>chmod 755 ~/bin/grind</pre>
+  <p>Type <tt>grind</tt> and hit enter to make sure the command is recognized. If not (if you see the message “grind: command not found”), try logging out and back in again.</p>
+  <p>If it still does not work (you still see the message “grind: command not found”), run the following command:</p>
+  <pre>echo 'export PATH=$PATH:$HOME/bin' &gt;&gt; ~/.bashrc</pre>
+  <p>Then log out and log in again. Type <tt>grind</tt> and hit enter to make sure the command is recognized.</p>
+  <p>Note: if it is still not working for you, please seek help! Do not fall behind on your assignments just because you ran into problems getting the tools set up. Your instructor will be happy to sit down with you and help you get it running.</p>
+</div>
+
+<h3>Installing/upgrading <tt>grind</tt> on Linux on a Raspberry Pi (or other ARM device)</h3>
+<div>
+  <p>Note: you can ignore this if you are working on leghorn. It already has the <tt>grind</tt> command installed.</p>
+  <p>Type the following commands to download the <tt>grind</tt> tool. These instructions apply to downloading it for the first time, and also to upgrading it to a new version:</p>
+  <pre>sudo curl --compressed -o /usr/local/bin/grind <script>document.write(document.location.origin)</script>/grind.linux_arm<br>sudo chmod 755 /usr/local/bin/grind</pre>
+  <p>Type <tt>grind</tt> and hit enter to make sure the command is recognized. If not (if you see the message “grind: command not found”), get help.</p>
+  <p>Note: if it is not working for you, please seek help! Do not fall behind on your assignments just because you ran into problems getting the tools set up. Your instructor will be happy to sit down with you and help you get it running.</p>
+</div>
+
+<h3>Installing/upgrading <tt>grind</tt> on macOS</h3>
+<div>
+  <p>Type the following commands to download the <tt>grind</tt> tool. These instructions apply to downloading it for the first time, and also to upgrading it to a new version:</p>
+  <pre>sudo curl --compressed -o /usr/local/bin/grind <script>document.write(document.location.origin)</script>/grind.darwin_amd64<br>sudo chmod 755 /usr/local/bin/grind</pre>
+  <p>Type <tt>grind</tt> and hit enter to make sure the command is recognized. If not (if you see the message “grind: command not found”), get help.</p>
+  <p>Note: if it is not working for you, please seek help! Do not fall behind on your assignments just because you ran into problems getting the tools set up. Your instructor will be happy to sit down with you and help you get it running.</p>
+</div>
+
+<h3>Installing/upgrading <tt>grind</tt> on Windows (NOT recommended: use Windows 10 WSL/Bash for Windows instead)</h3>
+<div>
+  <p>Note: if you are using Windows 10, <a href="https://docs.microsoft.com/en-us/windows/wsl/install-win10" target="_blank">install the Windows Subsystem for Linux</a> and then follow the Linux installation instructions from a Bash shell. This is simpler and works better than the normal Windows method.</p>
+  <p>Follow these steps to set up CodeGrinder. To upgrade <tt>grind</tt>, you only need to repeat the 3rd step.</p>
+  <ol>
+  <li>Make a folder on your U: drive called <tt>winbin</tt> (or pick your own location and remember it)</li>
+  <li>Add this directory to your <tt>Path</tt> using the Control Panel. Search online for help if you do not know how to do this</li>
+  <li>Download the <tt>grind.exe</tt> tool <a href="grind.exe" download="grind.exe">by right-clicking here</a> and selecting “Save link as” or “Save target as” to save it to that directory.</li>
+  </ol>
+  <p>Note: if it is still not working for you, please seek help! Do not fall behind on your assignments just because you ran into problems getting the tools set up. Your instructor will be happy to sit down with you and help you get it running.</p>
+</div>
+
+<h3>Logging in</h3>
+<div>
+  <p>After you install <tt>grind</tt> you must log in. You will normally only need to do this once per semester. To do so, type this command:</p>
+  <pre>grind login <script>document.write(document.location.hostname + ' ' + QueryString.session)</script></pre>
+  <p>Note that the command given above is custom to you, and will expire 5 minutes from when you first loaded this page. If you need a fresh login token, reload this page.</p>
+</div>
+
+<h3>Getting started on this assignment</h3>
+<div>
+  <p>You can download this assignment using the <tt>grind</tt> tool. Use the following command to download this assignment:</p>
+  <p><pre>grind get <script>document.write(QueryString.assignment)</script></pre></p>
+  <p>Note that you do not have to come here to copy the command. Instead, you can run:</p>
+  <pre>grind list</pre>
+  <p>to see all your assignments. The list will show the ID number for each assignment, and once you know the ID number of an assignment you can type <tt>grind get &lt;id&gt;</tt> to download it.</p>
+</div>
+
 
 <script>
     (function () {
@@ -168,15 +224,14 @@
                 if (h3[i] == e.target) {
                     if (h3[i].nextElementSibling.style.display == 'none') {
                         h3[i].nextElementSibling.style.display = 'block';
-			h3[i].classList.add('open');
-		    }
-                    else {
+						h3[i].classList.add('open');
+					} else {
                         h3[i].nextElementSibling.style.display = 'none';
-			h3[i].classList.remove('open');
-		    }
+						h3[i].classList.remove('open');
+					}
                 } else {
                     h3[i].nextElementSibling.style.display = 'none';
-		    h3[i].classList.remove('open');
+					h3[i].classList.remove('open');
                 }
             }
         };
