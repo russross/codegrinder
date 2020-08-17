@@ -11,7 +11,7 @@ RUN apt install -y --no-install-recommends \
     make \
     diffutils
 
-RUN pip3 install autopep8 unittest-xml-reporting
+RUN pip3 install unittest-xml-reporting
 
 RUN mkdir /home/student && chmod 777 /home/student
 USER 2000
