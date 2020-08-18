@@ -1,4 +1,7 @@
 import ast
+import os
+import sys
+import trace
 import unittest
 
 class ASTTest(unittest.TestCase):
@@ -7,6 +10,7 @@ class ASTTest(unittest.TestCase):
         """Stores the raw text of the student submission, the lines that were
         printed when executing the student submission, and the AST tree of the
         submission."""
+        self.filename = filename
         self.printed_lines = []
         f = open(filename)
         text = f.read()
@@ -42,18 +46,27 @@ class ASTTest(unittest.TestCase):
         with find_all."""
         return ast.dump(self.tree)
 
-    def get_function_calls(self):
+    def get_function_calls(self, start_node=None):
         """Helper to find all of the function calls in the submission."""
         names = []
-        for func in self.find_all(ast.Call):
+        for func in self.find_all(ast.Call, start_node):
             if isinstance(func.func, ast.Name):
                 names.append(func.func.id)
         return names
 
-    def get_method_calls(self):
+    def find_function_calls(self, func_name):
+        """Finds all of the function calls that match a certain name and
+        returns their nodes."""
+        calls = []
+        for call in self.find_all(ast.Call):
+            if call.func.id == func_name:
+                calls.append(call)
+        return calls
+
+    def get_method_calls(self, start_node=None):
         """Helper to find all of the function calls in the submission."""
         names = []
-        for func in self.find_all(ast.Call):
+        for func in self.find_all(ast.Call, start_node):
             if isinstance(func.func, ast.Attribute):
                 names.append(func.func.attr)
         return names
@@ -70,3 +83,48 @@ class ASTTest(unittest.TestCase):
     def assert_prints(self, lines=1, msg="You are not printing anything!"):
         """Assert helper testing the number of printed lines."""
         self.assertGreaterEqual(len(self.printed_lines), 1, msg)
+
+    def function_prints(self, func_def_node):
+        """Checks whether the given function has been defined to print or not."""
+        calls_in_func = self.find_all(ast.Call, func_def_node)
+        for call in calls_in_func:
+            if call.func.id == "print":
+                return True
+        return False
+
+    def ensure_coverage(self, min_coverage):
+        """Checks whether the student has written enough unit tests to cover a
+        significant portion of their solution. Note: super hacky... Also, you
+        might want to patch stdout for tests that use this."""
+        basename = self.filename.split('.')[0]
+        # build a tracer to trace the execution of the student's solution
+        tracer = trace.Trace(count=True, trace=True,
+                ignoremods=['asttest'],
+                ignoredirs=[sys.prefix, sys.exec_prefix])
+        def trigger(basename):
+            """Helper function to import student's solution and thus, evaluate it"""
+            import importlib
+            # import solution
+            m = importlib.import_module(basename)
+            # reload it to force evaluating it (in case already imported elsewhere)
+            importlib.reload(m)
+        # run the helper function (trigger) to trigger evaluation of the solution
+        tracer.runfunc(trigger, basename)
+        # write tracing results to a *.cover file
+        tracer.results().write_results(coverdir='.')
+        # count how many lines were executed vs skipped
+        skipped_lines = []
+        total_lines = 0
+        f = open(basename+".cover")
+        for line in f:
+            if line[4].isdigit() and int(line[4]) > 1:
+                total_lines += 1
+            if line[:6] == ">>>>>>":
+                skipped_lines.append(line[8:])
+        f.close()
+        # clean up cover file
+        os.remove(basename+".cover")
+        self.assertGreater((total_lines-len(skipped_lines))/total_lines, min_coverage,
+                "Your test coverage is not adequate. Write tests that cover "
+                "all possible outcomes of your function. Here are the lines "
+                "that weren't covered:\n\n" + '\n'.join(skipped_lines))
