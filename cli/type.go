@@ -126,10 +126,8 @@ func CommandType(cmd *cobra.Command, args []string) {
 					break
 				}
 				parent = next
-			} else if os.IsNotExist(err) {
-				break
 			} else {
-				log.Fatalf("while trying to delete directory %s: %v", parent, err)
+				break
 			}
 		}
 	}

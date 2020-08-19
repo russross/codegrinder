@@ -5,9 +5,9 @@ all:
 
 arm32: .proxy-arm32asm
 
-arm64: .proxy-arm64asm .proxy-python
+arm64: .proxy-arm64asm .proxy-python .proxy-forth .proxy-standardml .proxy-prolog .proxy-nand2tetris
 
-amd64: .proxy-cpp .proxy-go .proxy-nand2tetris .proxy-prolog .proxy-standardml .proxy-forth
+amd64: .proxy-cpp .proxy-go
 
 .proxy-arm32asm: arm32asm/Dockerfile
 	docker build -t codegrinder/arm32asm arm32asm
