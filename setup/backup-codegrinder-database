@@ -3,10 +3,10 @@
 set -e
 
 if [ -z "$CODEGRINDERROOT" ]; then
-    CODEGRINDERROOT="$HOME"/codegrinder
+    CODEGRINDERROOT="$HOME/codegrinder"
 fi
 
-BACKUPDIR="$CODEGRINDERROOT"/backup
+BACKUPDIR="$CODEGRINDERROOT/backup"
 
 # make sure all the backup directories exist
 mkdir -p "$BACKUPDIR"

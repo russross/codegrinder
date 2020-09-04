@@ -242,10 +242,10 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 
 	// launch a nanny process
 	nannyName := fmt.Sprintf("nanny-%d", req.CommitBundle.UserID)
-	log.Printf("launching container for %s", nannyName)
+	//log.Printf("launching container for %s", nannyName)
 	limits := newLimits(action)
 	limits.override(problem.Options)
-	n, err := NewNanny(req.CommitBundle.ProblemType, problem, action.Interactive, args, limits, nannyName)
+	n, err := NewNanny(req.CommitBundle.ProblemType, problem, action.Interactive, action.Message, args, limits, nannyName)
 	if err != nil {
 		logAndTransmitErrorf("error creating container: %v", err)
 		return
@@ -315,7 +315,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 				log.Printf("error shutting down container: %v", err)
 			}
 		}
-		log.Printf("stdin listener closed")
+		//log.Printf("stdin listener closed")
 	}()
 
 	// relay container events to the socket
@@ -349,7 +349,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 			// transmit the message to the client
 			switch event.Event {
 			case "exec", "exit", "stdin", "stdout", "stderr", "stdinclosed", "error", "files":
-				if event.Event == "exec" || event.Event == "files" {
+				if event.Event == "files" {
 					log.Printf("%s", event)
 				}
 				res := &DaycareResponse{Event: event}
@@ -384,7 +384,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	}
 
 	// run the action
-	log.Printf("%s: %s", action.ProblemType, action.Message)
+	//log.Printf("%s: %s", action.ProblemType, action.Message)
 	var stdin io.Reader
 	if action.Interactive {
 		stdin = rw
@@ -492,7 +492,7 @@ func getContainerID(msg string) string {
 	return groups[1]
 }
 
-func NewNanny(problemType *ProblemType, problem *Problem, interactive bool, args []string, limits *limits, name string) (*Nanny, error) {
+func NewNanny(problemType *ProblemType, problem *Problem, interactive bool, action string, args []string, limits *limits, name string) (*Nanny, error) {
 	// create a container
 	mem := limits.maxMemory * 1024 * 1024
 	disk := limits.maxFileSize * 1024 * 1024
@@ -563,8 +563,9 @@ func NewNanny(problemType *ProblemType, problem *Problem, interactive bool, args
 		ReadonlyRootfs: true,
 	}
 
-	log.Printf("new container %s with cpu=%d, fd=%d, file=%d, mem=%d, threads=%d",
-		name, limits.maxCPU, limits.maxFD, limits.maxFileSize, limits.maxMemory, limits.maxThreads)
+	log.Printf("new container %s; action %s on %s (%s); params cpu=%d, fd=%d, file=%d, mem=%d, threads=%d",
+		name, action, problem.Unique, problemType.Name,
+		limits.maxCPU, limits.maxFD, limits.maxFileSize, limits.maxMemory, limits.maxThreads)
 	container, err := dockerClient.CreateContainer(docker.CreateContainerOptions{
 		Name:       name,
 		Config:     config,
@@ -630,7 +631,7 @@ func (n *Nanny) Shutdown(msg string) error {
 	n.Closed = true
 
 	// shut down the container
-	log.Printf("shutting down %s: %s", n.Name, msg)
+	//log.Printf("shutting down %s: %s", n.Name, msg)
 	err := dockerClient.RemoveContainer(docker.RemoveContainerOptions{
 		ID:    n.Container.ID,
 		Force: true,
@@ -827,7 +828,7 @@ func (n *Nanny) GetFiles(filenames []string) (map[string][]byte, error) {
 				badpattern = pattern
 			} else if matched {
 				files[name] = contents
-				log.Printf("getfiles: getting %s", name)
+				//log.Printf("getfiles: getting %s", name)
 				break
 			}
 		}

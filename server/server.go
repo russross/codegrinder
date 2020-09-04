@@ -289,7 +289,7 @@ func main() {
 				}
 			} else {
 				// rollback
-				log.Printf("rolling back transaction")
+				//log.Printf("rolling back transaction")
 				if err := tx.Rollback(); err != nil {
 					loggedHTTPErrorf(w, http.StatusInternalServerError, "db error rolling back transaction: %v", err)
 					return
@@ -594,7 +594,7 @@ func loggedHTTPDBNotFoundError(w http.ResponseWriter, err error) {
 		msg = fmt.Sprintf("db error: %v", err)
 		status = http.StatusInternalServerError
 	}
-	log.Print(logPrefix(), msg)
+	//log.Print(logPrefix(), msg)
 	http.Error(w, msg, status)
 }
 

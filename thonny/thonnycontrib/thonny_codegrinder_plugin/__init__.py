@@ -283,8 +283,10 @@ def _codegrinder_download_handler():
 
         if len(downloads) == 0:
             tkinter.messagebox.showinfo('No new assignments found',
-                'Remember that you must click on each assignment in Canvas once ' +
-                'before you can access it here.')
+                'You must click on each assignment in Canvas once ' +
+                'before you can access it here.\n\nIf you have clicked on it in Canvas and ' +
+                'are seeing this message, then you have probably already downloaded it ' +
+                'and are ready to start working on it.')
         else:
             msg = f'Downloaded {len(downloads)} new assignment{"" if len(downloads) == 1 else "s"}'
             if len(downloads) > 0:
