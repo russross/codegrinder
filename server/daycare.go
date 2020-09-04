@@ -245,7 +245,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	//log.Printf("launching container for %s", nannyName)
 	limits := newLimits(action)
 	limits.override(problem.Options)
-	n, err := NewNanny(req.CommitBundle.ProblemType, problem, action.Interactive, action.Message, args, limits, nannyName)
+	n, err := NewNanny(req.CommitBundle.ProblemType, problem, action.Interactive, action.Action, args, limits, nannyName)
 	if err != nil {
 		logAndTransmitErrorf("error creating container: %v", err)
 		return
