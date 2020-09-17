@@ -37,6 +37,7 @@ CREATE TABLE problems (
     FOREIGN KEY (problem_type) REFERENCES problem_types (name) ON DELETE CASCADE ON UPDATE CASCADE
 );
 CREATE UNIQUE INDEX problems_unique_id ON problems (unique_id);
+CREATE INDEX problems_problem_type ON problems (problem_type);
 
 CREATE TABLE problem_steps (
     problem_id              integer NOT NULL,
@@ -60,6 +61,7 @@ CREATE TABLE problem_sets (
     updated_at              datetime NOT NULL
 );
 CREATE UNIQUE INDEX problem_sets_unique_id ON problem_sets (unique_id);
+CREATE INDEX problem_set_problems_problem_id ON problem_set_problems (problem_id);
 
 CREATE TABLE problem_set_problems (
     problem_set_id          integer NOT NULL,
@@ -133,6 +135,8 @@ CREATE TABLE assignments (
 CREATE UNIQUE INDEX assignments_unique_user ON assignments (user_id, lti_id);
 CREATE UNIQUE INDEX assignments_grade_id ON assignments (grade_id);
 CREATE INDEX assignments_instructor_lti_id ON assignments (instructor, lti_id);
+CREATE INDEX assignments_course_id ON assignments (course_id);
+CREATE INDEX assignments_problem_set_id ON assignments (problem_set_id);
 
 CREATE TABLE commits (
     id                      integer PRIMARY KEY,
@@ -152,6 +156,7 @@ CREATE TABLE commits (
     FOREIGN KEY (problem_id, step) REFERENCES problem_steps (problem_id, step) ON DELETE CASCADE ON UPDATE CASCADE
 );
 CREATE UNIQUE INDEX commits_unique_assignment_problem_step ON commits (assignment_id, problem_id, step);
+CREATE INDEX commits_problem_id_step ON commits (problem_id, step);
 
 CREATE VIEW user_problem_sets AS
     SELECT DISTINCT assignments.user_id, problem_sets.id AS problem_set_id FROM
@@ -238,6 +243,8 @@ CREATE TABLE quizzes (
 
     FOREIGN KEY (assignment_id) REFERENCES assignments (id) ON DELETE CASCADE ON UPDATE CASCADE
 );
+CREATE INDEX quizzes_assignment_id ON quizzes (assignment_id);
+
 
 CREATE TABLE questions (
     id                      integer PRIMARY KEY,
@@ -268,3 +275,4 @@ CREATE TABLE responses (
     FOREIGN KEY (question_id) REFERENCES questions (id) ON DELETE CASCADE ON UPDATE CASCADE
 );
 CREATE UNIQUE INDEX responses_assignment_id_question_id ON responses (assignment_id, question_id);
+CREATE INDEX responses_question_id ON responses (question_id);

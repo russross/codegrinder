@@ -635,7 +635,7 @@ func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Co
 	if asst.ID < 1 || changed {
 		// if something changed, note the update time and save
 		if asst.ID > 0 {
-			log.Printf("assignment %d (course %d (%s), lti id %s, user %d (%s) updated",
+			log.Printf("assignment %d, course %d (%s), lti id %s, user %d (%s) updated",
 				asst.ID, course.ID, course.Name, form.ResourceLinkID, user.ID, user.Email)
 		}
 		asst.UpdatedAt = now

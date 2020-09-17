@@ -59,7 +59,7 @@ class ASTTest(unittest.TestCase):
         returns their nodes."""
         calls = []
         for call in self.find_all(ast.Call):
-            if call.func.id == func_name:
+            if isinstance(call.func, ast.Name) and call.func.id == func_name:
                 calls.append(call)
         return calls
 
@@ -70,6 +70,15 @@ class ASTTest(unittest.TestCase):
             if isinstance(func.func, ast.Attribute):
                 names.append(func.func.attr)
         return names
+
+    def find_method_calls(self, func_name):
+        """Finds all of the method calls that match a certain name and returns
+        their nodes."""
+        calls = []
+        for call in self.find_all(ast.Call):
+            if isinstance(call.func, ast.Attribute) and call.func.attr == func_name:
+                calls.append(call)
+        return calls
 
     def match_signature(self, funcname, argc):
         """Finds and returns the function definition statement that matches the
@@ -92,13 +101,22 @@ class ASTTest(unittest.TestCase):
                 return True
         return False
 
-    def ensure_coverage(self, min_coverage):
+    def get_function_linenos(self):
+        linenos = {}
+        for funcdef in self.find_all(ast.FunctionDef):
+            linenos[funcdef.name] = {
+                    "start": funcdef.lineno,
+                    "end": get_function_end_lineno(funcdef),
+                    }
+        return linenos
+
+    def ensure_coverage(self, function_names, min_coverage):
         """Checks whether the student has written enough unit tests to cover a
         significant portion of their solution. Note: super hacky... Also, you
         might want to patch stdout for tests that use this."""
         basename = self.filename.split('.')[0]
         # build a tracer to trace the execution of the student's solution
-        tracer = trace.Trace(count=True, trace=True,
+        tracer = trace.Trace(
                 ignoremods=['asttest'],
                 ignoredirs=[sys.prefix, sys.exec_prefix])
         def trigger(basename):
@@ -112,19 +130,108 @@ class ASTTest(unittest.TestCase):
         tracer.runfunc(trigger, basename)
         # write tracing results to a *.cover file
         tracer.results().write_results(coverdir='.')
-        # count how many lines were executed vs skipped
-        skipped_lines = []
-        total_lines = 0
+        # count how many lines were skipped
+        all_skipped = []
         f = open(basename+".cover")
+        lineno = 0
         for line in f:
-            if line[4].isdigit() and int(line[4]) > 1:
-                total_lines += 1
+            lineno += 1
             if line[:6] == ">>>>>>":
-                skipped_lines.append(line[8:])
+                # skipped line
+                all_skipped.append((line[8:], lineno))
         f.close()
         # clean up cover file
         os.remove(basename+".cover")
+        # count executable lines
+        visitor = FindExecutableLines()
+        visitor.visit(self.tree)
+        all_executable_lines = set(visitor.lines)
+        # compare skipped lines with actual lines
+        total_lines = 0
+        skipped_lines = []
+        executable_lines = []
+        linenos = self.get_function_linenos()
+        for funcname in function_names:
+            self.assertIn(funcname, linenos, "Function {} is not "
+                    "defined.".format(funcname))
+            start = linenos[funcname]["start"]
+            end = linenos[funcname]["end"]
+            # count executable lines (can't just subtract start from end
+            # because that includes lines that don't show up in the trace)
+            for lineno in all_executable_lines:
+                if lineno in range(start+1, end+1):
+                    total_lines += 1
+            # count skipped lines
+            for (line, lineno) in all_skipped:
+                if lineno in range(start+1, end+1):
+                    skipped_lines.append(line)
         self.assertGreater((total_lines-len(skipped_lines))/total_lines, min_coverage,
                 "Your test coverage is not adequate. Write tests that cover "
                 "all possible outcomes of your function. Here are the lines "
                 "that weren't covered:\n\n" + '\n'.join(skipped_lines))
+
+    def is_top_level(self, node):
+        """Determines if a node is at the top-level of the program."""
+        for elt in self.tree.body:
+            if isinstance(elt, ast.Expr):
+                if elt.value == node:
+                    return True
+            elif elt == node:
+                return True
+        return False
+
+def get_function_end_lineno(funcdef):
+    """Given an ast.FunctionDef node, returns the line number of the last line
+    in the function. I only wrote this since I found out too late the
+    end_lineno attribute was only introduced in Python 3.8, which we aren't
+    currently using."""
+    if sys.version_info[0] >= 3 and sys.version_info[1] >= 8:
+        return funcdef.end_lineno
+    last = funcdef.body[-1]
+    while isinstance(last, (ast.For, ast.While, ast.If)):
+        last = last.body[-1]
+    return last.lineno
+
+class FindExecutableLines(ast.NodeVisitor):
+    """
+    taken from pedal
+        - (https://github.com/pedal-edu/pedal/blob/f3c195a2da9416745ad9122ec0e69d3d75d59866/pedal/sandbox/commands.py#L297)
+        - (https://github.com/pedal-edu/pedal/blob/f3c195a2da9416745ad9122ec0e69d3d75d59866/pedal/utilities/ast_tools.py#L147)
+    NodeVisitor subclass that visits every statement of a program and tracks
+    their line numbers in a list.
+    Attributes:
+        lines (list[int]): The list of lines that were visited.
+    """
+
+    def __init__(self):
+        self.lines = []
+
+    def _track_lines(self, node):
+        self.lines.append(node.lineno)
+        self.generic_visit(node)
+
+    visit_FunctionDef = _track_lines
+    visit_AsyncFunctionDef = _track_lines
+    visit_ClassDef = _track_lines
+    visit_Return = _track_lines
+    visit_Delete = _track_lines
+    visit_Assign = _track_lines
+    visit_AugAssign = _track_lines
+    visit_AnnAssign = _track_lines
+    visit_For = _track_lines
+    visit_AsyncFor = _track_lines
+    visit_While = _track_lines
+    visit_If = _track_lines
+    visit_With = _track_lines
+    visit_AsyncWith = _track_lines
+    visit_Raise = _track_lines
+    visit_Try = _track_lines
+    visit_Assert = _track_lines
+    visit_Import = _track_lines
+    visit_ImportFrom = _track_lines
+    visit_Global = _track_lines
+    visit_Nonlocal = _track_lines
+    visit_Expr = _track_lines
+    visit_Pass = _track_lines
+    visit_Continue = _track_lines
+    visit_Break = _track_lines
