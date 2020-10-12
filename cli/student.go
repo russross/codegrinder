@@ -132,7 +132,7 @@ func downloadStudentAssignment(id int64, assignment *Assignment) {
 		Dir:   changeTo,
 		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
 	}
-	proc, err := os.StartProcess(shell, nil, attr)
+	proc, err := os.StartProcess(shell, []string{shell}, attr)
 	if err != nil {
 		log.Fatalf("error launching shell: %v", err)
 	}

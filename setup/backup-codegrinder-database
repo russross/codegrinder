@@ -18,7 +18,7 @@ mkdir -p "$BACKUPDIR/daily"
 SOURCE="$CODEGRINDERROOT/db/codegrinder.db"
 DBFILE=codegrinder_`date '+%Y-%m-%d'`.db
 
-/usr/bin/sqlite3 "$SOURCE" vacuum 2> /dev/null
+#/usr/bin/sqlite3 "$SOURCE" vacuum 2> /dev/null
 /usr/bin/sqlite3 "$SOURCE" .backup\ "$BACKUPDIR/$DBFILE" 2> /dev/null
 /usr/bin/xz "$BACKUPDIR/$DBFILE"
 

@@ -41,7 +41,7 @@ a.out:	$(AOUTOBJECT)
 	$(CXX) $(CXXFLAGS) $^ $(AOUTLDFLAGS)
 
 unittest.out:	$(UNITOBJECT) $(TESTOBJECT)
-	(main_count=$$(egrep '^int *main' $(UNITSOURCE) | wc -l); \
+	@(main_count=$$(egrep '^int *main' $(UNITSOURCE) | wc -l); \
 	 if [ $$main_count -gt 0 ]; then \
 	   echo; echo "Your file with main() should not be here."; echo; \
 	   egrep '^int *main' $(UNITSOURCE); \
