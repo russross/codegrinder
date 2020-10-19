@@ -629,7 +629,7 @@ func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Co
 		when = when.Local()
 		asst.LockAt = &when
 	} else {
-		if form.CanvasAssignmentLockAt != "" {
+		if form.CanvasAssignmentLockAt != "" && form.CanvasAssignmentLockAt != "$Canvas.assignment.lockAt.iso8601" {
 			log.Printf("failed to parse CanvasAssignmentLockAt: %q", form.CanvasAssignmentLockAt)
 		}
 		asst.LockAt = nil
