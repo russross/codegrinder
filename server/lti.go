@@ -531,8 +531,7 @@ func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Co
 			return nil, err
 		}
 
-		log.Printf("creating new assignment %q for course %d (%s), lti id %s, user %d: %s (%s)",
-			form.CanvasAssignmentTitle, course.ID, course.Name, form.ResourceLinkID, user.ID, user.Name, user.Email)
+		log.Printf("new assignment %q for user %s course %s", form.CanvasAssignmentTitle, user.Name, course.Name)
 		asst.ID = 0
 		asst.RawScores = map[string][]float64{}
 		asst.Score = 0.0

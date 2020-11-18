@@ -29,7 +29,7 @@ func CommandSave(cmd *cobra.Command, args []string) {
 
 	_, problem, _, commit, _ := gatherStudent(now, ".")
 	commit.Action = ""
-	commit.Note = "saving from grind tool"
+	commit.Note = "grind save"
 	unsigned := &CommitBundle{
 		UserID: user.ID,
 		Commit: commit,

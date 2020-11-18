@@ -5,7 +5,7 @@ all:
 
 arm32: .proxy-arm32asm
 
-arm64: .proxy-arm64asm .proxy-python .proxy-forth .proxy-standardml .proxy-prolog .proxy-nand2tetris
+arm64: .proxy-arm64asm .proxy-python .proxy-forth .proxy-standardml .proxy-prolog .proxy-nand2tetris .proxy-rust
 
 amd64: .proxy-cpp .proxy-go
 
@@ -44,3 +44,7 @@ amd64: .proxy-cpp .proxy-go
 .proxy-forth: forth/Dockerfile
 	docker build -t codegrinder/forth forth
 	touch .proxy-forth
+
+.proxy-rust: rust/Dockerfile
+	docker build -t codegrinder/rust rust
+	touch .proxy-rust

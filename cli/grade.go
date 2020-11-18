@@ -24,7 +24,7 @@ func CommandGrade(cmd *cobra.Command, args []string) {
 
 	_, problem, _, commit, dotfile := gatherStudent(now, ".")
 	commit.Action = "grade"
-	commit.Note = "grading from grind tool"
+	commit.Note = "grind grade"
 	unsigned := &CommitBundle{
 		UserID: user.ID,
 		Commit: commit,

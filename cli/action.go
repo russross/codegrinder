@@ -45,7 +45,7 @@ func CommandAction(cmd *cobra.Command, args []string) {
 
 	problemType, problem, _, commit, _ := gatherStudent(now, ".")
 	commit.Action = action
-	commit.Note = "grind tool session for action " + action
+	commit.Note = "grind action " + action
 	unsigned := &CommitBundle{
 		UserID: user.ID,
 		Commit: commit,

@@ -517,6 +517,8 @@ func PostCommitBundlesUnsigned(w http.ResponseWriter, tx *sql.Tx, currentUser *U
 		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must not include daycare hostname")
 		return
 	}
+	if bundle.Commit.Action == "" {
+	}
 
 	bundle.Hostname = ""
 	bundle.Commit.Transcript = []*EventMessage{}
@@ -593,13 +595,18 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 	}
 
 	// assignment cannot be past the lock date:
-	// * lock dates attached to an instructor are considered course-wide deadlines (the latest one that applies is honored)
-	// * lock dates attached to an individual student only apply to that student (for extensions)
+	// * a student's lock at deadline is normally honored if present
+	// * however, if there is no course-wide lock at (attached to an instructor),
+	//   the student lock at is ignored on the assumption that the deadline was lifted course wide
+	// * if the student does not have an individual deadline but there is a course-wide deadline,
+	//   it is observed on the assumption that a deadline was imposed after the student started work
 	// to decide if a submission is past the deadline:
 	// * if there is no course-wide lock at, accept
-	// * else if the course-wide lock at is in the future, accept
-	// * else if the student has a lock at in the future, accept
-	// * else reject
+	// * else if the student has a lock at:
+	//     * if it is in the past, reject
+	//     * else accept
+	// * else if the course-wide lock at has passed, reject
+	// * else accept
 	var courseWideLockAt time.Time
 	err = tx.QueryRow(`SELECT lock_at FROM assignments WHERE instructor AND lti_id = ? AND lock_at IS NOT NULL ORDER BY lock_at DESC LIMIT 1`,
 		assignment.LtiID).Scan(&courseWideLockAt)
@@ -608,7 +615,8 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 		return
 	} else if err == nil {
 		// there is a course-wide deadline, should we reject?
-		if now.After(courseWideLockAt) && (assignment.LockAt == nil || now.After(*assignment.LockAt)) {
+		if (assignment.LockAt != nil && now.After(*assignment.LockAt)) ||
+			(assignment.LockAt == nil && now.After(courseWideLockAt)) {
 			loggedHTTPErrorf(w, http.StatusForbidden, "a commit cannot be submitted after the assignment is locked")
 			return
 		}
@@ -720,6 +728,15 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 		if err := meddler.Save(tx, "commits", commit); err != nil {
 			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 			return
+		}
+
+		// save an updated timestamp on the assignment if it would otherwise not be updated
+		if commit.ReportCard == nil {
+			assignment.UpdatedAt = now
+			if err := meddler.Save(tx, "assignments", assignment); err != nil {
+				loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
+				return
+			}
 		}
 	}
 	commit.Action = action
@@ -836,6 +853,21 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 				}
 			}
 		}(assignment, report.String())
+	}
+
+	note := ""
+	if bundle.Commit.Note != "" {
+		note = " (" + bundle.Commit.Note + ")"
+	}
+	if bundle.Commit.Action == "" && bundle.CommitSignature == "" {
+		log.Printf("save request: user %s saving %s step %d%s",
+			currentUser.Name, problem.Note, bundle.Commit.Step, note)
+	} else if bundle.Commit.Action != "" && bundle.CommitSignature == "" {
+		log.Printf(" pre-daycare commit: user %s action %s for %s step %d%s",
+			currentUser.Name, bundle.Commit.Action, problem.Note, bundle.Commit.Step, note)
+	} else if bundle.Commit.Action != "" {
+		log.Printf("post-daycare commit: user %s action %s for %s step %d%s",
+			currentUser.Name, bundle.Commit.Action, problem.Note, bundle.Commit.Step, note)
 	}
 
 	render.JSON(http.StatusOK, &signed)

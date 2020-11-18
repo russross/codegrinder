@@ -310,7 +310,7 @@ def _codegrinder_save_and_sync_handler():
 
         (problemType, problem, assignment, commit, dotfile) = gather_student(now, problemDir)
         commit['action'] = ''
-        commit['node'] = 'saving from thonny plugin'
+        commit['note'] = 'thonny plugin save'
         unsigned = {
             'userID': user.id,
             'commit': commit,
@@ -412,7 +412,7 @@ def _codegrinder_grade_handler():
 
         (problemType, problem, assignment, commit, dotfile) = gather_student(now, problemDir)
         commit['action'] = 'grade'
-        commit['node'] = 'grading from thonny plugin'
+        commit['note'] = 'thonny plugin grade'
         unsigned = {
             'userID': user.id,
             'commit': commit,

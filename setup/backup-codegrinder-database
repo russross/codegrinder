@@ -43,14 +43,14 @@ if [ `date +%-d` -eq 1 ]; then
     keep_top 12 "$BACKUPDIR/monthly/"
 fi
 
-# keep a weekly backup going back 4 weeks
+# keep a weekly backup going back 10 weeks
 if [ `date +%w` -eq 1 ] ; then
     ln "$COMPRESSED" "$BACKUPDIR/weekly/"
-    keep_top 4 "$BACKUPDIR/weekly/"
+    keep_top 10 "$BACKUPDIR/weekly/"
 fi
 
-# keep a daily backup going back 7 days
+# keep a daily backup going back 10 days
 ln "$COMPRESSED" "$BACKUPDIR/daily/"
-keep_top 7 "$BACKUPDIR/daily/"
+keep_top 10 "$BACKUPDIR/daily/"
 
 rm "$COMPRESSED"
