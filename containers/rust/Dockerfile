@@ -1,7 +1,6 @@
 FROM arm64v8/debian:buster
 MAINTAINER russ@russross.com
 
-RUN ls
 RUN apt update && apt upgrade -y
 
 RUN apt install -y --no-install-recommends \
