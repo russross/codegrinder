@@ -82,6 +82,9 @@ func (l *limits) override(options []string) {
 func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params martini.Params) {
 	now := time.Now()
 
+	// CORS header for browser-based requests if the TA is a different host than the daycare
+	w.Header().Set("Access-Control-Allow-Origin", "https://" + Config.TAHostname)
+
 	// get a websocket
 	socket, err := websocket.Upgrade(w, r, nil, 1024, 1024)
 	if err != nil {
