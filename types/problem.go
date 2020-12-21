@@ -123,7 +123,7 @@ func (problem *Problem) Normalize(now time.Time, steps []*ProblemStep) error {
 	}
 	sort.Strings(problem.Tags)
 
-	// check steps and build whitelists
+	// check steps and make sure whitelists never drop names
 	if len(steps) == 0 {
 		return fmt.Errorf("problem must have at least one step")
 	}
@@ -132,17 +132,12 @@ func (problem *Problem) Normalize(now time.Time, steps []*ProblemStep) error {
 			return err
 		}
 
-		step.Whitelist = make(map[string]bool)
-		if n > 0 {
-			// carry whitelist forward
-			for name := range steps[n-1].Whitelist {
-				step.Whitelist[name] = true
-			}
+		if step.Whitelist == nil {
+			step.Whitelist = make(map[string]bool)
 		}
-
-		// add files defined in the root directory of the problem step
-		for name := range step.Files {
-			if filepath.Dir(filepath.FromSlash(name)) == "." {
+		if n > 0 {
+			// make sure everything on the whitelist is carried forward
+			for name := range steps[n-1].Whitelist {
 				step.Whitelist[name] = true
 			}
 		}

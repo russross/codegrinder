@@ -366,6 +366,7 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 			if err != nil {
 				log.Fatalf("error finding relative path of %s: %v", path, err)
 			}
+			relpath = filepath.ToSlash(relpath)
 			if info.IsDir() {
 				dirname := filepath.Base(path)
 				for _, name := range blacklistDir {
@@ -380,7 +381,7 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 				// skip problem.cfg silently
 				return nil
 			}
-			if _, exists := problemType.Files[filepath.ToSlash(relpath)]; exists {
+			if _, exists := problemType.Files[relpath]; exists {
 				log.Printf("  skipping file %s", relpath)
 				log.Printf("    because it is provided by the problem type")
 				return nil
@@ -400,15 +401,14 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 			}
 
 			// pick out solution/starter files
-			reldir, relfile := filepath.Split(relpath)
-			if filepath.ToSlash(reldir) == "_solution/" && relfile != "" {
-				solution[filepath.ToSlash(relfile)] = contents
-			} else if filepath.ToSlash(reldir) == "_starter/" && relfile != "" {
-				starter[filepath.ToSlash(relfile)] = contents
-			} else if reldir == "" && relfile != "" {
-				root[relfile] = contents
+			if parts := strings.SplitN(relpath, "/", 2); len(parts) == 0 {
+				// do nothing
+			} else if len(parts) == 2 && parts[0] == "_solution" {
+				solution[parts[1]] = contents
+			} else if len(parts) == 2 && parts[0] == "_starter" {
+				starter[parts[1]] = contents
 			} else {
-				step.Files[filepath.ToSlash(relpath)] = contents
+				root[relpath] = contents
 			}
 
 			return nil
@@ -417,29 +417,70 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 			log.Fatalf("walk error for %s: %v", stepdir, err)
 		}
 
-		// find starter files and solution files
-		if len(solution) > 0 && len(starter) > 0 && len(root) > 0 {
-			log.Fatalf("found files in _starter, _solution, and root directory; unsure how to proceed")
-		}
-		if len(solution) > 0 {
-			// explicit solution
-		} else if len(root) > 0 {
-			// files in root directory must be the solution
-			solution = root
-			root = nil
+		// find starter files and solution files, and update whitelist
+		if len(solution) > 0 && len(starter) == 0 {
+			// explicit solution, need to find the starter files
+			for name := range solution {
+				// anything with a name that matches the solution must be part
+				// of the starter set for this step
+				if contents, exists := root[name]; exists {
+					starter[name] = contents
+					delete(root, name)
+
+					whitelist[name] = true
+				} else if !whitelist[name] {
+					// we found a new file in the solution set but no matching starter file
+					log.Fatalf("found %s in the solution, but no matching starter file", name)
+				}
+			}
+			for name := range whitelist {
+				if _, exists := root[name]; exists {
+					log.Fatalf("found %s outside the _solution directory")
+				}
+			}
+		} else if len(solution) == 0 && len(starter) > 0 {
+			// explicit starter set, need to find the solution set
+			// add all files from the starter to the whitelist
+			for name := range starter {
+				whitelist[name] = true
+			}
+
+			// find solution files, we search the whitelist because
+			// the file may have been started in an earlier step
+			for name := range whitelist {
+				if contents, exists := root[name]; exists {
+					solution[name] = contents
+					delete(root, name)
+				}
+			}
+		} else if len(solution) > 0 && len(starter) > 0 {
+			// both are explicit
+			for name := range starter {
+				whitelist[name] = true
+			}
+			for name := range whitelist {
+				if _, exists := root[name]; exists {
+					log.Fatalf("found %s outside the _solution and _starter directories")
+				}
+			}
 		} else {
-			log.Fatalf("no solution files found in _solution or root directory; problem must have a solution")
+			log.Fatalf("must have solution files and starter files")
 		}
-		if len(starter) == 0 && root != nil {
-			starter = root
+
+		// copy support files into the step
+		for name, contents := range root {
+			step.Files[name] = contents
 		}
 
 		// copy the starter files into the step
 		for name, contents := range starter {
 			step.Files[name] = contents
+		}
 
-			// if the file exists as a starter in this or earlier steps, it can be part of the solution
-			whitelist[name] = true
+		// copy the whitelist for the step
+		step.Whitelist = make(map[string]bool)
+		for name := range whitelist {
+			step.Whitelist[name] = true
 		}
 
 		// copy the solution files into the commit

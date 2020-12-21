@@ -47,7 +47,7 @@ type ProblemInfo struct {
 
 func main() {
 	isInstructor := hasInstructorFile()
-	log.SetFlags(log.Ltime)
+	log.SetFlags(0)
 
 	cmdGrind := &cobra.Command{
 		Use:   "grind",
