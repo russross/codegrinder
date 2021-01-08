@@ -164,7 +164,7 @@ def runAssemblyTest(test):
     absPath = str(Path(test.asm).resolve())
     start = time.time()
     proc = subprocess.Popen(
-        [ '/usr/local/nand2tetris/tools/Assembler.sh', absPath ],
+        [ 'python3', 'bin/assembler.py', absPath ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE)
     (stdoutBytes, stderrBytes) = proc.communicate()
