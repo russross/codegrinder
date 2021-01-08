@@ -5,7 +5,7 @@ all:
 
 arm32: .proxy-arm32asm
 
-arm64: .proxy-arm64asm .proxy-python .proxy-forth .proxy-standardml .proxy-prolog .proxy-nand2tetris .proxy-rust
+arm64: .proxy-arm64asm .proxy-forth .proxy-nand2tetris .proxy-prolog .proxy-python .proxy-rust .proxy-sqlite .proxy-standardml
 
 amd64: .proxy-cpp .proxy-go
 
@@ -20,6 +20,10 @@ amd64: .proxy-cpp .proxy-go
 .proxy-cpp: cpp/Dockerfile
 	docker build -t codegrinder/cpp cpp
 	touch .proxy-cpp
+
+.proxy-forth: forth/Dockerfile
+	docker build -t codegrinder/forth forth
+	touch .proxy-forth
 
 .proxy-go: go/Dockerfile
 	docker build -t codegrinder/go go
@@ -37,14 +41,14 @@ amd64: .proxy-cpp .proxy-go
 	docker build -t codegrinder/python python
 	touch .proxy-python
 
-.proxy-standardml: standardml/Dockerfile
-	docker build -t codegrinder/standardml standardml
-	touch .proxy-standardml
-
-.proxy-forth: forth/Dockerfile
-	docker build -t codegrinder/forth forth
-	touch .proxy-forth
-
 .proxy-rust: rust/Dockerfile
 	docker build -t codegrinder/rust rust
 	touch .proxy-rust
+
+.proxy-sqlite: sqlite/Dockerfile
+	docker build -t codegrinder/sqlite sqlite
+	touch .proxy-sqlite
+
+.proxy-standardml: standardml/Dockerfile
+	docker build -t codegrinder/standardml standardml
+	touch .proxy-standardml
