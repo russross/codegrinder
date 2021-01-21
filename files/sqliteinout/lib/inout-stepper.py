@@ -5,8 +5,8 @@ import selectors
 import subprocess
 import sys
 
-delay = 0.050
-warmupdelay = 1.0
+delay = 0.025
+warmupdelay = 0.250
 bufsize = 4096
 
 def main():

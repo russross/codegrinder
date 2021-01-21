@@ -666,18 +666,18 @@ def must_get_named_tuple(path, params):
     elt = do_request(path, params, 'GET', notfoundokay=True)
     if elt is None:
         raise DialogException('Server error',
-            f'Unable to download a needed object from the server. ' +
+            'Unable to download a needed object from the server. ' +
             'Please make sure your internet connection is working.\n\n' +
-            'URL was {path}')
+            f'URL was {path}')
     return collections.namedtuple('x', elt.keys())(**elt)
 
 def must_get_named_tuple_list(path, params):
     lst = do_request(path, params, 'GET')
     if lst is None:
         raise DialogException('Server error',
-            f'Unable to download a needed object from the server. ' +
+            'Unable to download a needed object from the server. ' +
             'Please make sure your internet connection is working.\n\n' +
-            'URL was {path}')
+            f'URL was {path}')
     return [ collections.namedtuple('x', elt.keys())(**elt) for elt in lst ]
 
 def get_named_tuple(path, params):
@@ -963,8 +963,8 @@ def must_confirm_commit_bundle(bundle, args, bar):
         if 'error' in reply and reply['error']:
             socket.close()
             raise DialogException('Server error',
-                f'The server reported an unexpected error:\n\n' +
-                '{reply["error"]}')
+                'The server reported an unexpected error:\n\n' +
+                f'{reply["error"]}')
 
         if 'commitBundle' in reply and reply['commitBundle']:
             socket.close()

@@ -249,6 +249,17 @@ func checkOAuthSignature(w http.ResponseWriter, r *http.Request) {
 
 	// verify it
 	if sig != expected {
+		context := ""
+		if val := r.Form.Get("oauth_consumer_key"); val != "" {
+			context += " oauth_consumer_key=" + val
+		}
+		if val := r.Form.Get("context_title"); val != "" {
+			context += " context_title=" + val
+		}
+		if val := r.Form.Get("lis_person_contact_email_primary"); val != "" {
+			context += " lis_person_contact_email_primary=" + val
+		}
+		log.Printf("failed LTI signature on request:%s", context)
 		loggedHTTPErrorf(w, http.StatusUnauthorized, "Signature mismatch: got %s but expected %s", sig, expected)
 	}
 }

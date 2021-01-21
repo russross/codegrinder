@@ -83,7 +83,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	now := time.Now()
 
 	// CORS header for browser-based requests if the TA is a different host than the daycare
-	w.Header().Set("Access-Control-Allow-Origin", "https://" + Config.TAHostname)
+	w.Header().Set("Access-Control-Allow-Origin", "https://"+Config.TAHostname)
 
 	// get a websocket
 	socket, err := websocket.Upgrade(w, r, nil, 1024, 1024)

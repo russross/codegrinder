@@ -5,7 +5,7 @@ import os.path
 import subprocess
 import sys
 
-cmd = ['sqlite3', '-init', '.sqliterc', 'database.db']
+cmd = ['sqlite3', 'database.db']
 
 # get the list of input files to process
 infiles = sorted(glob.glob('*.sql'))
