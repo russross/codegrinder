@@ -1,19 +1,17 @@
 .SUFFIXES:
-.SUFFIXES: .s .o .c .check .out .xml .log
+.SUFFIXES: .o .c .check .out .xml .log
 
-ASFLAGS=-g --warn --fatal-warnings
 CFLAGS=-g -std=c99 -pthread -Wpedantic -Wall -Wextra -Werror
 LIBS=$(shell pkg-config --libs check)
-LDFLAGS=--fatal-warnings
 
-AOUTSOURCE=$(wildcard *.s)
-AOUTOBJECT=$(AOUTSOURCE:.s=.o)
-UNITSOURCE=$(filter-out start.s, $(AOUTSOURCE))
-UNITOBJECT=$(UNITSOURCE:.s=.o)
-LIBSOURCE=$(wildcard lib/*.s)
-LIBOBJECT=$(LIBSOURCE:.s=.o)
-TESTSOURCE=$(wildcard tests/*.check)
+ALLCSOURCE=$(wildcard *.c)
+TESTSOURCE=$(wildcard *.check)
+TESTCSOURCE=$(TESTSOURCE:.check=.c)
 TESTOBJECT=$(TESTSOURCE:.check=.o)
+AOUTSOURCE=$(filter-out $(TESTCSOURCE), $(ALLCSOURCE))
+AOUTOBJECT=$(AOUTSOURCE:.c=.o)
+UNITSOURCE=$(filter-out main.c, $(filter-out $(TESTCSOURCE), $(ALLCSOURCE)))
+UNITOBJECT=$(UNITSOURCE:.c=.o)
 
 all:	test
 
@@ -37,9 +35,6 @@ debug:	a.out $(HOME)/.gdbinit
 $(HOME)/.gdbinit:
 	echo set auto-load safe-path / > $(HOME)/.gdbinit
 
-.s.o:
-	as $(ASFLAGS) $< -o $@
-
 .c.o:
 	gcc $(CFLAGS) $< -c -o $@
 
@@ -47,10 +42,10 @@ $(HOME)/.gdbinit:
 	checkmk $< > $@
 
 a.out:	$(AOUTOBJECT)
-	ld $(LDFLAGS) $^
+	gcc $(CFLAGS) $(AOUTOBJECT) -o $@
 
-unittest.out:	$(TESTOBJECT) $(LIBOBJECT) $(UNITOBJECT)
-	gcc $(CFLAGS) $(TESTOBJECT) $(LIBOBJECT) $(UNITOBJECT) $(LIBS) -o $@
+unittest.out:	$(TESTOBJECT) $(UNITOBJECT)
+	gcc $(CFLAGS) $(TESTOBJECT) $(UNITOBJECT) $(LIBS) -o $@
 
 setup:
 	# install build tools, unit test library, and valgrind
