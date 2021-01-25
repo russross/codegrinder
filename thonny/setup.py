@@ -26,6 +26,7 @@ setup (
             "requests >=2.21",
             "thonny >=3.0",
             "websocket-client >=0.57",
+            "tkinterhtml >=0.7",
         ],
         packages=['thonnycontrib.thonny_codegrinder_plugin'],
 )
