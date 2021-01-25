@@ -222,9 +222,10 @@ CREATE VIEW problem_set_search_fields AS
         problem_sets.unique_id || ',' ||
         problem_sets.note || ',' ||
         problem_sets.tags || ',' ||
-        problems.unique_id || ',' ||
-        problems.note || ',' ||
-        problems.tags AS search_text
+        group_concat(problems.unique_id, ',') || ',' ||
+        group_concat(problems.note, ',') || ',' ||
+        group_concat(problems.tags, ',')
+        AS search_text
     FROM problem_sets JOIN problem_set_problems ON problem_sets.id = problem_set_problems.problem_set_id
     JOIN problems ON problem_set_problems.problem_id = problems.id
     GROUP BY problem_sets.id;
