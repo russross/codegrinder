@@ -21,6 +21,8 @@ import tkinter.simpledialog
 import tkinter.ttk
 import websocket
 
+from tkinterhtml import HtmlFrame
+
 #
 # inject the CodeGrinder menu items into Thonny
 #
@@ -75,7 +77,7 @@ def load_plugin():
                    tester=_codegrinder_logout_enabled,
                    handler=_codegrinder_logout_handler,
                    group=90)
-    wb.add_view(InstructionsView, "Instructions", "ne", default_position_key="zzz")
+    wb.add_view(HtmlFrame, "Instructions", "ne", default_position_key="zzz")
 
 #
 # These functions are predicates to decide if menu items should be enabled
@@ -200,12 +202,12 @@ def _codegrinder_show_instructions_handler():
         dialog.show_dialog()
 
 def show_instructions(problemDir):
-    with open(os.path.join(problemDir, 'doc', 'doc.md')) as fp:
+    with open(os.path.join(problemDir, 'doc', 'index.html')) as fp:
         doc = fp.read()
 
-    iv = thonny.get_workbench().get_view('InstructionsView')
+    iv = thonny.get_workbench().get_view('HtmlFrame')
     iv.set_content(doc)
-    thonny.get_workbench().show_view('InstructionsView', set_focus=False)
+    thonny.get_workbench().show_view('HtmlFrame', set_focus=False)
 
 def _codegrinder_run_tests_handler():
     try:
@@ -499,22 +501,6 @@ def _codegrinder_grade_handler():
         bar.stop()
 
 #
-# This implements the instructions panel
-#
-
-class InstructionsView(thonny.tktextext.TextFrame):
-    def __init__(self, master):
-        super().__init__(master,
-                text_class=thonny.rst_utils.RstText,
-                read_only=True,
-                horizontal_scrollbar_class=thonny.ui_utils.AutoScrollbar)
-        self.text.edit_reset()
-    
-    def set_content(self, doc):
-        self.text.clear()
-        self.text.direct_insert("end", doc)
-
-#
 # The rest are helper functions, mostly ported from the grind CLI tool
 #
 
@@ -651,7 +637,7 @@ def do_request(path, params, method, upload=None, notfoundokay=False):
         headers['Content-Type'] = 'application/json'
         headers['Content-Encoding'] = 'gzip'
         data = json.dumps(upload).encode('utf-8')
-    
+
     resp = requests.request(method, url, params=params, data=data, cookies={ck: cv})
 
     if notfoundokay and resp.status_code == 404:
