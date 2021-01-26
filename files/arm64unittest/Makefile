@@ -1,19 +1,22 @@
 .SUFFIXES:
-.SUFFIXES: .s .o .c .check .out .xml .log
+.SUFFIXES: .o .c .s .check .out .xml .log
 
 ASFLAGS=-g --warn --fatal-warnings
 CFLAGS=-g -std=c99 -pthread -Wpedantic -Wall -Wextra -Werror
-LIBS=$(shell pkg-config --libs check)
+CHECKLIBS=$(shell pkg-config --libs check)
 LDFLAGS=--fatal-warnings
+MACHINE=$(shell uname -m)
 
-AOUTSOURCE=$(wildcard *.s)
-AOUTOBJECT=$(AOUTSOURCE:.s=.o)
-UNITSOURCE=$(filter-out start.s, $(AOUTSOURCE))
-UNITOBJECT=$(UNITSOURCE:.s=.o)
-LIBSOURCE=$(wildcard lib/*.s)
-LIBOBJECT=$(LIBSOURCE:.s=.o)
-TESTSOURCE=$(wildcard tests/*.check)
-TESTOBJECT=$(TESTSOURCE:.check=.o)
+ALLOBJECT=$(sort \
+	$(patsubst %.c,%.o,$(wildcard *.c)) \
+	$(patsubst %.s,%.o,$(wildcard *.s)) \
+	$(patsubst %.s,%.o,$(wildcard lib/*.s)) \
+	$(patsubst %.check,%.o,$(wildcard *.check)))
+CHECKC=$(patsubst %.check,%.c,$(wildcard *.check))
+CCOUNT=$(words $(filter-out $(CHECKC), $(wildcard *.c)))
+LIBOBJECT=$(patsubst %.s,%.o,$(wildcard lib/*.s))
+AOUTOBJECT=$(filter-out $(CHECKC:.c=.o), $(filter-out $(LIBOBJECT), $(ALLOBJECT)))
+UNITOBJECT=$(filter-out main.o start.o, $(ALLOBJECT))
 
 all:	test
 
@@ -38,6 +41,9 @@ $(HOME)/.gdbinit:
 	echo set auto-load safe-path / > $(HOME)/.gdbinit
 
 .s.o:
+ifneq ($(MACHINE), aarch64)
+	$(error this should only be run on the cs2810.cs.dixie.edu server)
+endif
 	as $(ASFLAGS) $< -o $@
 
 .c.o:
@@ -47,14 +53,18 @@ $(HOME)/.gdbinit:
 	checkmk $< > $@
 
 a.out:	$(AOUTOBJECT)
+ifeq ($(CCOUNT), 0)
 	ld $(LDFLAGS) $^
+else
+	gcc $(CFLAGS) $^ -o $@
+endif
 
-unittest.out:	$(TESTOBJECT) $(LIBOBJECT) $(UNITOBJECT)
-	gcc $(CFLAGS) $(TESTOBJECT) $(LIBOBJECT) $(UNITOBJECT) $(LIBS) -o $@
+unittest.out:	$(UNITOBJECT)
+	gcc $(CFLAGS) $^ $(CHECKLIBS) -o $@
 
 setup:
 	# install build tools, unit test library, and valgrind
-	sudo apt install -y build-essential make gdb valgrind check pkg-config
+	sudo apt install -y build-essential make gdb valgrind check pkg-config python3
 
 clean:
-	rm -f $(AOUTOBJECT) $(LIBOBJECT) $(TESTOBJECT) $(TESTSOURCE:.check=.c) *.out *.xml *.log
+	rm -f $(ALLOBJECT) $(CHECKC) *.out *.xml *.log
