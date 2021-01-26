@@ -159,12 +159,14 @@ CREATE UNIQUE INDEX commits_unique_assignment_problem_step ON commits (assignmen
 CREATE INDEX commits_problem_id_step ON commits (problem_id, step);
 
 CREATE VIEW user_problem_sets AS
-    SELECT DISTINCT assignments.user_id, problem_sets.id AS problem_set_id FROM
-    assignments JOIN problem_sets ON assignments.problem_set_id = problem_sets.id
+    SELECT DISTINCT assignments.user_id, problem_sets.id AS problem_set_id
+    FROM assignments
+    JOIN problem_sets ON assignments.problem_set_id = problem_sets.id
     WHERE assignments.problem_set_id IS NOT NULL
     UNION
-    SELECT DISTINCT instructors.id AS user_id, assignments.problem_set_id AS problem_set_id FROM
-    users AS instructors JOIN assignments AS instructors_assignments ON instructors.id = instructors_assignments.user_id
+    SELECT DISTINCT instructors.id AS user_id, assignments.problem_set_id AS problem_set_id
+    FROM users AS instructors
+    JOIN assignments AS instructors_assignments ON instructors.id = instructors_assignments.user_id
     JOIN courses ON instructors_assignments.course_id = courses.id
     JOIN assignments ON courses.id = assignments.course_id
     WHERE instructors_assignments.instructor
@@ -172,13 +174,15 @@ CREATE VIEW user_problem_sets AS
     AND instructors_assignments.problem_set_id IS NOT NULL;
 
 CREATE VIEW user_problems AS
-    SELECT DISTINCT assignments.user_id, problem_set_problems.problem_id FROM
-    assignments JOIN problem_sets ON assignments.problem_set_id = problem_sets.id
+    SELECT DISTINCT assignments.user_id, problem_set_problems.problem_id
+    FROM assignments
+    JOIN problem_sets ON assignments.problem_set_id = problem_sets.id
     JOIN problem_set_problems ON problem_sets.id = problem_set_problems.problem_set_id
     WHERE assignments.problem_set_id IS NOT NULL
     UNION
-    SELECT DISTINCT instructors.id AS user_id, problem_set_problems.problem_id FROM
-    users AS instructors JOIN assignments AS instructors_assignments ON instructors.id = instructors_assignments.user_id
+    SELECT DISTINCT instructors.id AS user_id, problem_set_problems.problem_id
+    FROM users AS instructors
+    JOIN assignments AS instructors_assignments ON instructors.id = instructors_assignments.user_id
     JOIN courses ON instructors_assignments.course_id = courses.id
     JOIN assignments ON courses.id = assignments.course_id
     JOIN problem_sets ON assignments.problem_set_id = problem_sets.id
@@ -188,23 +192,27 @@ CREATE VIEW user_problems AS
     AND instructors_assignments.problem_set_id IS NOT NULL;
 
 CREATE VIEW user_users AS
-    SELECT DISTINCT instructors.id AS user_id, users.id AS other_user_id FROM
-    users AS instructors JOIN assignments AS instructors_assignments ON instructors.id = instructors_assignments.user_id
+    SELECT DISTINCT instructors.id AS user_id, users.id AS other_user_id
+    FROM users AS instructors
+    JOIN assignments AS instructors_assignments ON instructors.id = instructors_assignments.user_id
     JOIN courses ON instructors_assignments.course_id = courses.id
     JOIN assignments ON courses.id = assignments.course_id
     JOIN users ON assignments.user_id = users.id
     WHERE instructors_assignments.instructor
     UNION
-    SELECT id as user_id, id AS other_user_id FROM users;
+    SELECT id as user_id, id AS other_user_id
+    FROM users;
 
 CREATE VIEW user_assignments AS
-    SELECT DISTINCT instructors.id AS user_id, assignments.id AS assignment_id FROM
-    users AS instructors JOIN assignments AS instructors_assignments ON instructors.id = instructors_assignments.user_id
+    SELECT DISTINCT instructors.id AS user_id, assignments.id AS assignment_id
+    FROM users AS instructors
+    JOIN assignments AS instructors_assignments ON instructors.id = instructors_assignments.user_id
     JOIN courses ON instructors_assignments.course_id = courses.id
     JOIN assignments ON courses.id = assignments.course_id
     WHERE instructors_assignments.instructor
     UNION
-    SELECT user_id, id as assignment_id FROM assignments;
+    SELECT user_id, id as assignment_id
+    FROM assignments;
 
 CREATE VIEW assignment_search_fields AS
     SELECT assignments.id AS assignment_id,
@@ -212,7 +220,8 @@ CREATE VIEW assignment_search_fields AS
         courses.name || ',' ||
         users.name || ',' || users.email || ',' ||
         problem_sets.unique_id || ',' || problem_sets.note || ',' || problem_sets.tags AS search_text
-    FROM assignments JOIN courses ON assignments.course_id = courses.id
+    FROM assignments
+    JOIN courses ON assignments.course_id = courses.id
     JOIN users ON assignments.user_id = users.id
     JOIN problem_sets ON assignments.problem_set_id = problem_sets.id
     WHERE assignments.problem_set_id IS NOT NULL;
@@ -226,7 +235,8 @@ CREATE VIEW problem_set_search_fields AS
         group_concat(problems.note, ',') || ',' ||
         group_concat(problems.tags, ',')
         AS search_text
-    FROM problem_sets JOIN problem_set_problems ON problem_sets.id = problem_set_problems.problem_set_id
+    FROM problem_sets
+    JOIN problem_set_problems ON problem_sets.id = problem_set_problems.problem_set_id
     JOIN problems ON problem_set_problems.problem_id = problems.id
     GROUP BY problem_sets.id;
 
