@@ -1,6 +1,6 @@
 '''Thonny plugin to integrate with CodeGrinder for coding practice'''
 
-__version__ = '2.5.3'
+__version__ = '2.5.4'
 
 import base64
 import collections
@@ -19,9 +19,8 @@ import thonny.common
 import tkinter.messagebox
 import tkinter.simpledialog
 import tkinter.ttk
+import tkinterhtml
 import websocket
-
-from tkinterhtml import HtmlFrame
 
 #
 # inject the CodeGrinder menu items into Thonny
@@ -77,7 +76,7 @@ def load_plugin():
                    tester=_codegrinder_logout_enabled,
                    handler=_codegrinder_logout_handler,
                    group=90)
-    wb.add_view(HtmlFrame, "Instructions", "ne", default_position_key="zzz")
+    wb.add_view(tkinterhtml.HtmlFrame, "Instructions", "ne", default_position_key="zzz")
 
 #
 # These functions are predicates to decide if menu items should be enabled
