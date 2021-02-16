@@ -74,9 +74,9 @@ INSERT INTO problem_type_actions (problem_type, action, parser, message, interac
 INSERT INTO problem_type_actions (problem_type, action, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('python3unittest', 'shell', NULL, 'Running Python shell‥', 1, 60, 1800, 300, 10, 10, 256, 30);
 
 INSERT INTO problem_types (name, image) VALUES ('sqliteinout', 'codegrinder/sqlite');
-INSERT INTO problem_type_actions (problem_type, action, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('sqliteinout', 'grade', 'xunit', 'Grading‥', 0, 60, 120, 120, 100, 10, 256, 20);
-INSERT INTO problem_type_actions (problem_type, action, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('sqliteinout', 'test', NULL, 'Testing‥', 0, 60, 120, 120, 100, 10, 256, 20);
-INSERT INTO problem_type_actions (problem_type, action, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('sqliteinout', 'step', NULL, 'Stepping‥', 0, 60, 1800, 300, 100, 10, 256, 20);
+INSERT INTO problem_type_actions (problem_type, action, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('sqliteinout', 'grade', 'xunit', 'Grading‥', 0, 60, 120, 120, 100, 1000, 256, 20);
+INSERT INTO problem_type_actions (problem_type, action, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('sqliteinout', 'test', NULL, 'Testing‥', 0, 60, 120, 120, 100, 1000, 256, 20);
+INSERT INTO problem_type_actions (problem_type, action, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('sqliteinout', 'step', NULL, 'Stepping‥', 0, 60, 1800, 300, 100, 1000, 256, 20);
 
 INSERT INTO problem_types (name, image) VALUES ('standardmlinout', 'codegrinder/standardml');
 INSERT INTO problem_type_actions (problem_type, action, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('standardmlinout', 'grade', 'xunit', 'Grading‥', 0, 10, 20, 20, 100, 10, 256, 200);
