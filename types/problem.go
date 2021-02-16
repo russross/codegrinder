@@ -287,7 +287,11 @@ func (step *ProblemStep) BuildInstructions() (string, error) {
 		extensions |= blackfriday.Strikethrough
 		extensions |= blackfriday.SpaceHeadings
 
-		justHTML = blackfriday.Run(data, blackfriday.WithExtensions(extensions))
+		renderer := blackfriday.NewHTMLRenderer(blackfriday.HTMLRendererParameters{})
+
+		justHTML = blackfriday.Run(data,
+			blackfriday.WithExtensions(extensions),
+			blackfriday.WithRenderer(renderer))
 		used[docmd] = true
 	} else {
 		return "", loggedErrorf("no documentation found: checked doc/doc.html and doc/doc.md")
