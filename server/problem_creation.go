@@ -169,8 +169,13 @@ func saveProblemBundleCommon(w http.ResponseWriter, tx *sql.Tx, currentUser *Use
 				loggedHTTPErrorf(w, http.StatusInternalServerError, "json error: %v", err)
 				return
 			}
-			if _, err = tx.Exec(`UPDATE problem_steps SET note=?,instructions=?,weight=?,files=? WHERE problem_id=? AND step=?`,
-				step.Note, step.Instructions, step.Weight, raw, step.ProblemID, step.Step); err != nil {
+			rawWhitelist, err := json.Marshal(step.Whitelist)
+			if err != nil {
+				loggedHTTPErrorf(w, http.StatusInternalServerError, "json error: %v", err)
+				return
+			}
+			if _, err = tx.Exec(`UPDATE problem_steps SET note=?,instructions=?,weight=?,files=?,whitelist=? WHERE problem_id=? AND step=?`,
+				step.Note, step.Instructions, step.Weight, raw, rawWhitelist, step.ProblemID, step.Step); err != nil {
 				loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 				return
 			}
