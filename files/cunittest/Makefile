@@ -2,7 +2,7 @@
 .SUFFIXES: .o .c .s .check .out .xml .log
 
 ASFLAGS=-g --warn --fatal-warnings
-CFLAGS=-g -std=c99 -pthread -Wpedantic -Wall -Wextra -Werror
+CFLAGS=-g -Os -std=c99 -pthread -Wpedantic -Wall -Wextra -Werror
 CHECKLIBS=$(shell pkg-config --libs check)
 LDFLAGS=--fatal-warnings
 MACHINE=$(shell uname -m)
