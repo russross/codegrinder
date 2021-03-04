@@ -40,8 +40,8 @@ stylecheck:
 	pep8 $(PYTHONSOURCE)
 
 setup:
-	sudo apt install -y make python3 python3-pip python3-six diffutils
-	sudo pip3 install unittest-xml-reporting
+	sudo apt install -y make python3 python3-pip python3-setuptools python3-six diffutils
+	sudo pip3 install unittest-xml-reporting cisc108 pygame
 
 clean:
 	rm -rf __pycache__ tests/__pycache__ tests/*.actual test_detail.xml

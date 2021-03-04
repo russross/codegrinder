@@ -10,49 +10,49 @@ arm64: .proxy-arm64asm .proxy-c .proxy-forth .proxy-nand2tetris .proxy-prolog .p
 amd64: .proxy-cpp .proxy-go
 
 .proxy-arm32asm: arm32asm/Dockerfile
-	docker build -t codegrinder/arm32asm arm32asm
+	docker build --pull -t codegrinder/arm32asm arm32asm
 	touch .proxy-arm32asm
 
 .proxy-arm64asm: arm64asm/Dockerfile
-	docker build -t codegrinder/arm64asm arm64asm
+	docker build --pull -t codegrinder/arm64asm arm64asm
 	touch .proxy-arm64asm
 
 .proxy-c: c/Dockerfile
-	docker build -t codegrinder/c c
+	docker build --pull -t codegrinder/c c
 	touch .proxy-c
 
 .proxy-cpp: cpp/Dockerfile
-	docker build -t codegrinder/cpp cpp
+	docker build --pull -t codegrinder/cpp cpp
 	touch .proxy-cpp
 
 .proxy-forth: forth/Dockerfile
-	docker build -t codegrinder/forth forth
+	docker build --pull -t codegrinder/forth forth
 	touch .proxy-forth
 
 .proxy-go: go/Dockerfile
-	docker build -t codegrinder/go go
+	docker build --pull -t codegrinder/go go
 	touch .proxy-go
 
 .proxy-nand2tetris: nand2tetris/Dockerfile
-	docker build -t codegrinder/nand2tetris nand2tetris
+	docker build --pull -t codegrinder/nand2tetris nand2tetris
 	touch .proxy-nand2tetris
 
 .proxy-prolog: prolog/Dockerfile
-	docker build -t codegrinder/prolog prolog
+	docker build --pull -t codegrinder/prolog prolog
 	touch .proxy-prolog
 
 .proxy-python: python/Dockerfile
-	docker build -t codegrinder/python python
+	docker build --pull -t codegrinder/python python
 	touch .proxy-python
 
 .proxy-rust: rust/Dockerfile
-	docker build -t codegrinder/rust rust
+	docker build --pull -t codegrinder/rust rust
 	touch .proxy-rust
 
 .proxy-sqlite: sqlite/Dockerfile
-	docker build -t codegrinder/sqlite sqlite
+	docker build --pull -t codegrinder/sqlite sqlite
 	touch .proxy-sqlite
 
 .proxy-standardml: standardml/Dockerfile
-	docker build -t codegrinder/standardml standardml
+	docker build --pull -t codegrinder/standardml standardml
 	touch .proxy-standardml
