@@ -8,10 +8,11 @@ import sys
 import time
 import xml.etree.ElementTree as ET
 
-cmd = sys.argv[1:]
+suffix = sys.argv[1]
+cmd = sys.argv[2:]
 
 # get the list of input files to process
-infiles = sorted(glob.glob('inputs/*.input'))
+infiles = sorted(glob.glob('inputs/*.' + suffix))
 
 testsuites = ET.Element('testsuites')
 suite = ET.SubElement(testsuites, 'testsuite')
@@ -23,8 +24,8 @@ for infile in infiles:
     if not prevpassed:
         print()
 
-    outfile = infile[:-len('.input')] + '.output'
-    actualfile = infile[:-len('.input')] + '.actual'
+    outfile = infile[:-len('.' + suffix)] + '.expected'
+    actualfile = infile[:-len('.' + suffix)] + '.actual'
 
     # get the input
     fp = open(infile, 'rb')

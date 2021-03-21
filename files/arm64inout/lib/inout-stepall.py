@@ -4,10 +4,11 @@ import glob
 import subprocess
 import sys
 
-cmd = sys.argv[1:]
+suffix = sys.argv[1]
+cmd = sys.argv[2:]
 
 # get the list of input files to process
-infiles = sorted(glob.glob('inputs/*.input'))
+infiles = sorted(glob.glob('inputs/*.' + suffix))
 
 first = True
 for infile in infiles:
@@ -15,9 +16,9 @@ for infile in infiles:
         print()
     first = False
 
-    outfile = infile[:-len('.input')] + '.output'
+    outfile = infile[:-len('.' + suffix)] + '.expected'
 
-    c = ['python3', 'bin/inout-stepper.py', infile, outfile]
+    c = ['python3', 'lib/inout-stepper.py', infile, outfile]
     c.extend(cmd)
 
     # run the program to get the actual output

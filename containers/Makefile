@@ -5,7 +5,7 @@ all:
 
 arm32: .proxy-arm32asm
 
-arm64: .proxy-arm64asm .proxy-c .proxy-forth .proxy-nand2tetris .proxy-prolog .proxy-python .proxy-rust .proxy-sqlite .proxy-standardml
+arm64: .proxy-arm64asm .proxy-c .proxy-forth .proxy-go .proxy-nand2tetris .proxy-prolog .proxy-python .proxy-rust .proxy-sqlite .proxy-standardml
 
 amd64: .proxy-cpp .proxy-go
 

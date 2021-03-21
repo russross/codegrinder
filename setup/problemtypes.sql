@@ -46,6 +46,12 @@ INSERT INTO problem_type_actions (problem_type, action, parser, message, interac
 INSERT INTO problem_type_actions (problem_type, action, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('gounittest', 'test', NULL, 'Testing‥', 0, 10, 20, 20, 200, 10, 256, 200);
 INSERT INTO problem_type_actions (problem_type, action, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('gounittest', 'run', NULL, 'Running‥', 1, 10, 1800, 300, 200, 10, 256, 200);
 
+INSERT INTO problem_types (name, image) VALUES ('goinout', 'codegrinder/go');
+INSERT INTO problem_type_actions (problem_type, action, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('goinout', 'grade', 'xunit', 'Grading‥', 0, 10, 20, 20, 200, 20, 256, 200);
+INSERT INTO problem_type_actions (problem_type, action, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('goinout', 'test', NULL, 'Testing‥', 0, 10, 20, 20, 200, 20, 256, 200);
+INSERT INTO problem_type_actions (problem_type, action, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('goinout', 'step', NULL, 'Stepping‥', 0, 10, 20, 20, 200, 20, 256, 200);
+INSERT INTO problem_type_actions (problem_type, action, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('goinout', 'run', NULL, 'Running‥', 1, 10, 600, 60, 200, 20, 256, 200);
+
 INSERT INTO problem_types (name, image) VALUES ('nand2tetris', 'codegrinder/nand2tetris');
 INSERT INTO problem_type_actions (problem_type, action, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('nand2tetris', 'grade', 'xunit', 'Grading‥', 0, 20, 20, 20, 100, 10, 1024, 200);
 INSERT INTO problem_type_actions (problem_type, action, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('nand2tetris', 'test', NULL, 'Testing‥', 0, 20, 20, 20, 100, 10, 1024, 200);
