@@ -71,4 +71,4 @@ setup:
 	sudo apt install -y build-essential make gdb valgrind check pkg-config python3
 
 clean:
-	rm -f $(ALLOBJECT) $(CHECKC) *.out *.xml *.log
+	rm -f $(ALLOBJECT) $(CHECKC) *.out *.xml *.log core

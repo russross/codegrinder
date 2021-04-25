@@ -7,7 +7,7 @@ import sys
 
 delay = 0.005
 warmupdelay = 1.0
-bufsize = 4096
+bufsize = 65536
 
 def main():
     if len(sys.argv) < 4:
