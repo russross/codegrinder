@@ -863,11 +863,11 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 		log.Printf("save request: user %s saving %s step %d%s",
 			currentUser.Name, problem.Note, bundle.Commit.Step, note)
 	} else if bundle.Commit.Action != "" && bundle.CommitSignature == "" {
-		log.Printf(" pre-daycare commit: user %s action %s for %s step %d%s",
-			currentUser.Name, bundle.Commit.Action, problem.Note, bundle.Commit.Step, note)
+		log.Printf(" pre-daycare commit: user %s (%d) action %s for %s step %d%s",
+			currentUser.Name, currentUser.ID, bundle.Commit.Action, problem.Note, bundle.Commit.Step, note)
 	} else if bundle.Commit.Action != "" {
-		log.Printf("post-daycare commit: user %s action %s for %s step %d%s",
-			currentUser.Name, bundle.Commit.Action, problem.Note, bundle.Commit.Step, note)
+		log.Printf("post-daycare commit: user %s (%d) action %s for %s step %d%s",
+			currentUser.Name, currentUser.ID, bundle.Commit.Action, problem.Note, bundle.Commit.Step, note)
 	}
 
 	render.JSON(http.StatusOK, &signed)

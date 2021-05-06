@@ -542,7 +542,8 @@ func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Co
 			return nil, err
 		}
 
-		log.Printf("new assignment %q for user %s course %s", form.CanvasAssignmentTitle, user.Name, course.Name)
+		log.Printf("new assignment, %q for user %s (%d) course %s",
+			form.CanvasAssignmentTitle, user.Name, user.ID, course.Name)
 		asst.ID = 0
 		asst.RawScores = map[string][]float64{}
 		asst.Score = 0.0
@@ -648,8 +649,8 @@ func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Co
 	if asst.ID < 1 || changed {
 		// if something changed, note the update time and save
 		if asst.ID > 0 {
-			log.Printf("assignment %d, course %d (%s), lti id %s, user %d (%s) updated",
-				asst.ID, course.ID, course.Name, form.ResourceLinkID, user.ID, user.Email)
+			log.Printf("assignment %d updated, %q for user %s (%d) course %s",
+				asst.ID, form.CanvasAssignmentTitle, user.Name, user.ID, course.Name)
 		}
 		asst.UpdatedAt = now
 		if err := meddler.Save(tx, "assignments", asst); err != nil {
