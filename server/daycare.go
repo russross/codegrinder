@@ -230,6 +230,10 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		logAndTransmitErrorf("step number %d in the problem thinks it is step number %d", commit.Step, step.Step)
 		return
 	}
+	if step.ProblemType != problemType.Name {
+		logAndTransmitErrorf("step number %d in the problem has problem type %q but the commit bundle included problem type %q", step.ProblemType, problemType)
+		return
+	}
 
 	// collect the files from the problem step, commit, and problem type
 	files := make(map[string][]byte)
@@ -392,7 +396,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	if action.Interactive {
 		stdin = rw
 	}
-	cmd := []string{"make", action.Action}
+	cmd := strings.Fields(action.Command)
 	switch {
 	case action.Parser == "xunit":
 		runAndParseXUnit(n, cmd)

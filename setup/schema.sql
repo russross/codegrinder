@@ -8,6 +8,7 @@ CREATE TABLE problem_types (
 CREATE TABLE problem_type_actions (
     problem_type            text NOT NULL,
     action                  text NOT NULL,
+    command                 text NOT NULL,
     parser                  text CHECK(parser IS NULL OR parser IN ('xunit', 'check')),
     message                 text NOT NULL,
     interactive             boolean NOT NULL,
@@ -28,29 +29,29 @@ CREATE TABLE problems (
     id                      integer PRIMARY KEY,
     unique_id               text NOT NULL,
     note                    text NOT NULL,
-    problem_type            text NOT NULL,
     tags                    text NOT NULL,
     options                 text NOT NULL,
     created_at              datetime NOT NULL,
-    updated_at              datetime NOT NULL,
-
-    FOREIGN KEY (problem_type) REFERENCES problem_types (name) ON DELETE CASCADE ON UPDATE CASCADE
+    updated_at              datetime NOT NULL
 );
 CREATE UNIQUE INDEX problems_unique_id ON problems (unique_id);
-CREATE INDEX problems_problem_type ON problems (problem_type);
 
 CREATE TABLE problem_steps (
     problem_id              integer NOT NULL,
     step                    integer NOT NULL,
+    problem_type            text NOT NULL,
     note                    text NOT NULL,
     instructions            text NOT NULL,
     weight                  real NOT NULL,
     files                   text NOT NULL,
     whitelist               text NOT NULL,
+    solution                text NOT NULL,
 
     PRIMARY KEY (problem_id, step),
-    FOREIGN KEY (problem_id) REFERENCES problems (id) ON DELETE CASCADE ON UPDATE CASCADE
+    FOREIGN KEY (problem_id) REFERENCES problems (id) ON DELETE CASCADE ON UPDATE CASCADE,
+    FOREIGN KEY (problem_type) REFERENCES problem_types (name) ON DELETE RESTRICT ON UPDATE CASCADE
 );
+CREATE INDEX problem_steps_problem_type ON problem_steps (problem_type);
 
 CREATE TABLE problem_sets (
     id                      integer PRIMARY KEY,
@@ -61,7 +62,6 @@ CREATE TABLE problem_sets (
     updated_at              datetime NOT NULL
 );
 CREATE UNIQUE INDEX problem_sets_unique_id ON problem_sets (unique_id);
-CREATE INDEX problem_set_problems_problem_id ON problem_set_problems (problem_id);
 
 CREATE TABLE problem_set_problems (
     problem_set_id          integer NOT NULL,
@@ -72,6 +72,7 @@ CREATE TABLE problem_set_problems (
     FOREIGN KEY (problem_set_id) REFERENCES problem_sets (id) ON DELETE CASCADE ON UPDATE CASCADE,
     FOREIGN KEY (problem_id) REFERENCES problems (id) ON DELETE CASCADE ON UPDATE CASCADE
 );
+CREATE INDEX problem_set_problems_problem_id ON problem_set_problems (problem_id);
 
 CREATE TABLE courses (
     id                      integer PRIMARY KEY,

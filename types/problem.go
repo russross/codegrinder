@@ -35,6 +35,7 @@ type ProblemType struct {
 type ProblemTypeAction struct {
 	ProblemType string `json:"problemType" meddler:"problem_type"`
 	Action      string `json:"action,omitempty" meddler:"action"`
+	Command     string `json:"command,omitempty" meddler:"command"`
 	Parser      string `json:"parser,omitempty" meddler:"parser,zeroisnull"`
 	Message     string `json:"message,omitempty" meddler:"message"`
 	Interactive bool   `json:"interactive,omitempty" meddler:"interactive"`
@@ -49,14 +50,13 @@ type ProblemTypeAction struct {
 }
 
 type Problem struct {
-	ID          int64     `json:"id" meddler:"id,pk"`
-	Unique      string    `json:"unique" meddler:"unique_id"`
-	Note        string    `json:"note" meddler:"note"`
-	ProblemType string    `json:"problemType" meddler:"problem_type"`
-	Tags        []string  `json:"tags" meddler:"tags,json"`
-	Options     []string  `json:"options" meddler:"options,json"`
-	CreatedAt   time.Time `json:"createdAt" meddler:"created_at,localtime"`
-	UpdatedAt   time.Time `json:"updatedAt" meddler:"updated_at,localtime"`
+	ID        int64     `json:"id" meddler:"id,pk"`
+	Unique    string    `json:"unique" meddler:"unique_id"`
+	Note      string    `json:"note" meddler:"note"`
+	Tags      []string  `json:"tags" meddler:"tags,json"`
+	Options   []string  `json:"options" meddler:"options,json"`
+	CreatedAt time.Time `json:"createdAt" meddler:"created_at,localtime"`
+	UpdatedAt time.Time `json:"updatedAt" meddler:"updated_at,localtime"`
 }
 
 // ProblemStep represents a single step of a problem.
@@ -66,11 +66,13 @@ type Problem struct {
 type ProblemStep struct {
 	ProblemID    int64             `json:"problemID" meddler:"problem_id"`
 	Step         int64             `json:"step" meddler:"step"` // note: one-based
+	ProblemType  string            `json:"problemType" meddler:"problem_type"`
 	Note         string            `json:"note" meddler:"note"`
 	Instructions string            `json:"instructions" meddler:"instructions"`
 	Weight       float64           `json:"weight" meddler:"weight"`
 	Files        map[string][]byte `json:"files" meddler:"files,json"`
 	Whitelist    map[string]bool   `json:"whitelist" meddler:"whitelist,json"`
+	Solution     map[string][]byte `json:"solution,omitempty" meddler:"solution,json"`
 }
 
 type ProblemSet struct {
@@ -164,6 +166,7 @@ func (problemType *ProblemType) ComputeSignature(secret string) string {
 		v.Add(fmt.Sprintf("file-%s", name), string(contents))
 	}
 	for name, action := range problemType.Actions {
+		v.Add(fmt.Sprintf("action-%s-command", name), action.Command)
 		v.Add(fmt.Sprintf("action-%s-parser", name), action.Parser)
 		v.Add(fmt.Sprintf("action-%s-message", name), action.Message)
 		v.Add(fmt.Sprintf("action-%s-interactive", name), strconv.FormatBool(action.Interactive))
@@ -191,12 +194,12 @@ func (problem *Problem) ComputeSignature(secret string, steps []*ProblemStep) st
 	v.Add("id", strconv.FormatInt(problem.ID, 10))
 	v.Add("unique", problem.Unique)
 	v.Add("note", problem.Note)
-	v.Add("problemType", problem.ProblemType)
 	v["tags"] = problem.Tags
 	v["options"] = problem.Options
 	v.Add("createdAt", problem.CreatedAt.Round(time.Second).UTC().Format(time.RFC3339))
 	v.Add("updatedAt", problem.UpdatedAt.Round(time.Second).UTC().Format(time.RFC3339))
 	for _, step := range steps {
+		v.Add(fmt.Sprintf("step-%d-problem-type", step.Step), step.ProblemType)
 		v.Add(fmt.Sprintf("step-%d-note", step.Step), step.Note)
 		v.Add(fmt.Sprintf("step-%d-weight", step.Step), strconv.FormatFloat(step.Weight, 'g', -1, 64))
 		for name, contents := range step.Files {
@@ -218,9 +221,9 @@ func (problem *Problem) ComputeSignature(secret string, steps []*ProblemStep) st
 
 // problem files in these directories do not have line endings cleaned up
 var ProblemStepDirectoryWhitelist = map[string]bool{
-	"inputs": true,
+	"inputs":  true,
 	"outputs": true,
-	"doc":    true,
+	"doc":     true,
 }
 
 // fix line endings

@@ -260,7 +260,7 @@ func checkOAuthSignature(w http.ResponseWriter, r *http.Request) {
 			context += " lis_person_contact_email_primary=" + val
 		}
 		log.Printf("failed LTI signature on request:%s", context)
-		loggedHTTPErrorf(w, http.StatusUnauthorized, "Signature mismatch: got %s but expected %s", sig, expected)
+		loggedHTTPErrorf(w, http.StatusUnauthorized, "Signature mismatch. This is usually due to an error in the external app setup for CodeGrinder in Canvas. Got %s but expected %s", sig, expected)
 	}
 }
 
@@ -360,7 +360,7 @@ func LtiProblemSet(w http.ResponseWriter, r *http.Request, tx *sql.Tx, form LTIR
 
 	now := time.Now()
 
-	// Special case: the problem set named "codegrinder-bootstrap"
+	// Special case: the problem set named "bootstrap-codegrinder"
 	// does not map to an actual problem set. This is useful for creating
 	// the first user before a problem set has been created.
 

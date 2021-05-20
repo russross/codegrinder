@@ -30,6 +30,7 @@ type ConfigFile struct {
 	}
 	Step map[string]*struct {
 		Note   string
+		Type   string
 		Weight float64
 	}
 }
@@ -84,13 +85,13 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 		if step < 1 {
 			log.Fatalf("to use --action, you must run from within a step directory")
 		}
-		log.Printf("running interactive session for action %q on step %d", action, step)
+		fmt.Printf("running interactive session for action %q on step %d\n", action, step)
 
 		// run the interactive action for a single step instead
 		// of validating all steps
 		unvalidated := &CommitBundle{
-			ProblemType:          signed.ProblemType,
-			ProblemTypeSignature: signed.ProblemTypeSignature,
+			ProblemType:          signed.ProblemTypes[signed.ProblemSteps[step-1].ProblemType],
+			ProblemTypeSignature: signed.ProblemTypeSignatures[signed.ProblemSteps[step-1].ProblemType],
 			Problem:              signed.Problem,
 			ProblemSteps:         signed.ProblemSteps,
 			ProblemSignature:     signed.ProblemSignature,
@@ -106,10 +107,10 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 
 	// validate the commits one at a time
 	for n := 0; n < len(signed.ProblemSteps); n++ {
-		log.Printf("validating solution for step %d", n+1)
+		fmt.Printf("validating solution for step %d\n", n+1)
 		unvalidated := &CommitBundle{
-			ProblemType:          signed.ProblemType,
-			ProblemTypeSignature: signed.ProblemTypeSignature,
+			ProblemType:          signed.ProblemTypes[signed.ProblemSteps[n].ProblemType],
+			ProblemTypeSignature: signed.ProblemTypeSignatures[signed.ProblemSteps[n].ProblemType],
 			Problem:              signed.Problem,
 			ProblemSteps:         signed.ProblemSteps,
 			ProblemSignature:     signed.ProblemSignature,
@@ -119,9 +120,9 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 			CommitSignature:      signed.CommitSignatures[n],
 		}
 		validated := mustConfirmCommitBundle(unvalidated, nil)
-		log.Printf("  finished validating solution")
+		fmt.Println("  finished validating solution")
 		if validated.Commit.ReportCard == nil || validated.Commit.Score != 1.0 || !validated.Commit.ReportCard.Passed {
-			log.Printf("  solution for step %d failed: %s", n+1, validated.Commit.ReportCard.Note)
+			fmt.Printf("  solution for step %d failed: %s\n", n+1, validated.Commit.ReportCard.Note)
 
 			// play the transcript
 			if err := validated.Commit.DumpTranscript(os.Stdout); err != nil {
@@ -129,8 +130,8 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 			}
 			log.Fatalf("please fix solution and try again")
 		}
-		signed.ProblemType = validated.ProblemType
-		signed.ProblemTypeSignature = validated.ProblemTypeSignature
+		signed.ProblemTypes[validated.ProblemType.Name] = validated.ProblemType
+		signed.ProblemTypeSignatures[validated.ProblemType.Name] = validated.ProblemTypeSignature
 		signed.Problem = validated.Problem
 		signed.ProblemSteps = validated.ProblemSteps
 		signed.ProblemSignature = validated.ProblemSignature
@@ -138,16 +139,16 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 		signed.CommitSignatures[n] = validated.CommitSignature
 	}
 
-	log.Printf("problem and solution confirmed successfully")
+	fmt.Println("problem and solution confirmed successfully")
 
 	// save the problem
 	final := new(ProblemBundle)
 	if signed.Problem.ID == 0 {
 		mustPostObject("/problem_bundles/confirmed", nil, signed, final)
-		log.Printf("problem %q created and ready to use", final.Problem.Unique)
+		fmt.Printf("problem %q created and ready to use\n", final.Problem.Unique)
 	} else {
 		mustPutObject(fmt.Sprintf("/problem_bundles/%d", signed.Problem.ID), nil, signed, final)
-		log.Printf("problem %q saved and ready to use", final.Problem.Unique)
+		fmt.Printf("problem %q saved and ready to use\n", final.Problem.Unique)
 	}
 
 	if signed.Problem.ID == 0 {
@@ -173,7 +174,7 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 		}
 		finalPSBundle := new(ProblemSetBundle)
 		mustPostObject("/problem_set_bundles", nil, psBundle, finalPSBundle)
-		log.Printf("problem set %q created and ready to use", finalPSBundle.ProblemSet.Unique)
+		fmt.Printf("problem set %q created and ready to use\n", finalPSBundle.ProblemSet.Unique)
 	}
 }
 
@@ -212,13 +213,12 @@ func findProblemCfg(now time.Time, startDir string) (string, string, int, *Probl
 		log.Fatalf("failed to parse %s: %v", configPath, err)
 	}
 	problem := &Problem{
-		Unique:      cfg.Problem.Unique,
-		Note:        cfg.Problem.Note,
-		ProblemType: cfg.Problem.Type,
-		Tags:        cfg.Problem.Tag,
-		Options:     cfg.Problem.Option,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		Unique:    cfg.Problem.Unique,
+		Note:      cfg.Problem.Note,
+		Tags:      cfg.Problem.Tag,
+		Options:   cfg.Problem.Option,
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 
 	// create skeleton steps
@@ -226,20 +226,31 @@ func findProblemCfg(now time.Time, startDir string) (string, string, int, *Probl
 	single := cfg.Step == nil || len(cfg.Step) == 0
 	if single {
 		steps = append(steps, &ProblemStep{
-			Step:   1,
-			Note:   problem.Note,
-			Weight: 1.0,
-			Files:  make(map[string][]byte),
+			Step:        1,
+			Note:        problem.Note,
+			ProblemType: cfg.Problem.Type,
+			Weight:      1.0,
+			Files:       make(map[string][]byte),
 		})
 		stepN = 1
 	} else {
 		for i := int64(1); cfg.Step[strconv.FormatInt(i, 10)] != nil; i++ {
 			elt := cfg.Step[strconv.FormatInt(i, 10)]
+			problemType := ""
+			switch {
+			case elt.Type == "" && cfg.Problem.Type != "":
+				problemType = cfg.Problem.Type
+			case elt.Type != "" && cfg.Problem.Type == "":
+				problemType = elt.Type
+			default:
+				log.Fatalf("problem type must be specified for the problem as a whole or for each step, but not both")
+			}
 			step := &ProblemStep{
-				Step:   i,
-				Note:   elt.Note,
-				Weight: elt.Weight,
-				Files:  make(map[string][]byte),
+				Step:        i,
+				Note:        elt.Note,
+				ProblemType: problemType,
+				Weight:      elt.Weight,
+				Files:       make(map[string][]byte),
 			}
 			steps = append(steps, step)
 		}
@@ -281,9 +292,15 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 		log.Fatalf("the problem directory name must match the problem unique ID")
 	}
 
-	// get the problem type
-	problemType := new(ProblemType)
-	mustGetObject(fmt.Sprintf("/problem_types/%s", problem.ProblemType), nil, problemType)
+	// get the problem types
+	problemTypes := make(map[string]*ProblemType)
+	for _, step := range steps {
+		if _, exists := problemTypes[step.ProblemType]; !exists {
+			problemType := new(ProblemType)
+			mustGetObject(fmt.Sprintf("/problem_types/%s", step.ProblemType), nil, problemType)
+			problemTypes[step.ProblemType] = problemType
+		}
+	}
 
 	// start forming the problem bundle
 	unsigned := &ProblemBundle{
@@ -315,16 +332,16 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 			log.Fatalf("  this would prevent creating a problem set containing just this problem with matching id")
 		}
 
-		log.Printf("unique ID is %q", problem.Unique)
-		log.Printf("  this problem is new--no existing problem has the same unique ID")
+		fmt.Printf("unique ID is %q\n", problem.Unique)
+		fmt.Println("  this problem is new--no existing problem has the same unique ID")
 	case 1:
 		// update to existing problem
 		if action == "" && !isUpdate {
 			log.Fatalf("you did not specify --update, but a problem already exists with unique ID %q", problem.Unique)
 		}
-		log.Printf("unique ID is %q", problem.Unique)
-		log.Printf("  this is an update of problem %d", existing[0].ID)
-		log.Printf("  (%q)", existing[0].Note)
+		fmt.Printf("unique ID is %q\n", problem.Unique)
+		fmt.Printf("  this is an update of problem %d\n", existing[0].ID)
+		fmt.Printf("  (%q)\n", existing[0].Note)
 		problem.ID = existing[0].ID
 		problem.CreatedAt = existing[0].CreatedAt
 	default:
@@ -338,7 +355,7 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 	blacklistDir := []string{"__pycache__"}
 	for index, step := range steps {
 		i := int64(index + 1)
-		log.Printf("gathering step %d", i)
+		fmt.Printf("gathering step %d\n", i)
 		commit := &Commit{
 			Step:      i,
 			Action:    "grade",
@@ -371,7 +388,7 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 				dirname := filepath.Base(path)
 				for _, name := range blacklistDir {
 					if dirname == name {
-						log.Printf("  skipping directory %s", relpath)
+						fmt.Printf("  skipping directory %s\n", relpath)
 						return filepath.SkipDir
 					}
 				}
@@ -381,15 +398,15 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 				// skip problem.cfg silently
 				return nil
 			}
-			if _, exists := problemType.Files[relpath]; exists {
-				log.Printf("  skipping file %s", relpath)
-				log.Printf("    because it is provided by the problem type")
+			if _, exists := problemTypes[step.ProblemType].Files[relpath]; exists {
+				fmt.Printf("  skipping file %s\n", relpath)
+				fmt.Printf("    because it is provided by the problem type\n")
 				return nil
 			}
 			for _, suffix := range blacklist {
 				if strings.HasSuffix(relpath, suffix) {
-					log.Printf("  skipping file %s", relpath)
-					log.Printf("    because it has the following suffix: %s", suffix)
+					fmt.Printf("  skipping file %s\n", relpath)
+					fmt.Printf("    because it has the following suffix: %s\n", suffix)
 					return nil
 				}
 			}
@@ -435,7 +452,7 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 			}
 			for name := range whitelist {
 				if _, exists := root[name]; exists {
-					log.Fatalf("found %s outside the _solution directory")
+					log.Fatalf("found %s outside the _solution directory", name)
 				}
 			}
 		} else if len(solution) == 0 && len(starter) > 0 {
@@ -460,7 +477,17 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 			}
 			for name := range whitelist {
 				if _, exists := root[name]; exists {
-					log.Fatalf("found %s outside the _solution and _starter directories")
+					log.Fatalf("found %s outside the _solution and _starter directories", name)
+				}
+			}
+		} else if i > 1 {
+			// for step > 1 with no explicit starter or solution,
+			// we assume no new starter files and search the
+			// whitelist for files starter in earlier steps
+			for name := range whitelist {
+				if contents, exists := root[name]; exists {
+					solution[name] = contents
+					delete(root, name)
 				}
 			}
 		} else {
@@ -493,8 +520,8 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 				commit.Files[name] = contents
 				delete(unused, name)
 			} else {
-				log.Printf("  warning: skipping solution file %q", name)
-				log.Printf("    because it is not in the starter file set of this or any previous step")
+				fmt.Printf("  warning: skipping solution file %q\n", name)
+				fmt.Println("    because it is not in the starter file set of this or any previous step")
 			}
 		}
 		if len(unused) > 0 {
@@ -510,7 +537,8 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 
 		unsigned.ProblemSteps = append(unsigned.ProblemSteps, step)
 		unsigned.Commits = append(unsigned.Commits, commit)
-		log.Printf("  found %d problem definition file%s and %d solution file%s", len(step.Files), plural(len(step.Files)), len(commit.Files), plural(len(commit.Files)))
+		fmt.Printf("  found %d problem definition file%s and %d solution file%s\n",
+			len(step.Files), plural(len(step.Files)), len(commit.Files), plural(len(commit.Files)))
 	}
 
 	if action != "" {
@@ -520,6 +548,12 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 		}
 
 		// if the user requested an interactive action, it must be valid for the problem type
+		var problemType *ProblemType
+		if single {
+			problemType = problemTypes[steps[0].ProblemType]
+		} else {
+			problemType = problemTypes[steps[stepN-1].ProblemType]
+		}
 		if _, exists := problemType.Actions[action]; !exists {
 			log.Fatalf("action %q does not exist for problem type %s", action, problemType.Name)
 		}
@@ -531,7 +565,7 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 func mustConfirmCommitBundle(bundle *CommitBundle, args []string) *CommitBundle {
 	// create a websocket connection to the server
 	headers := make(http.Header)
-	url := "wss://" + bundle.Hostname + urlPrefix + "/sockets/" + bundle.Problem.ProblemType + "/" + bundle.Commit.Action
+	url := "wss://" + bundle.Hostname + urlPrefix + "/sockets/" + bundle.ProblemType.Name + "/" + bundle.Commit.Action
 	socket, resp, err := websocket.DefaultDialer.Dial(url, headers)
 	if err != nil {
 		log.Printf("error dialing %s: %v", url, err)
@@ -626,17 +660,17 @@ func createProblemSet(path string, isUpdate bool) {
 			log.Fatalf("you specified --update, but no existing problem set with unique ID %q was found", problemSet.Unique)
 		}
 
-		log.Printf("unique ID is %q", problemSet.Unique)
-		log.Printf("  this problem set is new--no existing problem set has the same unique ID")
+		fmt.Printf("unique ID is %q\n", problemSet.Unique)
+		fmt.Println("  this problem set is new--no existing problem set has the same unique ID")
 	case 1:
 		// update to existing problem set
 		if !isUpdate {
 			log.Fatalf("you did not specify --update, but a problem set already exists with unique ID %q", problemSet.Unique)
 		}
 
-		log.Printf("unique ID is %q", problemSet.Unique)
-		log.Printf("  this is an update of problem set %d", existing[0].ID)
-		log.Printf("  (%q)", existing[0].Note)
+		fmt.Printf("unique ID is %q\n", problemSet.Unique)
+		fmt.Printf("  this is an update of problem set %d\n", existing[0].ID)
+		fmt.Printf("  (%q)\n", existing[0].Note)
 		problemSet.ID = existing[0].ID
 		problemSet.CreatedAt = existing[0].CreatedAt
 	default:
@@ -674,9 +708,9 @@ func createProblemSet(path string, isUpdate bool) {
 	final := new(ProblemSetBundle)
 	if bundle.ProblemSet.ID == 0 {
 		mustPostObject("/problem_set_bundles", nil, bundle, final)
-		log.Printf("problem set %q created and ready to use", final.ProblemSet.Unique)
+		fmt.Printf("problem set %q created and ready to use\n", final.ProblemSet.Unique)
 	} else {
 		mustPutObject(fmt.Sprintf("/problem_set_bundles/%d", bundle.ProblemSet.ID), nil, bundle, final)
-		log.Printf("problem set %q saved and ready to use", final.ProblemSet.Unique)
+		fmt.Printf("problem set %q saved and ready to use\n", final.ProblemSet.Unique)
 	}
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"time"
@@ -22,7 +23,7 @@ func CommandGrade(cmd *cobra.Command, args []string) {
 	user := new(User)
 	mustGetObject("/users/me", nil, user)
 
-	_, problem, _, commit, dotfile := gatherStudent(now, ".")
+	_, problem, _, commit, dotfile, _ := gatherStudent(now, ".")
 	commit.Action = "grade"
 	commit.Note = "grind grade"
 	unsigned := &CommitBundle{
@@ -38,7 +39,7 @@ func CommandGrade(cmd *cobra.Command, args []string) {
 	if signed.Hostname == "" {
 		log.Fatalf("server was unable to find a suitable daycare, unable to grade")
 	}
-	log.Printf("submitting %s step %d for grading", problem.Unique, commit.Step)
+	fmt.Printf("submitting %s step %d for grading\n", problem.Unique, commit.Step)
 	graded := mustConfirmCommitBundle(signed, nil)
 
 	// save the commit with report card
@@ -53,15 +54,15 @@ func CommandGrade(cmd *cobra.Command, args []string) {
 	commit = saved.Commit
 
 	if commit.ReportCard != nil && commit.ReportCard.Passed && commit.Score == 1.0 {
-		if nextStep(".", dotfile.Problems[problem.Unique], problem, commit) {
+		if nextStep(".", dotfile.Problems[problem.Unique], problem, commit, make(map[string]*ProblemType)) {
 			// save the updated dotfile with new step number
 			saveDotFile(dotfile)
 		}
 	} else {
 		// solution failed
-		log.Printf("  solution for step %d failed", commit.Step)
+		fmt.Printf("  solution for step %d failed\n", commit.Step)
 		if commit.ReportCard != nil {
-			log.Printf("  ReportCard: %s", commit.ReportCard.Note)
+			fmt.Printf("  ReportCard: %s\n", commit.ReportCard.Note)
 		}
 
 		// play the transcript

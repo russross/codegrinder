@@ -27,7 +27,7 @@ func CommandSave(cmd *cobra.Command, args []string) {
 	user := new(User)
 	mustGetObject("/users/me", nil, user)
 
-	_, problem, _, commit, _ := gatherStudent(now, ".")
+	_, problem, _, commit, _, _ := gatherStudent(now, ".")
 	commit.Action = ""
 	commit.Note = "grind save"
 	unsigned := &CommitBundle{
@@ -38,10 +38,35 @@ func CommandSave(cmd *cobra.Command, args []string) {
 	// send the commit to the server
 	signed := new(CommitBundle)
 	mustPostObject("/commit_bundles/unsigned", nil, unsigned, signed)
-	log.Printf("problem %s step %d saved", problem.Unique, commit.Step)
+	fmt.Printf("problem %s step %d saved\n", problem.Unique, commit.Step)
 }
 
-func gatherStudent(now time.Time, startDir string) (*ProblemType, *Problem, *Assignment, *Commit, *DotFileInfo) {
+// check that the on-disk file matches the expected contents
+// and update as needed
+func checkAndUpdate(directory, name string, contents []byte) {
+	path := filepath.Join(directory, name)
+	ondisk, err := ioutil.ReadFile(path)
+	if err != nil && os.IsNotExist(err) {
+		fmt.Printf("file %s\n", name)
+		fmt.Printf("   saving the current version\n")
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			log.Fatalf("error creating directory %s: %v", filepath.Dir(path), err)
+		}
+		if err := ioutil.WriteFile(path, contents, 0644); err != nil {
+			log.Fatalf("error saving %s: %v", name, err)
+		}
+	} else if err != nil {
+		log.Fatalf("error reading %s: %v", name, err)
+	} else if !bytes.Equal(ondisk, contents) {
+		fmt.Printf("file %s\n", name)
+		fmt.Printf("   replaced with the current version\n")
+		if err := ioutil.WriteFile(path, contents, 0644); err != nil {
+			log.Fatalf("error saving %s: %v", name, err)
+		}
+	}
+}
+
+func gatherStudent(now time.Time, startDir string) (*ProblemType, *Problem, *Assignment, *Commit, *DotFileInfo, string) {
 	// find the .grind file containing the problem set info
 	dotfile, problemSetDir, problemDir := findDotFile(startDir)
 	dotfileChanged := false
@@ -74,42 +99,18 @@ func gatherStudent(now time.Time, startDir string) (*ProblemType, *Problem, *Ass
 	problem := new(Problem)
 	mustGetObject(fmt.Sprintf("/problems/%d", info.ID), nil, problem)
 
-	// check that the on-disk file matches the expected contents
-	// and update as needed
-	checkAndUpdate := func(name string, contents []byte) {
-		path := filepath.Join(problemDir, name)
-		ondisk, err := ioutil.ReadFile(path)
-		if err != nil && os.IsNotExist(err) {
-			log.Printf("warning: file %s was not found", name)
-			log.Printf("   saving the current version")
-			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-				log.Fatalf("error creating directory %s: %v", filepath.Dir(path), err)
-			}
-			if err := ioutil.WriteFile(path, contents, 0644); err != nil {
-				log.Fatalf("error saving %s: %v", name, err)
-			}
-		} else if err != nil {
-			log.Fatalf("error reading %s: %v", name, err)
-		} else if !bytes.Equal(ondisk, contents) {
-			log.Printf("warning: file %s", name)
-			log.Printf("   does not match the latest version")
-			log.Printf("   replacing your file with the current version")
-			if err := ioutil.WriteFile(path, contents, 0644); err != nil {
-				log.Fatalf("error saving %s: %v", name, err)
-			}
-		}
-	}
+	// get the problem step
+	step := new(ProblemStep)
+	mustGetObject(fmt.Sprintf("/problems/%d/steps/%d", problem.ID, info.Step), nil, step)
 
 	// get the problem type and verify local files match
 	problemType := new(ProblemType)
-	mustGetObject(fmt.Sprintf("/problem_types/%s", problem.ProblemType), nil, problemType)
+	mustGetObject(fmt.Sprintf("/problem_types/%s", step.ProblemType), nil, problemType)
 	for name, contents := range problemType.Files {
-		checkAndUpdate(filepath.FromSlash(name), contents)
+		checkAndUpdate(problemDir, filepath.FromSlash(name), contents)
 	}
 
 	// get the problem step and verify local files match
-	step := new(ProblemStep)
-	mustGetObject(fmt.Sprintf("/problems/%d/steps/%d", problem.ID, info.Step), nil, step)
 	for name, contents := range step.Files {
 		if filepath.Dir(filepath.FromSlash(name)) == "." {
 			// in main directory, skip files that exist (but write files that are missing)
@@ -118,9 +119,9 @@ func gatherStudent(now time.Time, startDir string) (*ProblemType, *Problem, *Ass
 				continue
 			}
 		}
-		checkAndUpdate(filepath.FromSlash(name), contents)
+		checkAndUpdate(problemDir, filepath.FromSlash(name), contents)
 	}
-	checkAndUpdate(filepath.Join("doc", "index.html"), []byte(step.Instructions))
+	checkAndUpdate(problemDir, filepath.Join("doc", "index.html"), []byte(step.Instructions))
 	if dotfileChanged {
 		saveDotFile(dotfile)
 	}
@@ -157,7 +158,7 @@ func gatherStudent(now time.Time, startDir string) (*ProblemType, *Problem, *Ass
 		UpdatedAt:    now,
 	}
 
-	return problemType, problem, assignment, commit, dotfile
+	return problemType, problem, assignment, commit, dotfile, problemDir
 }
 
 func findDotFile(startDir string) (dotfile *DotFileInfo, problemSetDir, problemDir string) {
@@ -189,7 +190,7 @@ func findDotFile(startDir string) (dotfile *DotFileInfo, problemSetDir, problemD
 			log.Printf("   you must run this in a problem directory")
 			log.Fatalf("   or supply the directory name as an argument")
 		}
-		// log.Printf("could not find %s in %s, trying %s", perProblemSetDotFile, problemDir, problemSetDir)
+		// fmt.Printf("could not find %s in %s, trying %s\n", perProblemSetDotFile, problemDir, problemSetDir)
 	}
 
 	// read the .grind file

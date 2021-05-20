@@ -170,6 +170,13 @@ func main() {
 		}
 		cmdGrind.AddCommand(cmdStudent)
 
+		cmdSolve := &cobra.Command{
+			Use:   "solve",
+			Short: "save the solution for the current problem step (authors only)",
+			Run:   CommandSolve,
+		}
+		cmdGrind.AddCommand(cmdSolve)
+
 		cmdProblem := &cobra.Command{
 			Use:   "problem <search terms>",
 			Short: "find a problem set URL (authors only)",
@@ -236,7 +243,7 @@ func CommandLogin(cmd *cobra.Command, args []string) {
 	// save config for later use
 	mustWriteConfig()
 
-	log.Printf("login successful; welcome %s", user.Name)
+	fmt.Printf("login successful; welcome %s\n", user.Name)
 }
 
 func mustGetObject(path string, params url.Values, download interface{}) {
@@ -274,7 +281,7 @@ func doRequest(path string, params url.Values, method string, upload interface{}
 	}
 
 	if Config.apiReport {
-		log.Printf("%s %s", method, req.URL)
+		fmt.Printf("%s %s\n", method, req.URL)
 	}
 
 	// set the headers
@@ -307,7 +314,7 @@ func doRequest(path string, params url.Values, method string, upload interface{}
 		req.Body = ioutil.NopCloser(payload)
 
 		if Config.apiDump {
-			log.Printf("Request data: %s", uncompressed)
+			fmt.Printf("Request data: %s\n", uncompressed)
 		}
 	}
 
@@ -346,7 +353,7 @@ func doRequest(path string, params url.Values, method string, upload interface{}
 			if err != nil {
 				log.Fatalf("doRequest: JSON error encoding downloaded object: %v", err)
 			}
-			log.Printf("Response data: %s", raw)
+			fmt.Printf("Response data: %s\n", raw)
 		}
 
 		return true

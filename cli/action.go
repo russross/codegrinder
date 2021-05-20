@@ -43,7 +43,7 @@ func CommandAction(cmd *cobra.Command, args []string) {
 	user := new(User)
 	mustGetObject("/users/me", nil, user)
 
-	problemType, problem, _, commit, _ := gatherStudent(now, ".")
+	problemType, problem, _, commit, _, _ := gatherStudent(now, ".")
 	commit.Action = action
 	commit.Note = "grind action " + action
 	unsigned := &CommitBundle{
@@ -53,12 +53,12 @@ func CommandAction(cmd *cobra.Command, args []string) {
 
 	// if the requested action does not exist, report available choices
 	if _, exists := problemType.Actions[action]; !exists {
-		log.Printf("available actions for problem type %s:", problem.ProblemType)
+		fmt.Printf("available actions for problem type %s:\n", problemType.Name)
 		for elt := range problemType.Actions {
 			if elt == "grade" {
 				continue
 			}
-			log.Printf("   %s", elt)
+			fmt.Printf("   %s\n", elt)
 		}
 		log.Fatalf("use '%s action [action]' to initiate an action", os.Args[0])
 	}
@@ -71,7 +71,7 @@ func CommandAction(cmd *cobra.Command, args []string) {
 	if signed.Hostname == "" {
 		log.Fatalf("server was unable to find a suitable daycare, unable to run action")
 	}
-	log.Printf("starting interactive session for %s step %d", problem.Unique, commit.Step)
+	fmt.Printf("starting interactive session for %s step %d\n", problem.Unique, commit.Step)
 	runInteractiveSession(signed, nil, ".")
 }
 
@@ -119,7 +119,7 @@ func runInteractiveSession(bundle *CommitBundle, args []string, directory string
 	endpoint := &url.URL{
 		Scheme:   "wss",
 		Host:     bundle.Hostname,
-		Path:     urlPrefix + "/sockets/" + bundle.Problem.ProblemType + "/" + bundle.Commit.Action,
+		Path:     urlPrefix + "/sockets/" + bundle.ProblemType.Name + "/" + bundle.Commit.Action,
 		RawQuery: vals.Encode(),
 	}
 

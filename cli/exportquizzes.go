@@ -23,7 +23,7 @@ func CommandExportQuizzes(cmd *cobra.Command, args []string) {
 	} else if len(args) > 1 {
 		log.Printf("you must specify the assignment with quizzes to export")
 		log.Printf("   run '%s list' to see your assignments", os.Args[0])
-		log.Printf("   you must give the assignment number (displayed on the left of the list)")
+		log.Fatalf("   you must give the assignment number (displayed on the left of the list)")
 	}
 	name := args[0]
 
@@ -53,9 +53,9 @@ func CommandExportQuizzes(cmd *cobra.Command, args []string) {
 	}
 
 	if len(quizzes) == 1 {
-		log.Printf("found 1 quiz")
+		fmt.Println("found 1 quiz")
 	} else {
-		log.Printf("found %d quizzes", len(quizzes))
+		fmt.Printf("found %d quizzes\n", len(quizzes))
 	}
 
 	// get the course
@@ -73,7 +73,7 @@ func CommandExportQuizzes(cmd *cobra.Command, args []string) {
 	}
 
 	dirName := strings.Map(basicCharsOnly, fmt.Sprintf("%s--%s", course.Name, assignment.CanvasTitle))
-	log.Printf("creating a directory for export: %s", dirName)
+	fmt.Printf("creating a directory for export: %s\n", dirName)
 	if err := os.Mkdir(dirName, 0755); err != nil {
 		log.Fatalf("creating directory %s: %v", dirName, err)
 	}
@@ -90,7 +90,7 @@ func CommandExportQuizzes(cmd *cobra.Command, args []string) {
 		if strings.HasSuffix(quizPrefix, "_") {
 			quizPrefix = quizPrefix[:len(quizPrefix)-1]
 		}
-		log.Printf("exporting quiz created on %s as %s.json", quiz.CreatedAt.Format("2006-01-02T15:04"), quizPrefix)
+		fmt.Printf("exporting quiz created on %s as %s.json\n", quiz.CreatedAt.Format("2006-01-02T15:04"), quizPrefix)
 		raw, err := json.MarshalIndent(quiz, "", "    ")
 		if err != nil {
 			log.Fatalf("json encoding quiz: %v", err)
@@ -114,7 +114,7 @@ func CommandExportQuizzes(cmd *cobra.Command, args []string) {
 				questionName = questionName[:len(questionName)-1]
 			}
 
-			log.Printf("    writing question %s.json", questionName)
+			fmt.Printf("    writing question %s.json\n", questionName)
 			raw, err := json.MarshalIndent(question, "", "    ")
 			if err != nil {
 				log.Fatalf("json encoding question: %v", err)

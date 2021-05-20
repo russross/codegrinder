@@ -1,9 +1,7 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
 	"path/filepath"
@@ -22,7 +20,7 @@ func CommandType(cmd *cobra.Command, args []string) {
 
 	if list {
 		if len(args) != 0 || remove {
-			log.Printf("warning: for a list request, other options will be ignored")
+			fmt.Println("warning: for a list request, other options will be ignored")
 		}
 
 		// display a list of problem types
@@ -52,7 +50,7 @@ func CommandType(cmd *cobra.Command, args []string) {
 	directory, problemTypeName := ".", ""
 	if len(args) == 0 {
 		// look for a problem.cfg file
-		_, stepDir, stepDirN, problem, _, single := findProblemCfg(time.Now(), ".")
+		_, stepDir, stepDirN, problem, steps, single := findProblemCfg(time.Now(), ".")
 		if problem == nil {
 			log.Fatalf("you must supply the problem type or have a valid %s file already in place", ProblemConfigName)
 		}
@@ -60,7 +58,11 @@ func CommandType(cmd *cobra.Command, args []string) {
 			log.Fatalf("you must run this from within a step directory")
 		}
 		directory = filepath.Clean(stepDir)
-		problemTypeName = problem.ProblemType
+		if single {
+			problemTypeName = steps[0].ProblemType
+		} else {
+			problemTypeName = steps[stepDirN-1].ProblemType
+		}
 	} else if len(args) == 1 {
 		// problem type supplied as an argument
 		problemTypeName = args[0]
@@ -72,31 +74,6 @@ func CommandType(cmd *cobra.Command, args []string) {
 	// download files for the given problem type
 	problemType := new(ProblemType)
 	mustGetObject(fmt.Sprintf("/problem_types/%s", problemTypeName), nil, problemType)
-
-	// check that the on-disk file matches the expected contents
-	// and update as needed
-	checkAndUpdate := func(name string, contents []byte) {
-		path := filepath.Join(directory, name)
-		ondisk, err := ioutil.ReadFile(path)
-		if err != nil && os.IsNotExist(err) {
-			log.Printf("saving file %s", name)
-			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-				log.Fatalf("error creating directory %s: %v", filepath.Dir(path), err)
-			}
-			if err := ioutil.WriteFile(path, contents, 0644); err != nil {
-				log.Fatalf("error saving %s: %v", name, err)
-			}
-		} else if err != nil {
-			log.Fatalf("error reading %s: %v", name, err)
-		} else if !bytes.Equal(ondisk, contents) {
-			log.Printf("warning: file %s", name)
-			log.Printf("   does not match the latest version")
-			log.Printf("   replacing your file with the current version")
-			if err := ioutil.WriteFile(path, contents, 0644); err != nil {
-				log.Fatalf("error saving %s: %v", name, err)
-			}
-		}
-	}
 
 	// remove the on-disk file if it exists
 	// if that leaves an empty directory, remove it as well
@@ -110,7 +87,7 @@ func CommandType(cmd *cobra.Command, args []string) {
 			log.Fatalf("while checking %s: %v", path, err)
 		}
 
-		log.Printf("removing file %s", name)
+		fmt.Printf("removing file %s\n", name)
 		if err := os.Remove(path); err != nil {
 			log.Fatalf("removing %s: %v", name, err)
 		}
@@ -120,7 +97,7 @@ func CommandType(cmd *cobra.Command, args []string) {
 		for parent != directory {
 			err := os.Remove(parent)
 			if err == nil {
-				log.Printf("  removed empty directory %s", parent)
+				fmt.Printf("  removed empty directory %s\n", parent)
 				next := filepath.Dir(parent)
 				if next == parent {
 					break
@@ -137,7 +114,7 @@ func CommandType(cmd *cobra.Command, args []string) {
 		if remove {
 			removeFile(filepath.FromSlash(name))
 		} else {
-			checkAndUpdate(filepath.FromSlash(name), contents)
+			checkAndUpdate(directory, filepath.FromSlash(name), contents)
 		}
 	}
 }

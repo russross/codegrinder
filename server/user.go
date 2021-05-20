@@ -638,8 +638,17 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 		return
 	}
 
-	// get the problem type
-	problemType, err := getProblemType(tx, problem.ProblemType)
+	if commit.Step < 1 {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "commit has step number %d, which is invalid", commit.Step)
+		return
+	}
+	if commit.Step > int64(len(steps)) {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "commit has step number %d, but there are only %d steps in the problem", commit.Step, len(steps))
+		return
+	}
+
+	// get the problem type for this step
+	problemType, err := getProblemType(tx, steps[commit.Step-1].ProblemType)
 	if err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "error loading problem type: %v", err)
 		return
@@ -671,10 +680,6 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 	}
 
 	// validate commit
-	if commit.Step > int64(len(steps)) {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "commit has step number %d, but there are only %d steps in the problem", commit.Step, len(steps))
-		return
-	}
 	if err := commit.Normalize(now, steps[commit.Step-1].Whitelist); err != nil {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "%v", err)
 		return
@@ -743,7 +748,9 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 
 	// assign a daycare host if needed
 	if bundle.Hostname == "" {
-		host, err := daycareRegistrations.Assign(problem.ProblemType)
+		typeSet := map[string]bool{problemType.Name: true}
+
+		host, err := daycareRegistrations.Assign(typeSet)
 		if err != nil {
 			log.Printf("error assigning a daycare for this commit: %v", err)
 		} else {

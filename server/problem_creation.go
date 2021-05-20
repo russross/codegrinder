@@ -2,7 +2,6 @@ package main
 
 import (
 	"database/sql"
-	"encoding/json"
 	"log"
 	"net/http"
 	"sort"
@@ -54,30 +53,39 @@ func PutProblemBundle(w http.ResponseWriter, tx *sql.Tx, params martini.Params, 
 		loggedHTTPErrorf(w, http.StatusBadRequest, "updating a problem cannot change its unique ID from %q to %q; create a new problem instead", old.Unique, bundle.Problem.Unique)
 		return
 	}
-	if bundle.Problem.ProblemType != old.ProblemType {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "updating a problem cannot change its type from %q to %q; create a new problem instead", old.ProblemType, bundle.Problem.ProblemType)
-		return
-	}
 	if !bundle.Problem.CreatedAt.Equal(old.CreatedAt) {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "updating a problem cannot change its created time from %v to %v", old.CreatedAt, bundle.Problem.CreatedAt)
 		return
 	}
 
 	var assignmentCount int
-	if err := tx.QueryRow(`SELECT COUNT(1) FROM assignments INNER JOIN problem_sets ON assignments.problem_set_id = problem_sets.id INNER JOIN problem_set_problems ON problem_sets.id = problem_set_problems.problem_set_id WHERE problem_set_problems.problem_id = ?`, bundle.Problem.ID).Scan(&assignmentCount); err != nil {
+	if err := tx.QueryRow(
+		`SELECT COUNT(1) `+
+			`FROM assignments `+
+			`INNER JOIN problem_sets ON assignments.problem_set_id = problem_sets.id `+
+			`INNER JOIN problem_set_problems ON problem_sets.id = problem_set_problems.problem_set_id `+
+			`WHERE problem_set_problems.problem_id = ?`,
+		bundle.Problem.ID).Scan(&assignmentCount); err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
 	}
 	if assignmentCount > 0 {
-		// count the steps in the old problem
-		var stepCount int
-		if err := tx.QueryRow(`SELECT COUNT(1) FROM problem_steps WHERE problem_id = ?`, bundle.Problem.ID).Scan(&stepCount); err != nil {
+		// if this is an active problem, it must have the same number of steps
+		// and steps must be of the same problem types
+		var oldSteps []*ProblemStep
+		if err := meddler.QueryAll(tx, &oldSteps, `SELECT * FROM problem_steps WHERE problem_id = ?`, bundle.Problem.ID); err != nil {
 			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 			return
 		}
-		if len(bundle.ProblemSteps) != stepCount {
+		if len(bundle.ProblemSteps) != len(oldSteps) {
 			loggedHTTPErrorf(w, http.StatusBadRequest, "cannot change the number of steps in a problem that is already in use")
 			return
+		}
+		for i := 0; i < len(oldSteps); i++ {
+			if bundle.ProblemSteps[i].ProblemType != oldSteps[i].ProblemType {
+				loggedHTTPErrorf(w, http.StatusBadRequest, "cannot change the problem type of step %d in a problem that is already in use", i+1)
+				return
+			}
 		}
 	}
 
@@ -96,12 +104,36 @@ func saveProblemBundleCommon(w http.ResponseWriter, tx *sql.Tx, currentUser *Use
 
 	// note: unique constraint will be checked by the database
 
-	// verify the problem type signature
-	// note: we only need problem type signature, the problem type can be nil
-	typeSig := bundle.ProblemType.ComputeSignature(Config.DaycareSecret)
-	if bundle.ProblemTypeSignature != typeSig {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "problem type signature does not check out: found %s but expected %s", bundle.ProblemTypeSignature, typeSig)
+	// make sure the set of problem types included matches the list of steps
+	typeSet := make(map[string]bool)
+	for _, elt := range bundle.ProblemSteps {
+		typeSet[elt.ProblemType] = true
+	}
+	if len(typeSet) != len(bundle.ProblemTypeSignatures) {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "problem bundle includes %d problem type signatures, but %d expected based on the step list",
+			len(bundle.ProblemTypeSignatures), len(typeSet))
 		return
+	}
+
+	// gather canonical problem types and check signatures as we go
+	bundle.ProblemTypes = make(map[string]*ProblemType)
+	for name := range bundle.ProblemTypeSignatures {
+		if !typeSet[name] {
+			loggedHTTPErrorf(w, http.StatusBadRequest, "the problem requires problem type %q but no signature provided for that type", name)
+			return
+		}
+		pt, err := getProblemType(tx, name)
+		if err != nil {
+			loggedHTTPErrorf(w, http.StatusInternalServerError, "loading problem type %q: %v", name, err)
+			return
+		}
+		bundle.ProblemTypes[name] = pt
+		typeSig := pt.ComputeSignature(Config.DaycareSecret)
+		if bundle.ProblemTypeSignatures[name] != typeSig {
+			loggedHTTPErrorf(w, http.StatusBadRequest, "problem type signature for %q does not check out: found %s but expected %s",
+				name, bundle.ProblemTypeSignatures[name], typeSig)
+			return
+		}
 	}
 
 	// verify the problem signature
@@ -126,7 +158,7 @@ func saveProblemBundleCommon(w http.ResponseWriter, tx *sql.Tx, currentUser *Use
 	}
 	for i, commit := range bundle.Commits {
 		// check the commit signature
-		csig := commit.ComputeSignature(Config.DaycareSecret, bundle.ProblemTypeSignature, bundle.ProblemSignature, bundle.Hostname, bundle.UserID)
+		csig := commit.ComputeSignature(Config.DaycareSecret, bundle.ProblemTypeSignatures[steps[i].ProblemType], bundle.ProblemSignature, bundle.Hostname, bundle.UserID)
 		if csig != bundle.CommitSignatures[i] {
 			loggedHTTPErrorf(w, http.StatusBadRequest, "commit for step %d has a bad signature", commit.Step)
 			return
@@ -142,6 +174,9 @@ func saveProblemBundleCommon(w http.ResponseWriter, tx *sql.Tx, currentUser *Use
 			loggedHTTPErrorf(w, http.StatusBadRequest, "commit for step %d did not pass", i+1)
 			return
 		}
+
+		// keep a copy of the solution
+		steps[i].Solution = commit.Files
 	}
 
 	isUpdate, oldStepCount := false, 0
@@ -158,47 +193,24 @@ func saveProblemBundleCommon(w http.ResponseWriter, tx *sql.Tx, currentUser *Use
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
 	}
+
+	// delete the old steps if applicable
+	if _, err := tx.Exec(`DELETE FROM problem_steps WHERE problem_id = ?`, problem.ID); err != nil {
+		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
+		return
+	}
 	for _, step := range steps {
 		step.ProblemID = problem.ID
 
-		// is this an update to an existing step?
-		if step.Step <= int64(oldStepCount) {
-			// meddler does not understand updating rows without a single integer primary key
-			raw, err := json.Marshal(step.Files)
-			if err != nil {
-				loggedHTTPErrorf(w, http.StatusInternalServerError, "json error: %v", err)
-				return
-			}
-			rawWhitelist, err := json.Marshal(step.Whitelist)
-			if err != nil {
-				loggedHTTPErrorf(w, http.StatusInternalServerError, "json error: %v", err)
-				return
-			}
-			if _, err = tx.Exec(`UPDATE problem_steps SET note=?,instructions=?,weight=?,files=?,whitelist=? WHERE problem_id=? AND step=?`,
-				step.Note, step.Instructions, step.Weight, raw, rawWhitelist, step.ProblemID, step.Step); err != nil {
-				loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-				return
-			}
-		} else {
-			// insert a new record
-			if err := meddler.Insert(tx, "problem_steps", step); err != nil {
-				loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-				return
-			}
-		}
-	}
-
-	// did the old version have extra steps that need to be deleted?
-	if len(steps) < oldStepCount {
-		if _, err := tx.Exec(`DELETE FROM problem_steps WHERE problem_id = ? AND step > ?`, problem.ID, len(steps)); err != nil {
+		// insert a new record
+		if err := meddler.Insert(tx, "problem_steps", step); err != nil {
 			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 			return
 		}
 	}
-	if isUpdate && len(steps) == oldStepCount {
+
+	if isUpdate {
 		log.Printf("problem %s (%d) with %d step(s) updated", problem.Unique, problem.ID, len(steps))
-	} else if isUpdate {
-		log.Printf("problem %s (%d) with %d step(s) updated (old version had %d step(s))", problem.Unique, problem.ID, len(steps), oldStepCount)
 	} else {
 		log.Printf("problem %s (%d) with %d step(s) created", problem.Unique, problem.ID, len(steps))
 	}
@@ -212,7 +224,7 @@ func PostProblemBundleUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser
 	now := time.Now()
 
 	// basic sanity checks
-	if bundle.ProblemType != nil {
+	if bundle.ProblemTypes != nil || bundle.ProblemTypeSignatures != nil {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must not include problem type")
 		return
 	}
@@ -245,14 +257,23 @@ func PostProblemBundleUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser
 		return
 	}
 
-	// provide the problem type
-	problemType, err := getProblemType(tx, bundle.Problem.ProblemType)
-	if err != nil {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "error loading problem type: %v", err)
-		return
+	// provide the problem types with signatures
+	bundle.ProblemTypes = make(map[string]*ProblemType)
+	bundle.ProblemTypeSignatures = make(map[string]string)
+	typeSet := make(map[string]bool)
+	for _, step := range bundle.ProblemSteps {
+		name := step.ProblemType
+		if _, exists := typeSet[name]; !exists {
+			problemType, err := getProblemType(tx, name)
+			if err != nil {
+				loggedHTTPErrorf(w, http.StatusBadRequest, "error loading problem type %q: %v", name, err)
+				return
+			}
+			typeSet[name] = true
+			bundle.ProblemTypes[name] = problemType
+			bundle.ProblemTypeSignatures[name] = problemType.ComputeSignature(Config.DaycareSecret)
+		}
 	}
-	bundle.ProblemType = problemType
-	bundle.ProblemTypeSignature = problemType.ComputeSignature(Config.DaycareSecret)
 
 	// new problems are created and updated now
 	// existing problems will have their created time verified after loading the old object
@@ -285,10 +306,6 @@ func PostProblemBundleUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser
 			loggedHTTPErrorf(w, http.StatusBadRequest, "updating a problem cannot change its unique ID from %q to %q; create a new problem instead", old.Unique, bundle.Problem.Unique)
 			return
 		}
-		if bundle.Problem.ProblemType != old.ProblemType {
-			loggedHTTPErrorf(w, http.StatusBadRequest, "updating a problem cannot change its type from %q to %q; create a new problem instead", old.ProblemType, bundle.Problem.ProblemType)
-			return
-		}
 		if !bundle.Problem.CreatedAt.Equal(old.CreatedAt) {
 			loggedHTTPErrorf(w, http.StatusBadRequest, "updating a problem cannot change its created time from %v to %v", old.CreatedAt, bundle.Problem.CreatedAt)
 			return
@@ -317,10 +334,17 @@ func PostProblemBundleUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser
 	bundle.ProblemSignature = bundle.Problem.ComputeSignature(Config.DaycareSecret, bundle.ProblemSteps)
 
 	// assign a daycare host
-	host, err := daycareRegistrations.Assign(bundle.Problem.ProblemType)
+	host, err := daycareRegistrations.Assign(typeSet)
 	if err != nil {
+		names := ""
+		for name := range typeSet {
+			if names != "" {
+				names += ", "
+			}
+			names += name
+		}
 		loggedHTTPErrorf(w, http.StatusInternalServerError,
-			"failed to find daycare for problem type %s: %v", bundle.Problem.ProblemType, err)
+			"failed to find daycare for problem type(s) %s: %v", names, err)
 		return
 	}
 	bundle.Hostname = host
@@ -333,6 +357,7 @@ func PostProblemBundleUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser
 		commit.AssignmentID = 0
 		commit.ProblemID = bundle.Problem.ID
 		commit.Step = int64(n) + 1
+		problemType := bundle.ProblemTypes[bundle.ProblemSteps[n].ProblemType]
 		if _, exists := problemType.Actions[commit.Action]; !exists {
 			loggedHTTPErrorf(w, http.StatusBadRequest, "commit %d has action %q, which does not exist for problem type %s", n, commit.Action, problemType.Name)
 			return
@@ -348,7 +373,7 @@ func PostProblemBundleUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser
 		}
 
 		// set timestamps and compute signature
-		sig := commit.ComputeSignature(Config.DaycareSecret, bundle.ProblemTypeSignature, bundle.ProblemSignature, bundle.Hostname, bundle.UserID)
+		sig := commit.ComputeSignature(Config.DaycareSecret, bundle.ProblemTypeSignatures[problemType.Name], bundle.ProblemSignature, bundle.Hostname, bundle.UserID)
 		bundle.CommitSignatures = append(bundle.CommitSignatures, sig)
 	}
 

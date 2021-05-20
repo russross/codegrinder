@@ -186,6 +186,7 @@ func main() {
 				time.Sleep(2 * time.Second)
 			}
 			status := ""
+			client := &http.Client{Timeout: time.Second * 5}
 
 			for {
 				reg := DaycareRegistration{
@@ -208,7 +209,7 @@ func main() {
 					log.Fatalf("forming http request for daycare registration: %v", err)
 				}
 				req.Header.Add("Content-Type", "application/json")
-				res, err := http.DefaultClient.Do(req)
+				res, err := client.Do(req)
 				if err != nil {
 					if status != "failed" {
 						log.Printf("error connecting to register daycare: %v", err)
@@ -708,15 +709,23 @@ func (m *daycares) Insert(reg *DaycareRegistration) error {
 	return nil
 }
 
-func (m *daycares) Assign(problemType string) (string, error) {
+func (m *daycares) Assign(problemTypes map[string]bool) (string, error) {
 	m.Lock()
 	defer m.Unlock()
 
 	// gather the total weights of all of the eligible daycare hosts
 	totalWeight := 0
 	for _, elt := range m.daycares {
-		n := sort.SearchStrings(elt.ProblemTypes, problemType)
-		if n < len(elt.ProblemTypes) && elt.ProblemTypes[n] == problemType {
+		// does this daycare support all required problem types?
+		supported := true
+		for problemType := range problemTypes {
+			n := sort.SearchStrings(elt.ProblemTypes, problemType)
+			if n >= len(elt.ProblemTypes) || elt.ProblemTypes[n] != problemType {
+				supported = false
+				break
+			}
+		}
+		if supported {
 			totalWeight += elt.Capacity
 		}
 	}
@@ -728,8 +737,15 @@ func (m *daycares) Assign(problemType string) (string, error) {
 	point := rand.Intn(totalWeight)
 	skippedWeight := 0
 	for host, elt := range m.daycares {
-		n := sort.SearchStrings(elt.ProblemTypes, problemType)
-		if n < len(elt.ProblemTypes) && elt.ProblemTypes[n] == problemType {
+		supported := true
+		for problemType := range problemTypes {
+			n := sort.SearchStrings(elt.ProblemTypes, problemType)
+			if n >= len(elt.ProblemTypes) || elt.ProblemTypes[n] != problemType {
+				supported = false
+				break
+			}
+		}
+		if supported {
 			skippedWeight += elt.Capacity
 		}
 		if point < skippedWeight {

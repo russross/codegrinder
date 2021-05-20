@@ -8,15 +8,15 @@ type ProblemSetBundle struct {
 }
 
 type ProblemBundle struct {
-	ProblemType          *ProblemType   `json:"problemType"`
-	ProblemTypeSignature string         `json:"problemTypeSignature,omitempty"`
-	Problem              *Problem       `json:"problem"`
-	ProblemSteps         []*ProblemStep `json:"problemSteps"`
-	ProblemSignature     string         `json:"problemSignature,omitempty"`
-	Hostname             string         `json:"hostname"`
-	UserID               int64          `json:"userID"`
-	Commits              []*Commit      `json:"commits"`
-	CommitSignatures     []string       `json:"commitSignatures,omitempty"`
+	ProblemTypes          map[string]*ProblemType `json:"problemTypes"`
+	ProblemTypeSignatures map[string]string       `json:"problemTypeSignatures,omitempty"`
+	Problem               *Problem                `json:"problem"`
+	ProblemSteps          []*ProblemStep          `json:"problemSteps"`
+	ProblemSignature      string                  `json:"problemSignature,omitempty"`
+	Hostname              string                  `json:"hostname"`
+	UserID                int64                   `json:"userID"`
+	Commits               []*Commit               `json:"commits"`
+	CommitSignatures      []string                `json:"commitSignatures,omitempty"`
 }
 
 type CommitBundle struct {

@@ -112,14 +112,14 @@ func downloadStudentAssignment(id int64, assignment *Assignment) {
 	}
 	user := new(User)
 	mustGetObject(fmt.Sprintf("/users/%d", assignment.UserID), nil, user)
-	log.Printf("[%s] asst %d @ %.0f%% '%s'", user.Name, assignment.ID, assignment.Score*100.0, assignment.CanvasTitle)
+	fmt.Printf("[%s] asst %d @ %.0f%% '%s'\n", user.Name, assignment.ID, assignment.Score*100.0, assignment.CanvasTitle)
 
 	rootDir := filepath.Join(os.TempDir(), fmt.Sprintf("grind-tmp.%d", os.Getpid()))
 	if err := os.Mkdir(rootDir, 0700); err != nil {
 		log.Fatalf("error creating temp directory %s: %v", rootDir, err)
 	}
 	defer func() {
-		log.Printf("deleting %s", rootDir)
+		fmt.Printf("deleting %s\n", rootDir)
 		os.RemoveAll(rootDir)
 	}()
 	changeTo := getAssignment(assignment, rootDir)
@@ -127,7 +127,7 @@ func downloadStudentAssignment(id int64, assignment *Assignment) {
 	if shell == "" {
 		shell = "/bin/bash"
 	}
-	log.Printf("exit shell when finished")
+	fmt.Println("exit shell when finished")
 	attr := &os.ProcAttr{
 		Dir:   changeTo,
 		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},

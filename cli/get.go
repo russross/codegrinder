@@ -108,13 +108,6 @@ func getAssignment(assignment *Assignment, rootDir string) string {
 		mustGetObject(fmt.Sprintf("/problems/%d", elt.ProblemID), nil, problem)
 		problems[problem.Unique] = problem
 
-		// get the problem type if we do not already have it
-		if _, exists := types[problem.ProblemType]; !exists {
-			problemType := new(ProblemType)
-			mustGetObject(fmt.Sprintf("/problem_types/%s", problem.ProblemType), nil, problemType)
-			types[problem.ProblemType] = problemType
-		}
-
 		if getObject(fmt.Sprintf("/assignments/%d/problems/%d/commits/last", assignment.ID, problem.ID), nil, commit) {
 			info.ID = problem.ID
 			info.Step = commit.Step
@@ -129,6 +122,14 @@ func getAssignment(assignment *Assignment, rootDir string) string {
 		infos[problem.Unique] = info
 		commits[problem.Unique] = commit
 		steps[problem.Unique] = step
+
+		// get the problem type if we do not already have it
+		if _, exists := types[step.ProblemType]; !exists {
+			problemType := new(ProblemType)
+			mustGetObject(fmt.Sprintf("/problem_types/%s", step.ProblemType), nil, problemType)
+			types[step.ProblemType] = problemType
+		}
+
 	}
 
 	// check if the target directory exists
@@ -141,7 +142,7 @@ func getAssignment(assignment *Assignment, rootDir string) string {
 	}
 
 	// create the target directory
-	log.Printf("unpacking problem set in %s", rootDir)
+	fmt.Printf("unpacking problem set in %s\n", rootDir)
 	if err := os.MkdirAll(rootDir, 0755); err != nil {
 		log.Fatalf("error creating directory %s: %v", rootDir, err)
 	}
@@ -158,21 +159,21 @@ func getAssignment(assignment *Assignment, rootDir string) string {
 			target = filepath.Join(rootDir, unique)
 
 			if step.Step > 1 {
-				log.Printf("unpacking problem %s step %d", unique, step.Step)
+				fmt.Printf("unpacking problem %s step %d\n", unique, step.Step)
 			} else {
-				log.Printf("unpacking problem %s", unique)
+				fmt.Printf("unpacking problem %s\n", unique)
 			}
 			if err := os.MkdirAll(target, 0755); err != nil {
 				log.Fatalf("error creating directory %s: %v", target, err)
 			}
 		} else if step.Step > 1 {
-			log.Printf("unpacking step %d", step.Step)
+			fmt.Printf("unpacking step %d\n", step.Step)
 		}
 
 		// save the step files
 		for name, contents := range step.Files {
 			path := filepath.Join(target, filepath.FromSlash(name))
-			//log.Printf("writing step %d file %s", step.Step, name)
+			//fmt.Printf("writing step %d file %s\n", step.Step, name)
 			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 				log.Fatalf("error create directory %s: %v", filepath.Dir(path), err)
 			}
@@ -185,7 +186,7 @@ func getAssignment(assignment *Assignment, rootDir string) string {
 		if len(step.Instructions) > 0 {
 			name := filepath.Join("doc", "index.html")
 			path := filepath.Join(target, name)
-			//log.Printf("writing instruction file %s", name)
+			//fmt.Printf("writing instruction file %s\n", name)
 			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 				log.Fatalf("error create directory %s: %v", filepath.Dir(path), err)
 			}
@@ -204,7 +205,7 @@ func getAssignment(assignment *Assignment, rootDir string) string {
 			}
 			for name, contents := range commit.Files {
 				path := filepath.Join(target, filepath.FromSlash(name))
-				//log.Printf("writing commit file %s", name)
+				//fmt.Printf("writing commit file %s\n", name)
 				if err := ioutil.WriteFile(path, contents, 0644); err != nil {
 					log.Fatalf("error saving file %s: %v", path, err)
 				}
@@ -212,22 +213,22 @@ func getAssignment(assignment *Assignment, rootDir string) string {
 
 			// does this commit indicate the step was finished and needs to advance?
 			if commit.ReportCard != nil && commit.ReportCard.Passed && commit.Score == 1.0 {
-				nextStep(target, infos[unique], problem, commit)
+				nextStep(target, infos[unique], problem, commit, types)
 			}
 		}
 
 		// save any problem type files
-		problemType := types[problem.ProblemType]
+		problemType := types[step.ProblemType]
 		for name, contents := range problemType.Files {
 			path := filepath.Join(target, filepath.FromSlash(name))
-			//log.Printf("writing problem type file %s", name)
+			//fmt.Printf("writing problem type file %s\n", name)
 			if directory := filepath.Dir(path); directory != "." {
 				if err := os.MkdirAll(directory, 0755); err != nil {
 					log.Fatalf("error create directory %s: %v", directory, err)
 				}
 			}
 			if _, err := os.Lstat(path); err == nil {
-				log.Printf("warning: problem type file is overwriting problem file: %s", path)
+				fmt.Printf("warning: problem type file is overwriting problem file: %s\n", path)
 			}
 			if err := ioutil.WriteFile(path, contents, 0644); err != nil {
 				log.Fatalf("error saving file %s: %v", path, err)
@@ -243,65 +244,83 @@ func getAssignment(assignment *Assignment, rootDir string) string {
 	return changeTo
 }
 
-func nextStep(directory string, info *ProblemInfo, problem *Problem, commit *Commit) bool {
-	log.Printf("step %d passed", commit.Step)
+func nextStep(directory string, info *ProblemInfo, problem *Problem, commit *Commit, types map[string]*ProblemType) bool {
+	fmt.Printf("step %d passed\n", commit.Step)
 
 	// advance to the next step
 	oldStep, newStep := new(ProblemStep), new(ProblemStep)
 	if !getObject(fmt.Sprintf("/problems/%d/steps/%d", problem.ID, commit.Step+1), nil, newStep) {
-		log.Printf("you have completed all steps for this problem")
+		fmt.Println("you have completed all steps for this problem")
 		return false
 	}
 	mustGetObject(fmt.Sprintf("/problems/%d/steps/%d", problem.ID, commit.Step), nil, oldStep)
-	log.Printf("moving to step %d", newStep.Step)
+	fmt.Printf("moving to step %d\n", newStep.Step)
 
-	// delete all the files from the old step
-	if len(oldStep.Instructions) > 0 {
-		name := filepath.Join("doc", "index.html")
+	if _, exists := types[oldStep.ProblemType]; !exists {
+		problemType := new(ProblemType)
+		mustGetObject(fmt.Sprintf("/problem_types/%s", oldStep.ProblemType), nil, problemType)
+		types[oldStep.ProblemType] = problemType
+	}
+	if _, exists := types[newStep.ProblemType]; !exists {
+		problemType := new(ProblemType)
+		mustGetObject(fmt.Sprintf("/problem_types/%s", newStep.ProblemType), nil, problemType)
+		types[newStep.ProblemType] = problemType
+	}
+
+	remove := func(name string) {
 		path := filepath.Join(directory, name)
-		if _, err := os.Stat(path); err == nil {
-			//log.Printf("deleting %s from old step", name)
-			if err := os.Remove(path); err != nil {
-				log.Fatalf("error deleting %s: %v", name, err)
+		if err := os.Remove(path); err != nil {
+			log.Fatalf("error deleting %s: %v", name, err)
+		}
+		dirpath := filepath.Dir(name)
+		if dirpath != "." {
+			if err := os.Remove(filepath.Join(directory, dirpath)); err != nil {
+				// do nothing: the directory probably has other files left
 			}
 		}
 	}
-	for name := range oldStep.Files {
-		if filepath.Dir(filepath.FromSlash(name)) == "." {
-			continue
-		}
-		path := filepath.Join(directory, filepath.FromSlash(name))
-		//log.Printf("deleting %s from old step", path)
-		if err := os.Remove(path); err != nil {
-			log.Fatalf("error deleting %s: %v", path, err)
-		}
-		dirpath := filepath.Dir(path)
-		if err := os.Remove(dirpath); err != nil {
-			// do nothing; the directory probably has other files left
+
+	// delete all the files from the old step
+	if oldStep.ProblemType != newStep.ProblemType {
+		for name := range types[oldStep.ProblemType].Files {
+			remove(filepath.FromSlash(name))
 		}
 	}
+	if len(oldStep.Instructions) > 0 {
+		remove(filepath.Join("doc", "index.html"))
+	}
+	for name := range oldStep.Files {
+		remove(filepath.FromSlash(name))
+	}
 
-	// write files from new step and update the whitelist
-	for name, contents := range newStep.Files {
-		path := filepath.Join(directory, filepath.FromSlash(name))
-		//log.Printf("writing %s from new step", path)
+	create := func(name string, contents []byte) {
+		path := filepath.Join(directory, name)
 		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 			log.Fatalf("error creating directory %s: %v", filepath.Dir(path), err)
+		}
+		if _, err := os.Lstat(path); err == nil {
+			fmt.Printf("warning: overwriting file: %s\n", path)
 		}
 		if err := ioutil.WriteFile(path, contents, 0644); err != nil {
 			log.Fatalf("error saving file %s: %v", path, err)
 		}
 	}
+
+	// write files from new step
+	if oldStep.ProblemType != newStep.ProblemType {
+		// add the files provided by the new problem type
+		for name, contents := range types[oldStep.ProblemType].Files {
+			create(filepath.FromSlash(name), contents)
+		}
+	}
 	if len(newStep.Instructions) > 0 {
-		name := filepath.Join("doc", "index.html")
-		path := filepath.Join(directory, name)
-		//log.Printf("writing %s from new step", name)
-		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-			log.Fatalf("error creating directory %s: %v", filepath.Dir(path), err)
-		}
-		if err := ioutil.WriteFile(path, []byte(newStep.Instructions), 0644); err != nil {
-			log.Fatalf("error saving file %s: %v", path, err)
-		}
+		create(filepath.Join("doc", "index.html"), []byte(newStep.Instructions))
+	}
+	for name, contents := range newStep.Files {
+		create(filepath.FromSlash(name), contents)
+	}
+	for name, contents := range commit.Files {
+		create(filepath.FromSlash(name), contents)
 	}
 
 	info.Step++

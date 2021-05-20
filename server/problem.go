@@ -217,6 +217,12 @@ func GetProblemSteps(w http.ResponseWriter, r *http.Request, tx *sql.Tx, params 
 		return
 	}
 
+	if !currentUser.Admin && !currentUser.Author {
+		for _, elt := range problemSteps {
+			elt.Solution = nil
+		}
+	}
+
 	render.JSON(http.StatusOK, problemSteps)
 }
 
@@ -248,6 +254,9 @@ func GetProblemStep(w http.ResponseWriter, tx *sql.Tx, params martini.Params, cu
 		return
 	}
 
+	if !currentUser.Admin && !currentUser.Author {
+		problemStep.Solution = nil
+	}
 	render.JSON(http.StatusOK, problemStep)
 }
 
