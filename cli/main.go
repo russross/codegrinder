@@ -130,12 +130,12 @@ func main() {
 	cmdGrind.AddCommand(cmdAction)
 
 	cmdReset := &cobra.Command{
-		Use:   "reset",
-		Short: "go back to the beginning of the current step",
+		Use:   "reset [file1] [file2] [...]",
+		Short: "go back to the beginning of the current step for specified files",
 		Long: fmt.Sprintf("This lets you start the current step from the beginning\n" +
 			"by deleting any changes you have made.\n\n" +
-			"BE CAREFUL!! THIS WILL ERASE ANY WORK YOU HAVE DONE\n" +
-			"SINCE THE BEGINNING OF THE CURRENT STEP!!"),
+			"Files you have modified will be listed, and if you provide\n" +
+			"a list of files they will be reset to their start-of-step state."),
 		Run: CommandReset,
 	}
 	cmdGrind.AddCommand(cmdReset)
