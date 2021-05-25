@@ -75,46 +75,17 @@ func CommandType(cmd *cobra.Command, args []string) {
 	problemType := new(ProblemType)
 	mustGetObject(fmt.Sprintf("/problem_types/%s", problemTypeName), nil, problemType)
 
-	// remove the on-disk file if it exists
-	// if that leaves an empty directory, remove it as well
-	removeFile := func(name string) {
-		path := filepath.Join(directory, name)
-		_, err := os.Stat(path)
-		if err != nil && os.IsNotExist(err) {
-			return
+	files := make(map[string][]byte)
+	if remove {
+		oldFiles := make(map[string]struct{})
+		for name := range problemType.Files {
+			oldFiles[filepath.FromSlash(name)] = struct{}{}
 		}
-		if err != nil {
-			log.Fatalf("while checking %s: %v", path, err)
+		updateFiles(directory, files, oldFiles, true)
+	} else {
+		for name, contents := range problemType.Files {
+			files[filepath.FromSlash(name)] = contents
 		}
-
-		fmt.Printf("removing file %s\n", name)
-		if err := os.Remove(path); err != nil {
-			log.Fatalf("removing %s: %v", name, err)
-		}
-
-		// try removing the parent directories
-		parent := filepath.Dir(path)
-		for parent != directory {
-			err := os.Remove(parent)
-			if err == nil {
-				fmt.Printf("  removed empty directory %s\n", parent)
-				next := filepath.Dir(parent)
-				if next == parent {
-					break
-				}
-				parent = next
-			} else {
-				break
-			}
-		}
-	}
-
-	// save each file
-	for name, contents := range problemType.Files {
-		if remove {
-			removeFile(filepath.FromSlash(name))
-		} else {
-			checkAndUpdate(directory, filepath.FromSlash(name), contents)
-		}
+		updateFiles(directory, files, nil, true)
 	}
 }

@@ -46,11 +46,11 @@ type ReportCardResult struct {
 type EventMessage struct {
 	Time        time.Time         `json:"time"`
 	Event       string            `json:"event"`
-	ExecCommand []string          `json:"execcommand,omitempty"`
-	ExitStatus  int               `json:"exitstatus,omitempty"`
-	StreamData  []byte            `json:"streamdata,omitempty"`
+	ExecCommand []string          `json:"execCommand,omitempty"`
+	ExitStatus  int               `json:"exitStatus,omitempty"`
+	StreamData  []byte            `json:"streamData,omitempty"`
 	Error       string            `json:"error,omitempty"`
-	ReportCard  *ReportCard       `json:"reportcard,omitempty"`
+	ReportCard  *ReportCard       `json:"reportCard,omitempty"`
 	Files       map[string][]byte `json:"files,omitempty"`
 }
 

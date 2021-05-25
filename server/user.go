@@ -185,7 +185,7 @@ func GetUserSession(w http.ResponseWriter, r *http.Request, render render.Render
 	session := NewSession(userID)
 	cookie := session.Save(w)
 
-	result := map[string]string{"Cookie": cookie}
+	result := map[string]string{"cookie": cookie}
 	render.JSON(http.StatusOK, result)
 }
 

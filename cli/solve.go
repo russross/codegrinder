@@ -34,7 +34,9 @@ func CommandSolve(cmd *cobra.Command, args []string) {
 	if step.Solution == nil || len(step.Solution) == 0 {
 		log.Fatalf("no solution files found")
 	}
+	files := make(map[string][]byte)
 	for name, contents := range step.Solution {
-		checkAndUpdate(problemDir, filepath.FromSlash(name), contents)
+		files[filepath.FromSlash(name)] = contents
 	}
+	updateFiles(problemDir, files, nil, true)
 }

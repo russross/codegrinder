@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
-	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -12,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gorilla/websocket"
 	. "github.com/russross/codegrinder/types"
 	"github.com/spf13/cobra"
 	"gopkg.in/gcfg.v1"
@@ -560,55 +558,6 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 	}
 
 	return unsigned, stepDir, stepN
-}
-
-func mustConfirmCommitBundle(bundle *CommitBundle, args []string) *CommitBundle {
-	// create a websocket connection to the server
-	headers := make(http.Header)
-	url := "wss://" + bundle.Hostname + urlPrefix + "/sockets/" + bundle.ProblemType.Name + "/" + bundle.Commit.Action
-	socket, resp, err := websocket.DefaultDialer.Dial(url, headers)
-	if err != nil {
-		log.Printf("error dialing %s: %v", url, err)
-		if resp != nil && resp.Body != nil {
-			dumpBody(resp)
-			resp.Body.Close()
-		}
-		log.Fatalf("giving up")
-	}
-	defer socket.Close()
-
-	// form the initial request
-	req := &DaycareRequest{CommitBundle: bundle}
-	if err := socket.WriteJSON(req); err != nil {
-		log.Fatalf("error writing request message: %v", err)
-	}
-
-	// start listening for events
-	for {
-		reply := new(DaycareResponse)
-		if err := socket.ReadJSON(reply); err != nil {
-			log.Fatalf("socket error reading event: %v", err)
-			break
-		}
-
-		switch {
-		case reply.Error != "":
-			log.Printf("server returned an error:")
-			log.Fatalf("   %s", reply.Error)
-
-		case reply.CommitBundle != nil:
-			return reply.CommitBundle
-
-		case reply.Event != nil:
-			// ignore the streamed data
-
-		default:
-			log.Fatalf("unexpected reply from server")
-		}
-	}
-
-	log.Fatalf("no commit returned from server")
-	return nil
 }
 
 func createProblemSet(path string, isUpdate bool) {

@@ -129,23 +129,16 @@ func main() {
 	}
 	cmdGrind.AddCommand(cmdAction)
 
-	/*
-		cmdReset := &cobra.Command{
-			Use:   "reset",
-			Short: "go back to the beginning of the current step",
-			Long: fmt.Sprintf("When run without arguments, this shows which files have\n"+
-				"been changed. If you name one or more files, it will revert them\n"+
-				"to their state at the beginning of the current step.\n"+
-				"Note: this saves your code before doing anything else, and any\n"+
-				"changes occur only in your local file system. Until you perform\n"+
-				"another action that forces a save (save, grade, action),\n"+
-				"you can restore your files by deleting the directory and running\n"+
-				"'%s get' to re-download your assignment.\n\n"+
-				"   Example: '%s reset file1 file2'", os.Args[0], os.Args[0]),
-			Run: CommandReset,
-		}
-		cmdGrind.AddCommand(cmdReset)
-	*/
+	cmdReset := &cobra.Command{
+		Use:   "reset",
+		Short: "go back to the beginning of the current step",
+		Long: fmt.Sprintf("This lets you start the current step from the beginning\n" +
+			"by deleting any changes you have made.\n\n" +
+			"BE CAREFUL!! THIS WILL ERASE ANY WORK YOU HAVE DONE\n" +
+			"SINCE THE BEGINNING OF THE CURRENT STEP!!"),
+		Run: CommandReset,
+	}
+	cmdGrind.AddCommand(cmdReset)
 
 	if isInstructor {
 		cmdCreate := &cobra.Command{
@@ -209,7 +202,7 @@ func main() {
 }
 
 type LoginSession struct {
-	Cookie string
+	Cookie string `json:"cookie"`
 }
 
 func CommandLogin(cmd *cobra.Command, args []string) {

@@ -65,11 +65,11 @@ type Assignment struct {
 	LtiID              string               `json:"-" meddler:"lti_id"`
 	CanvasTitle        string               `json:"canvasTitle" meddler:"canvas_title"`
 	CanvasID           int64                `json:"canvasID" meddler:"canvas_id"`
-	CanvasAPIDomain    string               `json:"canvasAPIDomain" meddler:"canvas_api_domain"`
+	CanvasAPIDomain    string               `json:"-" meddler:"canvas_api_domain"`
 	OutcomeURL         string               `json:"-" meddler:"outcome_url"`
 	OutcomeExtURL      string               `json:"-" meddler:"outcome_ext_url"`
 	OutcomeExtAccepted string               `json:"-" meddler:"outcome_ext_accepted"`
-	FinishedURL        string               `json:"finishedURL" meddler:"finished_url"`
+	FinishedURL        string               `json:"-" meddler:"finished_url"`
 	ConsumerKey        string               `json:"consumerKey" meddler:"consumer_key"`
 	UnlockAt           *time.Time           `json:"unlockAt" meddler:"unlock_at,localtime"`
 	DueAt              *time.Time           `json:"dueAt" meddler:"due_at,localtime"`
