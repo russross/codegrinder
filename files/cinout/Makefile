@@ -18,21 +18,25 @@ LIBOBJECT=$(patsubst %.s,%.o,$(wildcard lib/*.s))
 AOUTOBJECT=$(filter-out $(CHECKC:.c=.o), $(filter-out $(LIBOBJECT), $(ALLOBJECT)))
 UNITOBJECT=$(filter-out main.o start.o, $(ALLOBJECT))
 
-all:	test
+all:	step
 
-test:	unittest.out
-	./unittest.out
+test:	a.out
+	python3 lib/inout-runner.py input ./a.out
 
-grade:	unittest.out
-	./unittest.out
+grade:	a.out
+	rm -f test_detail.xml inputs/*.actual
+	python3 lib/inout-runner.py input ./a.out
 
-valgrind:	unittest.out
+valgrind:	a.out
 	rm -f valgrind.log
-	-valgrind --leak-check=full --track-fds=yes --log-file=valgrind.log ./unittest.out
+	-valgrind --leak-check=full --track-fds=yes --log-file=valgrind.log ./a.out
 	cat valgrind.log
 
 run:	a.out
 	./a.out
+
+step:	a.out
+	python3 lib/inout-stepall.py input ./a.out
 
 debug:	a.out $(HOME)/.gdbinit
 	gdb ./a.out

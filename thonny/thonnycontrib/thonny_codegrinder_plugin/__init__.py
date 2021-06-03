@@ -4,8 +4,8 @@ __version__ = '2.6.1'
 
 import base64
 import collections
-from dataclasses import dataclass, field
-from dataclasses_json import dataclass_json, LetterCase, config
+from dataclasses import dataclass
+from dataclasses_json.api import DataClassJsonMixin
 import datetime
 import glob
 import gzip
@@ -225,9 +225,9 @@ def _codegrinder_run_tests_handler() -> None:
             cmd_line += f'!{python} -m unittest discover -vs tests\n'
         elif os.path.exists(os.path.join(problemDir, 'inputs')):
             # find main
+            count = 0
             py_files = [ os.path.basename(s) for s in glob.glob(f'{problemDir}/*.py')]
             for name in py_files:
-                count = 0
                 with open(os.path.join(problemDir, name)) as fp:
                     contents = fp.read()
                     if re.search('^def main\b', contents):
@@ -273,13 +273,13 @@ def _codegrinder_download_handler() -> None:
         downloads: List[str] = []
         for assignment in assignments:
             # ignore quizzes
-            if assignment.problem_set_id <= 0:
+            if assignment.problemSetID <= 0:
                 continue
 
             # get the course
-            if assignment.course_id not in courses:
-                courses[assignment.course_id] = must_get_object(f'/courses/{assignment.course_id}', None, Course)
-            course = courses[assignment.course_id]
+            if assignment.courseID not in courses:
+                courses[assignment.courseID] = must_get_object(f'/courses/{assignment.courseID}', None, Course)
+            course = courses[assignment.courseID]
 
             # download the assignment
             problemDir = get_assignment(assignment, course, home)
@@ -345,15 +345,15 @@ def _codegrinder_progress_handler() -> None:
         now = datetime.datetime.utcnow()
 
         # get the assignment
-        assignment: Assignment = must_get_object(f'/assignments/{dotfile.assignment_id}', None, Assignment)
+        assignment: Assignment = must_get_object(f'/assignments/{dotfile.assignmentID}', None, Assignment)
 
         # get the course
-        course: Course = must_get_object(f'/courses/{assignment.course_id}', None, Course)
+        course: Course = must_get_object(f'/courses/{assignment.courseID}', None, Course)
 
         # get the problems
-        problem_set: ProblemSet = must_get_object(f'/problem_sets/{assignment.problem_set_id}', None, ProblemSet)
-        problem_set_problems: List[ProblemSetProblem] = must_get_object_list(f'/problem_sets/{assignment.problem_set_id}/problems', None, ProblemSetProblem)
-        msg = f'{assignment.canvas_title}\n'
+        problem_set: ProblemSet = must_get_object(f'/problem_sets/{assignment.problemSetID}', None, ProblemSet)
+        problem_set_problems: List[ProblemSetProblem] = must_get_object_list(f'/problem_sets/{assignment.problemSetID}/problems', None, ProblemSetProblem)
+        msg = f'{assignment.canvasTitle}\n'
         if len(problem_set_problems) == 0:
             raise DialogException('No problems found',
                 'Could not find any problems as part of this assignment.')
@@ -365,15 +365,15 @@ def _codegrinder_progress_handler() -> None:
             msg += '\n'
 
         for psp in problem_set_problems:
-            problem: Problem = must_get_object(f'/problems/{psp.problem_id}', None, Problem)
+            problem: Problem = must_get_object(f'/problems/{psp.problemID}', None, Problem)
             msg += f'[*] {problem.note}\n'
             if len(problem_set_problems) > 1:
                 msg += f'    Location: {problem.unique}\n'
 
             # get the steps
             steps: List[ProblemStep] = must_get_object_list(f'/problems/{problem.id}/steps', None, ProblemStep)
-            if problem.unique in assignment.raw_scores:
-                scores = assignment.raw_scores[problem.unique]
+            if problem.unique in assignment.rawScores:
+                scores = assignment.rawScores[problem.unique]
             else:
                 scores = []
             weightSum, scoreSum = 0.0, 0.0
@@ -408,7 +408,7 @@ def _codegrinder_progress_handler() -> None:
         dialog.show_dialog()
 
 def _codegrinder_grade_handler() -> None:
-    bar = None
+    bar: Optional[Progress] = None
     try:
         thonny.get_workbench().get_editor_notebook().save_all_named_editors()
         (filename, dotfile, problemSetDir, problemDir) = get_codegrinder_project_info()
@@ -443,16 +443,16 @@ def _codegrinder_grade_handler() -> None:
         # save the commit with report card
         toSave = {
             'hostname':         graded.hostname,
-            'userID':           graded.user_id,
+            'userID':           graded.userID,
             'commit':           graded.commit.to_dict(),
-            'commitSignature':  graded.commit_signature,
+            'commitSignature':  graded.commitSignature,
         }
         saved = must_post_commit_bundle('/commit_bundles/signed', None, toSave)
         commit = saved.commit
 
         shell = thonny.get_workbench().get_view('ShellView')
         shell.clear_shell()
-        if commit.report_card and commit.report_card.passed is True and commit.score == 1.0:
+        if commit.reportCard and commit.reportCard.passed is True and commit.score == 1.0:
 
             # peek ahead to see if there is another step
             newStep: Optional[ProblemStep] = get_object(f'/problems/{problem.id}/steps/{commit.step+1}', None, ProblemStep)
@@ -483,7 +483,7 @@ def _codegrinder_grade_handler() -> None:
 
         else:
             # solution failed
-            def escape(s):
+            def escape(s: str) -> str:
                 return s.replace('"""', '\\"\\"\\"')
 
             msg = 'reportCard = """\n'
@@ -492,9 +492,9 @@ def _codegrinder_grade_handler() -> None:
                 for elt in commit.transcript:
                     msg += escape(dump_event_message(elt))
 
-            if commit.report_card:
+            if commit.reportCard:
                 msg += '\n\n'
-                msg += escape(commit.report_card.note)
+                msg += escape(commit.reportCard.note)
 
             msg += '\n"""\n'
             shell.submit_python_code(msg)
@@ -511,82 +511,73 @@ def _codegrinder_grade_handler() -> None:
 # Object types, mainly mirroring the server object types
 #
 
-@dataclass_json(letter_case=LetterCase.CAMEL)
 @dataclass
-class Config:
+class Config(DataClassJsonMixin):
     host:   str
     cookie: str
 
-@dataclass_json(letter_case=LetterCase.CAMEL)
 @dataclass
-class Info:
+class Info(DataClassJsonMixin):
     id:     int
     step:   int
 
-@dataclass_json(letter_case=LetterCase.CAMEL)
 @dataclass
-class DotFile:
-    assignment_id:  int = field(metadata=config(field_name='assignmentID'))
+class DotFile(DataClassJsonMixin):
+    assignmentID:   int
     problems:       Dict[str, Info]
     path:           str = ''
 
 
-@dataclass_json(letter_case=LetterCase.CAMEL)
 @dataclass
-class Version:
+class Version(DataClassJsonMixin):
     version:                    str
-    grind_version_required:     str
-    grind_version_recommended:  str
-    thonny_version_required:    str
-    thonny_version_recommended: str
+    grindVersionRequired:       str
+    grindVersionRecommended:    str
+    thonnyVersionRequired:      str
+    thonnyVersionRecommended:   str
 
-@dataclass_json(letter_case=LetterCase.CAMEL)
 @dataclass
-class Session:
+class Session(DataClassJsonMixin):
     cookie: str
 
-@dataclass_json(letter_case=LetterCase.CAMEL)
 @dataclass
-class ProblemTypeAction:
-    problem_type:   str = ''
+class ProblemTypeAction(DataClassJsonMixin):
+    problemType:    str = ''
     action:         str = ''
     command:        str = ''
     parser:         str = ''
     message:        str = ''
     interactive:    bool = False
-    max_cpu:        int = field(metadata=config(field_name='maxCPU'), default=0)
-    max_session:    int = 0
-    max_timeout:    int = 0
-    max_fd:         int = field(metadata=config(field_name='maxFD'), default=0)
-    max_file_size:  int = 0
-    max_memory:     int = 0
-    max_threads:    int = 0
+    maxCPU:         int = 0
+    maxSession:     int = 0
+    maxTimeout:     int = 0
+    maxFD:          int = 0
+    maxFileSize:    int = 0
+    maxMemory:      int = 0
+    maxThreads:     int = 0
 
-@dataclass_json(letter_case=LetterCase.CAMEL)
 @dataclass
-class ProblemType:
+class ProblemType(DataClassJsonMixin):
     name:       str
     image:      str
     files:      Dict[str, str]
     actions:    Dict[str, ProblemTypeAction]
 
-@dataclass_json(letter_case=LetterCase.CAMEL)
 @dataclass
-class Problem:
+class Problem(DataClassJsonMixin):
     id:             int
     unique:         str
     note:           str
     tags:           List[str]
     options:        List[str]
-    created_at:     str
-    updated_at:     str
+    createdAt:      str
+    updatedAt:      str
 
-@dataclass_json(letter_case=LetterCase.CAMEL)
 @dataclass
-class ProblemStep:
-    problem_id:     int = field(metadata=config(field_name='problemID'))
+class ProblemStep(DataClassJsonMixin):
+    problemID:      int
     step:           int
-    problem_type:   str
+    problemType:    str
     note:           str
     instructions:   str
     weight:         float
@@ -594,127 +585,117 @@ class ProblemStep:
     whitelist:      Dict[str, bool]
     solution:       Optional[Dict[str, str]] = None
 
-@dataclass_json(letter_case=LetterCase.CAMEL)
 @dataclass
-class ProblemSet:
+class ProblemSet(DataClassJsonMixin):
     id:         int
     unique:     str
     note:       str
     tags:       List[str]
-    created_at: str
-    updated_at: str
+    createdAt:  str
+    updatedAt:  str
 
-@dataclass_json(letter_case=LetterCase.CAMEL)
 @dataclass
-class ProblemSetProblem:
-    problem_set_id: int = field(metadata=config(field_name='problemSetID'))
-    problem_id:     int = field(metadata=config(field_name='problemID'))
+class ProblemSetProblem(DataClassJsonMixin):
+    problemSetID:   int
+    problemID:      int
     weight:         float
 
-@dataclass_json(letter_case=LetterCase.CAMEL)
 @dataclass
-class Course:
+class Course(DataClassJsonMixin):
     id:         int
     name:       str
     label:      str
-    lti_id:     str = field(metadata=config(field_name='ltiID'))
-    canvas_id:  int = field(metadata=config(field_name='canvasID'))
-    created_at: str
-    updated_at: str
+    ltiID:      str
+    canvasID:   int
+    createdAt:  str
+    updatedAt:  str
 
-@dataclass_json(letter_case=LetterCase.CAMEL)
 @dataclass
-class User:
+class User(DataClassJsonMixin):
     id:                 int
     name:               str
     email:              str
-    lti_id:             str = field(metadata=config(field_name='ltiID'))
-    image_url:          str = field(metadata=config(field_name='imageURL'))
-    canvas_login:       str
-    canvas_id:          int = field(metadata=config(field_name='canvasID'))
+    ltiID:              str
+    imageURL:           str
+    canvasLogin:        str
+    canvasID:           int
     author:             bool
     admin:              bool
-    created_at:         str
-    updated_at:         str
-    last_signed_in_at:  str
+    createdAt:          str
+    updatedAt:          str
+    lastSignedInAt:     str
 
-@dataclass_json(letter_case=LetterCase.CAMEL)
 @dataclass
-class Assignment:
+class Assignment(DataClassJsonMixin):
     id:             int
-    course_id:      int = field(metadata=config(field_name='courseID'))
-    problem_set_id: int = field(metadata=config(field_name='problemSetID'))
-    user_id:        int = field(metadata=config(field_name='userID'))
+    courseID:       int
+    problemSetID:   int
+    userID:         int
     roles:          str
     instructor:     bool
-    raw_scores:     Dict[str, List[float]]
+    rawScores:      Dict[str, List[float]]
     score:          float
-    canvas_title:   str
-    canvas_id:      int = field(metadata=config(field_name='canvasID'))
-    consumer_key:   str
-    unlock_at:      Optional[str] = None
-    due_at:         Optional[str] = None
-    lock_at:        Optional[str] = None
-    created_at:     str = ''
-    updated_at:     str = ''
+    canvasTitle:    str
+    canvasID:       int
+    consumerKey:    str
+    unlockAt:       Optional[str] = None
+    dueAt:          Optional[str] = None
+    lockAt:         Optional[str] = None
+    createdAt:      str = ''
+    updatedAt:      str = ''
 
-@dataclass_json(letter_case=LetterCase.CAMEL)
 @dataclass
-class ReportCardResult:
+class ReportCardResult(DataClassJsonMixin):
     name:       str = ''
     outcome:    str = ''
     details:    str = ''
     context:    str = ''
 
-@dataclass_json(letter_case=LetterCase.CAMEL)
 @dataclass
-class ReportCard:
+class ReportCard(DataClassJsonMixin):
     passed:     bool = False
     note:       str = ''
     duration:   str = ''
     results:    Optional[List[ReportCardResult]] = None
 
-@dataclass_json(letter_case=LetterCase.CAMEL)
 @dataclass
-class EventMessage:
+class EventMessage(DataClassJsonMixin):
     time:           str = ''
     event:          str = ''
-    exec_command:   Optional[List[str]] = None
-    exit_status:    Optional[int] = None
-    stream_data:    Optional[str] = None
+    execCommand:    Optional[List[str]] = None
+    exitStatus:     Optional[int] = None
+    streamData:     Optional[str] = None
     error:          Optional[str] = None
-    report_card:    Optional[ReportCard] = None
+    reportCard:     Optional[ReportCard] = None
     files:          Optional[Dict[str, str]] = None
 
-@dataclass_json(letter_case=LetterCase.CAMEL)
 @dataclass
-class Commit:
+class Commit(DataClassJsonMixin):
     id:             int = 0
-    assignment_id:  int = field(metadata=config(field_name='assignmentID'), default=0)
-    problem_id:     int = field(metadata=config(field_name='problemID'), default=0)
+    assignmentID:   int = 0
+    problemID:      int = 0
     step:           int = 0
     action:         str = ''
     note:           str = ''
     files:          Optional[Dict[str, str]] = None
     transcript:     Optional[List[EventMessage]] = None
-    report_card:    Optional[ReportCard] = None
+    reportCard:     Optional[ReportCard] = None
     score:          float = 0.0
-    created_at:     str = ''
-    updated_at:     str = ''
+    createdAt:      str = ''
+    updatedAt:      str = ''
 
-@dataclass_json(letter_case=LetterCase.CAMEL)
 @dataclass
-class CommitBundle:
-    problem_type:           ProblemType
-    problem_type_signature: str
+class CommitBundle(DataClassJsonMixin):
+    problemType:            ProblemType
+    problemTypeSignature:   str
     problem:                Problem
-    problem_steps:          List[ProblemStep]
-    problem_signature:      str
+    problemSteps:           List[ProblemStep]
+    problemSignature:       str
     action:                 str
     hostname:               str
-    user_id:                int = field(metadata=config(field_name='userID'))
+    userID:                 int
     commit:                 Commit
-    commit_signature:       str
+    commitSignature:        str
 
 
 # constants
@@ -729,19 +710,19 @@ class SilentException(Exception):
     pass
 
 class DialogException(Exception):
-    def __init__(self, title, message, warning=False):
+    def __init__(self, title: str, message: str, warning: bool = False):
         self.title = title
         self.message = message
         self.warning = warning
 
-    def show_dialog(self):
+    def show_dialog(self) -> None:
         if self.warning:
             tkinter.messagebox.showwarning(self.title, self.message, master=thonny.get_workbench())
         else:
             tkinter.messagebox.showerror(self.title, self.message, master=thonny.get_workbench())
 
 class Progress(tkinter.simpledialog.SimpleDialog):
-    def __init__(self, parent):
+    def __init__(self, parent: tkinter.Tk):
         super().__init__(
                 parent,
                 title='Grading your solution...',
@@ -756,12 +737,12 @@ class Progress(tkinter.simpledialog.SimpleDialog):
         self.parent.update_idletasks()
         self.active = True
 
-    def show_progress(self):
+    def show_progress(self) -> None:
         if self.active:
             self.bar.step(10)
             self.parent.update_idletasks()
 
-    def stop(self):
+    def stop(self) -> None:
         if self.active:
             self.root.destroy()
             self.active = False
@@ -810,21 +791,21 @@ def version_tuple(s: str) -> Tuple[int, ...]:
 def check_version() -> None:
     global VERSION_WARNING
     server: Version = must_get_object('/version', None, Version)
-    if version_tuple(server.thonny_version_required) > version_tuple(__version__):
+    if version_tuple(server.thonnyVersionRequired) > version_tuple(__version__):
         raise DialogException('CodeGrinder upgrade required',
             f'This is version {__version__} of the CodeGrinder plugin, ' +
-            f'but the server requires {server.thonny_version_required} or higher.\n\n' +
+            f'but the server requires {server.thonnyVersionRequired} or higher.\n\n' +
             'You must upgrade to continue\n\n' +
             'To upgrade:\n' +
             '1. Select the menu item "Tools" -> "Manage plug-ins..."\n' +
             '2. Find "thonny-codegrinder-plugin" in the list on the left and click on it\n' +
             '3. Click the "Upgrade" button at the bottom\n' +
             '4. After it finishes upgrading, quit Thonny and restart it')
-    elif version_tuple(server.thonny_version_recommended) > version_tuple(__version__) and not VERSION_WARNING:
+    elif version_tuple(server.thonnyVersionRecommended) > version_tuple(__version__) and not VERSION_WARNING:
         VERSION_WARNING = True
         raise DialogException('CodeGrinder upgrade recommended',
             f'This is version {__version__} of the CodeGrinder plugin, ' +
-            f'but the server recommends {server.thonny_version_recommended} or higher.\n\n' +
+            f'but the server recommends {server.thonnyVersionRecommended} or higher.\n\n' +
             'Please upgrade as soon as possible\n\n' +
             'To upgrade:\n' +
             '1. Select the menu item "Tools" -> "Manage plug-ins..."\n' +
@@ -835,7 +816,7 @@ def check_version() -> None:
 
 # send an API request and gather the result
 # returns (result object, error string)
-def do_request(path: str, params: Optional[Dict], method: str, upload: str='', notfoundokay: bool=False) -> Any:
+def do_request(path: str, params: Optional[Dict[str, Any]], method: str, upload: str='', notfoundokay: bool=False) -> Any:
     global CONFIG
     if not path.startswith('/'):
         raise TypeError('do_request path must start with /')
@@ -865,7 +846,7 @@ def do_request(path: str, params: Optional[Dict], method: str, upload: str='', n
 
     return json.loads(resp.content.decode(encoding='utf-8'))
 
-def must_get_object_list(path, params, type_class) -> List[Any]:
+def must_get_object_list(path: str, params: Optional[Dict[str, Any]], type_class: Any) -> List[Any]:
     lst = do_request(path, params, 'GET')
     if lst is None:
         raise DialogException('Server error',
@@ -874,7 +855,7 @@ def must_get_object_list(path, params, type_class) -> List[Any]:
             f'URL was {path}')
     return [ type_class.from_dict(elt) for elt in lst ]
 
-def must_get_object(path: str , params: Optional[Dict], type_class) -> Any:
+def must_get_object(path: str , params: Optional[Dict[str, Any]], type_class: Any) -> Any:
     elt = do_request(path, params, 'GET')
     if elt is None:
         raise DialogException('Server error',
@@ -883,18 +864,19 @@ def must_get_object(path: str , params: Optional[Dict], type_class) -> Any:
             f'URL was {path}')
     return type_class.from_dict(elt)
 
-def get_object(path: str, params: Optional[Dict], type_class) -> Optional[Any]:
+def get_object(path: str, params: Optional[Dict[str, Any]], type_class: Any) -> Optional[Any]:
     elt = do_request(path, params, 'GET', notfoundokay=True)
     return type_class.from_dict(elt) if elt is not None else None
 
-def must_post_commit_bundle(path: str, params: Optional[Dict], upload: Dict) -> CommitBundle:
+def must_post_commit_bundle(path: str, params: Optional[Dict[str, Any]], upload: Dict[str, Any]) -> CommitBundle:
     elt = do_request(path, params, 'POST', upload=json.dumps(upload))
     if elt is None:
         raise DialogException('Server error',
             'Unable to download a needed object from the server. ' +
             'Please make sure your internet connection is working.\n\n' +
             f'URL was {path}')
-    return CommitBundle.from_dict(elt)
+    bundle: CommitBundle = CommitBundle.from_dict(elt)
+    return bundle
 
 def course_directory(label: str) -> str:
     match = re.match(r'^([A-Za-z]+[- ]*\d+\w*)\b', label)
@@ -905,7 +887,7 @@ def course_directory(label: str) -> str:
 
 def get_assignment(assignment: Assignment, course: Course, rootDir: str) -> Optional[str]:
     # get the problem set
-    problemSet: ProblemSet = must_get_object(f'/problem_sets/{assignment.problem_set_id}', None, ProblemSet)
+    problemSet: ProblemSet = must_get_object(f'/problem_sets/{assignment.problemSetID}', None, ProblemSet)
 
     # if the target directory exists, skip this assignment
     rootDir = os.path.join(rootDir, course_directory(course.label), problemSet.unique)
@@ -913,7 +895,7 @@ def get_assignment(assignment: Assignment, course: Course, rootDir: str) -> Opti
         return None
 
     # get the list of problems in the problem set
-    problemSetProblems: List[ProblemSetProblem] = must_get_object_list(f'/problem_sets/{assignment.problem_set_id}/problems', None, ProblemSetProblem)
+    problemSetProblems: List[ProblemSetProblem] = must_get_object_list(f'/problem_sets/{assignment.problemSetID}/problems', None, ProblemSetProblem)
 
     # for each problem get the problem, the most recent commit (or create one),
     # and the corresponding step
@@ -923,7 +905,7 @@ def get_assignment(assignment: Assignment, course: Course, rootDir: str) -> Opti
     steps = {}
     types = {}
     for elt in problemSetProblems:
-        problem: Problem = must_get_object(f'/problems/{elt.problem_id}', None, Problem)
+        problem: Problem = must_get_object(f'/problems/{elt.problemID}', None, Problem)
         problems[problem.unique] = problem
 
         # get the commit and create a problem info based on it
@@ -941,9 +923,9 @@ def get_assignment(assignment: Assignment, course: Course, rootDir: str) -> Opti
         steps[problem.unique] = step
 
         # get the problem type if we do not already have it
-        if step.problem_type not in types:
-            problemType: ProblemType = must_get_object(f'/problem_types/{step.problem_type}', None, ProblemType)
-            types[step.problem_type] = problemType
+        if step.problemType not in types:
+            problemType: ProblemType = must_get_object(f'/problem_types/{step.problemType}', None, ProblemType)
+            types[step.problemType] = problemType
 
     for unique in steps.keys():
         commit, problem, step = commits[unique], problems[unique], steps[unique]
@@ -965,13 +947,13 @@ def get_assignment(assignment: Assignment, course: Course, rootDir: str) -> Opti
                 files[from_slash(name)] = decode64(contents)
 
         # save any problem type files
-        for (name, contents) in types[step.problem_type].files.items():
+        for (name, contents) in types[step.problemType].files.items():
             files[from_slash(name)] = decode64(contents)
 
         update_files(target, files, {})
 
     # does this commit indicate the step was finished and needs to advance?
-    if commit is not None and commit.report_card and commit.report_card.passed is True and commit.score == 1.0:
+    if commit is not None and commit.reportCard and commit.reportCard.passed is True and commit.score == 1.0:
         next_step(target, infos[unique], problem, commit, types, None)
 
     save_dot_file(DotFile(assignment.id, infos, os.path.join(rootDir, perProblemSetDotFile)))
@@ -995,16 +977,16 @@ def next_step(directory: str, info: Info, problem: Problem, commit: Commit, type
     oldStep: ProblemStep = must_get_object(f'/problems/{problem.id}/steps/{commit.step}', None, ProblemStep)
     # log.Printf("moving to step %d", newStep.Step)
 
-    if oldStep.problem_type not in types:
-        oldType: ProblemType = must_get_object(f'/problem_types/{oldStep.problem_type}', None, ProblemType)
+    if oldStep.problemType not in types:
+        oldType: ProblemType = must_get_object(f'/problem_types/{oldStep.problemType}', None, ProblemType)
         if oldType is None:
             return False
-        types[oldStep.problem_type] = oldType
-    if newStep.problem_type not in types:
-        newType: ProblemType = must_get_object(f'/problem_types/{newStep.problem_type}', None, ProblemType)
+        types[oldStep.problemType] = oldType
+    if newStep.problemType not in types:
+        newType: ProblemType = must_get_object(f'/problem_types/{newStep.problemType}', None, ProblemType)
         if newType is None:
             return False
-        types[newStep.problem_type] = newType
+        types[newStep.problemType] = newType
 
     # gather all the files for the new step
     files: Dict[str, bytes] = {}
@@ -1016,12 +998,12 @@ def next_step(directory: str, info: Info, problem: Problem, commit: Commit, type
     for (name, contents) in newStep.files.items():
         files[from_slash(name)] = decode64(contents)
     files[os.path.join('doc', 'index.html')] = newStep.instructions.encode()
-    for (name, contents) in types[newStep.problem_type].files.items():
+    for (name, contents) in types[newStep.problemType].files.items():
         files[from_slash(name)] = decode64(contents)
 
     # files from the old problem type and old step may need to be removed
     oldFiles: Dict[str, bool] = {}
-    for name in types[oldStep.problem_type].files.keys():
+    for name in types[oldStep.problemType].files.keys():
         oldFiles[from_slash(name)] = True
     for name in oldStep.files.keys():
         oldFiles[from_slash(name)] = True
@@ -1031,7 +1013,7 @@ def next_step(directory: str, info: Info, problem: Problem, commit: Commit, type
     info.step += 1
     return True
 
-def save_dot_file(dotfile: DotFile):
+def save_dot_file(dotfile: DotFile) -> None:
     with open(dotfile.path, 'w') as fp:
         as_dict = dotfile.to_dict()
         del as_dict['path']
@@ -1071,7 +1053,7 @@ def gather_student(now: datetime.datetime, startDir: str) -> Tuple[ProblemType, 
     (dotfile, problemSetDir, problemDir) = find_dot_file(startDir)
 
     # get the assignment
-    assignment: Assignment = must_get_object(f'/assignments/{dotfile.assignment_id}', None, Assignment)
+    assignment: Assignment = must_get_object(f'/assignments/{dotfile.assignmentID}', None, Assignment)
 
     # get the problem
     unique = ''
@@ -1094,7 +1076,7 @@ def gather_student(now: datetime.datetime, startDir: str) -> Tuple[ProblemType, 
     step: ProblemStep = must_get_object(f'/problems/{problem.id}/steps/{info.step}', None, ProblemStep)
 
     # get the problem type and verify local files match
-    problemType: ProblemType = must_get_object(f'/problem_types/{step.problem_type}', None, ProblemType)
+    problemType: ProblemType = must_get_object(f'/problem_types/{step.problemType}', None, ProblemType)
 
     # make sure all step and problemtype files are up to date
     stepFiles: Dict[str, bytes] = {}
@@ -1124,24 +1106,24 @@ def gather_student(now: datetime.datetime, startDir: str) -> Tuple[ProblemType, 
     # form a commit object
     commit = Commit(
         id=0,
-        assignment_id=dotfile.assignment_id,
-        problem_id=info.id,
+        assignmentID=dotfile.assignmentID,
+        problemID=info.id,
         step=info.step, 
         action='',
         note='',
         files=files,
         transcript=None,
-        report_card=None,
+        reportCard=None,
         score=0.0,
-        created_at=now.isoformat() + 'Z',
-        updated_at=now.isoformat() + 'Z')
+        createdAt=now.isoformat() + 'Z',
+        updatedAt=now.isoformat() + 'Z')
 
     return (problemType, problem, assignment, commit, dotfile)
 
 def must_confirm_commit_bundle(bundle: CommitBundle, args: Optional[List[str]], bar: Progress) -> CommitBundle:
     # create a websocket connection to the server
     url = 'wss://' + bundle.hostname + urlPrefix + '/sockets/' + \
-        bundle.problem_type.name + '/' + bundle.commit.action
+        bundle.problemType.name + '/' + bundle.commit.action
     socket = websocket.create_connection(url)
 
     # form the initial request
@@ -1164,7 +1146,8 @@ def must_confirm_commit_bundle(bundle: CommitBundle, args: Optional[List[str]], 
 
         if 'commitBundle' in reply and reply['commitBundle']:
             socket.close()
-            return CommitBundle.from_dict(reply['commitBundle'])
+            result: CommitBundle = CommitBundle.from_dict(reply['commitBundle'])
+            return result
 
         if 'event' in reply and reply['event']:
             # ignore the streamed data
@@ -1233,22 +1216,22 @@ def find_dot_file(startDir: str) -> Tuple[DotFile, str, str]:
     return (dotfile, problemSetDir, problemDir)
 
 def dump_event_message(e: EventMessage) -> str:
-    if e.event == 'exec' and e.exec_command is not None:
-        return f'$ {" ".join(e.exec_command)}\n'
+    if e.event == 'exec' and e.execCommand is not None:
+        return f'$ {" ".join(e.execCommand)}\n'
 
-    if e.event == 'exit' and e.exit_status is not None:
-        if e.exit_status == 0:
+    if e.event == 'exit' and e.exitStatus is not None:
+        if e.exitStatus == 0:
             return ''
 
-        n = e.exit_status - 128
+        n = e.exitStatus - 128
         if n in signals:
             sig = signals[n]
-            return f'exit status {e.exit_status} (killed by {sig})\n'
+            return f'exit status {e.exitStatus} (killed by {sig})\n'
 
-        return f'exit status {e.exit_status}\n'
+        return f'exit status {e.exitStatus}\n'
 
-    if e.event in ('stdin', 'stdout', 'stderr') and e.stream_data is not None:
-        return base64.b64decode(e.stream_data, validate=True).decode('utf-8')
+    if e.event in ('stdin', 'stdout', 'stderr') and e.streamData is not None:
+        return base64.b64decode(e.streamData, validate=True).decode('utf-8')
 
     if e.event == 'error':
         return f'Error: {e.error}\n'
