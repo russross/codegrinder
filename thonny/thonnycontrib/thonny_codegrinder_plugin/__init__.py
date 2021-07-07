@@ -1,6 +1,6 @@
 '''Thonny plugin to integrate with CodeGrinder for coding practice'''
 
-__version__ = '2.6.1'
+__version__ = '2.6.2'
 
 import base64
 import collections
@@ -65,6 +65,12 @@ def load_plugin() -> None:
                    command_label='Save and sync this assignment',
                    tester=_codegrinder_in_project,
                    handler=_codegrinder_save_and_sync_handler,
+                   group=70)
+    wb.add_command(command_id='CodeGrinder-reset',
+                   menu_name='CodeGrinder',
+                   command_label='Reset to beginning of current step...',
+                   tester=_codegrinder_in_project,
+                   handler=_codegrinder_reset_handler,
                    group=70)
     wb.add_command(command_id='CodeGrinder-login',
                    menu_name='CodeGrinder',
@@ -138,8 +144,7 @@ def _codegrinder_login_handler() -> None:
             'Please paste the login code from a Canvas assignment page. ' +
             'It should look something like:\n\n' +
             'grind login some.servername.edu 8chrcode\n\n' +
-            'Note: this is normally only necessary once per semester',
-            master=thonny.get_workbench())
+            'Note: this is normally only necessary once per semester')
         if code is None:
             return
 
@@ -331,6 +336,76 @@ def _codegrinder_save_and_sync_handler() -> None:
         msg += 'before contacting your instructor for help.'
         tkinter.messagebox.showinfo('Saved successfully', msg,
             master=thonny.get_workbench())
+
+    except SilentException:
+        pass
+    except DialogException as dialog:
+        dialog.show_dialog()
+
+def _codegrinder_reset_handler() -> None:
+    try:
+        thonny.get_workbench().get_editor_notebook().save_all_named_editors()
+        (filename, dotfile, problemSetDir, problemDir) = get_codegrinder_project_info()
+
+        must_load_config()
+        now = datetime.datetime.utcnow()
+
+        user: User = must_get_object('/users/me', None, User)
+
+        (problemType, problem, assignment, _, dotfile) = gather_student(now, problemDir)
+        info = dotfile.problems[problem.unique]
+
+        step: ProblemStep = must_get_object(f'/problems/{problem.id}/steps/{info.step}', None, ProblemStep)
+
+        # gather all the files that make up this step
+        files: Dict[str, bytes] = {}
+
+        # get the commit from the previous step if applicable
+        if info.step > 1:
+            commit: Commit = must_get_object(f'/assignments/{assignment.id}/problems/{problem.id}/steps/{info.step - 1}/commits/last', None, Commit)
+            if commit.files:
+                for (name, contents) in commit.files.items():
+                    files[from_slash(name)] = decode64(contents)
+
+        # commit files may be overwritten by new step files
+        for (name, contents) in step.files.items():
+            files[from_slash(name)] = decode64(contents)
+        files[os.path.join('doc', 'index.html')] = step.instructions.encode()
+        for (name, contents) in problemType.files.items():
+            files[from_slash(name)] = decode64(contents)
+
+        # report which files have changed since the step started
+        changed: List[str] = []
+        for name in step.whitelist.keys():
+            if name not in files:
+                # not good: file on the whitelist but not in the file set
+                continue
+
+            expected = files[name]
+            path = os.path.join(problemDir, from_slash(name))
+            if not os.path.exists(path):
+                # file is missing; leave it on the list and it will be restored
+                changed.append(name)
+            else:
+                with open(path, 'rb') as fp:
+                    ondisk = fp.read()
+                if ondisk != expected:
+                    changed.append(name)
+
+        if len(changed) == 0:
+            tkinter.messagebox.showinfo('No files have been changed',
+                'No files have been changed since the beginning of the current step.',
+                master=thonny.get_workbench())
+            return
+
+        file_list = '\n'.join(changed)
+        answer: bool = tkinter.messagebox.askokcancel('Are you sure?',
+            f'Any changes you have made in the following files will be overwritten:\n\n{file_list}\n\n'+
+            f'Do you wish to continue?',
+            master=thonny.get_workbench())
+
+        if answer:
+            update_files(problemDir, files, {})
 
     except SilentException:
         pass
