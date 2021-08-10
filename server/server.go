@@ -189,6 +189,7 @@ func main() {
 			client := &http.Client{Timeout: time.Second * 5}
 
 			for {
+				start := time.Now()
 				reg := DaycareRegistration{
 					Hostname:     Config.Hostname,
 					ProblemTypes: Config.ProblemTypes,
@@ -213,6 +214,7 @@ func main() {
 				if err != nil {
 					if status != "failed" {
 						log.Printf("error connecting to register daycare: %v", err)
+						log.Printf("attempt took %v", time.Since(start))
 					}
 					status = "failed"
 				} else {
@@ -224,6 +226,7 @@ func main() {
 					if res.StatusCode == http.StatusOK {
 						if status != "succeeded" {
 							log.Printf("registered with %s", url)
+							log.Printf("attempt took %v", time.Since(start))
 						}
 						status = "succeeded"
 					} else {

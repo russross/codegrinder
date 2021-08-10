@@ -22,6 +22,8 @@ import (
 	"github.com/russross/meddler"
 )
 
+// bootstrap assignment URL is something like:
+// https://codegrinder.cs.dixie.edu/v2/lti/problem_sets/cli/bootstrap-codegrinder
 const bootstrapAssignmentName string = "bootstrap-codegrinder"
 const canvasDateFormat string = "2006-01-02T15:04:05Z"
 
