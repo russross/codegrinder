@@ -107,11 +107,13 @@ func updateFiles(directory string, files map[string][]byte, oldFiles map[string]
 			continue
 		}
 		path := filepath.Join(directory, name)
-		if chatty {
-			fmt.Printf("removing file: %s\n", name)
-		}
-		if err := os.Remove(path); err != nil {
-			log.Fatalf("error deleting %s: %v", name, err)
+		if _, err := os.Stat(path); err == nil {
+			if chatty {
+				fmt.Printf("removing file: %s\n", name)
+			}
+			if err := os.Remove(path); err != nil {
+				log.Fatalf("error deleting %s: %v", name, err)
+			}
 		}
 		dirpath := filepath.Dir(name)
 		if dirpath != "." {
