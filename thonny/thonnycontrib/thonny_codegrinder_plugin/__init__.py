@@ -17,10 +17,10 @@ import requests
 import shlex
 import thonny
 import thonny.common
+import tkhtmlview
 import tkinter.messagebox
 import tkinter.simpledialog
 import tkinter.ttk
-import tkinterhtml
 from typing import List, Dict, Tuple, Optional, Any
 import websocket
 
@@ -84,7 +84,15 @@ def load_plugin() -> None:
                    tester=_codegrinder_logout_enabled,
                    handler=_codegrinder_logout_handler,
                    group=90)
-    wb.add_view(tkinterhtml.HtmlFrame, "Instructions", "ne", default_position_key="zzz")
+    wb.add_view(HtmlFrame, "Instructions", "ne", default_position_key="zzz")
+
+class HtmlFrame(tkhtmlview.HTMLScrolledText):
+
+    def __init__(self, parent):
+        super().__init__(width="1", background="white")
+
+    def set_content(self, content):
+        super().set_html(content, False)
 
 #
 # These functions are predicates to decide if menu items should be enabled
@@ -213,6 +221,13 @@ def show_instructions(problemDir: str) -> None:
         doc = fp.read()
 
     iv = thonny.get_workbench().get_view('HtmlFrame')
+    if '<body>' in doc and '</body>' in doc:
+        parts = doc.split('<body>')
+        if len(parts) == 2:
+            doc = parts[0] + '<body><div style="font-size: 16pt">' + parts[1]
+        parts = doc.split('</body>')
+        if len(parts) == 2:
+            doc = parts[0] + '</div></body>' + parts[1]
     iv.set_content(doc)
     thonny.get_workbench().show_view('HtmlFrame', set_focus=False)
 
