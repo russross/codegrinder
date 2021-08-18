@@ -1,6 +1,6 @@
 '''Thonny plugin to integrate with CodeGrinder for coding practice'''
 
-__version__ = '2.6.4'
+__version__ = '2.6.5'
 
 import base64
 import collections
@@ -218,7 +218,7 @@ def _codegrinder_show_instructions_handler() -> None:
 
 def show_instructions(problemDir: str) -> None:
     with open(os.path.join(problemDir, 'doc', 'index.html'), 'rb') as fp:
-        doc = fp.read()
+        doc = fp.read().decode('utf-8')
 
     iv = thonny.get_workbench().get_view('HtmlFrame')
     if '<body>' in doc and '</body>' in doc:
