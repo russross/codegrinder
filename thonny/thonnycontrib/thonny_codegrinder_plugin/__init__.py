@@ -17,7 +17,7 @@ import requests
 import shlex
 import thonny
 import thonny.common
-import tkhtmlview
+from thonnycontrib.thonny_codegrinder_plugin import tkhtmlview
 import tkinter.messagebox
 import tkinter.simpledialog
 import tkinter.ttk
