@@ -1,6 +1,6 @@
 '''Thonny plugin to integrate with CodeGrinder for coding practice'''
 
-__version__ = '2.6.9'
+__version__ = '2.6.10'
 
 import base64
 import collections
@@ -849,6 +849,8 @@ def get_home() -> str:
     home = os.path.expanduser('~')
     if home == '':
         raise DialogException('Fatal error', 'Unable to locate home directory, giving up')
+    if os.name == 'nt':
+        home = os.path.join(home, 'Documents')
     return home
 
 def must_load_config() -> None:
