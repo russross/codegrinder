@@ -1,6 +1,6 @@
 '''Thonny plugin to integrate with CodeGrinder for coding practice'''
 
-__version__ = '2.6.10'
+__version__ = '2.6.11'
 
 import base64
 import collections
@@ -847,10 +847,15 @@ def from_slash(name: str) -> str:
 
 def get_home() -> str:
     home = os.path.expanduser('~')
+    if os.name == 'nt':
+        import ctypes.wintypes
+        CSIDL_PERSONAL= 5 # find "My Documents" folder
+        SHGFP_TYPE_CURRENT = 0 # get the current value, not the default value
+        buf = ctypes.create_unicode_buffer(ctypes.wintypes.MAX_PATH)
+        ctypes.windll.shell32.SHGetFolderPathW(0, CSIDL_PERSONAL, 0, SHGFP_TYPE_CURRENT, buf)
+        home = buf.value
     if home == '':
         raise DialogException('Fatal error', 'Unable to locate home directory, giving up')
-    if os.name == 'nt':
-        home = os.path.join(home, 'Documents')
     return home
 
 def must_load_config() -> None:
