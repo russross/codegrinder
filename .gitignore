@@ -1,5 +1,5 @@
 backup
 db
-letsencrypt
+acme
 config.json
 *.swp

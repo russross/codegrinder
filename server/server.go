@@ -34,6 +34,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	. "github.com/russross/codegrinder/types"
 	"github.com/russross/meddler"
+	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
 )
 
@@ -41,9 +42,10 @@ import (
 // Contains a mix of Daycare and main server parameters.
 var Config struct {
 	// required parameters
-	Hostname         string `json:"hostname"`         // Hostname for the site: "your.host.goes.here"
-	DaycareSecret    string `json:"daycareSecret"`    // Random string used to sign daycare requests: `head -c 32 /dev/urandom | base64`
-	LetsEncryptEmail string `json:"letsEncryptEmail"` // Email address to register TLS certificates: "foo@bar.com"
+	Hostname      string `json:"hostname"`      // Hostname for the site: "your.host.goes.here"
+	DaycareSecret string `json:"daycareSecret"` // Random string used to sign daycare requests: `head -c 32 /dev/urandom | base64`
+	AcmeEmail     string `json:"acmeEmail"`     // Email address to register TLS certificates: "foo@bar.com"
+	AcmeURL       string `json:"acmeURL"`       // URL of ACME certificate provider. If omitted, use letsencrypt
 
 	// ta-only required parameters
 	LTISecret     string `json:"ltiSecret"`     // LTI authentication shared secret. Must match that given to Canvas course: `head -c 32 /dev/urandom | base64`
@@ -55,12 +57,12 @@ var Config struct {
 	ProblemTypes []string `json:"problemTypes"` // List of problem types this daycare host supports: [ "python3unittest", "gotest", ... ]
 
 	// ta-only parameters where the default is usually sufficient
-	ToolName         string      `json:"toolName"`        // LTI human readable name: default "CodeGrinder"
-	ToolID           string      `json:"toolID"`          // LTI unique ID: default "codegrinder"
-	ToolDescription  string      `json:"toolDescription"` // LTI description: default "Programming exercises with grading"
-	LetsEncryptCache string      `json:"letsEncryptDir"`  // Full path of LetsEncrypt cache file: default "$CODEGRINDERROOT/letsencrypt"
-	SQLite3Path      string      `json:"sqlite3Path"`     // path to the sqlite database file: default "$CODEGRINDERROOT/db/codegrinder.db"
-	SessionsExpire   []time.Time `json:"sessionsExpire"`  // times/dates when sessions should expire (year is ignored)
+	ToolName        string      `json:"toolName"`        // LTI human readable name: default "CodeGrinder"
+	ToolID          string      `json:"toolID"`          // LTI unique ID: default "codegrinder"
+	ToolDescription string      `json:"toolDescription"` // LTI description: default "Programming exercises with grading"
+	AcmeCache       string      `json:"acmeDir"`         // Full path of Acme cache file: default "$CODEGRINDERROOT/acme"
+	SQLite3Path     string      `json:"sqlite3Path"`     // path to the sqlite database file: default "$CODEGRINDERROOT/db/codegrinder.db"
+	SessionsExpire  []time.Time `json:"sessionsExpire"`  // times/dates when sessions should expire (year is ignored)
 }
 var root string
 
@@ -93,7 +95,7 @@ func main() {
 	Config.ToolName = "CodeGrinder"
 	Config.ToolID = "codegrinder"
 	Config.ToolDescription = "Programming exercises with grading"
-	Config.LetsEncryptCache = filepath.Join(root, "letsencrypt")
+	Config.AcmeCache = filepath.Join(root, "acme")
 	Config.SQLite3Path = filepath.Join(root, "db", "codegrinder.db")
 	Config.SessionsExpire = []time.Time{
 		time.Date(2020, 1, 1, 0, 0, 0, 0, time.Local),
@@ -116,7 +118,7 @@ func main() {
 	if Config.DaycareSecret == "" {
 		log.Fatalf("cannot run with no daycareSecret in the config file")
 	}
-	// Config.LetsEncryptEmail is optional
+	// Config.AcmeEmail is optional
 
 	// set up martini
 	r := martini.NewRouter()
@@ -492,12 +494,17 @@ func main() {
 		r.Post("/v2/responses", counter, withTx, withCurrentUser, gunzip, binding.Json(Response{}), PostResponse)
 	}
 
-	// set up letsencrypt
+	// set up automatic TLS certificates
+	var acmeClient *acme.Client
+	if Config.AcmeURL != "" {
+		acmeClient = &acme.Client{DirectoryURL: Config.AcmeURL}
+	}
 	lem := autocert.Manager{
 		Prompt:     autocert.AcceptTOS,
-		Cache:      autocert.DirCache(Config.LetsEncryptCache),
+		Cache:      autocert.DirCache(Config.AcmeCache),
 		HostPolicy: autocert.HostWhitelist(Config.Hostname),
-		Email:      Config.LetsEncryptEmail,
+		Email:      Config.AcmeEmail,
+		Client:     acmeClient,
 	}
 
 	// set up the https server
@@ -513,7 +520,7 @@ func main() {
 	}
 
 	// set up the http server
-	// it is necessary for LetsEncrypt challenges
+	// it is necessary for ACME challenges
 	// it forwards other requests to https, but only if the host name was correct
 	forwarder := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// get the address of the client
