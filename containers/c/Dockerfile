@@ -1,15 +1,19 @@
-FROM arm64v8/debian:buster
+FROM arm64v8/debian:bullseye
 MAINTAINER russ@russross.com
 
 RUN apt update && apt upgrade -y
 
 RUN apt install -y --no-install-recommends \
+    make \
+    python3
+RUN apt install -y --no-install-recommends \
     build-essential \
-    gdb \
-    pkg-config \
+    gdb
+RUN apt install -y --no-install-recommends \
     check \
     valgrind \
-    python3
+    libgtest-dev \
+    pkg-config
 
 RUN mkdir /home/student && chmod 777 /home/student
 ADD .gdbinit /home/student/

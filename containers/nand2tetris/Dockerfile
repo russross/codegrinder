@@ -1,12 +1,13 @@
-FROM arm64v8/debian:buster
+FROM arm64v8/debian:bullseye
 MAINTAINER russ@russross.com
 
 RUN apt update && apt upgrade -y
 
 RUN apt install -y --no-install-recommends \
-    default-jre-headless \
-    python3 \
     make \
+    python3
+RUN apt install -y --no-install-recommends \
+    default-jre-headless \
     unzip
 
 # install software suite

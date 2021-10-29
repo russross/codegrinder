@@ -1,18 +1,20 @@
-FROM arm64v8/debian:buster
+FROM arm64v8/debian:bullseye
 MAINTAINER russ@russross.com
 
 RUN apt update && apt upgrade -y
 
 RUN apt install -y --no-install-recommends \
-    python3 \
+    make \
+    python3
+RUN apt install -y --no-install-recommends \
+    build-essential \
+    gdb
+RUN apt install -y --no-install-recommends \
     python3-pip \
     python3-setuptools \
     python3-six \
-    make \
     diffutils
-
 RUN apt install -y --no-install-recommends \
-    build-essential \
     libsdl2-dev \
     libsdl2-image-dev \
     libsdl2-mixer-dev \
