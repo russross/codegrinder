@@ -1,8 +1,9 @@
 '''Thonny plugin to integrate with CodeGrinder for coding practice'''
 
-__version__ = '2.6.13'
+__version__ = '2.6.14'
 
 import base64
+import certifi
 import collections
 from dataclasses import dataclass
 from dataclasses_json.api import DataClassJsonMixin
@@ -1221,7 +1222,8 @@ def must_confirm_commit_bundle(bundle: CommitBundle, args: Optional[List[str]], 
     # create a websocket connection to the server
     url = 'wss://' + bundle.hostname + urlPrefix + '/sockets/' + \
         bundle.problemType.name + '/' + bundle.commit.action
-    socket = websocket.create_connection(url)
+    certs = certifi.where()
+    socket = websocket.create_connection(url, sslopt={'ca_certs': certs})
 
     # form the initial request
     req = {

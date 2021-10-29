@@ -514,7 +514,7 @@ func main() {
 		Handler: m,
 		TLSConfig: &tls.Config{
 			PreferServerCipherSuites: true,
-			MinVersion:               tls.VersionTLS10,
+			MinVersion:               tls.VersionTLS12,
 			GetCertificate:           lem.GetCertificate,
 		},
 	}
