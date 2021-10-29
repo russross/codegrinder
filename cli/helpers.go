@@ -51,7 +51,7 @@ func nextStep(directory string, info *ProblemInfo, problem *Problem, commit *Com
 		files[filepath.FromSlash(name)] = contents
 	}
 	files[filepath.Join("doc", "index.html")] = []byte(newStep.Instructions)
-	for name, contents := range types[oldStep.ProblemType].Files {
+	for name, contents := range types[newStep.ProblemType].Files {
 		if _, exists := files[filepath.FromSlash(name)]; exists {
 			fmt.Printf("warning: problem type file is overwriting problem file: %s\n", name)
 		}
