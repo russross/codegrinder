@@ -1,33 +1,21 @@
 .SUFFIXES:
-.SUFFIXES: .rs .rlib .out .xml
+.SUFFIXES: .rs .rlib .out .xml .lock
 
-CRATE=student
-
-RUSTC=rustc
-RUSTFLAGS=--edition=2018 --crate-name $(CRATE) --crate-type lib
-TESTFLAGS=--edition=2018 --crate-name $(CRATE) --test
-
-UNITSOURCE=lib.rs
-UNITOBJECT=lib.rlib
-TESTSOURCE=$(wildcard tests/*.rs)
+TESTFLAGS=-- --test-threads 1 -Z unstable-options --format json --report-time
 
 all:	test
 
-test:	a.out
-	./a.out --test --test-threads 1
+test:
+	cargo test $(TESTFLAGS)
 
-grade:	a.out
+grade:
 	rm -f test_detail.xml
-	./a.out --test --test-threads 1 -Z unstable-options --format json | cargo2junit > test_detail.xml
-
-.rs.rlib:
-	$(RUSTC) $(RUSTFLAGS) $< -o $@
-
-a.out:	$(UNITOBJECT) $(TESTSOURCE)
-	$(RUSTC) $(TESTFLAGS) $(TESTSOURCE) --extern $(CRATE)=$(UNITOBJECT) -o $@
+	cargo test $(TESTFLAGS) | cargo2junit > test_detail.xml
 
 setup:
 	sudo apt install -y cargo make
+	cargo install cargo2junit
 
 clean:
-	rm -f *.rlib *.out *.xml
+	cargo clean
+	rm -f *.lock *.xml
