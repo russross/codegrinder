@@ -3,8 +3,7 @@ PRAGMA encoding = 'UTF-8';
 PRAGMA busy_timeout = 10000;
 PRAGMA case_sensitive_like = OFF;
 PRAGMA foreign_keys = ON;
-PRAGMA journal_mode = WAL;
-PRAGMA locking_mode = NORMAL;
+PRAGMA journal_mode = DELETE;
 PRAGMA synchronous = FULL;
 .headers on
 .mode column
