@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"log"
 	"net/http"
 	"sort"
@@ -194,16 +195,71 @@ func saveProblemBundleCommon(w http.ResponseWriter, tx *sql.Tx, currentUser *Use
 		return
 	}
 
-	// delete the old steps if applicable
-	if _, err := tx.Exec(`DELETE FROM problem_steps WHERE problem_id = ?`, problem.ID); err != nil {
-		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-		return
-	}
+	// insert/update all the new steps
 	for _, step := range steps {
 		step.ProblemID = problem.ID
 
-		// insert a new record
-		if err := meddler.Insert(tx, "problem_steps", step); err != nil {
+		if step.Step > int64(oldStepCount) {
+			// insert a new record
+			if err := meddler.Insert(tx, "problem_steps", step); err != nil {
+				loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
+				return
+			}
+		} else {
+			// update an existing record
+			// meddler only understands integer primary keys, so we have to do it the long way
+			filesJSON, err := json.Marshal(step.Files)
+			if err != nil {
+				loggedHTTPErrorf(w, http.StatusInternalServerError, "json encoding error for step.Files: %v", err)
+				return
+			}
+			whitelistJSON, err := json.Marshal(step.Whitelist)
+			if err != nil {
+				loggedHTTPErrorf(w, http.StatusInternalServerError, "json encoding error for step.Whitelist: %v", err)
+				return
+			}
+			solutionJSON, err := json.Marshal(step.Solution)
+			if err != nil {
+				loggedHTTPErrorf(w, http.StatusInternalServerError, "json encoding error for step.Solution: %v", err)
+				return
+			}
+			result, err := tx.Exec(`UPDATE problem_steps SET `+
+				`problem_type=?, `+
+				`note=?, `+
+				`instructions=?, `+
+				`weight=?, `+
+				`files=?, `+
+				`whitelist=?, `+
+				`solution=? `+
+				`WHERE problem_id=? AND step=?`,
+				step.ProblemType,
+				step.Note,
+				step.Instructions,
+				step.Weight,
+				filesJSON,
+				whitelistJSON,
+				solutionJSON,
+				step.ProblemID,
+				step.Step)
+			if err != nil {
+				loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
+				return
+			}
+			affected, err := result.RowsAffected()
+			if err != nil {
+				loggedHTTPErrorf(w, http.StatusInternalServerError, "db error testing rows affected by update: %v", err)
+				return
+			}
+			if affected != 1 {
+				loggedHTTPErrorf(w, http.StatusInternalServerError, "expected 1 row up be updated, found %d", affected)
+				return
+			}
+		}
+	}
+
+	// delete any extra steps from the old version
+	if len(steps) < oldStepCount {
+		if _, err := tx.Exec(`DELETE FROM problem_steps WHERE problem_id = ? AND step > ?`, problem.ID, len(steps)); err != nil {
 			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 			return
 		}
