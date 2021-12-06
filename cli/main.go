@@ -102,12 +102,12 @@ func main() {
 	}
 	cmdGrind.AddCommand(cmdGet)
 
-	cmdSave := &cobra.Command{
-		Use:   "save",
-		Short: "save your work to the server without additional action",
-		Run:   CommandSave,
+	cmdSync := &cobra.Command{
+		Use:   "sync",
+		Short: "save your work to the server and update local problem files",
+		Run:   CommandSync,
 	}
-	cmdGrind.AddCommand(cmdSave)
+	cmdGrind.AddCommand(cmdSync)
 
 	cmdGrade := &cobra.Command{
 		Use:   "grade",
