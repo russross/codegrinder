@@ -1,5 +1,5 @@
 core
 *.o
 *.out
-*.ppm
+*.xml
 .gdb_history

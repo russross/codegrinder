@@ -51,8 +51,8 @@ print_n:
 # print_set(set)
 print_set:
                 # prelude
-                addi    sp, sp, -16
-                sd      ra, 8(sp)
+                addi    sp, sp, -8
+                sw      ra, 4(sp)
 
                 # a0: in
                 # a1: out
@@ -61,7 +61,7 @@ print_set:
                 li      a1, 0
                 li      a3, 10
 
-                # for i from [9,1]
+                # for i from [9,0]
                 li      a2, 9
 1:
                 li      t0, 1
@@ -72,12 +72,11 @@ print_set:
                 add     a1, a1, a2
 2:
                 addi    a2, a2, -1
-                bgtz    a2, 1b
+                bgez    a2, 1b
 
                 mv      a0, a1
                 jal     print_n
 
-                ld      ra, 8(sp)
-                addi    sp, sp, 16
+                lw      ra, 4(sp)
+                addi    sp, sp, 8
                 ret
-

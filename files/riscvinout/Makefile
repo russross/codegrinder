@@ -1,36 +1,33 @@
 .SUFFIXES:
-.SUFFIXES: .o .c .s .out .xml .log .input .expected .actual
+.SUFFIXES: .o .s .si .out .xml .input .expected .actual
 
-ASFLAGS=-ggdb --warn --fatal-warnings -march=rv64imd -mno-relax
-LDFLAGS=--fatal-warnings
+ASFLAGS=-ggdb --warn --fatal-warnings -march=rv32im -mno-relax
+LDFLAGS=--fatal-warnings -melf32lriscv -Ttext 1074
 PREFIX=riscv64-unknown-elf
-RUN=qemu-riscv64
+RUN=qemu-riscv32
 ASSEMBLER=$(shell which $(PREFIX)-as)
 
-ALLOBJECT=$(sort \
-	$(patsubst %.s,%.o,$(wildcard *.s)) \
-	$(patsubst %.s,%.o,$(wildcard lib/*.s)))
-LIBOBJECT=$(patsubst %.s,%.o,$(wildcard lib/*.s))
-AOUTOBJECT=$(filter-out test.o, $(filter-out $(LIBOBJECT), $(ALLOBJECT)))
-TESTOUTOBJECT=$(filter-out start.o, $(ALLOBJECT))
+ALLOBJECT=$(sort $(patsubst %.s,%.o,$(wildcard *.s))) $(sort $(patsubst %.s,%.o,$(wildcard lib/*.s)))
+START=$(filter start.o, $(ALLOBJECT))
+AOUTOBJECT=$(START) $(filter-out $(START), $(ALLOBJECT))
 
 all:	step
 
-test:	test.out
-	python3 lib/inout-runner.py input $(RUN) ./test.out
+test:	a.out
+	python3 lib/inout-runner.py input $(RUN) ./a.out
 
-grade:	test.out
+grade:	a.out
 	rm -f test_details.xml inputs/*.actual
-	python3 lib/inout-runner.py input $(RUN) ./test.out
+	python3 lib/inout-runner.py input $(RUN) ./a.out
 
 run:	a.out
 	$(RUN) ./a.out
 
-step:	test.out
-	python3 lib/inout-stepall.py input $(RUN) ./test.out
+step:	a.out
+	python3 lib/inout-stepall.py input $(RUN) ./a.out
 
-debug:	test.out $(HOME)/.gdbinit
-	$(PREFIX)-gdb ./test.out
+debug:	a.out $(HOME)/.gdbinit
+	$(PREFIX)-gdb ./a.out
 
 $(HOME)/.gdbinit:
 	echo set auto-load safe-path / > $(HOME)/.gdbinit
@@ -43,9 +40,5 @@ endif
 
 a.out:	$(AOUTOBJECT)
 	$(PREFIX)-ld $(LDFLAGS) $^
-
-test.out:	$(TESTOUTOBJECT)
-	$(PREFIX)-ld $(LDFLAGS) $^ -o $@
-
 clean:
-	rm -f $(ALLOBJECT) *.out *.xml *.log core
+	rm -f *.o lib/*.o *.out *.xml core .gdb_history
