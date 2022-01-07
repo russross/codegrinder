@@ -25,6 +25,10 @@ echo building grind for darwin amd64
 GOOS=darwin GOARCH=amd64 go install github.com/russross/codegrinder/cli
 mv `go env GOPATH`/bin/darwin_amd64/cli "$CODEGRINDERROOT"/www/grind.darwin_amd64
 
+echo building grind for darwin arm64
+GOOS=darwin GOARCH=arm64 go install github.com/russross/codegrinder/cli
+mv `go env GOPATH`/bin/darwin_arm64/cli "$CODEGRINDERROOT"/www/grind.darwin_arm64
+
 echo building grind for windows amd64
 GOOS=windows GOARCH=amd64 go install github.com/russross/codegrinder/cli
 mv `go env GOPATH`/bin/windows_amd64/cli.exe "$CODEGRINDERROOT"/www/grind.exe

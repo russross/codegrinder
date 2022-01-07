@@ -151,7 +151,7 @@
 <h2>For students using the command-line tool</h2>
 <p>You must install the <tt>grind</tt> command-line tool to interact with CodeGrinder and complete this assignment.</p>
 
-<h3>Installing/upgrading <tt>grind</tt> on Linux (including Windows 10 with WSL/Bash for Windows) where you have <tt>sudo</tt> privileges</h3>
+<h3>Installing/upgrading <tt>grind</tt> on Linux (64-bit x86)</h3>
 <div>
   <p>Type the following commands to download the <tt>grind</tt> tool. These instructions apply to downloading it for the first time, and also to upgrading it to a new version:</p>
   <pre>sudo curl --compressed -o /usr/local/bin/grind <script>document.write(document.location.origin)</script>/grind.linux_amd64<br>sudo chmod 755 /usr/local/bin/grind</pre>
@@ -159,18 +159,7 @@
   <p>Note: if it is not working for you, please seek help! Do not fall behind on your assignments just because you ran into problems getting the tools set up. Your instructor will be happy to sit down with you and help you get it running.</p>
 </div>
 
-<h3>Installing/upgrading <tt>grind</tt> on Linux where you do NOT have <tt>sudo</tt> privileges</h3>
-<div>
-  <p>Type the following commands to download the <tt>grind</tt> tool. These instructions apply to downloading it for the first time, and also to upgrading it to a new version:</p>
-  <pre>curl --compressed --create-dirs -o ~/bin/grind <script>document.write(document.location.origin)</script>/grind.linux_amd64<br>chmod 755 ~/bin/grind</pre>
-  <p>Type <tt>grind</tt> and hit enter to make sure the command is recognized. If not (if you see the message “grind: command not found”), try logging out and back in again.</p>
-  <p>If it still does not work (you still see the message “grind: command not found”), run the following command:</p>
-  <pre>echo 'export PATH=$PATH:$HOME/bin' &gt;&gt; ~/.bashrc</pre>
-  <p>Then log out and log in again. Type <tt>grind</tt> and hit enter to make sure the command is recognized.</p>
-  <p>Note: if it is still not working for you, please seek help! Do not fall behind on your assignments just because you ran into problems getting the tools set up. Your instructor will be happy to sit down with you and help you get it running.</p>
-</div>
-
-<h3>Installing/upgrading <tt>grind</tt> on Linux on a Raspberry Pi (or other 64-bit ARM device)</h3>
+<h3>Installing/upgrading <tt>grind</tt> on Linux on a Raspberry Pi (or other ARM device)</h3>
 <div>
   <p>Note: you can ignore this if you are working on leghorn. It already has the <tt>grind</tt> command installed.</p>
   <p>Type the following commands to download the <tt>grind</tt> tool. These instructions apply to downloading it for the first time, and also to upgrading it to a new version:</p>
@@ -179,10 +168,18 @@
   <p>Note: if it is not working for you, please seek help! Do not fall behind on your assignments just because you ran into problems getting the tools set up. Your instructor will be happy to sit down with you and help you get it running.</p>
 </div>
 
-<h3>Installing/upgrading <tt>grind</tt> on macOS</h3>
+<h3>Installing/upgrading <tt>grind</tt> on macOS (Intel)</h3>
 <div>
   <p>Type the following commands to download the <tt>grind</tt> tool. These instructions apply to downloading it for the first time, and also to upgrading it to a new version:</p>
   <pre>sudo curl --compressed -o /usr/local/bin/grind <script>document.write(document.location.origin)</script>/grind.darwin_amd64<br>sudo chmod 755 /usr/local/bin/grind</pre>
+  <p>Type <tt>grind</tt> and hit enter to make sure the command is recognized. If not (if you see the message “grind: command not found”), get help.</p>
+  <p>Note: if it is not working for you, please seek help! Do not fall behind on your assignments just because you ran into problems getting the tools set up. Your instructor will be happy to sit down with you and help you get it running.</p>
+</div>
+
+<h3>Installing/upgrading <tt>grind</tt> on macOS (Apple Silicon)</h3>
+<div>
+  <p>Type the following commands to download the <tt>grind</tt> tool. These instructions apply to downloading it for the first time, and also to upgrading it to a new version:</p>
+  <pre>sudo curl --compressed -o /usr/local/bin/grind <script>document.write(document.location.origin)</script>/grind.darwin_arm64<br>sudo chmod 755 /usr/local/bin/grind</pre>
   <p>Type <tt>grind</tt> and hit enter to make sure the command is recognized. If not (if you see the message “grind: command not found”), get help.</p>
   <p>Note: if it is not working for you, please seek help! Do not fall behind on your assignments just because you ran into problems getting the tools set up. Your instructor will be happy to sit down with you and help you get it running.</p>
 </div>
@@ -192,15 +189,6 @@
   <p>After you install <tt>grind</tt> you must log in. You will normally only need to do this once per semester. To do so, type this command:</p>
   <pre>grind login <script>document.write(document.location.hostname + ' ' + QueryString.session)</script></pre>
   <p>Note that the command given above is custom to you, and will expire 5 minutes from when you first loaded this page. If you need a fresh login token, reload this page.</p>
-</div>
-
-<h3>Getting started on this assignment</h3>
-<div>
-  <p>You can download this assignment using the <tt>grind</tt> tool. Use the following command to download this assignment:</p>
-  <p><pre>grind get <script>document.write(QueryString.assignment)</script></pre></p>
-  <p>Note that you do not have to come here to copy the command. Instead, you can run:</p>
-  <pre>grind list</pre>
-  <p>to see all your assignments. The list will show the ID number for each assignment, and once you know the ID number of an assignment you can type <tt>grind get &lt;id&gt;</tt> to download it.</p>
 </div>
 
 

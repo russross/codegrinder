@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"./lib"
+	"github.com/tebeka/go2xunit/lib"
 )
 
 var args struct {

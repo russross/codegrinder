@@ -2,74 +2,15 @@
 package lib
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"regexp"
 	"strings"
 )
 
-const (
-	// gotest regular expressions
-
-	// === RUN TestAdd
-	gtStartRE = "^=== RUN:?[[:space:]]+([a-zA-Z_][^[:space:]]*)"
-
-	// --- PASS: TestSub (0.00 seconds)
-	// --- FAIL: TestSubFail (0.00 seconds)
-	// --- SKIP: TestSubSkip (0.00 seconds)
-	gtEndRE = "--- (PASS|FAIL|SKIP):[[:space:]]+([a-zA-Z_][^[:space:]]*) \\((-?\\d+(.\\d+)?)"
-
-	// FAIL	_/home/miki/Projects/goroot/src/xunit	0.004s
-	// ok  	_/home/miki/Projects/goroot/src/anotherTest	0.000s
-	gtSuiteRE = "^(ok|FAIL)[ \t]+([^ \t]+)[ \t]+(-?\\d+.\\d+)"
-
-	// ?       alipay  [no test files]
-	gtNoFilesRE = "^\\?.*\\[no test files\\]$"
-	// FAIL    node/config [build failed]
-	gtBuildFailedRE = `^FAIL.*\[(build|setup) failed\]$`
-
-	// gocheck regular expressions
-
-	// START: mmath_test.go:16: MySuite.TestAdd
-	gcStartRE = "START: [^:]+:[^:]+: ([A-Za-z_][[:word:]]*).([A-Za-z_][[:word:]]*)"
-
-	// PASS: mmath_test.go:16: MySuite.TestAdd	0.000s
-	// FAIL: mmath_test.go:35: MySuite.TestDiv
-	gcEndRE = "(PASS|FAIL|SKIP|PANIC|MISS): [^:]+:[^:]+: ([A-Za-z_][[:word:]]*).([A-Za-z_][[:word:]]*)[[:space:]]?(-?[0-9]+.[0-9]+)?"
-
-	// FAIL	go2xunit/demo-gocheck	0.008s
-	// ok  	go2xunit/demo-gocheck	0.008s
-	gcSuiteRE = "^(ok|FAIL)[ \t]+([^ \t]+)[ \t]+(-?\\d+.\\d+)"
-)
-
 var (
 	matchDatarace = regexp.MustCompile("^WARNING: DATA RACE$").MatchString
 )
-
-// LineScanner scans lines and keep track of line numbers
-type LineScanner struct {
-	*bufio.Scanner
-	lnum int
-}
-
-// NewLineScanner creates a new line scanner from r
-func NewLineScanner(r io.Reader) *LineScanner {
-	scan := bufio.NewScanner(r)
-	return &LineScanner{scan, 0}
-}
-
-// Scan advances to next line
-func (ls *LineScanner) Scan() bool {
-	val := ls.Scanner.Scan()
-	ls.lnum++
-	return val
-}
-
-// Line returns the current line number
-func (ls *LineScanner) Line() int {
-	return ls.lnum
-}
 
 // hasDatarace checks if there's a data race warning in the line
 func hasDatarace(lines []string) bool {
@@ -94,13 +35,33 @@ func Token2Status(token string) Status {
 	return UnknownStatus
 }
 
+// Returns previous test in a suite, for a given test. Returns error if previous
+// test doesn't exist.
+func getPreviousFailTest(suite *Suite, curTest *Test) (*Test, error) {
+	previousFailTestIndex := -1
+	for testIndex, test := range suite.Tests {
+		if test.Name == curTest.Name {
+			break
+		} else {
+			if test.Status == Failed {
+				previousFailTestIndex = testIndex
+			}
+		}
+	}
+
+	if previousFailTestIndex >= 0 {
+		return suite.Tests[previousFailTestIndex], nil
+	}
+	return nil, fmt.Errorf("Not found previous test of %s in suite %s", curTest.Name, suite.Name)
+}
+
 // ParseGocheck parses output of "go test -gocheck.vv", returns a list of tests
 // See data/gocheck.out for an example
 // TODO: Refactor to shorter ones
 func ParseGocheck(rd io.Reader, suitePrefix string) (Suites, error) {
-	findStart := regexp.MustCompile(gcStartRE).FindStringSubmatch
-	findEnd := regexp.MustCompile(gcEndRE).FindStringSubmatch
-	findSuite := regexp.MustCompile(gcSuiteRE).FindStringSubmatch
+	findStart := gcStartRE.FindStringSubmatch
+	findEnd := gcEndRE.FindStringSubmatch
+	findSuite := gcSuiteRE.FindStringSubmatch
 
 	scanner := NewLineScanner(rd)
 	var suites = make([]*Suite, 0)
@@ -119,7 +80,7 @@ func ParseGocheck(rd io.Reader, suitePrefix string) (Suites, error) {
 				continue
 			}
 			if testName != "" {
-				return nil, fmt.Errorf("%d: start in middle\n", scanner.Line())
+				return nil, fmt.Errorf("%d: start in middle of test", scanner.Line())
 			}
 			suiteName = tokens[1]
 			testName = tokens[2]
@@ -192,12 +153,13 @@ func ParseGocheck(rd io.Reader, suitePrefix string) (Suites, error) {
 // ParseGotest parser output of gotest
 // TODO: Make it shorter
 func ParseGotest(rd io.Reader, suitePrefix string) (Suites, error) {
-	findStart := regexp.MustCompile(gtStartRE).FindStringSubmatch
-	findEnd := regexp.MustCompile(gtEndRE).FindStringSubmatch
-	findSuite := regexp.MustCompile(gtSuiteRE).FindStringSubmatch
-	isNoFiles := regexp.MustCompile(gtNoFilesRE).MatchString
-	isBuildFailed := regexp.MustCompile(gtBuildFailedRE).MatchString
-	isExit := regexp.MustCompile("^exit status -?\\d+").MatchString
+	findStart := gtStartRE.FindStringSubmatch
+	findEnd := gtEndRE.FindStringSubmatch
+	findSuite := gtSuiteRE.FindStringSubmatch
+	isNoFiles := gtNoFilesRE.MatchString
+	isBuildFailed := gtBuildFailedRE.MatchString
+	isExit := gtExitRE.MatchString
+	isErrorOutput := gcTestErrorRE.MatchString
 
 	suites := []*Suite{}
 	subTests := map[string]*Test{}
@@ -206,10 +168,11 @@ func ParseGotest(rd io.Reader, suitePrefix string) (Suites, error) {
 	var curSuite *Suite
 	var out []string
 	suiteStack := SuiteStack{}
+
 	// Handles a test that ended with a panic.
 	handlePanic := func() {
 		curTest.Status = Failed
-		curTest.Time = "N/A"
+		curTest.Time = "0"
 		curSuite.Tests = append(curSuite.Tests, curTest)
 		curTest = nil
 	}
@@ -218,10 +181,14 @@ func ParseGotest(rd io.Reader, suitePrefix string) (Suites, error) {
 	appendError := func() {
 		if len(out) > 0 && curSuite != nil && len(curSuite.Tests) > 0 {
 			message := strings.Join(out, "\n")
-			if curSuite.Tests[len(curSuite.Tests)-1].Message == "" {
-				curSuite.Tests[len(curSuite.Tests)-1].Message = message
-			} else {
-				curSuite.Tests[len(curSuite.Tests)-1].Message += "\n" + message
+			test := curSuite.Tests[len(curSuite.Tests)-1]
+			if test.isParentTest == false {
+				if test.Message == "" {
+					test.Message = message
+				} else {
+					test.Message += "\n" + message
+				}
+				test.AppendedErrorOutput = isErrorOutput(message)
 			}
 		}
 		out = []string{}
@@ -243,7 +210,6 @@ func ParseGotest(rd io.Reader, suitePrefix string) (Suites, error) {
 		if curSuite == nil {
 			curSuite = &Suite{}
 		}
-
 		tokens := findStart(line)
 		if tokens != nil {
 			subTest := false
@@ -256,6 +222,8 @@ func ParseGotest(rd io.Reader, suitePrefix string) (Suites, error) {
 					subTests = map[string]*Test{}
 					subTest = true
 				} else if parentTest != nil && strings.HasPrefix(tokens[1], parentTest.Name+"/") {
+					parentTest.isParentTest = true
+					parentTest.AppendedErrorOutput = true
 					subTest = true
 				} else if suiteStack.count == 0 {
 					suiteStack.Push(curSuite)
@@ -311,7 +279,22 @@ func ParseGotest(rd io.Reader, suitePrefix string) (Suites, error) {
 				curTest.Status = Failed
 			}
 			curTest.Time = tokens[3]
-			curTest.Message = strings.Join(out, "\n")
+
+			if len(out) > 0 {
+				message := strings.Join(out, "\n")
+				prevTest, err := getPreviousFailTest(curSuite, curTest)
+				var test *Test
+				if err == nil && prevTest.AppendedErrorOutput == false {
+					test = prevTest
+				} else {
+					test = curTest
+				}
+				if test.isParentTest == false {
+					test.Message += message
+					test.AppendedErrorOutput = isErrorOutput(message)
+				}
+			}
+
 			if appendTest {
 				curSuite.Tests = append(curSuite.Tests, curTest)
 			}
@@ -358,6 +341,9 @@ func ParseGotest(rd io.Reader, suitePrefix string) (Suites, error) {
 		}
 		// Catch any post-failure messages from the last test
 		appendError()
+	}
+
+	if curSuite != nil && len(curSuite.Tests) > 0 {
 		suites = append(suites, curSuite)
 	}
 
