@@ -4,9 +4,11 @@
 all:	test
 
 test:
+	go fmt
 	go test -v
 
 grade:	go2xunit/go2xunit
+	go fmt
 	go test -v | go2xunit/go2xunit -output test_detail.xml
 
 go2xunit/go2xunit:

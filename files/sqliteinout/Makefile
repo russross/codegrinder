@@ -18,6 +18,11 @@ step:	$(HOME)/.sqliterc
 	@for x in $(shell ls .*.sql); do sqlite3 database.db < $$x > /dev/null; done
 	@python3 lib/inout-stepall.py
 
+shell:	$(HOME)/.sqliterc
+	@rm -f database.db
+	@for x in $(shell ls .*.sql); do sqlite3 database.db < $$x > /dev/null; done
+	sqlite3 database.db
+
 $(HOME)/.sqliterc:	lib/.sqliterc
 	cp lib/.sqliterc $(HOME)/
 

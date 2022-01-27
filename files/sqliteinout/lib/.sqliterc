@@ -7,5 +7,5 @@ PRAGMA journal_mode = DELETE;
 PRAGMA locking_mode = NORMAL;
 PRAGMA synchronous = NORMAL;
 .headers on
-.mode column
+.mode table
 .output stdout
