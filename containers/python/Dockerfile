@@ -10,6 +10,7 @@ RUN apt install -y --no-install-recommends \
     build-essential \
     gdb
 RUN apt install -y --no-install-recommends \
+    mypy \
     python3-pip \
     python3-setuptools \
     python3-six \
