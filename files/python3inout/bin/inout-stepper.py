@@ -5,9 +5,9 @@ import selectors
 import subprocess
 import sys
 
-delay = 0.005
-warmupdelay = 1.0
-bufsize = 4096
+delay = 0.01
+warmupdelay = 0.1
+bufsize = 65536
 
 def main():
     if len(sys.argv) < 4:
@@ -136,6 +136,12 @@ def main():
 
     # report an error if we noticed error output, wrong regular output, or
     # any input/output leftover that should have been consumed
+    if not error and len(inputData) > 0:
+        print('\n!!ERROR!! Program ended without reading all input. Unused input was:')
+        print(repr(inputData.decode('utf-8')))
+    if not error and len(outputData) > 0:
+        print('\n!!ERROR!! Program ended but more output was expected. Expected output was:')
+        print(repr(outputData.decode('utf-8')))
     if error or len(inputData) > 0 or len(outputData) > 0:
         sys.exit(1)
 
