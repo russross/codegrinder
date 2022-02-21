@@ -17,6 +17,7 @@ step:	a.out
 	python3 lib/inout-stepall.py input ./a.out
 
 a.out:	*.go
+	go fmt
 	go build -o a.out
 
 setup:
