@@ -11,40 +11,50 @@ print_n:
                 # a0: n
                 # a1: ptr
                 # a2: 10
+                # a3: is_negative
+                sltz    a3, a0
+                bgez    a0, 1f
+                neg     a0, a0
+1:
                 mv      a1, sp
                 li      a2, 10
-1:
+2:
                 remu    t0, a0, a2
                 addi    t0, t0, '0'
                 sb      t0, (a1)
                 addi    a1, a1, 1
                 divu    a0, a0, a2
-                bnez    a0, 1b
+                bnez    a0, 2b
+                beqz    a3, 3f
+                li      t0, '-'
+                sb      t0, (a1)
+                addi    a1, a1, 1
 
                 # a0: ptr_a
                 # a1: ptr_b
                 # a2: len
+3:
                 sub     a2, a1, sp
                 mv      a0, sp
                 add     a1, a1, -1
-2:
+4:
                 lb      t0, (a0)
                 lb      t1, (a1)
                 sb      t0, (a1)
                 sb      t1, (a0)
                 addi    a0, a0, 1
                 addi    a1, a1, -1
-                blt     a0, a1, 2b
+                blt     a0, a1, 4b
 
                 li      a0, stdout
                 mv      a1, sp
                 li      a7, sys_write
                 ecall
-                bgez    a0, 3f
+                bgez    a0, 5f
                 neg     a0, a0
                 li      a7, sys_exit
                 ecall
-3:
+5:
                 addi    sp, sp, 16
                 ret
 
