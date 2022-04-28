@@ -1,12 +1,37 @@
-                .global print_n, print_set
+                .global print_n, print_set, puts
                 .equ    stdout, 1
                 .equ    sys_write, 64
                 .equ    sys_exit, 93
                 .text
 
+# puts(s)
+puts:
+                # a1: ptr
+                # a2: len
+                mv      a1, a0
+                li      a2, 0
+1:
+                add     t0, a1, a2
+                lb      t1, (t0)
+                beqz    t1, 2f
+                addi    a2, a2, 1
+                j       1b
+2:
+                li      a0, stdout
+                li      a7, sys_write
+                ecall
+                bgez    a0, 3f
+                neg     a0, a0
+                li      a7, sys_exit
+                ecall
+3:
+                ret
+
+
 # print_n(n)
 print_n:
                 addi    sp, sp, -16
+                sw      ra, 12(sp)
 
                 # a0: n
                 # a1: ptr
@@ -36,7 +61,7 @@ print_n:
 3:
                 sub     a2, a1, sp
                 mv      a0, sp
-                add     a1, a1, -1
+                addi    a1, a1, -1
 4:
                 lb      t0, (a0)
                 lb      t1, (a1)
@@ -46,15 +71,13 @@ print_n:
                 addi    a1, a1, -1
                 blt     a0, a1, 4b
 
-                li      a0, stdout
-                mv      a1, sp
-                li      a7, sys_write
-                ecall
-                bgez    a0, 5f
-                neg     a0, a0
-                li      a7, sys_exit
-                ecall
+                add     t0, sp, a2
+                sb      zero, (t0)
+
+                mv      a0, sp
+                jal     puts
 5:
+                lw      ra, 12(sp)
                 addi    sp, sp, 16
                 ret
 
