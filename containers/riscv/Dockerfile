@@ -7,13 +7,9 @@ RUN apt install -y --no-install-recommends \
     make \
     python3
 RUN apt install -y --no-install-recommends \
+    binutils-riscv64-unknown-elf \
+    gcc-riscv64-unknown-elf \
     qemu-user
-
-# install cross-compiler
-ADD https://cit.dixie.edu/cs/2810/riscv.tar.gz /tmp/
-RUN tar zxvf /tmp/riscv.tar.gz -C /opt && \
-    rm -f /tmp/riscv.tar.gz
-ENV PATH=/opt/riscv/bin:/usr/bin/:/bin
 
 RUN mkdir /home/student && chmod 777 /home/student
 USER 2000
