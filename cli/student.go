@@ -122,7 +122,7 @@ func downloadStudentAssignment(id int64, assignment *Assignment) {
 		fmt.Printf("deleting %s\n", rootDir)
 		os.RemoveAll(rootDir)
 	}()
-	changeTo := getAssignment(assignment, rootDir)
+	changeTo := getAssignment(assignment, rootDir, rootDir)
 	shell := os.Getenv("SHELL")
 	if shell == "" {
 		shell = "/bin/bash"

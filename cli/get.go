@@ -21,6 +21,7 @@ func CommandGet(cmd *cobra.Command, args []string) {
 	if err != nil {
 		log.Fatalf("unable to find home directory: %v", err)
 	}
+	prettyRoot := "~"
 
 	if len(args) == 0 {
 		cmd.Help()
@@ -34,6 +35,7 @@ func CommandGet(cmd *cobra.Command, args []string) {
 	name := args[0]
 	if len(args) == 2 {
 		rootDir = args[1]
+		prettyRoot = rootDir
 	}
 
 	user := new(User)
@@ -80,10 +82,10 @@ func CommandGet(cmd *cobra.Command, args []string) {
 	if assignment.UserID != user.ID {
 		log.Fatalf("you do not have an assignment with number %d", assignment.ID)
 	}
-	getAssignment(assignment, rootDir)
+	getAssignment(assignment, rootDir, prettyRoot)
 }
 
-func getAssignment(assignment *Assignment, rootDir string) string {
+func getAssignment(assignment *Assignment, rootDir, prettyRoot string) string {
 	// get the course
 	course := new(Course)
 	mustGetObject(fmt.Sprintf("/courses/%d", assignment.CourseID), nil, course)
@@ -94,11 +96,12 @@ func getAssignment(assignment *Assignment, rootDir string) string {
 
 	// check if the target directory exists
 	rootDir = filepath.Join(rootDir, courseDirectory(course.Label), problemSet.Unique)
+	prettyRoot = filepath.Join(prettyRoot, courseDirectory(course.Label), problemSet.Unique)
 	if _, err := os.Stat(rootDir); err == nil {
-		log.Printf("directory %s already exists", rootDir)
+		log.Printf("directory %s already exists", prettyRoot)
 		log.Fatalf("delete it first if you want to re-download the assignment")
 	} else if !os.IsNotExist(err) {
-		log.Fatalf("error checking if directory %s exists: %v", rootDir, err)
+		log.Fatalf("error checking if directory %s exists: %v", prettyRoot, err)
 	}
 
 	// get the list of problems in the problem set
@@ -139,7 +142,7 @@ func getAssignment(assignment *Assignment, rootDir string) string {
 		}
 	}
 
-	fmt.Printf("unpacking problem set in %s\n", rootDir)
+	fmt.Printf("unpacking problem set in %s\n", prettyRoot)
 
 	mostRecentTime := time.Time{}
 	changeTo := rootDir
