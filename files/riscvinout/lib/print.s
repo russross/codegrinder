@@ -75,7 +75,7 @@ print_n:
                 sb      zero, (t0)
 
                 mv      a0, sp
-                jal     puts
+                call    puts
 5:
                 lw      ra, 12(sp)
                 addi    sp, sp, 16
@@ -108,7 +108,7 @@ print_set:
                 bgez    a2, 1b
 
                 mv      a0, a1
-                jal     print_n
+                call    print_n
 
                 lw      ra, 4(sp)
                 addi    sp, sp, 8
