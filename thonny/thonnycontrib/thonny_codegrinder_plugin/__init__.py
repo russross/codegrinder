@@ -1,6 +1,6 @@
 '''Thonny plugin to integrate with CodeGrinder for coding practice'''
 
-__version__ = '2.6.14'
+__version__ = '2.6.15'
 
 import base64
 import certifi

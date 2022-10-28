@@ -490,10 +490,18 @@ class HTMLTextParser(HTMLParser):
                     self._stack_pop(tag, Fnt.OVERSTRIKE)
 
         elif tag == HTML.Tag.IMG and attrs[HTML.Attrs.SRC]:
-            #-------------------------------------------------------------------- [ UNSTYLED_TAGS ]
+            import base64
+            import re
             image = None
-            #print(attrs[HTML.Attrs.SRC] , self.cached_images)
-            if attrs[HTML.Attrs.SRC].startswith(("https://" , "ftp://" , "http://")):
+            src = attrs[HTML.Attrs.SRC]
+            encoding = re.match("data:[-\w.]+/[-\w.]+;base64,", src)
+            if encoding:
+                #-------------------------------------------------------------------- [ INLINE_TAGS ]
+                raw = src[len(encoding[0]):]
+                image = Image.open(BytesIO(base64.b64decode(raw)))
+                self.cached_images[attrs[HTML.Attrs.SRC]] = deepcopy(image)
+            elif attrs[HTML.Attrs.SRC].startswith(("https://" , "ftp://" , "http://")):
+                #-------------------------------------------------------------------- [ UNSTYLED_TAGS ]
                 if attrs[HTML.Attrs.SRC] in self.cached_images.keys():
                     image = deepcopy(self.cached_images[attrs[HTML.Attrs.SRC]])
                 else:
@@ -508,6 +516,7 @@ class HTMLTextParser(HTMLParser):
             elif os.path.exists(attrs[HTML.Attrs.SRC]):
                 image = Image.open(attrs[HTML.Attrs.SRC])
                 self.cached_images[attrs[HTML.Attrs.SRC]] = deepcopy(image)
+
             if image:
                 width = image.size[0]
                 height = image.size[1]

@@ -12,6 +12,6 @@ var CurrentVersion = Version{
 	Version:                  "2.6.4",
 	GrindVersionRequired:     "2.6.4",
 	GrindVersionRecommended:  "2.6.4",
-	ThonnyVersionRecommended: "2.6.9",
+	ThonnyVersionRecommended: "2.6.15",
 	ThonnyVersionRequired:    "2.6.9",
 }
