@@ -14,11 +14,11 @@ require (
 	github.com/martini-contrib/binding v0.0.0-20160701174519-05d3e151b6cf
 	github.com/martini-contrib/gzip v0.0.0-20151124214156-6c035326b43f
 	github.com/martini-contrib/render v0.0.0-20150707142108-ec18f8345a11
-	github.com/mattn/go-sqlite3 v2.0.3+incompatible
+	github.com/mattn/go-sqlite3 v1.14.15
 	github.com/opencontainers/runc v1.0.0-rc1.0.20160613132442-8fbe19e02015 // indirect
 	github.com/oxtoacart/bpool v0.0.0-20150712133111-4e1c5567d7c2 // indirect
 	github.com/russross/blackfriday/v2 v2.0.1
-	github.com/russross/meddler v1.0.0
+	github.com/russross/meddler v1.0.1 // indirect
 	github.com/spf13/cobra v1.0.0
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/stretchr/testify v1.5.1 // indirect
