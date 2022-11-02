@@ -16,7 +16,7 @@ RUN cd /tmp/ && \
     cd rust-1.64.0-aarch64-unknown-linux-gnu/ && \
     ./install.sh && \
     cd .. && \
-    rm -rf rust-1.64.0-aarch64-unknown-linux-gnu/ rust-1.64.0-aarch64-unknown-linux-gnu.tar.gz 
+    rm -rf rust-1.64.0-aarch64-unknown-linux-gnu/ rust-1.64.0-aarch64-unknown-linux-gnu.tar.gz
 
 ADD https://computing.utahtech.edu/cs/3520/cargo2junit /usr/local/bin/
 RUN chmod 755 /usr/local/bin/cargo2junit
