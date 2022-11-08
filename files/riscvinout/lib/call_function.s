@@ -53,27 +53,47 @@ call_function:
                 li      t0, sentinal
 
                 # trash t, a, and s registers
-                mv      t1, t0
-                mv      t2, t0
-                mv      t3, t0
-                mv      t4, t0
-                mv      t5, t0
-                mv      t6, t0
-                mv      a5, t0
-                mv      a6, t0
-                mv      a7, t0
                 mv      s0, t0
+                addi    t0, t0, 17
                 mv      s1, t0
+                addi    t0, t0, 17
                 mv      s2, t0
+                addi    t0, t0, 17
                 mv      s3, t0
+                addi    t0, t0, 17
                 mv      s4, t0
+                addi    t0, t0, 17
                 mv      s5, t0
+                addi    t0, t0, 17
                 mv      s6, t0
+                addi    t0, t0, 17
                 mv      s7, t0
+                addi    t0, t0, 17
                 mv      s8, t0
+                addi    t0, t0, 17
                 mv      s9, t0
+                addi    t0, t0, 17
                 mv      s10, t0
+                addi    t0, t0, 17
                 mv      s11, t0
+                addi    t0, t0, 17
+                mv      t1, t0
+                addi    t0, t0, 17
+                mv      t2, t0
+                addi    t0, t0, 17
+                mv      t3, t0
+                addi    t0, t0, 17
+                mv      t4, t0
+                addi    t0, t0, 17
+                mv      t5, t0
+                addi    t0, t0, 17
+                mv      t6, t0
+                addi    t0, t0, 17
+                mv      a5, t0
+                addi    t0, t0, 17
+                mv      a6, t0
+                addi    t0, t0, 17
+                mv      a7, t0
 
                 # call the user function
                 jalr    a4
@@ -87,16 +107,27 @@ call_function:
 
                 # check all the callee-saved registers
                 bne     s0, t0, 1f
+                addi    t0, t0, 17
                 bne     s1, t0, 1f
+                addi    t0, t0, 17
                 bne     s2, t0, 1f
+                addi    t0, t0, 17
                 bne     s3, t0, 1f
+                addi    t0, t0, 17
                 bne     s4, t0, 1f
+                addi    t0, t0, 17
                 bne     s5, t0, 1f
+                addi    t0, t0, 17
                 bne     s6, t0, 1f
+                addi    t0, t0, 17
                 bne     s7, t0, 1f
+                addi    t0, t0, 17
                 bne     s8, t0, 1f
+                addi    t0, t0, 17
                 bne     s9, t0, 1f
+                addi    t0, t0, 17
                 bne     s10, t0, 1f
+                addi    t0, t0, 17
                 bne     s11, t0, 1f
                 j       2f
 1:
@@ -112,19 +143,31 @@ call_function:
 2:
                 # trash t and a registers
                 mv      t1, t0
+                addi    t0, t0, 31
                 mv      t2, t0
+                addi    t0, t0, 31
                 mv      t3, t0
+                addi    t0, t0, 31
                 mv      t4, t0
+                addi    t0, t0, 31
                 mv      t5, t0
+                addi    t0, t0, 31
                 mv      t6, t0
 
                 # leave the return value in a0
+                addi    t0, t0, 31
                 mv      a1, t0
+                addi    t0, t0, 31
                 mv      a2, t0
+                addi    t0, t0, 31
                 mv      a3, t0
+                addi    t0, t0, 31
                 mv      a4, t0
+                addi    t0, t0, 31
                 mv      a5, t0
+                addi    t0, t0, 31
                 mv      a6, t0
+                addi    t0, t0, 31
                 mv      a7, t0
 
                 # postlude
