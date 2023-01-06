@@ -31,7 +31,7 @@ puts:
 # print_n(n)
 print_n:
                 addi    sp, sp, -16
-                sw      ra, 12(sp)
+                sd      ra, 8(sp)
 
                 # a0: n
                 # a1: ptr
@@ -77,15 +77,15 @@ print_n:
                 mv      a0, sp
                 call    puts
 5:
-                lw      ra, 12(sp)
+                ld      ra, 8(sp)
                 addi    sp, sp, 16
                 ret
 
 # print_set(set)
 print_set:
                 # prelude
-                addi    sp, sp, -8
-                sw      ra, 4(sp)
+                addi    sp, sp, -16
+                sd      ra, 8(sp)
 
                 # a0: in
                 # a1: out
@@ -110,6 +110,6 @@ print_set:
                 mv      a0, a1
                 call    print_n
 
-                lw      ra, 4(sp)
-                addi    sp, sp, 8
+                ld      ra, 8(sp)
+                addi    sp, sp, 16
                 ret

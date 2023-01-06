@@ -17,7 +17,7 @@ run:	target/debug/student
 step:	target/debug/student
 	python3 scripts/inout-stepall.py input target/debug/student
 
-target/debug/student:	src/main.rs Cargo.toml
+target/debug/student:	src/*.rs Cargo.toml
 	cargo build
 
 setup:

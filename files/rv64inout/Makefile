@@ -1,10 +1,10 @@
 .SUFFIXES:
 .SUFFIXES: .o .s .si .out .xml .input .expected .actual
 
-ASFLAGS=-ggdb --warn --fatal-warnings -march=rv32im -mno-relax
-LDFLAGS=--fatal-warnings -melf32lriscv -Ttext 1074
+ASFLAGS=-ggdb --warn --fatal-warnings -march=rv64im
+LDFLAGS=--fatal-warnings -Ttext 10b0
 PREFIX=riscv64-unknown-elf
-RUN=qemu-riscv32
+RUN=qemu-riscv64
 ASSEMBLER=$(shell which $(PREFIX)-as)
 
 ALLOBJECT=$(sort $(patsubst %.s,%.o,$(wildcard *.s))) $(sort $(patsubst %.s,%.o,$(wildcard lib/*.s)))
@@ -34,7 +34,7 @@ $(HOME)/.gdbinit:
 
 .s.o:
 ifeq ("$(ASSEMBLER)", "")
-	$(error this should only be run on the cs2810.cs.dixie.edu server)
+	$(error this should only be run on the cs2810.cs.utahtech.edu server)
 endif
 	$(PREFIX)-as $(ASFLAGS) $< -o $@
 

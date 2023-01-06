@@ -28,23 +28,23 @@ bad_register_msg:
 # case, and incorrect use of sp or ra will likely cause it to fail.
 call_function:
                 # save callee-saved registers
-                addi    sp, sp, -64
-                sw      ra, 60(sp)
-                sw      s0, 56(sp)
-                sw      s1, 52(sp)
-                sw      s2, 48(sp)
-                sw      s3, 44(sp)
-                sw      s4, 40(sp)
-                sw      s5, 36(sp)
-                sw      s6, 32(sp)
-                sw      s7, 28(sp)
-                sw      s8, 24(sp)
-                sw      s9, 20(sp)
-                sw      s10, 16(sp)
-                sw      s11, 12(sp)
-                sw      gp, 8(sp)
-                sw      tp, 4(sp)
-                sw      sp, 0(sp)
+                addi    sp, sp, -128
+                sd      ra, 120(sp)
+                sd      s0, 112(sp)
+                sd      s1, 104(sp)
+                sd      s2, 96(sp)
+                sd      s3, 88(sp)
+                sd      s4, 80(sp)
+                sd      s5, 72(sp)
+                sd      s6, 64(sp)
+                sd      s7, 56(sp)
+                sd      s8, 48(sp)
+                sd      s9, 40(sp)
+                sd      s10, 32(sp)
+                sd      s11, 24(sp)
+                sd      gp, 16(sp)
+                sd      tp, 8(sp)
+                sd      sp, 0(sp)
 
                 # saving sp on the stack is not a perfect solution
                 # but it acts as a sanity check
@@ -99,7 +99,7 @@ call_function:
                 jalr    a4
 
                 # check sp first
-                lw      t0, 0(sp)
+                ld      t0, 0(sp)
                 bne     sp, t0, 1f
 
                 # load sentinal value
@@ -171,20 +171,20 @@ call_function:
                 mv      a7, t0
 
                 # postlude
-                lw      ra, 60(sp)
-                lw      s0, 56(sp)
-                lw      s1, 52(sp)
-                lw      s2, 48(sp)
-                lw      s3, 44(sp)
-                lw      s4, 40(sp)
-                lw      s5, 36(sp)
-                lw      s6, 32(sp)
-                lw      s7, 28(sp)
-                lw      s8, 24(sp)
-                lw      s9, 20(sp)
-                lw      s10, 16(sp)
-                lw      s11, 12(sp)
-                lw      gp, 8(sp)
-                lw      tp, 4(sp)
-                addi    sp, sp, 64
+                ld      ra, 120(sp)
+                ld      s0, 112(sp)
+                ld      s1, 104(sp)
+                ld      s2, 96(sp)
+                ld      s3, 88(sp)
+                ld      s4, 80(sp)
+                ld      s5, 72(sp)
+                ld      s6, 64(sp)
+                ld      s7, 56(sp)
+                ld      s8, 48(sp)
+                ld      s9, 40(sp)
+                ld      s10, 32(sp)
+                ld      s11, 24(sp)
+                ld      gp, 16(sp)
+                ld      tp, 8(sp)
+                addi    sp, sp, 128
                 ret
