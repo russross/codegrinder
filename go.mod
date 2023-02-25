@@ -18,12 +18,12 @@ require (
 	github.com/opencontainers/runc v1.0.0-rc1.0.20160613132442-8fbe19e02015 // indirect
 	github.com/oxtoacart/bpool v0.0.0-20150712133111-4e1c5567d7c2 // indirect
 	github.com/russross/blackfriday/v2 v2.0.1
-	github.com/russross/meddler v1.0.1 // indirect
+	github.com/russross/meddler v1.0.1
 	github.com/spf13/cobra v1.0.0
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/stretchr/testify v1.5.1 // indirect
-	golang.org/x/crypto v0.0.0-20220126234351-aa10faf2a1f8
-	golang.org/x/net v0.0.0-20211112202133-69e39bad7dc2
+	golang.org/x/crypto v0.1.0
+	golang.org/x/net v0.1.0
 	gopkg.in/gcfg.v1 v1.2.3
 	gopkg.in/warnings.v0 v0.1.1 // indirect
 )
