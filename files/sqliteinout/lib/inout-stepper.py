@@ -7,7 +7,7 @@ import sys
 
 delay = 0.05
 warmupdelay = 0.5
-bufsize = 65536
+bufsize = 2**16
 
 def main():
     if len(sys.argv) < 4:
@@ -39,6 +39,7 @@ def main():
     # the next chunk of input to feed to the process
     # this gets filled when we have a timeout while waiting for output
     nextInput = ''
+    partial = b''
     inputClosed = False
 
     keepGoing = True
@@ -73,19 +74,26 @@ def main():
             if key.data == 'out':
                 # there is stdout output ready
                 data = os.read(stdout, bufsize)
-                if len(data) == 0:
+                if len(data) == 0 and len(partial) > 0:
+                    print('\n!!ERROR!! Program output ended without a newline:')
+                    print(repr(partial.decode('utf-8')))
+                    sys.exit(1)
+                elif len(data) == 0:
                     keepGoing = False
                     break
+                data = partial + data
+                partial = b''
 
                 # compare it to the expected output one line at a time
                 while len(data) > 0:
                     newline = data.find(b'\n')
                     if newline < 0:
-                        chunk = data
-                        data = b''
-                    else:
-                        chunk = data[:newline+1]
-                        data = data[len(chunk):]
+                        # save this partial line until more input is available
+                        partial = data
+                        break
+
+                    chunk = data[:newline+1]
+                    data = data[len(chunk):]
 
                     # does it match what we expected?
                     if outputData.startswith(chunk):
