@@ -617,7 +617,16 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 		// there is a course-wide deadline, should we reject?
 		if (assignment.LockAt != nil && now.After(*assignment.LockAt)) ||
 			(assignment.LockAt == nil && now.After(courseWideLockAt)) {
-			loggedHTTPErrorf(w, http.StatusForbidden, "a commit cannot be submitted after the assignment is locked")
+			course := new(Course)
+			err = meddler.Load(tx, "courses", course, assignment.CourseID)
+			if err != nil {
+				loggedHTTPDBNotFoundError(w, err)
+				return
+			}
+			loggedHTTPErrorf(w, http.StatusForbidden, "A commit cannot be submitted after the assignment is locked.\n\n" +
+			"If the assignment has been extended then you must click on the assignment\n"+
+			"in Canvas before CodeGrinder will be updated. You can try this link:\n\n"+
+			"  https://%s/courses/%d/assignments/%d\n", assignment.CanvasAPIDomain, course.CanvasID, assignment.CanvasID)
 			return
 		}
 	}
@@ -867,7 +876,7 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 		note = " (" + bundle.Commit.Note + ")"
 	}
 	if bundle.Commit.Action == "" && bundle.CommitSignature == "" {
-		log.Printf("save request: user %s saving %s step %d%s",
+		log.Printf("sync request: user %s syncing %s step %d%s",
 			currentUser.Name, problem.Note, bundle.Commit.Step, note)
 	} else if bundle.Commit.Action != "" && bundle.CommitSignature == "" {
 		log.Printf(" pre-daycare commit: user %s (%d) action %s for %s step %d%s",

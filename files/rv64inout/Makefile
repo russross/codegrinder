@@ -1,11 +1,19 @@
 .SUFFIXES:
 .SUFFIXES: .o .s .si .out .xml .input .expected .actual
 
-ASFLAGS=-ggdb --warn --fatal-warnings -march=rv64im
-LDFLAGS=--fatal-warnings -Ttext 10b0
-PREFIX=riscv64-unknown-elf
-RUN=qemu-riscv64
-ASSEMBLER=$(shell which $(PREFIX)-as)
+ASFLAGS=-g --warn --fatal-warnings -march=rv64im
+LDFLAGS=--fatal-warnings
+ifeq ("$(shell uname -m)", "riscv64")
+	AS=as
+	LD=ld
+	GDB=gdb
+	AOUT=./a.out
+else
+	AS=riscv64-linux-gnu-as
+	LD=riscv64-linux-gnu-ld
+	GDB=riscv64-linux-gnu-gdb
+	AOUT=qemu-riscv64 ./a.out
+endif
 
 ALLOBJECT=$(sort $(patsubst %.s,%.o,$(wildcard *.s))) $(sort $(patsubst %.s,%.o,$(wildcard lib/*.s)))
 START=$(filter start.o, $(ALLOBJECT))
@@ -14,31 +22,31 @@ AOUTOBJECT=$(START) $(filter-out $(START), $(ALLOBJECT))
 all:	step
 
 test:	a.out
-	python3 lib/inout-runner.py input $(RUN) ./a.out
+	python3 lib/inout-runner.py input $(AOUT)
 
 grade:	a.out
 	rm -f test_details.xml inputs/*.actual
-	python3 lib/inout-runner.py input $(RUN) ./a.out
+	python3 lib/inout-runner.py input $(AOUT)
 
 run:	a.out
-	$(RUN) ./a.out
+	$(AOUT)
 
 step:	a.out
-	python3 lib/inout-stepall.py input $(RUN) ./a.out
+	python3 lib/inout-stepall.py input $(AOUT)
 
 debug:	a.out $(HOME)/.gdbinit
-	$(PREFIX)-gdb ./a.out
+	$(GDB) ./a.out
 
 $(HOME)/.gdbinit:
 	echo set auto-load safe-path / > $(HOME)/.gdbinit
 
 .s.o:
-ifeq ("$(ASSEMBLER)", "")
-	$(error this should only be run on the cs2810.cs.utahtech.edu server)
+ifeq ("$(shell which $(AS))", "")
+	$(error this should only be run on a machine with riscv support such as the cs2810.cs.utahtech.edu server)
 endif
-	$(PREFIX)-as $(ASFLAGS) $< -o $@
+	$(AS) $(ASFLAGS) $< -o $@
 
 a.out:	$(AOUTOBJECT)
-	$(PREFIX)-ld $(LDFLAGS) $^
+	$(LD) $(LDFLAGS) $^
 clean:
 	rm -f *.o lib/*.o *.out *.xml core .gdb_history

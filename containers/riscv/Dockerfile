@@ -7,8 +7,8 @@ RUN apt install -y --no-install-recommends \
     make \
     python3
 RUN apt install -y --no-install-recommends \
-    binutils-riscv64-unknown-elf \
-    gcc-riscv64-unknown-elf \
+    binutils-riscv64-linux-gnu \
+    gcc-riscv64-linux-gnu \
     qemu-user
 
 RUN mkdir /home/student && chmod 777 /home/student
