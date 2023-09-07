@@ -10,6 +10,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -218,7 +219,7 @@ func signXMLRequest(consumerKey, method, targetURL string, content []byte, secre
 	return buf.String()
 }
 
-func getMyURL(r *http.Request, withPath bool) *url.URL {
+func getMyURL(r *http.Request) *url.URL {
 	scheme := r.Header.Get("X-Forwarded-Proto")
 	if scheme == "" {
 		scheme = "https"
@@ -230,9 +231,7 @@ func getMyURL(r *http.Request, withPath bool) *url.URL {
 	u := &url.URL{
 		Scheme: scheme,
 		Host:   host,
-	}
-	if withPath {
-		u.Path = r.URL.Path
+		Path:   r.URL.Path,
 	}
 	return u
 }
@@ -247,7 +246,7 @@ func checkOAuthSignature(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// compute the signature
-	sig := computeOAuthSignature(r.Method, getMyURL(r, true).String(), r.Form, Config.LTISecret)
+	sig := computeOAuthSignature(r.Method, getMyURL(r).String(), r.PostForm, Config.LTISecret)
 
 	// verify it
 	if sig != expected {
@@ -346,8 +345,8 @@ func encode(v url.Values) []byte {
 // and redirects the user to the main UI URL.
 func LtiProblemSet(w http.ResponseWriter, r *http.Request, tx *sql.Tx, form LTIRequest, params martini.Params) {
 	ui := params["ui"]
-	if ui != "cli" {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "UI type must be cli, not %q", ui)
+	if ui != "cli" && ui != "web" {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "UI type must be cli or web, not %q", ui)
 		return
 	}
 	unique := params["unique"]

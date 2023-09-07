@@ -159,6 +159,18 @@ CREATE TABLE commits (
 CREATE UNIQUE INDEX commits_unique_assignment_problem_step ON commits (assignment_id, problem_id, step);
 CREATE INDEX commits_problem_id_step ON commits (problem_id, step);
 
+CREATE VIEW assts AS
+    SELECT
+        courses.name AS course_name,
+        unique_id, note,
+        canvas_title, score,
+        users.name AS user_name, email,
+        assignments.id AS assignment_id
+    FROM assignments
+    JOIN courses ON assignments.course_id = courses.id
+    JOIN problem_sets ON assignments.problem_set_id = problem_sets.id
+    JOIN users ON assignments.user_id = users.id;
+
 CREATE VIEW user_problem_sets AS
     SELECT DISTINCT assignments.user_id, problem_sets.id AS problem_set_id
     FROM assignments

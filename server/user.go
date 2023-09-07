@@ -623,10 +623,10 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 				loggedHTTPDBNotFoundError(w, err)
 				return
 			}
-			loggedHTTPErrorf(w, http.StatusForbidden, "A commit cannot be submitted after the assignment is locked.\n\n" +
-			"If the assignment has been extended then you must click on the assignment\n"+
-			"in Canvas before CodeGrinder will be updated. You can try this link:\n\n"+
-			"  https://%s/courses/%d/assignments/%d\n", assignment.CanvasAPIDomain, course.CanvasID, assignment.CanvasID)
+			loggedHTTPErrorf(w, http.StatusForbidden, "A commit cannot be submitted after the assignment is locked.\n\n"+
+				"If the assignment has been extended then you must click on the assignment\n"+
+				"in Canvas before CodeGrinder will be updated. You can try this link:\n\n"+
+				"  https://%s/courses/%d/assignments/%d\n", assignment.CanvasAPIDomain, course.CanvasID, assignment.CanvasID)
 			return
 		}
 	}
@@ -645,6 +645,11 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 	if len(steps) == 0 {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "no steps found for problem %s (%d)", problem.Unique, problem.ID)
 		return
+	}
+
+	// filter out solutions
+	for _, step := range steps {
+		step.Solution = nil
 	}
 
 	if commit.Step < 1 {
