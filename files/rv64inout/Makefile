@@ -8,11 +8,13 @@ ifeq ("$(shell uname -m)", "riscv64")
 	LD=ld
 	GDB=gdb
 	AOUT=./a.out
+	AOUTDEBUG=./a.out
 else
 	AS=riscv64-linux-gnu-as
 	LD=riscv64-linux-gnu-ld
-	GDB=riscv64-linux-gnu-gdb
+	GDB=gdb-multiarch
 	AOUT=qemu-riscv64 ./a.out
+	AOUTDEBUG=qemu-riscv64 -g 2810 ./a.out
 endif
 
 ALLOBJECT=$(sort $(patsubst %.s,%.o,$(wildcard *.s))) $(sort $(patsubst %.s,%.o,$(wildcard lib/*.s)))
@@ -34,6 +36,9 @@ run:	a.out
 step:	a.out
 	python3 lib/inout-stepall.py input $(AOUT)
 
+fordebug:	a.out
+	$(AOUTDEBUG)
+
 debug:	a.out $(HOME)/.gdbinit
 	$(GDB) ./a.out
 
@@ -42,11 +47,15 @@ $(HOME)/.gdbinit:
 
 .s.o:
 ifeq ("$(shell which $(AS))", "")
-	$(error this should only be run on a machine with riscv support such as the cs2810.cs.utahtech.edu server)
+	$(error this should only be run on a machine with riscv support installed)
 endif
 	$(AS) $(ASFLAGS) $< -o $@
 
 a.out:	$(AOUTOBJECT)
 	$(LD) $(LDFLAGS) $^
+
+setup:
+	sudo apt install gcc-riscv64-linux-gnu gdb-multiarch qemu-user-static python3 make
+
 clean:
 	rm -f *.o lib/*.o *.out *.xml core .gdb_history

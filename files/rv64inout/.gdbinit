@@ -600,9 +600,9 @@ class Dashboard(gdb.Command):
         run('dashboard -layout registers memory source')
         from platform import machine
         if machine() != 'riscv64':
-                run('target sim')
-                run('load')
-        run('starti')
+            run('target remote localhost:2810')
+        else:
+            run('starti')
         # display if possible (program running and not explicitly disabled by
         # some configuration file)
         if dashboard.enabled:
