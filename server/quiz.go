@@ -178,7 +178,7 @@ func DeleteQuiz(w http.ResponseWriter, tx *sql.Tx, currentUser *User, params mar
 	}
 
 	assignment := new(Assignment)
-	if err = meddler.QueryRow(tx, assignment, `SELECT DISTINCT(assignments.*) `+
+	if err = meddler.QueryRow(tx, assignment, `SELECT DISTINCT assignments.* `+
 		`FROM assignments JOIN quizzes ON assignments.lti_id = quizzes.lti_id `+
 		`WHERE quizzes.id = ? AND assignments.user_id = ?`, quizID, currentUser.ID); err != nil {
 		loggedHTTPDBNotFoundError(w, err)
@@ -757,7 +757,7 @@ func gradeQuizClass(now time.Time, tx *sql.Tx, quizID int64) error {
 
 func GetQuizWeights(tx *sql.Tx, ltiID string) (majorWeights map[string]float64, minorWeights map[string][]float64, err error) {
 	weights := []*StepWeight{}
-	if err := meddler.QueryAll(tx, &weights, `SELECT quizzes.id::text AS major_key, quizzes.weight AS major_weight, questions.question_number AS minor_key, questions.weight AS minor_weight `+
+	if err := meddler.QueryAll(tx, &weights, `SELECT CAST(quizzes.id AS TEXT) AS major_key, quizzes.weight AS major_weight, questions.question_number AS minor_key, questions.weight AS minor_weight `+
 		`FROM quizzes JOIN questions ON quizzes.id = questions.quiz_id `+
 		`WHERE quizzes.lti_id = ? `+
 		`ORDER BY quizzes.id, questions.question_number`, ltiID); err != nil {
