@@ -242,6 +242,7 @@ func GetQuizQuestions(w http.ResponseWriter, tx *sql.Tx, params martini.Params, 
 }
 
 func GetAssignmentQuestionsOpen(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
+	now := time.Now()
 	assignmentID, err := parseID(w, "assignment_id", params["assignment_id"])
 	if err != nil {
 		return
@@ -258,8 +259,8 @@ func GetAssignmentQuestionsOpen(w http.ResponseWriter, tx *sql.Tx, params martin
 	err = meddler.QueryAll(tx, &questions, `SELECT questions.* `+
 		`FROM questions JOIN quizzes ON questions.quiz_id = quizzes.id `+
 		`WHERE quizzes.lti_id = ? `+
-		`AND questions.closed_at > now() `+
-		`ORDER BY questions.quiz_id, questions.question_number`, assignment.LtiID)
+		`AND questions.closed_at > ? `+
+		`ORDER BY questions.quiz_id, questions.question_number`, assignment.LtiID, now)
 
 	if err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)

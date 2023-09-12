@@ -10,7 +10,6 @@ import (
 	"encoding/xml"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"net/url"
 	"sort"
