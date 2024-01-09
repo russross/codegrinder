@@ -18,14 +18,19 @@ type ReportCard struct {
 }
 
 // ReportCardResult Outcomes:
-//   passed
-//   failed
-//   error
-//   skipped
+//
+//	passed
+//	failed
+//	error
+//	skipped
+//
 // Details: a multi-line message that should
-//   be displayed in a monospace font
+//
+//	be displayed in a monospace font
+//
 // Context:
-//   path/to/file.py:line#
+//
+//	path/to/file.py:line#
 type ReportCardResult struct {
 	Name    string `json:"name"`
 	Outcome string `json:"outcome"`
@@ -34,15 +39,16 @@ type ReportCardResult struct {
 }
 
 // EventMessage follows one of these forms:
-//   exec ExecCommand
-//   exit ExitStatus
-//   stdin StreamData
-//   stdout StreamData
-//   stderr StreamData
-//   stdinclosed
-//   error Error
-//   reportcard ReportCard
-//   files Files
+//
+//	exec ExecCommand
+//	exit ExitStatus
+//	stdin StreamData
+//	stdout StreamData
+//	stderr StreamData
+//	stdinclosed
+//	error Error
+//	reportcard ReportCard
+//	files Files
 type EventMessage struct {
 	Time        time.Time         `json:"time"`
 	Event       string            `json:"event"`

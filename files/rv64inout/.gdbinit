@@ -2019,6 +2019,11 @@ class Registers(Dashboard.Module):
                 name = 's0'
             if '.' in name:
                 continue
+
+            # hack to ignore some spurious registers...
+            if len(name) > len('zero'):
+                continue
+
             value = gdb.parse_and_eval('${}'.format(name))
             string_value = Registers.format_value(value)
             # exclude unavailable registers (see #255)

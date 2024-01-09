@@ -98,7 +98,7 @@ type Commit struct {
 // user is an instructor for a specific course.
 func (asst *Assignment) IsInstructorRole() bool {
 	for _, role := range strings.Split(asst.Roles, ",") {
-		if role == "Instructor" {
+		if role == "Instructor" || role == "urn:lti:role:ims/lis/TeachingAssistant" {
 			return true
 		}
 	}

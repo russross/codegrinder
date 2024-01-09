@@ -23,9 +23,6 @@ AOUTOBJECT=$(START) $(filter-out $(START), $(ALLOBJECT))
 
 all:	step
 
-test:	a.out
-	python3 lib/inout-runner.py input $(AOUT)
-
 grade:	a.out
 	rm -f test_details.xml inputs/*.actual
 	python3 lib/inout-runner.py input $(AOUT)
@@ -55,7 +52,7 @@ a.out:	$(AOUTOBJECT)
 	$(LD) $(LDFLAGS) $^
 
 setup:
-	sudo apt install gcc-riscv64-linux-gnu gdb-multiarch qemu-user-static python3 make
+	sudo apt install curl gcc-riscv64-linux-gnu gdb-multiarch git make micro python3 qemu-user-binfmt
 
 clean:
 	rm -f *.o lib/*.o *.out *.xml core .gdb_history

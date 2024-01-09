@@ -7,6 +7,8 @@ import sys
 
 delay = 0.01
 warmupdelay = 1.0
+postcrashlines = 15
+wronglines = 10
 bufsize = 2**16
 
 def main():
@@ -46,6 +48,8 @@ def main():
     warmup = True
     error = False
 
+    wrong = []
+
     while keepGoing:
         # wait for some output, and if we have input ready
         # check if we can send it
@@ -58,6 +62,11 @@ def main():
 
         # timeout? prepare some input to feed to the process
         if len(events) == 0 and len(nextInput) == 0:
+            # if we timeout after bad output, do not feed input or wait any longer
+            if len(wrong) > 0:
+                keepGoing = False
+                break
+
             if len(inputData) > 0:
                 # grab one line, or everything if there are no newlines
                 newline = inputData.find(b'\n')
@@ -76,6 +85,8 @@ def main():
                 data = os.read(stdout, bufsize)
                 if len(data) == 0 and len(partial) > 0:
                     print('\n!!ERROR!! Program output ended without a newline:')
+                    for line in wrong:
+                        print(repr(line.decode('utf-8')))
                     print(repr(partial.decode('utf-8')))
                     sys.exit(1)
                 elif len(data) == 0:
@@ -95,22 +106,19 @@ def main():
                     chunk = data[:newline+1]
                     data = data[len(chunk):]
 
+                    # is this line incorrect or does it follow an incorrect line?
+                    if len(wrong) > 0 or not outputData.startswith(chunk):
+                        wrong.append(chunk)
+
+                        # stop after a while
+                        if len(wrong) >= wronglines+5:
+                            keepGoing = False
+                            break
+
                     # does it match what we expected?
-                    if outputData.startswith(chunk):
+                    else:
                         print(chunk.decode('utf-8'), end='')
                         outputData = outputData[len(chunk):]
-                    else:
-                        print('\n!!INCORRECT OUTPUT!! Your next line of output was:')
-                        print(repr(chunk.decode('utf-8')))
-                        print('but the next line of output expected was:')
-                        newline = outputData.find(b'\n')
-                        if newline < 0:
-                            print(repr(outputData.decode('utf-8')))
-                        else:
-                            print(repr(outputData[:newline+1].decode('utf-8')))
-                        keepGoing = False
-                        error = True
-                        break
 
             if key.data == 'err':
                 # there is stderr output ready
@@ -134,6 +142,37 @@ def main():
                 inputData = inputData[count:]
                 nextInput = ''
 
+    if len(wrong) > 0:
+        # report incorrect output
+        if len(wrong) == 1:
+            print('\n!!INCORRECT OUTPUT!! Your next line of output was:')
+        else:
+            if len(wrong) >= wronglines+5:
+                wrong = wrong[:wronglines]
+            print(f'\n!!INCORRECT OUTPUT!! Your next {len(wrong)} lines of output were:')
+        for line in wrong:
+            print(repr(line.decode('utf-8')))
+
+        # gather the same number of correct output lines if possible
+        correct = []
+        for i in range(len(wrong)):
+            newline = outputData.find(b'\n')
+            if newline < 0:
+                correct.append(outputData)
+                break
+            else:
+                correct.append(outputData[:newline+1])
+                outputData = outputData[newline+1:]
+
+        # report expected output
+        if len(correct) == 1:
+            print('\nbut the next line of output expected was:')
+        else:
+            print(f'\nbut the next {len(correct)} lines of output expected were:')
+        for line in correct:
+            print(repr(line.decode('utf-8')))
+        error = True
+
     # wait for the child process to end
     proc.kill()
     proc.wait()
@@ -146,10 +185,24 @@ def main():
     # any input/output leftover that should have been consumed
     if not error and len(inputData) > 0:
         print('\n!!ERROR!! Program ended without reading all input. Unused input was:')
-        print(repr(inputData.decode('utf-8')))
+        lines = inputData.decode('utf-8').split('\n')[:-1]
+        if len(lines) < postcrashlines+5:
+            for line in lines:
+                print(repr(line + '\n'))
+        else:
+            for line in lines[:postcrashlines]:
+                print(repr(line + '\n'))
+            print(f'... (skipped {len(lines)-postcrashlines} additional lines of unread input)')
     if not error and len(outputData) > 0:
         print('\n!!ERROR!! Program ended but more output was expected. Expected output was:')
-        print(repr(outputData.decode('utf-8')))
+        lines = outputData.decode('utf-8').split('\n')[:-1]
+        if len(lines) < postcrashlines+5:
+            for line in lines:
+                print(repr(line + '\n'))
+        else:
+            for line in lines[:postcrashlines]:
+                print(repr(line + '\n'))
+            print(f'... (skipped {len(lines)-postcrashlines} additional lines of expected output)')
     if error or len(inputData) > 0 or len(outputData) > 0:
         sys.exit(1)
 

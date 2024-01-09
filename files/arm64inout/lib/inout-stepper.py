@@ -146,10 +146,24 @@ def main():
     # any input/output leftover that should have been consumed
     if not error and len(inputData) > 0:
         print('\n!!ERROR!! Program ended without reading all input. Unused input was:')
-        print(repr(inputData.decode('utf-8')))
+        lines = inputData.decode('utf-8').split('\n')[:-1]
+        if len(lines) < 20:
+            for line in lines:
+                print(repr(line + '\n'))
+        else:
+            for line in lines[:15]:
+                print(repr(line + '\n'))
+            print(f'... (skipped {len(lines)-15} additional lines of unread input)')
     if not error and len(outputData) > 0:
         print('\n!!ERROR!! Program ended but more output was expected. Expected output was:')
-        print(repr(outputData.decode('utf-8')))
+        lines = outputData.decode('utf-8').split('\n')[:-1]
+        if len(lines) < 20:
+            for line in lines:
+                print(repr(line + '\n'))
+        else:
+            for line in lines[:15]:
+                print(repr(line + '\n'))
+            print(f'... (skipped {len(lines)-15} additional lines of expected output)')
     if error or len(inputData) > 0 or len(outputData) > 0:
         sys.exit(1)
 

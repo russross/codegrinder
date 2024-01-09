@@ -880,7 +880,7 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 	if bundle.Commit.Note != "" {
 		note = " (" + bundle.Commit.Note + ")"
 	}
-	if bundle.Commit.Action == "" && bundle.CommitSignature == "" {
+	if bundle.Commit.Action == "" && bundle.CommitSignature == "" && bundle.Commit.Note != "web autosave" {
 		log.Printf("sync request: user %s syncing %s step %d%s",
 			currentUser.Name, problem.Note, bundle.Commit.Step, note)
 	} else if bundle.Commit.Action != "" && bundle.CommitSignature == "" {
