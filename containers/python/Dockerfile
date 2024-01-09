@@ -1,7 +1,7 @@
-FROM arm64v8/debian:bullseye
+FROM arm64v8/debian:bookworm
 MAINTAINER russ@russross.com
 
-RUN apt update && apt upgrade -y
+RUN apt update
 
 RUN apt install -y --no-install-recommends \
     make \
@@ -25,7 +25,7 @@ RUN apt install -y --no-install-recommends \
     python3-dev \
     libportmidi-dev    
 
-RUN pip3 install unittest-xml-reporting cisc108 pygame
+RUN pip3 install --break-system-packages unittest-xml-reporting cisc108 pygame
 
 RUN mkdir /home/student && chmod 777 /home/student
 USER 2000

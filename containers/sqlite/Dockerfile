@@ -1,7 +1,7 @@
-FROM arm64v8/debian:bullseye
+FROM arm64v8/debian:bookworm
 MAINTAINER russ@russross.com
 
-RUN apt update && apt upgrade -y
+RUN apt update
 
 RUN apt install -y --no-install-recommends \
     make \
