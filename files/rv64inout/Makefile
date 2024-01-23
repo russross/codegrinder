@@ -3,6 +3,16 @@
 
 ASFLAGS=-g --warn --fatal-warnings -march=rv64im
 LDFLAGS=--fatal-warnings
+ifneq ("$(shell which riscv64-linux-gnu-as)", "")
+	PREFIX=riscv64-linux-gnu-
+else ifneq ("$(shell which riscv64-unknown-elf-as)", "")
+	PREFIX=riscv64-unknown-elf-
+else ifneq ("$(shell which riscv64-alpine-linux-musl-as)", "")
+	PREFIX=riscv64-alpine-linux-musl-
+else
+	PREFIX=
+endif
+
 ifeq ("$(shell uname -m)", "riscv64")
 	AS=as
 	LD=ld
@@ -10,8 +20,8 @@ ifeq ("$(shell uname -m)", "riscv64")
 	AOUT=./a.out
 	AOUTDEBUG=./a.out
 else
-	AS=riscv64-linux-gnu-as
-	LD=riscv64-linux-gnu-ld
+	AS=$(PREFIX)as
+	LD=$(PREFIX)ld
 	GDB=gdb-multiarch
 	AOUT=qemu-riscv64 ./a.out
 	AOUTDEBUG=qemu-riscv64 -g 2810 ./a.out
