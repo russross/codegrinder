@@ -6,7 +6,7 @@ an LMS such as Canvas using the LTI protocol.
 Project status
 ==============
 
-This is a tool we use internally at Dixie State University in our
+This is a tool we use internally at Utah Tech University in our
 Computer Science program. It is pretty stable and we have been using
 it for years, but it is mostly an internal project. I recommend
 getting in touch if you would like to use it.
@@ -51,7 +51,7 @@ This repository currently hosts three tools:
 Installation
 ============
 
-All instructions here assume a Debian Buster or Ubuntu Server 20.04
+All instructions here assume a Debian Bookworm or Ubuntu Server 22.04
 server environment.
 
 
@@ -241,7 +241,7 @@ on the use case. Please contact me if you wish to discuss this.
 
 
 CodeGrinder programming exercise system
-Copyright © 2016–2020  Russ Ross
+Copyright © 2016–2024  Russ Ross
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU Affero General Public License as
