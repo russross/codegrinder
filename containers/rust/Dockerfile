@@ -1,15 +1,10 @@
-FROM arm64v8/debian:bookworm
+FROM arm64v8/alpine:3.19
 MAINTAINER russ@russross.com
 
-RUN apt update
-
-RUN apt install -y --no-install-recommends \
+RUN apk add --no-cache \
     make \
     python3
-RUN apt install -y --no-install-recommends \
-    build-essential \
-    gdb
-RUN apt install -y --no-install-recommends \
+RUN apk add --no-cache \
     cargo
 
 ADD https://computing.utahtech.edu/cs/3520/cargo2junit /usr/local/bin/

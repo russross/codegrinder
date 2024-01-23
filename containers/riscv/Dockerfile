@@ -1,15 +1,12 @@
-FROM arm64v8/debian:bookworm
+FROM arm64v8/alpine:edge
 MAINTAINER russ@russross.com
 
-RUN apt update
-
-RUN apt install -y --no-install-recommends \
+RUN apk add --no-cache \
     make \
     python3
-RUN apt install -y --no-install-recommends \
-    binutils-riscv64-linux-gnu \
-    gcc-riscv64-linux-gnu \
-    qemu-user
+RUN apk add --no-cache \
+    binutils-riscv64 \
+    qemu-riscv64
 
 RUN mkdir /home/student && chmod 777 /home/student
 USER 2000
