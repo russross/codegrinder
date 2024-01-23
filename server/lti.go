@@ -23,7 +23,7 @@ import (
 )
 
 // bootstrap assignment URL is something like:
-// https://codegrinder.cs.dixie.edu/v2/lti/problem_sets/cli/bootstrap-codegrinder
+// https://codegrinder.cs.utahtech.edu/v2/lti/problem_sets/cli/bootstrap-codegrinder
 const bootstrapAssignmentName string = "bootstrap-codegrinder"
 const canvasDateFormat string = "2006-01-02T15:04:05Z"
 
@@ -32,7 +32,7 @@ type LTIRequest struct {
 	PersonNameFull                   string  `form:"lis_person_name_full"`                     // Russ Ross
 	PersonNameFamily                 string  `form:"lis_person_name_family"`                   // Ross
 	PersonNameGiven                  string  `form:"lis_person_name_given"`                    // Russ
-	PersonContactEmailPrimary        string  `form:"lis_person_contact_email_primary"`         // russ@dixie.edu
+	PersonContactEmailPrimary        string  `form:"lis_person_contact_email_primary"`         // russ.ross@utahtech.edu
 	UserID                           string  `form:"user_id"`                                  // <opaque>: unique per user
 	Roles                            string  `form:"roles"`                                    // Instructor, Student; note: varies per course
 	UserImage                        string  `form:"user_image"`                               // https:// ... user picture
@@ -63,7 +63,7 @@ type LTIRequest struct {
 	CanvasUserID                     int64   `form:"custom_canvas_user_id"`                    // 353051
 	CanvasAssignmentTitle            string  `form:"custom_canvas_assignment_title"`           // YouFace Template
 	CanvasAssignmentID               int64   `form:"custom_canvas_assignment_id"`              // 1566693
-	CanvasAPIDomain                  string  `form:"custom_canvas_api_domain"`                 // dixie.instructure.com
+	CanvasAPIDomain                  string  `form:"custom_canvas_api_domain"`                 // utahtech.instructure.com
 	OAuthVersion                     string  `form:"oauth_version"`                            // 1.0
 	OAuthSignature                   string  `form:"oauth_signature"`                          // <opaque> base64
 	OAuthSignatureMethod             string  `form:"oauth_signature_method"`                   // HMAC-SHA1

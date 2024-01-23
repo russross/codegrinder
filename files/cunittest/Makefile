@@ -42,7 +42,7 @@ $(HOME)/.gdbinit:
 
 .s.o:
 ifneq ($(MACHINE), aarch64)
-	$(error this should only be run on the cs2810.cs.dixie.edu server)
+	$(error this should only be run on the cs2810.cs.utahtech.edu server)
 endif
 	as $(ASFLAGS) $< -o $@
 

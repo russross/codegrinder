@@ -13,7 +13,7 @@ grade:
 
 setup:
 	sudo apt install -y default-jre make curl unzip python3
-	curl -s http://cit.dixie.edu/cs/2810/nand2tetris.zip -o /tmp/nand2tetris.zip
+	curl -s https://computing.utahtech.edu/cs/2810/nand2tetris.zip -o /tmp/nand2tetris.zip
 	sudo rm -rf /usr/local/nand2tetris
 	sudo unzip -d /usr/local /tmp/nand2tetris.zip
 	sudo chmod 755 /usr/local/nand2tetris/tools/*.sh
