@@ -18,20 +18,27 @@ else
     PYTHONMAIN := NO_MAIN_PYTHON_FILE
 endif
 
-all:	step
+STEPPER_DELAY=0.01
+STEPPER_WARMUPDELAY=0.1
+STEPPER_POSTCRASHLINES=15
+STEPPER_WRONGLINES=10
+STEPPER_SUFFIX=input
+STEPPER_INDIR=inputs
+STEPPER_OUTDIR=inputs
+STEPPER_CMD=python3 $(PYTHONMAIN)
+export STEPPER_DELAY STEPPER_WARMUPDELAY STEPPER_POSTCRASHLINES STEPPER_WRONGLINES
+export STEPPER_SUFFIX STEPPER_INDIR STEPPER_OUTDIR STEPPER_CMD
 
-test:
-	mypy --strict *.py
-	python3 lib/inout-runner.py input python3 $(PYTHONMAIN)
+all:	step
 
 step:
 	mypy --strict *.py
-	python3 lib/inout-stepall.py input python3 $(PYTHONMAIN)
+	python3 lib/stepper
 
 grade:
 	rm -f test_detail.xml inputs/*.actual
 	mypy --strict *.py
-	python3 lib/inout-runner.py input python3 $(PYTHONMAIN)
+	python3 lib/grader
 
 shell:
 	python3

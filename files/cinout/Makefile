@@ -1,17 +1,24 @@
 .SUFFIXES:
-.SUFFIXES: .o .c .out .xml .log
+.SUFFIXES: .o .c .out .xml .log .input .expected .actual
 
 CFLAGS=-g -Os -std=c99 -Wpedantic -Wall -Wextra -Werror
 AOUTOBJECT=$(patsubst %.c,%.o,$(wildcard *.c))
+STEPPER_DELAY=0.01
+STEPPER_WARMUPDELAY=0.1
+STEPPER_POSTCRASHLINES=15
+STEPPER_WRONGLINES=10
+STEPPER_SUFFIX=input
+STEPPER_INDIR=inputs
+STEPPER_OUTDIR=inputs
+STEPPER_CMD=./a.out
+export STEPPER_DELAY STEPPER_WARMUPDELAY STEPPER_POSTCRASHLINES STEPPER_WRONGLINES
+export STEPPER_SUFFIX STEPPER_INDIR STEPPER_OUTDIR STEPPER_CMD
 
 all:	step
 
-test:	a.out
-	python3 lib/inout-runner.py input ./a.out
-
 grade:	a.out
 	rm -f test_detail.xml inputs/*.actual
-	python3 lib/inout-runner.py input ./a.out
+	python3 lib/grader
 
 valgrind:	a.out
 	rm -f valgrind.log
@@ -22,7 +29,7 @@ run:	a.out
 	./a.out
 
 step:	a.out
-	python3 lib/inout-stepall.py input ./a.out
+	python3 lib/stepper
 
 debug:	a.out $(HOME)/.gdbinit
 	gdb ./a.out

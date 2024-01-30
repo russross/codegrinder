@@ -10,7 +10,7 @@ else ifneq ("$(shell which riscv64-unknown-elf-as)", "")
 else ifneq ("$(shell which riscv64-alpine-linux-musl-as)", "")
 	PREFIX=riscv64-alpine-linux-musl-
 else
-	PREFIX=
+	PREFIX=unknown
 endif
 
 ifeq ("$(shell uname -m)", "riscv64")
@@ -31,17 +31,28 @@ ALLOBJECT=$(sort $(patsubst %.s,%.o,$(wildcard *.s))) $(sort $(patsubst %.s,%.o,
 START=$(filter start.o, $(ALLOBJECT))
 AOUTOBJECT=$(START) $(filter-out $(START), $(ALLOBJECT))
 
+STEPPER_DELAY=0.01
+STEPPER_WARMUPDELAY=0.1
+STEPPER_POSTCRASHLINES=15
+STEPPER_WRONGLINES=10
+STEPPER_SUFFIX=input
+STEPPER_INDIR=inputs
+STEPPER_OUTDIR=inputs
+STEPPER_CMD=$(AOUT)
+export STEPPER_DELAY STEPPER_WARMUPDELAY STEPPER_POSTCRASHLINES STEPPER_WRONGLINES
+export STEPPER_SUFFIX STEPPER_INDIR STEPPER_OUTDIR STEPPER_CMD
+
 all:	step
 
 grade:	a.out
 	rm -f test_details.xml inputs/*.actual
-	python3 lib/inout-runner.py input $(AOUT)
+	python3 lib/grader
 
 run:	a.out
 	$(AOUT)
 
 step:	a.out
-	python3 lib/inout-stepall.py input $(AOUT)
+	python3 lib/stepper
 
 fordebug:	a.out
 	$(AOUTDEBUG)
