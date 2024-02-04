@@ -1,21 +1,10 @@
 all:
 	# run "make amd64" to build all Intel-based containers
-	# run "make arm32" to build all 32-bit ARM-based containers
 	# run "make arm64" to build all 64-bit ARM-based containers
-
-arm32: .proxy-arm32asm
 
 arm64: .proxy-c .proxy-cpp .proxy-forth .proxy-go .proxy-nand2tetris .proxy-prolog .proxy-python .proxy-riscv .proxy-rust .proxy-sqlite .proxy-standardml
 
 amd64: .proxy-cpp .proxy-go
-
-.proxy-arm32asm: arm32asm/Dockerfile
-	docker build --pull -t codegrinder/arm32asm arm32asm
-	touch .proxy-arm32asm
-
-.proxy-arm64asm: arm64asm/Dockerfile
-	docker build --pull -t codegrinder/arm64asm arm64asm
-	touch .proxy-arm64asm
 
 .proxy-c: c/Dockerfile
 	docker build --pull -t codegrinder/c c

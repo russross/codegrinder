@@ -1,5 +1,0 @@
-core
-*.o
-*.out
-*.ppm
-.gdb_history
