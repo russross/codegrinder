@@ -10,5 +10,4 @@ RUN apk add --no-cache \
     qemu-riscv64
 
 RUN mkdir /home/student && chmod 777 /home/student
-USER 2000
 WORKDIR /home/student

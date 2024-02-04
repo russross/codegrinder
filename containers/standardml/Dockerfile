@@ -16,5 +16,4 @@ RUN apt install -y --no-install-recommends \
 RUN ln -rsf /usr/lib/aarch64-linux-gnu/libpolyml.so.9.0.0 /usr/lib/aarch64-linux-gnu/libpolyml.so
 
 RUN mkdir /home/student && chmod 777 /home/student
-USER 2000
 WORKDIR /home/student

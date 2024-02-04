@@ -28,5 +28,4 @@ RUN apt install -y --no-install-recommends \
 RUN pip3 install --break-system-packages unittest-xml-reporting cisc108 pygame
 
 RUN mkdir /home/student && chmod 777 /home/student
-USER 2000
 WORKDIR /home/student

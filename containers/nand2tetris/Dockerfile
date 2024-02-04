@@ -15,5 +15,4 @@ RUN unzip -d /usr/local /tmp/nand2tetris.zip && \
     rm -f /tmp/nand2tetris.zip
 
 RUN mkdir /home/student && chmod 777 /home/student
-USER 2000
 WORKDIR /home/student
