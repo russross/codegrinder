@@ -1,19 +1,15 @@
-FROM arm64v8/debian:bookworm
+FROM arm64v8/alpine:edge
 MAINTAINER russ@russross.com
 
-RUN apt update
-
-RUN apt install -y --no-install-recommends \
+RUN apk add --no-cache \
     make \
     python3
-RUN apt install -y --no-install-recommends \
-    build-essential \
-    gdb
-RUN apt install -y --no-install-recommends \
+RUN apk add --no-cache \
+    build-base
+RUN apk add --no-cache \
     check \
-    valgrind \
-    libgtest-dev \
-    pkg-config
+    pkgconf \
+    valgrind
 
 RUN mkdir /home/student && chmod 777 /home/student
 USER 2000

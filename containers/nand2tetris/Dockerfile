@@ -1,13 +1,11 @@
-FROM arm64v8/debian:bookworm
+FROM arm64v8/alpine:edge
 MAINTAINER russ@russross.com
 
-RUN apt update
-
-RUN apt install -y --no-install-recommends \
+RUN apk add --no-cache \
     make \
     python3
-RUN apt install -y --no-install-recommends \
-    default-jre-headless \
+RUN apk add --no-cache \
+    openjdk8-jre \
     unzip
 
 # install software suite

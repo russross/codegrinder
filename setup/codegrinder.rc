@@ -1,0 +1,15 @@
+#!/sbin/openrc-run
+
+depend() {
+    need net
+    need docker
+}
+
+command="/usr/local/bin/codegrinder"
+command_args="-daycare"
+command_user="russ:russ"
+command_background="true"
+pidfile="/run/${RC_SVCNAME}.pid"
+capabilities="^cap_net_bind_service"
+output_logger="logger -t codegrinder"
+error_logger="logger -t codegrinder"

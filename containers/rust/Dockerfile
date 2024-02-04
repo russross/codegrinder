@@ -1,4 +1,4 @@
-FROM arm64v8/alpine:3.19
+FROM arm64v8/alpine:edge
 MAINTAINER russ@russross.com
 
 RUN apk add --no-cache \
