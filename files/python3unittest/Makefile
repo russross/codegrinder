@@ -40,7 +40,7 @@ stylecheck:
 	pep8 $(PYTHONSOURCE)
 
 setup:
-	sudo apt install -y make python3 python3-pip python3-setuptools python3-six diffutils
+	sudo apt install -y diffutils icdiff make python3 python3-pip python3-setuptools python3-six
 	sudo pip3 install unittest-xml-reporting cisc108 pygame
 
 clean:

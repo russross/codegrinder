@@ -12,7 +12,7 @@ grade:
 	python3 bin/testrunner.py
 
 setup:
-	sudo apt install -y default-jre make curl unzip python3
+	sudo apt install -y curl default-jre icdiff make python3 unzip
 	curl -s https://computing.utahtech.edu/cs/2810/nand2tetris.zip -o /tmp/nand2tetris.zip
 	sudo rm -rf /usr/local/nand2tetris
 	sudo unzip -d /usr/local /tmp/nand2tetris.zip

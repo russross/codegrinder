@@ -45,7 +45,7 @@ a.out:	$(AOUTOBJECT)
 
 setup:
 	# install build tools, unit test library, and valgrind
-	sudo apt install -y build-essential make gdb valgrind python3
+	sudo apt install -y build-essential curl gdb icdiff make python3 valgrind
 
 clean:
 	rm -f $(AOUTOBJECT) *.out *.xml *.log core

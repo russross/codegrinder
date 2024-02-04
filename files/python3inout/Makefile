@@ -56,7 +56,7 @@ stylecheck:
 	pep8 $(PYTHONSOURCE)
 
 setup:
-	sudo apt install -y make mypy python3 python3-pip python3-six diffutils
+	sudo apt install -y diffutils icdiff make mypy python3 python3-pip python3-six
 	sudo pip3 install unittest-xml-reporting
 
 clean:

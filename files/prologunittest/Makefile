@@ -28,7 +28,7 @@ shell:
 	swipl
 
 setup:
-	sudo apt install -y swi-prolog make python3
+	sudo apt install -y icdiff make python3 swi-prolog
 
 clean:
 	rm -f test.out test_detail.xml

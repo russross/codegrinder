@@ -63,8 +63,7 @@ unittest.out:	$(UNITOBJECT)
 	gcc $(CFLAGS) $^ $(CHECKLIBS) -o $@
 
 setup:
-	# install build tools, unit test library, and valgrind
-	sudo apt install -y build-essential make gdb valgrind check pkg-config python3
+	sudo apt install -y build-essential check gdb icdiff make pkg-config python3 valgrind
 
 clean:
 	rm -f $(ALLOBJECT) $(CHECKC) *.out *.xml *.log core

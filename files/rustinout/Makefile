@@ -21,7 +21,7 @@ target/debug/student:	src/*.rs Cargo.toml
 	cargo build
 
 setup:
-	sudo apt install -y cargo make
+	sudo apt install -y cargo icdiff make python3
 
 clean:
 	cargo clean

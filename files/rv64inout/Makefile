@@ -73,7 +73,7 @@ a.out:	$(AOUTOBJECT)
 	$(LD) $(LDFLAGS) $^
 
 setup:
-	sudo apt install curl gcc-riscv64-linux-gnu gdb-multiarch git make micro python3 qemu-user-binfmt
+	sudo apt install curl gcc-riscv64-linux-gnu gdb-multiarch icdiff make python3 qemu-user-binfmt
 
 clean:
 	rm -f *.o lib/*.o *.out *.xml core .gdb_history

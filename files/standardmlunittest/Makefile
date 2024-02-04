@@ -49,7 +49,7 @@ ifeq ($(libcount), 1)
 endif
 
 setup:
-	sudo apt install -y polyml rlwrap make
+	sudo apt install -y icdiff make polyml python3 rlwrap
 
 clean:
 	rm -f test_detail.xml a.out

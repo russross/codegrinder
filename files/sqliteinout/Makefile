@@ -33,7 +33,7 @@ $(HOME)/.sqliterc:	lib/.sqliterc
 	cp lib/.sqliterc $(HOME)/
 
 setup:
-	sudo apt install -y sqlite3 make python3
+	sudo apt install -y icdiff make python3 sqlite3
 
 clean:
 	rm -f test_detail.xml database.db outputs/*.actual

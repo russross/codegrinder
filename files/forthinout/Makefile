@@ -37,7 +37,7 @@ shell:
 	gforth
 
 setup:
-	sudo apt install -y gforth make python3
+	sudo apt install -y gforth icdiff make python3
 
 clean:
 	rm -f test_detail.xml inputs/*.actual

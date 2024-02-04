@@ -53,7 +53,7 @@ unittest.out: $(UNITOBJECT) $(TESTOBJECT)
 
 # install build tools, sources for gtest, and valgrind
 setup:
-	sudo apt install -y build-essential make gdb libgtest-dev valgrind
+	sudo apt install -y build-essential gdb icdiff libgtest-dev make python3 valgrind
 
 clean:
 	rm -f $(UNITOBJECT) $(LIBOBJECT) $(TESTOBJECT) *.out *.xml

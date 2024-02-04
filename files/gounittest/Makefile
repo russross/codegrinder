@@ -15,7 +15,7 @@ go2xunit/go2xunit:
 	cd go2xunit && go build
 
 setup:
-	sudo apt install -y make golang
+	sudo apt install -y icdiff make golang python3
 
 clean:
 	rm -f *.xml go2xunit/go2xunit

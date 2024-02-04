@@ -1,6 +1,9 @@
 .SUFFIXES:
 .SUFFIXES: .go .xml .out
 
+GODEBUG=installgoroot=all
+export GODEBUG
+
 STEPPER_DELAY=0.01
 STEPPER_WARMUPDELAY=1.0
 STEPPER_POSTCRASHLINES=15
@@ -29,7 +32,7 @@ a.out:	*.go
 	go build -o a.out
 
 setup:
-	sudo apt install -y golang make python3
+	sudo apt install -y golang icdiff make python3
 
 clean:
 	rm -f *.out *.xml

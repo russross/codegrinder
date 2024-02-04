@@ -13,7 +13,7 @@ grade:
 	cargo test $(TESTFLAGS) | cargo2junit > test_detail.xml
 
 setup:
-	sudo apt install -y cargo make
+	sudo apt install -y cargo icdiff make python3
 	cargo install cargo2junit
 
 clean:
