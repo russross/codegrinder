@@ -6,10 +6,7 @@ RUN apk add --no-cache \
     make \
     python3
 RUN apk add --no-cache \
-    build-base
-RUN apk add --no-cache \
-    check \
-    pkgconf \
+    build-base \
     valgrind
 
 RUN mkdir /home/student && chmod 777 /home/student

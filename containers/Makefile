@@ -2,7 +2,7 @@ all:
 	# run "make amd64" to build all Intel-based containers
 	# run "make arm64" to build all 64-bit ARM-based containers
 
-arm64: .proxy-c .proxy-cpp .proxy-forth .proxy-go .proxy-nand2tetris .proxy-prolog .proxy-python .proxy-riscv .proxy-rust .proxy-sqlite .proxy-standardml
+arm64: .proxy-c .proxy-cpp .proxy-forth .proxy-go .proxy-nand2tetris .proxy-prolog .proxy-python .proxy-riscv .proxy-rust .proxy-sqlite
 
 amd64: .proxy-cpp .proxy-go
 

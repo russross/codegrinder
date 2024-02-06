@@ -10,21 +10,12 @@ RUN apk add --no-cache \
 RUN apk add --no-cache \
     py3-mypy \
     py3-pip \
+    py3-pygame \
     py3-setuptools \
     py3-six \
     diffutils
- RUN apk add --no-cache \
-    sdl2-dev \
-    sdl2_image-dev \
-    sdl2_mixer-dev \
-    sdl2_ttf-dev \
-    freetype-dev \
-    jpeg-dev \
-    python3-dev \
-    portmidi-dev
 
-RUN pip3 install --break-system-packages unittest-xml-reporting cisc108 pygame
+RUN pip3 install --break-system-packages unittest-xml-reporting cisc108
 
 RUN mkdir /home/student && chmod 777 /home/student
 WORKDIR /home/student
-
