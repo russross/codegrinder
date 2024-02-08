@@ -1,8 +1,11 @@
 #!/sbin/openrc-run
 
 depend() {
-    need net
     need docker
+}
+
+start_pre() {
+    ewaitfile 30 /var/run/docker.sock
 }
 
 command="/usr/local/bin/codegrinder"

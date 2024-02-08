@@ -561,7 +561,7 @@ func setupDB(path string) *sql.DB {
 
 	options :=
 		"?" + "_busy_timeout=10000" +
-			"&" + "_case_sensitive_like=OFF" +
+			"&" + "_cache_size=-524288" +
 			"&" + "_foreign_keys=ON" +
 			"&" + "_journal_mode=DELETE" +
 			"&" + "mode=rw" +
