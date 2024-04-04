@@ -560,12 +560,14 @@ func setupDB(path string) *sql.DB {
 	meddler.Default = meddler.SQLite
 
 	options :=
-		"?" + "_busy_timeout=10000" +
+		"?" + "mode=rw" +
+			"&" + "_busy_timeout=10000" +
 			"&" + "_cache_size=-524288" +
 			"&" + "_foreign_keys=ON" +
 			"&" + "_journal_mode=DELETE" +
-			"&" + "mode=rw" +
-			"&" + "_synchronous=FULL"
+			"&" + "_mmap_size=1000000000" +
+			"&" + "_synchronous=FULL" +
+			"&" + "_temp_store=MEMORY"
 	db, err := sql.Open("sqlite3", path+options)
 	if err != nil {
 		log.Fatalf("error opening database: %v", err)

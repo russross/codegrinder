@@ -2,6 +2,7 @@
 
 depend() {
     need docker
+    need ntpd
 }
 
 start_pre() {

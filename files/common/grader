@@ -13,8 +13,11 @@ suffix          = os.environ['STEPPER_SUFFIX']
 indir           = os.environ['STEPPER_INDIR']
 outdir          = os.environ['STEPPER_OUTDIR']
 cmd             = os.environ['STEPPER_CMD'].split()
+outname         = 'test_detail.xml'
 
 def main():
+    if os.path.exists(outname): os.remove(outname)
+
     # get the list of input files to process
     infiles = sorted(glob.glob(os.path.join(indir, '*.' + suffix)))
 
@@ -123,6 +126,7 @@ def main():
     testsuites.set('time', str(totaltime))
 
     tree = ET.ElementTree(element=testsuites)
+    if os.path.exists(outname): os.remove(outname)
     tree.write('test_detail.xml', encoding='utf-8', xml_declaration=True)
 
     print('\nPassed {}/{} tests in {:.2} seconds'.format(tests-failures, tests, totaltime))

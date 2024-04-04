@@ -1,7 +1,7 @@
 .SUFFIXES:
 .SUFFIXES: .o .c .out .xml .log .input .expected .actual
 
-CFLAGS=-g -Os -std=c99 -Wpedantic -Wall -Wextra -Werror
+CFLAGS=-g -Os -std=c17 -Wpedantic -Wall -Wextra -Werror
 AOUTOBJECT=$(patsubst %.c,%.o,$(wildcard *.c))
 STEPPER_DELAY=0.01
 STEPPER_WARMUPDELAY=0.1
