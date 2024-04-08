@@ -270,11 +270,26 @@ func main() {
 		var dbMutex sync.Mutex
 
 		// martini service: wrap handler in a transaction
-		withTx := func(c martini.Context, w http.ResponseWriter) {
+		withTx := func(c martini.Context, r *http.Request, w http.ResponseWriter) {
 			// start a transaction
 			dbMutex.Lock()
 			defer dbMutex.Unlock()
 
+			start := time.Now()
+			defer func() {
+				elapsed := time.Since(start)
+				if elapsed > 500*time.Millisecond {
+					switch {
+					case elapsed < time.Second:
+						elapsed -= elapsed % time.Millisecond
+					case elapsed < 10*time.Second:
+						elapsed -= elapsed % (10 * time.Millisecond)
+					default:
+						elapsed -= elapsed % (100 * time.Millisecond)
+					}
+					log.Printf("transaction took %v, req was %s", elapsed, r.RequestURI)
+				}
+			}()
 			tx, err := db.Begin()
 			if err != nil {
 				loggedHTTPErrorf(w, http.StatusInternalServerError, "db error starting transaction: %v", err)
