@@ -679,7 +679,11 @@ func gradeQuizClass(now time.Time, tx *sql.Tx, quizID int64) error {
 	}
 
 	// grade by assignment
-	messages := make(map[*Assignment]string)
+	type postBack struct {
+		asst *Assignment
+		msg  string
+	}
+	var todo []postBack
 
 	index := 0
 	for _, assignment := range assignments {
@@ -713,7 +717,7 @@ func gradeQuizClass(now time.Time, tx *sql.Tx, quizID int64) error {
 		var report bytes.Buffer
 
 		// TODO: write out a quiz grade report to post to the LMS
-		messages[assignment] = report.String()
+		todo = append(todo, postBack{assignment, report.String()})
 
 		index = end
 	}
@@ -721,23 +725,24 @@ func gradeQuizClass(now time.Time, tx *sql.Tx, quizID int64) error {
 	// send grade to the LMS in a goroutine
 	// so we can wrap up the transaction and return to the user
 	go func() {
-		start := time.Now()
-	OUTER:
-		for _, asst := range assignments {
-			msg := messages[asst]
-
-			// try up to 10 times before giving up
-			tries := 10
-			minSleepTime := 10 * time.Second
-			maxSleepTime := 5 * time.Minute
-			sleepTime := minSleepTime
-			for i := 0; i < tries; i++ {
-				err := saveGrade(asst, msg)
-				if err == nil {
-					continue OUTER
+		tries := 10
+		minSleepTime := 10 * time.Second
+		maxSleepTime := 5 * time.Minute
+		sleepTime := minSleepTime
+		for i := 0; len(todo) > 0 && i < tries; i++ {
+			start := time.Now()
+			var fails []postBack
+			for _, elt := range todo {
+				err := saveGrade(elt.asst, elt.msg)
+				if err != nil {
+					log.Printf("error posting grade back to LMS (attempt %d/%d): %v", i+1, tries, err)
+					fails = append(fails, elt)
 				}
-				log.Printf("error posting grade back to LMS (attempt %d/%d): %v", i+1, tries, err)
-				if i+1 < 10 {
+			}
+			log.Printf("posted %d/%d grades to the LMS in %v", len(todo)-len(fails), len(todo), time.Since(start))
+			todo = fails
+			if len(todo) > 0 {
+				if i+1 < tries {
 					log.Printf("  will try again in %v", sleepTime)
 					time.Sleep(sleepTime)
 					sleepTime *= 2
@@ -749,7 +754,6 @@ func gradeQuizClass(now time.Time, tx *sql.Tx, quizID int64) error {
 				}
 			}
 		}
-		log.Printf("posted %d grades to the LMS in %v", len(assignments), time.Since(start))
 	}()
 
 	return nil
