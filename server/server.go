@@ -577,11 +577,10 @@ func setupDB(path string) *sql.DB {
 	options :=
 		"?" + "mode=rw" +
 			"&" + "_busy_timeout=10000" +
-			"&" + "_cache_size=-524288" +
+			"&" + "_cache_size=-20000" +
 			"&" + "_foreign_keys=ON" +
 			"&" + "_journal_mode=DELETE" +
-			"&" + "_mmap_size=1000000000" +
-			"&" + "_synchronous=FULL" +
+			"&" + "_synchronous=NORMAL" +
 			"&" + "_temp_store=MEMORY"
 	db, err := sql.Open("sqlite3", path+options)
 	if err != nil {

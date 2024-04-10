@@ -136,7 +136,8 @@ CREATE TABLE assignments (
 CREATE UNIQUE INDEX assignments_unique_user ON assignments (user_id, lti_id);
 CREATE UNIQUE INDEX assignments_grade_id ON assignments (grade_id);
 CREATE INDEX assignments_instructor_lti_id ON assignments (instructor, lti_id);
-CREATE INDEX assignments_course_id ON assignments (course_id);
+CREATE INDEX assignments_course_id_problem_set_id ON assignments (course_id, problem_set_id);
+CREATE INDEX assignments_user_id_problem_set_id ON assignments (user_id, problem_set_id);
 CREATE INDEX assignments_problem_set_id ON assignments (problem_set_id);
 
 CREATE TABLE commits (
