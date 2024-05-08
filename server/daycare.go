@@ -226,6 +226,10 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		return
 	}
 	step := steps[commit.Step-1]
+	if step == nil {
+		logAndTransmitErrorf("required step %d is nil", commit.Step)
+		return
+	}
 	if step.Step != commit.Step {
 		logAndTransmitErrorf("step number %d in the problem thinks it is step number %d", commit.Step, step.Step)
 		return

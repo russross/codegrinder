@@ -129,11 +129,23 @@ func (problem *Problem) Normalize(now time.Time, steps []*ProblemStep) error {
 	if len(steps) == 0 {
 		return fmt.Errorf("problem must have at least one step")
 	}
+	incomplete := false
 	for n, step := range steps {
+		if step == nil {
+			// this is a commit bundle and does not include all steps, so
+			// do not try to validate and/or normalize whitelist
+			//
+			// whitelist is handled in problem validation
+			incomplete = true
+			continue
+		}
 		if err := step.Normalize(int64(n) + 1); err != nil {
 			return err
 		}
 
+		if incomplete {
+			continue
+		}
 		if step.Whitelist == nil {
 			step.Whitelist = make(map[string]bool)
 		}
@@ -198,7 +210,11 @@ func (problem *Problem) ComputeSignature(secret string, steps []*ProblemStep) st
 	v["options"] = problem.Options
 	v.Add("createdAt", problem.CreatedAt.Round(time.Second).UTC().Format(time.RFC3339))
 	v.Add("updatedAt", problem.UpdatedAt.Round(time.Second).UTC().Format(time.RFC3339))
-	for _, step := range steps {
+	for n, step := range steps {
+		if step == nil {
+			v.Add(fmt.Sprintf("step-%d-nil", n+1), "")
+			continue
+		}
 		v.Add(fmt.Sprintf("step-%d-problem-type", step.Step), step.ProblemType)
 		v.Add(fmt.Sprintf("step-%d-note", step.Step), step.Note)
 		v.Add(fmt.Sprintf("step-%d-weight", step.Step), strconv.FormatFloat(step.Weight, 'g', -1, 64))

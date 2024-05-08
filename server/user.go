@@ -637,32 +637,39 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
 	}
-	steps := []*ProblemStep{}
-	if err = meddler.QueryAll(tx, &steps, `SELECT * FROM problem_steps WHERE problem_id = ? ORDER BY step`, commit.ProblemID); err != nil {
+
+	// get the required step, but keep a slice with empty entries for the other steps
+	// this is for backward compatibility: we used to pass around the full list of steps
+	var stepCount int64
+	if err = tx.QueryRow(`SELECT COUNT(1) FROM problem_steps WHERE problem_id = ?`, commit.ProblemID).Scan(&stepCount); err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
 	}
-	if len(steps) == 0 {
-		loggedHTTPErrorf(w, http.StatusInternalServerError, "no steps found for problem %s (%d)", problem.Unique, problem.ID)
+	if stepCount < 1 {
+		loggedHTTPErrorf(w, http.StatusInternalServerError, "no steps found for problem %d", commit.ProblemID)
 		return
 	}
-
-	// filter out solutions
-	for _, step := range steps {
-		step.Solution = nil
-	}
-
 	if commit.Step < 1 {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "commit has step number %d, which is invalid", commit.Step)
 		return
 	}
-	if commit.Step > int64(len(steps)) {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "commit has step number %d, but there are only %d steps in the problem", commit.Step, len(steps))
+	if commit.Step > stepCount {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "commit has step number %d, but there are only %d steps in the problem", commit.Step, stepCount)
 		return
 	}
+	steps := make([]*ProblemStep, stepCount)
+	var step ProblemStep
+	steps[commit.Step-1] = &step
+	if err = meddler.QueryRow(tx, &step, `SELECT * FROM problem_steps WHERE problem_id = ? AND step = ?`, commit.ProblemID, commit.Step); err != nil {
+		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
+		return
+	}
+	
+	// filter out solution
+	step.Solution = nil
 
 	// get the problem type for this step
-	problemType, err := getProblemType(tx, steps[commit.Step-1].ProblemType)
+	problemType, err := getProblemType(tx, step.ProblemType)
 	if err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "error loading problem type: %v", err)
 		return
@@ -694,7 +701,7 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 	}
 
 	// validate commit
-	if err := commit.Normalize(now, steps[commit.Step-1].Whitelist); err != nil {
+	if err := commit.Normalize(now, step.Whitelist); err != nil {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "%v", err)
 		return
 	}
