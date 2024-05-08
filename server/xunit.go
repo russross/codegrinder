@@ -70,7 +70,7 @@ func runAndParseXUnit(n *Nanny, cmd []string) {
 	filename := "test_detail.xml"
 
 	// run tests with XML output
-	_, _, _, status, err := n.Exec(cmd, nil, false)
+	_, _, _, status, err := n.Exec(cmd)
 	if err != nil {
 		n.ReportCard.LogAndFailf("Error running unit tests: %v", err)
 		return
@@ -203,7 +203,7 @@ func runAndParseCheckXML(n *Nanny, cmd []string) {
 	filename := "test_detail.xml"
 
 	// run tests with XML output
-	_, _, _, status, err := n.Exec(cmd, nil, false)
+	_, _, _, status, err := n.Exec(cmd)
 	if err != nil {
 		n.ReportCard.LogAndFailf("Error running unit tests: %v", err)
 		return

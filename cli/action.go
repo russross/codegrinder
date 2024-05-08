@@ -4,19 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"log"
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
-	"strconv"
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/russross/codegrinder/term"
-	"github.com/russross/codegrinder/tty"
 	. "github.com/russross/codegrinder/types"
 	"github.com/spf13/cobra"
 )
@@ -76,51 +71,10 @@ func CommandAction(cmd *cobra.Command, args []string) {
 }
 
 func runInteractiveSession(bundle *CommitBundle, args []string, directory string) {
-	stdin, stdout, stderr := term.StdStreams()
-
-	// initialize the input terminal
-	in := tty.NewInStream(stdin)
-	if !in.IsTerminal() {
-		log.Printf("stdin not a terminal")
-	}
-	if err := in.SetRawTerminal(); err != nil {
-		log.Printf("initializing stdin: %v", err)
-		return
-	}
-	defer in.RestoreTerminal()
-
-	// initialize the output terminal
-	out := tty.NewOutStream(stdout)
-	if !out.IsTerminal() {
-		log.Printf("stdout not a terminal")
-	}
-	if err := out.SetRawTerminal(); err != nil {
-		log.Printf("initializing stdout: %v", err)
-		return
-	}
-	rawMode = true
-	defer func() { rawMode = false }()
-	defer out.RestoreTerminal()
-
-	vals := url.Values{}
-
-	// get the terminal size
-	sizey, sizex := out.GetTtySize()
-	if sizex > 0 && sizey > 0 {
-		vals.Set("COLUMNS", strconv.Itoa(int(sizex)))
-		vals.Set("LINES", strconv.Itoa(int(sizey)))
-	}
-	if term := os.Getenv("TERM"); term != "" {
-		vals.Set("TERM", term)
-	} else if runtime.GOOS == "windows" {
-		vals.Set("TERM", "ansi")
-	}
-
 	endpoint := &url.URL{
 		Scheme:   "wss",
 		Host:     bundle.Hostname,
 		Path:     urlPrefix + "/sockets/" + bundle.ProblemType.Name + "/" + bundle.Commit.Action,
-		RawQuery: vals.Encode(),
 	}
 
 	socket, resp, err := websocket.DefaultDialer.Dial(endpoint.String(), nil)
@@ -142,40 +96,6 @@ func runInteractiveSession(bundle *CommitBundle, args []string, directory string
 		log.Printf("error writing request message: %v", err)
 		return
 	}
-
-	go func() {
-		for {
-			buffer := make([]byte, 256)
-			count, err := in.Read(buffer)
-			if count == 0 && err == io.EOF {
-				closeReq := &DaycareRequest{CloseStdin: true}
-				dumpOutgoing(closeReq)
-				if err := socket.WriteJSON(closeReq); err != nil {
-					log.Printf("error writing stdin request message: %v", err)
-					return
-				}
-			} else if err != nil {
-				log.Printf("terminal error: %v", err)
-				closeReq := &DaycareRequest{CloseStdin: true}
-				dumpOutgoing(closeReq)
-				if err := socket.WriteJSON(closeReq); err != nil {
-					log.Printf("error writing stdin request message: %v", err)
-				}
-				return
-			}
-
-			if count > 0 {
-				data := make([]byte, count)
-				copy(data, buffer[:count])
-				stdinReq := &DaycareRequest{Stdin: data}
-				dumpOutgoing(stdinReq)
-				if err := socket.WriteJSON(stdinReq); err != nil {
-					log.Printf("error writing stdin request message: %v", err)
-					return
-				}
-			}
-		}
-	}()
 
 	// start listening for events
 	for {
@@ -200,9 +120,9 @@ func runInteractiveSession(bundle *CommitBundle, args []string, directory string
 		case reply.Event != nil:
 			switch reply.Event.Event {
 			case "exec", "stdin", "stdout", "exit", "error":
-				fmt.Fprintf(out, "%s", reply.Event.Dump())
+				fmt.Printf("%s", reply.Event.Dump())
 			case "stderr":
-				fmt.Fprintf(stderr, "%s", reply.Event.Dump())
+				fmt.Printf("%s", reply.Event.Dump())
 			case "files":
 				if reply.Event.Files != nil {
 					for name, contents := range reply.Event.Files {

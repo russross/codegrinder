@@ -256,78 +256,11 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	//log.Printf("launching container for %s", nannyName)
 	limits := newLimits(action)
 	limits.override(problem.Options)
-	n, err := NewNanny(req.CommitBundle.ProblemType, problem, action.Interactive, action.Action, args, limits, nannyName)
+	n, err := NewNanny(req.CommitBundle.ProblemType, problem, action.Action, args, limits, nannyName)
 	if err != nil {
 		logAndTransmitErrorf("error creating container: %v", err)
 		return
 	}
-	rw := newReadWriteBuffer()
-
-	// watch for timeouts
-	alive := make(chan bool)
-	go func() {
-		duration := time.Duration(limits.maxTimeout) * time.Second
-		t := time.NewTimer(duration)
-
-		for alive != nil {
-			select {
-			case keepGoing := <-alive:
-				if !t.Stop() {
-					<-t.C
-				}
-				if keepGoing {
-					t.Reset(duration)
-				} else {
-					alive = nil
-				}
-			case <-t.C:
-				if err := n.Shutdown("timeout"); err != nil {
-					log.Printf("error shutting down container: %v", err)
-				}
-			}
-		}
-	}()
-
-	// relay stdin events from socket to the container through rw
-	go func() {
-		broken := false
-		for {
-			msg := new(DaycareRequest)
-			if err := socket.ReadJSON(msg); err != nil {
-				if strings.Contains(err.Error(), "use of closed network connection") || strings.Contains(err.Error(), "close 1005") {
-					// websocket closed
-				} else {
-					log.Printf("websocket read error: %v", err)
-				}
-				broken = true
-				break
-			}
-			if msg.CommitBundle != nil {
-				logAndTransmitErrorf("unexpected commit bundle received from client; quitting")
-				broken = true
-				break
-			}
-			if len(msg.Stdin) > 0 {
-				if _, err := rw.Write(msg.Stdin); err != nil {
-					break
-				}
-				alive <- true
-			}
-			if msg.CloseStdin {
-				rw.MarkEOF()
-			}
-		}
-		rw.Close()
-		alive <- false
-
-		// if the connection closed on the client side, kill the container
-		if broken {
-			if err := n.Shutdown("broken websocket"); err != nil {
-				log.Printf("error shutting down container: %v", err)
-			}
-		}
-		//log.Printf("stdin listener closed")
-	}()
 
 	// relay container events to the socket
 	eventListenerClosed := make(chan struct{})
@@ -378,7 +311,6 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 				// ignore other event types
 			}
 		}
-		rw.Close()
 
 		// report any truncation
 		if overflow > 0 || discarded > 0 {
@@ -396,10 +328,6 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 
 	// run the action
 	//log.Printf("%s: %s", action.ProblemType, action.Message)
-	var stdin io.Reader
-	if action.Interactive {
-		stdin = rw
-	}
 	cmd := strings.Fields(action.Command)
 	switch {
 	case action.Parser == "xunit":
@@ -414,7 +342,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		return
 
 	default:
-		_, _, _, status, err := n.Exec(cmd, stdin, true)
+		_, _, _, status, err := n.Exec(cmd)
 		if err != nil {
 			n.ReportCard.LogAndFailf("%q exec error: %v", strings.Join(cmd, " "), err)
 		}
@@ -503,7 +431,7 @@ func getContainerID(msg string) string {
 	return groups[1]
 }
 
-func NewNanny(problemType *ProblemType, problem *Problem, interactive bool, action string, args []string, limits *limits, name string) (*Nanny, error) {
+func NewNanny(problemType *ProblemType, problem *Problem, action string, args []string, limits *limits, name string) (*Nanny, error) {
 	// create a container
 	mem := limits.maxMemory * 1024 * 1024
 	disk := limits.maxFileSize * 1024 * 1024
@@ -513,9 +441,6 @@ func NewNanny(problemType *ProblemType, problem *Problem, interactive bool, acti
 	}
 
 	timeLimit := limits.maxCPU * 2
-	if interactive {
-		timeLimit = limits.maxSession
-	}
 	config := &docker.Config{
 		Hostname:        name,
 		User:            uidgid(uid),
@@ -525,17 +450,6 @@ func NewNanny(problemType *ProblemType, problem *Problem, interactive bool, acti
 		Env:             []string{"USER=student", "HOME=/home/student"},
 		Image:           problemType.Image,
 		NetworkDisabled: true,
-	}
-	for _, s := range args {
-		if strings.HasPrefix(s, "COLUMNS=") {
-			config.Env = append(config.Env, s)
-		}
-		if strings.HasPrefix(s, "LINES=") {
-			config.Env = append(config.Env, s)
-		}
-		if strings.HasPrefix(s, "TERM=") {
-			config.Env = append(config.Env, s)
-		}
 	}
 
 	hostConfig := &docker.HostConfig{
@@ -908,7 +822,7 @@ func (out *execStderr) Write(data []byte) (n int, err error) {
 	return n, err
 }
 
-func (n *Nanny) Exec(cmd []string, stdin io.Reader, useTTY bool) (stdout, stderr, script *bytes.Buffer, status int, err error) {
+func (n *Nanny) Exec(cmd []string) (stdout, stderr, script *bytes.Buffer, status int, err error) {
 	// log the event
 	n.Events <- &EventMessage{
 		Time:        time.Now(),
@@ -918,10 +832,10 @@ func (n *Nanny) Exec(cmd []string, stdin io.Reader, useTTY bool) (stdout, stderr
 
 	// create
 	exec, err := dockerClient.CreateExec(docker.CreateExecOptions{
-		AttachStdin:  stdin != nil,
+		AttachStdin:  false,
 		AttachStdout: true,
 		AttachStderr: true,
-		Tty:          useTTY,
+		Tty:          false,
 		Cmd:          cmd,
 		Container:    n.Container.ID,
 		User:         uidgid(n.UID),
@@ -937,11 +851,11 @@ func (n *Nanny) Exec(cmd []string, stdin io.Reader, useTTY bool) (stdout, stderr
 	// start
 	err = dockerClient.StartExec(exec.ID, docker.StartExecOptions{
 		Detach:       false,
-		Tty:          useTTY,
-		InputStream:  stdin,
+		Tty:          false,
+		InputStream:  nil,
 		OutputStream: (*execStdout)(&out),
 		ErrorStream:  (*execStderr)(&out),
-		RawTerminal:  useTTY,
+		RawTerminal:  false,
 	})
 	if err != nil {
 		return nil, nil, nil, -1, err
@@ -993,75 +907,4 @@ func releaseUID(uid int64) {
 
 func uidgid(uid int64) string {
 	return fmt.Sprintf("%d:%d", uid, uid)
-}
-
-type readWritebuffer struct {
-	lock     sync.Mutex
-	notEmpty sync.Cond
-	notFull  sync.Cond
-	buf      bytes.Buffer
-	eof      bool
-	closed   bool
-}
-
-const maxReadWriteBufferLen int = 1e6
-
-func newReadWriteBuffer() *readWritebuffer {
-	rw := new(readWritebuffer)
-	rw.notEmpty.L = &rw.lock
-	rw.notFull.L = &rw.lock
-	return rw
-}
-
-func (rw *readWritebuffer) Read(p []byte) (n int, err error) {
-	rw.lock.Lock()
-	defer rw.lock.Unlock()
-	if rw.closed {
-		return 0, io.EOF
-	}
-	for rw.buf.Len() == 0 {
-		if rw.eof {
-			return 0, io.EOF
-		}
-		rw.notEmpty.Wait()
-		if rw.closed {
-			return 0, io.EOF
-		}
-	}
-	rw.notFull.Broadcast()
-	return rw.buf.Read(p)
-}
-
-func (rw *readWritebuffer) Write(p []byte) (n int, err error) {
-	rw.lock.Lock()
-	defer rw.lock.Unlock()
-	if rw.closed || rw.eof {
-		return 0, io.EOF
-	}
-	for rw.buf.Len()+len(p) > maxReadWriteBufferLen {
-		rw.notFull.Wait()
-		if rw.closed || rw.eof {
-			return 0, io.EOF
-		}
-	}
-	rw.notEmpty.Broadcast()
-	return rw.buf.Write(p)
-}
-
-func (rw *readWritebuffer) MarkEOF() {
-	rw.lock.Lock()
-	defer rw.lock.Unlock()
-	rw.eof = true
-	rw.notEmpty.Broadcast()
-	rw.notFull.Broadcast()
-}
-
-func (rw *readWritebuffer) Close() {
-	rw.lock.Lock()
-	defer rw.lock.Unlock()
-	rw.eof = true
-	rw.closed = true
-	rw.buf.Reset()
-	rw.notEmpty.Broadcast()
-	rw.notFull.Broadcast()
 }
