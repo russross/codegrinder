@@ -9,7 +9,7 @@ start_pre() {
     ewaitfile 30 /var/run/docker.sock
 }
 
-command="/usr/local/bin/codegrinder"
+command="/home/russ/go/bin/server"
 command_args="-daycare"
 command_user="russ:russ"
 command_background="true"
