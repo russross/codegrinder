@@ -15,6 +15,7 @@ import (
 	"io/ioutil"
 	"log"
 	"math/rand"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -26,7 +27,6 @@ import (
 	"sync"
 	"time"
 
-	docker "github.com/fsouza/go-dockerclient"
 	"github.com/go-martini/martini"
 	"github.com/martini-contrib/binding"
 	mgzip "github.com/martini-contrib/gzip"
@@ -169,14 +169,16 @@ func main() {
 			log.Fatalf("Daycare capacity must be greater than zero")
 		}
 
-		// attach to docker and try a ping
-		var err error
-		dockerClient, err = docker.NewVersionedClient("unix:///var/run/docker.sock", "1.24")
-		if err != nil {
-			log.Fatalf("NewVersionedClient: %v", err)
+		// attach to docker via the API and try a ping
+		dockerTransport = &http.Client{
+			Transport: &http.Transport{
+				Dial: func(_, _ string) (net.Conn, error) {
+					return net.Dial("unix", dockerPath)
+				},
+			},
 		}
-		if err = dockerClient.Ping(); err != nil {
-			log.Fatalf("Ping: %v", err)
+		if err := getObject("/_ping", nil, nil); err != nil {
+			log.Printf("Ping: %v", err)
 		}
 
 		r.Get("/v2/sockets/:problem_type/:action", SocketProblemTypeAction)

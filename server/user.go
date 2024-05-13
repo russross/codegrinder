@@ -664,7 +664,7 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
 	}
-	
+
 	// filter out solution
 	step.Solution = nil
 
