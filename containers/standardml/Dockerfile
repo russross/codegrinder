@@ -1,9 +1,13 @@
 FROM arm64v8/debian:bookworm
 MAINTAINER russ@russross.com
 
+RUN mkdir /home/student && chmod 777 /home/student
+WORKDIR /home/student
+
 RUN apt update
 
 RUN apt install -y --no-install-recommends \
+    icdiff \
     make \
     python3
 RUN apt install -y --no-install-recommends \
@@ -14,6 +18,3 @@ RUN apt install -y --no-install-recommends \
     rlwrap
 
 RUN ln -rsf /usr/lib/aarch64-linux-gnu/libpolyml.so.9.0.0 /usr/lib/aarch64-linux-gnu/libpolyml.so
-
-RUN mkdir /home/student && chmod 777 /home/student
-WORKDIR /home/student
