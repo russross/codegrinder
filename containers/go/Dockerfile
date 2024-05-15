@@ -7,6 +7,7 @@ RUN apk add --no-cache \
     icdiff \
     make \
     python3
+ENV GODEBUG=installgoroot=all
 RUN apk add --no-cache \
     go
-RUN GODEBUG=installgoroot=all go install -a std
+RUN go install -a std
