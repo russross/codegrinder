@@ -1,6 +1,6 @@
 '''Thonny plugin to integrate with CodeGrinder for coding practice'''
 
-__version__ = '2.6.15'
+__version__ = '2.6.16'
 
 import base64
 import certifi
@@ -780,7 +780,7 @@ class CommitBundle(DataClassJsonMixin):
     problemType:            ProblemType
     problemTypeSignature:   str
     problem:                Problem
-    problemSteps:           List[ProblemStep]
+    problemSteps:           List[Optional[ProblemStep]]
     problemSignature:       str
     action:                 str
     hostname:               str
