@@ -1,11 +1,11 @@
-                .global print_n, print_set, puts
+                .global print_string, print_int, print_set
                 .equ    stdout, 1
                 .equ    sys_write, 64
                 .equ    sys_exit, 93
                 .text
 
-# puts(s)
-puts:
+# print_string(s)
+print_string:
                 # a1: ptr
                 # a2: len
                 mv      a1, a0
@@ -28,8 +28,8 @@ puts:
                 ret
 
 
-# print_n(n)
-print_n:
+# print_int(n)
+print_int:
                 addi    sp, sp, -32
                 sd      ra, 24(sp)
 
@@ -75,7 +75,7 @@ print_n:
                 sb      zero, (t0)
 
                 mv      a0, sp
-                call    puts
+                call    print_string
 5:
                 ld      ra, 24(sp)
                 addi    sp, sp, 32
@@ -108,7 +108,7 @@ print_set:
                 bgez    a2, 1b
 
                 mv      a0, a1
-                call    print_n
+                call    print_int
 
                 ld      ra, 8(sp)
                 addi    sp, sp, 16
