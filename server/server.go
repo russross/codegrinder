@@ -581,7 +581,7 @@ func setupDB(path string) *sql.DB {
 			"&" + "_busy_timeout=10000" +
 			"&" + "_cache_size=-20000" +
 			"&" + "_foreign_keys=ON" +
-			"&" + "_journal_mode=DELETE" +
+			"&" + "_journal_mode=WAL" +
 			"&" + "_synchronous=NORMAL" +
 			"&" + "_temp_store=MEMORY"
 	db, err := sql.Open("sqlite3", path+options)
