@@ -1,5 +1,4 @@
 FROM arm64v8/debian:bookworm
-MAINTAINER russ@russross.com
 
 RUN mkdir /home/student && chmod 777 /home/student
 WORKDIR /home/student

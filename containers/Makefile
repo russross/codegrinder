@@ -3,7 +3,7 @@
 
 all:	arm64
 
-arm64: .proxy-c .proxy-cpp .proxy-go .proxy-python .proxy-riscv .proxy-rust .proxy-sqlite
+arm64: .proxy-c .proxy-cpp .proxy-go .proxy-python .proxy-riscv .proxy-rust .proxy-sqlite .proxy-prolog
 
 amd64: .proxy-cpp .proxy-go
 
