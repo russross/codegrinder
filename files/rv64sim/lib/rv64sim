@@ -1,0 +1,2180 @@
+#!/usr/bin/env python3
+
+import argparse
+import ctypes
+import curses
+import dataclasses
+import itertools
+import os
+import re
+import sys
+import struct
+from typing import Callable, Optional, TypeAlias
+
+STACK_SIZE = 4096
+
+class Segment:
+    def __init__(self, name: str, start: int, end: int, writeable: bool, executable: bool, init: bytes) -> None:
+        assert(start > 0 and end > start and (writeable != executable))
+        assert(len(init) <= end - start)
+        self.name = name
+        self.start = start
+        self.end = end
+        self.mem = bytearray()
+        self.init = init
+        self.writeable = writeable
+        self.executable = executable
+
+    def in_range(self, addr: int, size: int) -> bool:
+        return addr >= self.start and addr+size <= self.end
+
+    def reset(self) -> None:
+        self.mem = bytearray(self.end - self.start)
+        self.mem[0:len(self.init)] = self.init
+
+    def load(self, addr: int, size: int, effects: Optional['Effects'] = None) -> bytes:
+        assert(self.in_range(addr, size))
+        raw = self.mem[addr - self.start: addr+size - self.start]
+        if effects is not None:
+            assert(effects.mem_read is None)
+            effects.mem_read = MemoryValue(addr, raw)
+        return raw
+
+    def store(self, addr: int, raw: bytes, effects: Optional['Effects'] = None) -> None:
+        size = len(raw)
+        assert(self.in_range(addr, size))
+        if effects is not None:
+            assert(effects.mem_write is None)
+            old = self.mem[addr - self.start: addr+size - self.start]
+            effects.mem_write = (MemoryValue(addr, old), MemoryValue(addr, raw))
+        self.mem[addr - self.start: addr+size - self.start] = raw
+
+class Machine:
+    def __init__(self,
+            segments: list[Segment],
+            pc_start: int,
+            global_pointer: int,
+            address_symbols: dict[int, str],
+            other_symbols: dict[str, int]) -> None:
+        self.segments = segments
+        self.pc_start = pc_start
+        self.global_pointer = global_pointer
+        self.address_symbols = address_symbols
+        self.other_symbols = other_symbols
+        self.stack_start = 0x100000 - STACK_SIZE
+        for segment in segments:
+            if segment.end + STACK_SIZE >= self.stack_start:
+                self.stack_start = (segment.end + STACK_SIZE*2 - 1) & (STACK_SIZE-1)
+        self.stack_end = self.stack_start + STACK_SIZE
+        self.data_start = self.stack_end - 8
+        self.data_end = 0
+        self.text_start = self.stack_end
+        self.text_end = 0
+        for segment in segments:
+            if segment.executable:
+                self.text_start = min(self.text_start, segment.start)
+                self.text_end = max(self.text_end, segment.end)
+            else:
+                self.data_start = min(self.data_start, segment.start)
+                self.data_end = max(self.data_end, segment.end)
+        if self.data_end == 0:
+            self.data_end = self.data_start
+        self.segments.append(Segment('stack', self.stack_start, self.stack_end, True, False, b''))
+
+    def reset(self) -> None:
+        for segment in self.segments:
+            segment.reset()
+
+        # set up cpu state
+        self.x = [0] * 32
+        self.x[2] = self.stack_end
+        self.pc = self.pc_start
+
+        # set up tracing
+        self.stdout = bytearray()
+        self.stdin = bytearray()
+        self.stack_frames: list[int] = []
+        self.effects: Optional['Effects'] = None
+
+    def set_most_recent_memory(self, sequence: list['Effects'], seq_i: int) -> None:
+        self.most_recent_memory = self.data_start if self.data_start > 0 else self.stack_end-8
+        self.most_recent_data = (self.data_start, 0)
+        self.most_recent_stack = (self.stack_end-8, 0)
+        (stack, data) = (False, False)
+        for seq_i in range(seq_i, -1, -1):
+            e = sequence[seq_i]
+            if e.mem_read is not None:
+                (address, value) = (e.mem_read.address, e.mem_read.value)
+            elif e.mem_write is not None:
+                (address, value) = (e.mem_write[1].address, e.mem_write[1].value)
+            else:
+                continue
+            
+            if not stack and address >= self.stack_start:
+                self.most_recent_stack = (address, len(value))
+                if not data:
+                    self.most_recent_memory = address
+                stack = True
+            if not data and address < self.data_end:
+                self.most_recent_data = (address, len(value))
+                if not stack:
+                    self.most_recent_memory = address
+                data = True
+            if stack and data:
+                break
+
+    def load(self, addr: int, size: int) -> bytes:
+        for segment in self.segments:
+            if segment.in_range(addr, size):
+                return segment.load(addr, size, self.effects)
+        raise Fault(f'segfault: load addr={addr:x} size={size}')
+
+    def is_valid_addr(self, addr: int) -> bool:
+        for segment in self.segments:
+            if segment.in_range(addr, 1):
+                return True
+        return False
+
+    def load_int(self, addr: int, size: int, signed: bool = True) -> int:
+        raw = self.load(addr, size)
+        return int.from_bytes(raw, byteorder='little', signed=signed)
+
+    def load_instruction(self, addr: int) -> int:
+        size = 4
+        for segment in self.segments:
+            if segment.in_range(addr, size) and segment.executable:
+                raw = segment.load(addr, size, None)
+                return int.from_bytes(raw, byteorder='little', signed=True)
+        raise Fault(f'segfault: instruction fetch addr={addr:x} size={size}')
+
+    def store(self, addr: int, raw: bytes) -> None:
+        size = len(raw)
+        for segment in self.segments:
+            if segment.in_range(addr, len(raw)) and segment.writeable:
+                segment.store(addr, raw, self.effects)
+                return
+        raise Fault(f'segfault: store addr={addr:x} size={size}')
+
+    def get(self, reg: int) -> int:
+        if reg != 0 and self.effects is not None:
+            dup = False
+            for elt in self.effects.reg_reads:
+                if elt.register == reg:
+                    dup = True
+            if not dup:
+                self.effects.reg_reads.append(RegisterValue(reg, self.x[reg]))
+        return self.x[reg]
+
+    def set(self, reg: int, value: int) -> None:
+        # zero register never changes
+        if reg != 0:
+            if self.effects is not None:
+                assert(self.effects.reg_write is None)
+                self.effects.reg_write = (RegisterValue(reg, self.x[reg]), RegisterValue(reg, clip(value)))
+            self.x[reg] = clip(value)
+
+    def set32(self, reg: int, value: int) -> None:
+        # zero register never changes
+        if reg != 0:
+            if self.effects is not None:
+                assert(self.effects.reg_write is None)
+                self.effects.reg_write = (RegisterValue(reg, self.x[reg]), RegisterValue(reg, clip32(value)))
+            self.x[reg] = clip32(value)
+
+    def set_pc(self, value: int) -> None:
+        old_pc = self.pc
+        self.pc = clip(value)
+        if self.pc & 1 != 0:
+            raise Fault(f'bus error: pc addr={self.pc}')
+        if self.effects is not None:
+            self.effects.pc = (old_pc, self.pc)
+
+    def address_label(self, addr: int) -> str:
+        if addr in self.address_symbols:
+            return self.address_symbols[addr]
+        else:
+            return str(addr)
+
+    def apply(self, e: 'Effects', is_forward: bool) -> None:
+        self.set_pc(e.pc[0 if is_forward else 1])
+        if e.reg_write is not None:
+            write = e.reg_write[1 if is_forward else 0]
+            self.set(write.register, write.value)
+        if e.mem_write is not None:
+            store = e.mem_write[1 if is_forward else 0]
+            self.store(store.address, store.value)
+        if e.stdout is not None:
+            if is_forward:
+                self.stdout += e.stdout
+            else:
+                self.stdout = self.stdout[:-len(e.stdout)]
+        if e.stdin is not None:
+            # echo input
+            if is_forward:
+                self.stdout += e.stdin
+            else:
+                self.stdout = self.stdout[:-len(e.stdin)]
+        if e.function_start is not None:
+            if is_forward:
+                self.stack_frames.append(e.function_start)
+            else:
+                self.stack_frames.pop()
+        if e.function_end is not None:
+            if is_forward:
+                self.stack_frames.pop()
+            else:
+                self.stack_frames.append(e.function_end)
+
+@dataclasses.dataclass
+class Instruction:
+    address: int
+    instruction: int
+    fields: list[str]
+    execute: Callable[[Machine], None]
+    static_target: Optional[int] = None
+    return_target: Optional[int] = None
+    label: Optional[str] = None
+    length: int = 4
+    is_target: bool = False
+    arrows: Optional[list[tuple[bool, bool, int]]] = None
+
+    def render(self) -> str:
+        fields = list(self.fields)
+        if fields[-1][0] == '[':
+            comment = fields.pop()
+        else:
+            comment = ''
+        if len(fields) >= 3 and fields[-2] == '()':
+            if fields[-3] == '0':
+                parts = fields[1:-3] + [f'({fields[-1]})']
+            else:
+                parts = fields[1:-3] + [f'{fields[-3]}({fields[-1]})']
+        else:
+            parts = fields[1:]
+        if comment != '':
+            parts.append(comment)
+        disasm = f'{self.fields[0]:<8}' + ', '.join(parts)
+        if self.label is None:
+            addr_part = ''
+        else:
+            addr_part = self.label + ':'
+        return f'{addr_part:<16}{disasm:<48}'
+
+class Fault(Exception):
+    def __init__(self, msg: str):
+        self.msg = msg
+
+@dataclasses.dataclass
+class MemoryValue:
+    address: int
+    value: bytes
+
+@dataclasses.dataclass
+class RegisterValue:
+    register: int
+    value: int
+
+Value: TypeAlias = MemoryValue | RegisterValue
+
+@dataclasses.dataclass
+class Effects:
+    # pairs are (old_value, new_value)
+    instruction: Instruction
+    pc: tuple[int, int] = (0, 0)
+    reg_reads: list[RegisterValue] = dataclasses.field(default_factory=list)
+    reg_write: Optional[tuple[RegisterValue, RegisterValue]] = None
+    mem_read: Optional[MemoryValue] = None
+    mem_write: Optional[tuple[MemoryValue, MemoryValue]] = None
+    stdin: Optional[bytes] = None
+    stdout: Optional[bytes] = None
+    other_message: Optional[str] = None
+    terminate: bool = False
+    function_start: Optional[int] = None # sp at call time
+    function_end: Optional[int] = None # sp at ret time
+
+    def report(self) -> list[str]:
+        parts = []
+        if self.reg_write is not None:
+            (rd, val) = (self.reg_write[1].register, self.reg_write[1].value)
+            if r[rd] in ('ra', 'sp'):
+                parts.append(f'{r[rd]} <- {hex(val)}')
+            else:
+                parts.append(f'{r[rd]} <- {val}')
+        if self.pc[1] != self.pc[0] + self.instruction.length:
+            parts.append(f'pc <- {hex(self.pc[1])}')
+
+        lines = [', '.join(parts)]
+
+        if self.other_message is not None:
+            lines.append(self.other_message)
+        if self.stdin is not None:
+            lines.append(repr(self.stdin.decode()))
+        if self.stdout is not None:
+            lines.append(repr(self.stdout.decode()))
+
+        return lines
+
+# misc helpers
+def unsigned(i: int) -> int:
+    return i&0xffffffffffffffff
+
+def unsigned32(i: int) -> int:
+    return i&0x00000000ffffffff
+
+maxint = (1<<63) - 1
+def old_clip(i: int) -> int:
+    if -maxint - 1 <= i <= maxint:
+        return i
+    return (i + (maxint+1)) % (2 * (maxint+1)) - maxint - 1
+
+maxint32 = (1<<31) - 1
+def old_clip32(i: int) -> int:
+    if -maxint32 - 1 <= i <= maxint32:
+        return i
+    return (i + (maxint32+1)) % (2 * (maxint32+1)) - maxint32 - 1
+
+max64 = 1<<63
+def clip(i: int) -> int:
+    if -max64 <= i < max64:
+        return i
+    return ctypes.c_int64(i).value
+
+max32 = 1<<31
+def clip32(i: int) -> int:
+    if -max32 <= i < max32:
+        return i
+    return ctypes.c_int32(i).value
+
+def load_elf(filename: str) -> Machine:
+    with open(filename, mode='rb') as fp:
+        raw = fp.read()
+
+    # unpack the elf header
+    (
+        e_ident_mag,
+        e_ident_class, e_ident_data, e_ident_version, e_ident_osabi,
+        e_ident_abiversion,
+
+        e_type, e_machine, e_version, e_entry,
+
+        e_phoff, e_shoff,
+
+        e_flags, e_ehsize, e_phentsize, e_phnum, e_shentsize, e_shnum, e_shstrndx
+    ) = struct.unpack('<4s5B7x'+'2HIQ'+'2Q'+'I6H', raw[:0x40])
+
+    # sanity check everything
+    assert(e_ident_mag == b'\x7fELF')       # magic number
+    assert(e_ident_class == 2)              # 64 bit
+    assert(e_ident_data == 1)               # little endian
+    assert(e_ident_version == 1)            # version 1 format
+    assert(e_ident_osabi == 0)              # System V ABI
+
+    assert(e_type == 2)                     # executable
+    assert(e_machine == 0xf3)               # RISC-V
+    assert(e_version == 1)                  # ELF version 1
+
+    assert(e_phoff == 0x40)                 # start of program headers
+    assert(e_ehsize == 0x40)                # size of elf header
+    assert(e_phentsize == 0x38)             # size of program header entry
+    assert(e_phnum >= 1)                    # number of program header entries
+
+    # get the loadable segments
+    chunks = []
+    for i in range(e_phnum):
+        # unpack the program header
+        #print('unpacking program header')
+        start = e_phoff + e_phentsize*i
+        (
+            p_type, p_flags, p_offset, p_vaddr, p_paddr, p_filesz, p_memsz, p_align
+        ) = struct.unpack('<2I6Q', raw[start:start+e_phentsize])
+
+        if p_type != 1:
+            continue
+        assert(p_vaddr >= 0)
+        chunk = (p_vaddr, raw[p_offset: p_offset+p_filesz])
+        chunks.append(chunk)
+
+    # get the section header strings
+    i = e_shstrndx
+    start = e_shoff + e_shentsize*i
+    (
+        sh_name, sh_type, sh_flags, sh_addr, sh_offset, sh_size,
+        sh_link, sh_info, sh_addralign, sh_entsize
+    ) = struct.unpack('<2I4Q2I2Q', raw[start:start+e_shentsize])
+
+    # unpack the strings, keyed by offset
+    sh_strs = {}
+    sh_str_raw = raw[sh_offset:sh_offset + sh_size]
+    start = 0
+    for (i, b) in enumerate(sh_str_raw):
+        if b == 0:
+            sh_strs[start] = sh_str_raw[start:i].decode()
+            start = i+1
+
+    # read the section headers
+    (strs_raw, syms_raw) = (b'', b'')
+    segments = []
+    for i in range(e_shnum):
+        # unpack the section header
+        start = e_shoff + e_shentsize*i
+        (
+            sh_name, sh_type, sh_flags, sh_addr, sh_offset, sh_size,
+            sh_link, sh_info, sh_addralign, sh_entsize
+        ) = struct.unpack('<2I4Q2I2Q', raw[start:start+e_shentsize])
+
+        #print(f'{i}: name: {sh_strs[sh_name]}. type: {hex(sh_type)}')
+        # watch out for features we do not support
+        assert(sh_type not in (0x4, 0x5, 0x6, 0x9, 0xb, 0xe, 0xf, 0x10, 0x11))
+
+        if sh_type in (1, 8) and sh_flags&0x2 != 0:
+            # in-memory section; see if we have loadable data
+            init = b''
+            for (p_vaddr, seg_raw) in chunks:
+                if p_vaddr <= sh_addr < p_vaddr+len(seg_raw):
+                    init = seg_raw[sh_addr-p_vaddr: sh_addr-p_vaddr + sh_size]
+            segments.append(Segment(sh_strs[sh_name],
+                                    sh_addr,
+                                    sh_addr+sh_size, 
+                                    sh_flags&0x1 != 0,
+                                    sh_flags&0x4 != 0,
+                                    init))
+
+        elif sh_strs[sh_name] == '.strtab' and sh_type == 3:
+            strs_raw = raw[sh_offset:sh_offset + sh_size]
+
+        elif sh_strs[sh_name] == '.symtab' and sh_type == 2:
+            syms_raw = raw[sh_offset:sh_offset + sh_size]
+
+    assert(len(strs_raw) > 0)
+    assert(len(syms_raw) > 0)
+
+    # parse the symbol table
+    address_symbols = {}
+    other_symbols = {}
+    global_pointer = 0
+    symbol_size = 24
+    for start in range(0, len(syms_raw), symbol_size):
+        (
+            st_name, st_info, st_other, st_shndx, st_value, st_size
+        ) = struct.unpack('<I2BH2Q', syms_raw[start:start+symbol_size])
+
+        # find the name
+        for end in range(st_name, len(strs_raw)):
+            if strs_raw[end] == 0:
+                break
+        name = strs_raw[st_name:end].decode()
+        if len(name) == 0:
+            # skip section entries
+            continue
+        elif st_info == 4:
+            # skip object file names
+            continue
+        elif name == '__global_pointer$':
+            # keep global pointer
+            global_pointer = st_value
+            address_symbols[st_value] = name
+            continue
+        elif name.startswith('$') or name.startswith('__'):
+            # skip internal names
+            continue
+
+        # sort into text, data/bss, and other symbols
+        if st_shndx > 0:
+            address_symbols[st_value] = name
+        else:
+            other_symbols[name] = st_value
+
+    # allocate address space
+    m = Machine(segments, e_entry, global_pointer, address_symbols, other_symbols)
+    m.reset()
+    return m
+
+# instruction decoders
+def get_funct3(inst: int) -> int:
+    return (inst>>12) & 0x07
+
+def get_rd(inst: int) -> int:
+    return (inst>>7) & 0x1f
+
+def get_rs1(inst: int) -> int:
+    return (inst>>15) & 0x1f
+
+def get_rs2(inst: int) -> int:
+    return (inst>>20) & 0x1f
+
+def get_imm_i(inst: int) -> int:
+    return inst >> 20
+
+def get_imm_s(inst: int) -> int:
+    imm =  (inst >> 20) & ~0x0000001f
+    imm |= (inst >> 7)  &  0x0000001f
+    return imm
+
+def get_imm_b(inst: int) -> int:
+    imm =  (inst >> 20) & ~0x00000fff
+    imm |= (inst << 4)  &  0x00000800
+    imm |= (inst >> 20) &  0x000007e0
+    imm |= (inst >> 7)  &  0x0000001e
+    return imm
+
+def get_imm_u(inst: int) -> int:
+    return inst & ~0x00000fff
+
+def get_imm_j(inst: int) -> int:
+    imm =  (inst >> 11) & ~0x000fffff
+    imm |=  inst        &  0x000ff000
+    imm |= (inst >> 9)  &  0x00000800
+    imm |= (inst >> 20) &  0x000007e0
+    imm |= (inst >> 20) &  0x0000001e
+    return imm
+
+def get_funct7(inst: int) -> int:
+    return inst >> 25
+
+r = [
+    'zero', 'ra', 'sp', 'gp', 'tp', 't0', 't1', 't2',
+    's0', 's1', 'a0', 'a1', 'a2', 'a3', 'a4', 'a5',
+    'a6', 'a7', 's2', 's3', 's4', 's5', 's6', 's7',
+    's8', 's9', 's10', 's11', 't3', 't4', 't5', 't6',
+]
+a_regs = [r.index(elt) for elt in r if elt[0] == 'a']
+t_regs = [r.index(elt) for elt in r if elt[0] == 't' and elt[1] != 'p']
+s_regs = [r.index(elt) for elt in r if elt[0] == 's' and elt[1] != 'p']
+
+def decode(labels: Machine, address: int, inst: int) -> Instruction:
+    # divide the instructions up according the main instruction opcode
+    # then call a specialized function for each opcode to do the rest
+    opcode = inst & 0x7f
+    match opcode:
+        # lui
+        case 0x37:
+            return decode_lui(address, inst, get_rd(inst), get_imm_u(inst))
+
+        # auipc
+        case 0x17:
+            return decode_auipc(address, inst, get_rd(inst), get_imm_u(inst))
+
+        # jal
+        case 0x6f:
+            return decode_jal(labels, address, inst, get_rd(inst), get_imm_j(inst))
+
+        # jalr
+        case 0x67:
+            return decode_jalr(address, inst, get_funct3(inst), get_rd(inst), get_rs1(inst), get_imm_i(inst))
+
+        # beq, bne, blt, bge, bltu, bgeu
+        case 0x63:
+            return decode_branches(labels, address, inst, get_funct3(inst), get_rs1(inst), get_rs2(inst), get_imm_b(inst))
+
+        # lb, lh, lw, ld, lbu, lhu, lwu
+        case 0x03:
+            return decode_load(address, inst, get_funct3(inst), get_rd(inst), get_rs1(inst), get_imm_i(inst))
+
+        # sb, sh, sw, sd
+        case 0x23:
+            return decode_store(address, inst, get_funct3(inst), get_rs1(inst), get_rs2(inst), get_imm_s(inst))
+
+        # addi, slti, sltiu, xori, ori, andi, slli, srli, srai
+        case 0x13:
+            return decode_alu_imm(labels, address, inst, get_funct3(inst), get_rd(inst), get_rs1(inst), get_imm_i(inst))
+
+        # addiw, slliw, srliw, sraiw
+        case 0x1b:
+            return decode_alu_imm_w(labels, address, inst, get_funct3(inst), get_rd(inst), get_rs1(inst), get_imm_i(inst))
+
+        # add, sub, sll, slt, sltu, xor, srl, sra, or, and
+        # mul, mulh, mulhsu, mulhu, div, divu, rem, remu
+        case 0x33:
+            return decode_alu(address, inst, get_funct3(inst), get_rd(inst), get_rs1(inst), get_rs2(inst), get_funct7(inst))
+
+        # addw, subw, sllw, srlw, sraw
+        # mulw, divw, remw, remuw
+        case 0x3b:
+            return decode_alu_w(address, inst, get_funct3(inst), get_rd(inst), get_rs1(inst), get_rs2(inst), get_funct7(inst))
+
+        # fence
+        case 0x0f:
+            def execute_fence(m: Machine) -> None:
+                # do nothing
+                pass
+
+            return Instruction(address, inst, ['fence', '*'], execute_fence)
+
+        # ecall, ebreak
+        case 0x73:
+            if inst == 0x00000073:
+                return decode_ecall(address, inst)
+            elif inst == 0x00100073:
+                # handle ebreak here--exit
+                def execute_ebreak(m: Machine) -> None:
+                    assert(m.effects is not None)
+                    m.effects.other_message = 'ebreak'
+                    m.effects.terminate = True
+
+                return Instruction(address, inst, ['ebreak'], execute_ebreak)
+
+    raise Fault(f'disassembler found unknown opcode {opcode}')
+
+def decode_lui(address: int, inst: int, rd: int, imm: int) -> Instruction:
+    def execute_lui(m: Machine) -> None:
+        m.set(rd, imm)
+
+    return Instruction(address, inst, ['lui', r[rd], str(imm)], execute_lui)
+
+def decode_auipc(address: int, inst: int, rd: int, imm: int) -> Instruction:
+    def execute_auipc(m: Machine) -> None:
+        m.set(rd, m.pc + imm)
+
+    return Instruction(address, inst, ['auipc', r[rd], str(imm)], execute_auipc)
+
+def decode_jal(labels: Machine, address: int, inst: int, rd: int, imm: int) -> Instruction:
+    def execute_jal(m: Machine) -> None:
+        m.set(rd, m.pc + 4)
+        m.set_pc(m.pc + imm)
+
+    dest = labels.address_label(address+imm)
+    if r[rd] == 'zero':
+        fields = ['j', dest]
+    elif r[rd] == 'ra':
+        fields = ['call', dest]
+    else:
+        fields = ['jal', r[rd], dest]
+    return Instruction(address, inst, fields, execute_jal,
+        static_target=address + imm, return_target=None if rd == 0 else address + 4)
+
+def decode_jalr(address: int, inst: int, funct3: int, rd: int, rs1: int, imm: int) -> Instruction:
+    if funct3 != 0:
+        raise Fault(f'jalr with unknown funct3 value of {funct3}')
+
+    def execute_jalr(m: Machine) -> None:
+        # rd and rs1 could be the same, so capture rs1 before setting rd
+        rs1_val = m.get(rs1)
+        m.set(rd, m.pc + 4)
+        m.set_pc((rs1_val + imm) & ~1)
+
+    match (r[rd], imm, r[rs1]):
+        case ('zero', 0, 'ra'):
+            fields = ['ret']
+        case ('zero', 0, _):
+            fields = ['jr', r[rs1]]
+        case ('ra', 0, _):
+            fields = ['jalr', r[rs1]]
+        case _:
+            fields = ['jalr', r[rd], str(imm), '()', r[rs1]]
+
+    return Instruction(address, inst, fields, execute_jalr,
+        return_target=None if rd == 0 else address + 4)
+
+def decode_branches(labels: Machine, address: int, inst: int, funct3: int, rs1: int, rs2: int, imm: int) -> Instruction:
+    match funct3:
+        case 0:
+            def execute_beq(m: Machine) -> None:
+                if m.get(rs1) == m.get(rs2):
+                    m.set_pc(m.pc + imm)
+
+            dest = labels.address_label(address+imm)
+            if r[rs1] == 'zero':
+                fields = ['beqz', r[rs2], dest]
+            elif r[rs2] == 'zero':
+                fields = ['beqz', r[rs1], dest]
+            else:
+                fields = ['beq', r[rs1], r[rs2], dest]
+
+            return Instruction(address, inst, fields, execute_beq,
+                static_target=address+imm)
+
+        case 1:
+            def execute_bne(m: Machine) -> None:
+                if m.get(rs1) != m.get(rs2):
+                    m.set_pc(m.pc + imm)
+
+            dest = labels.address_label(address+imm)
+            if r[rs1] == 'zero':
+                fields = ['bnez', r[rs2], dest]
+            elif r[rs2] == 'zero':
+                fields = ['bnez', r[rs1], dest]
+            else:
+                fields = ['bne', r[rs1], r[rs2], dest]
+            return Instruction(address, inst, fields, execute_bne,
+                static_target=address+imm)
+
+        case 4:
+            def execute_blt(m: Machine) -> None:
+                if m.get(rs1) < m.get(rs2):
+                    m.set_pc(m.pc + imm)
+
+            dest = labels.address_label(address+imm)
+            if r[rs1] == 'zero':
+                fields=['bgtz', r[rs2], dest]
+            elif r[rs2] == 'zero':
+                fields=['bltz', r[rs1], dest]
+            else:
+                fields=['blt', r[rs1], r[rs2], dest]
+
+            return Instruction(address, inst, fields, execute_blt,
+                static_target=address+imm)
+
+        case 5:
+            def execute_bge(m: Machine) -> None:
+                if m.get(rs1) >= m.get(rs2):
+                    m.set_pc(m.pc + imm)
+
+            dest = labels.address_label(address+imm)
+            if r[rs1] == 'zero':
+                fields=['blez', r[rs2], dest]
+            elif r[rs2] == 'zero':
+                fields=['bgez', r[rs1], dest]
+            else:
+                fields=['bge', r[rs1], r[rs2], dest]
+
+            return Instruction(address, inst, fields, execute_bge,
+                static_target=address+imm)
+
+        case 6:
+            def execute_bltu(m: Machine) -> None:
+                if unsigned(m.get(rs1)) < unsigned(m.get(rs2)):
+                    m.set_pc(m.pc + imm)
+
+            dest = labels.address_label(address+imm)
+
+            return Instruction(address, inst, ['bltu', r[rs1], r[rs2], dest], execute_bltu,
+                static_target=address+imm)
+
+        case 7:
+            def execute_bgeu(m: Machine) -> None:
+                if unsigned(m.get(rs1)) >= unsigned(m.get(rs2)):
+                    m.set_pc(m.pc + imm)
+
+            dest = labels.address_label(address+imm)
+
+            return Instruction(address, inst, ['bgeu', r[rs1], r[rs2], dest], execute_bgeu,
+                static_target=address+imm)
+
+        case _:
+            raise Fault(f'branch of unknown type {funct3}')
+
+def decode_load(address: int, inst: int, funct3: int, rd: int, rs1: int, imm: int) -> Instruction:
+    match funct3:
+        case 0:
+            def execute_lb(m: Machine) -> None:
+                effective_address = m.get(rs1) + imm
+                m.set(rd, m.load_int(effective_address, 1))
+
+            fields=['lb', r[rd], str(imm), '()', r[rs1]]
+
+            return Instruction(address, inst, fields, execute_lb)
+
+        case 1:
+            def execute_lh(m: Machine) -> None:
+                effective_address = m.get(rs1) + imm
+                m.set(rd, m.load_int(effective_address, 2))
+
+            fields=['lh', r[rd], str(imm), '()', r[rs1]]
+
+            return Instruction(address, inst, fields, execute_lh)
+
+        case 2:
+            def execute_lw(m: Machine) -> None:
+                effective_address = m.get(rs1) + imm
+                m.set(rd, m.load_int(effective_address, 4))
+
+            fields=['lw', r[rd], str(imm), '()', r[rs1]]
+
+            return Instruction(address, inst, fields, execute_lw)
+
+        case 3:
+            def execute_ld(m: Machine) -> None:
+                effective_address = m.get(rs1) + imm
+                m.set(rd, m.load_int(effective_address, 8))
+
+            fields=['ld', r[rd], str(imm), '()', r[rs1]]
+
+            return Instruction(address, inst, fields, execute_ld)
+
+        case 4:
+            def execute_lbu(m: Machine) -> None:
+                effective_address = m.get(rs1) + imm
+                m.set(rd, m.load_int(effective_address, 1, signed=False))
+
+            fields=['lbu', r[rd], str(imm), '()', r[rs1]]
+
+            return Instruction(address, inst, fields, execute_lbu)
+
+        case 5:
+            def execute_lhu(m: Machine) -> None:
+                effective_address = m.get(rs1) + imm
+                m.set(rd, m.load_int(effective_address, 2, signed=False))
+
+            fields=['lhu', r[rd], str(imm), '()', r[rs1]]
+
+            return Instruction(address, inst, fields, execute_lhu)
+
+        case 6:
+            def execute_lwu(m: Machine) -> None:
+                effective_address = m.get(rs1) + imm
+                m.set(rd, m.load_int(effective_address, 4, signed=False))
+
+            fields=['lwu', r[rd], str(imm), '()', r[rs1]]
+
+            return Instruction(address, inst, fields, execute_lwu)
+
+    raise Fault(f'load instruction of unknown type {funct3}')
+
+def decode_store(address: int, inst: int, funct3: int, rs1: int, rs2: int, imm: int) -> Instruction:
+    match funct3:
+        case 0:
+            def execute_sb(m: Machine) -> None:
+                effective_address = m.get(rs1) + imm
+                raw = ctypes.c_int8(m.get(rs2)). \
+                    value.to_bytes(1, byteorder='little', signed=True)
+                m.store(effective_address, raw)
+
+            fields=['sb', r[rs2], str(imm), '()', r[rs1]]
+
+            return Instruction(address, inst, fields, execute_sb)
+
+        case 1:
+            def execute_sh(m: Machine) -> None:
+                effective_address = m.get(rs1) + imm
+                raw = ctypes.c_int16(m.get(rs2)). \
+                    value.to_bytes(2, byteorder='little', signed=True)
+                m.store(effective_address, raw)
+
+            fields=['sh', r[rs2], str(imm), '()', r[rs1]]
+
+            return Instruction(address, inst, fields, execute_sh)
+
+        case 2:
+            def execute_sw(m: Machine) -> None:
+                effective_address = m.get(rs1) + imm
+                raw = ctypes.c_int32(m.get(rs2)). \
+                    value.to_bytes(4, byteorder='little', signed=True)
+                m.store(effective_address, raw)
+
+            fields=['sw', r[rs2], str(imm), '()', r[rs1]]
+
+            return Instruction(address, inst, fields, execute_sw)
+
+        case 3:
+            def execute_sd(m: Machine) -> None:
+                effective_address = m.get(rs1) + imm
+                raw = ctypes.c_int64(m.get(rs2)). \
+                    value.to_bytes(8, byteorder='little', signed=True)
+                m.store(effective_address, raw)
+
+            fields=['sd', r[rs2], str(imm), '()', r[rs1]]
+
+            return Instruction(address, inst, fields, execute_sd)
+
+    raise Fault(f'store instruction of unknown type {funct3}')
+
+def decode_alu_imm(labels: Machine, address: int, inst: int, funct3: int, rd: int, rs1: int, imm: int) -> Instruction:
+    shamt = imm & 0x3f
+    imm_high = imm>>6
+
+    match funct3:
+        case 0:
+            def execute_addi(m: Machine) -> None:
+                m.set(rd, m.get(rs1) + imm)
+
+            match (r[rd], r[rs1], imm):
+                case ('zero', 'zero', 0):
+                    fields=['nop']
+                case (_, 'zero', _):
+                    fields=['li', r[rd], str(imm)]
+                case (_, _, 0):
+                    fields=['mv', r[rd], r[rs1]]
+                case (_, 'gp', _) if r[rd] != 'gp':
+                    fields=['la', r[rd], labels.address_label(labels.global_pointer + imm)]
+                case _:
+                    fields=['addi', r[rd], r[rs1], str(imm)]
+
+            return Instruction(address, inst, fields, execute_addi)
+
+        case 2:
+            def execute_slti(m: Machine) -> None:
+                m.set(rd, 1 if m.get(rs1) < imm else 0)
+
+            return Instruction(address, inst, ['slti', r[rd], r[rs1], str(imm)], execute_slti)
+
+        case 3:
+            def execute_sltiu(m: Machine) -> None:
+                m.set(rd, 1 if unsigned(m.get(rs1)) < unsigned(imm) else 0)
+
+            if imm == 1:
+                fields=['seqz', r[rd], r[rs1]]
+            else:
+                fields=['sltiu', r[rd], r[rs1], str(imm)]
+
+            return Instruction(address, inst, fields, execute_sltiu)
+
+        case 4:
+            def execute_xori(m: Machine) -> None:
+                m.set(rd, m.get(rs1) ^ unsigned(imm))
+
+            if imm == -1:
+                fields=['not', r[rd], r[rs1]]
+            else:
+                fields=['xori', r[rd], r[rs1], str(imm)]
+
+            return Instruction(address, inst, fields, execute_xori)
+
+        case 6:
+            def execute_ori(m: Machine) -> None:
+                m.set(rd, m.get(rs1) | imm)
+
+            return Instruction(address, inst, ['ori', r[rd], r[rs1], str(imm)], execute_ori)
+
+        case 7:
+            def execute_andi(m: Machine) -> None:
+                m.set(rd, m.get(rs1) & imm)
+
+            return Instruction(address, inst, ['andi', r[rd], r[rs1], str(imm)], execute_andi)
+
+        case 1:
+            if imm_high != 0x00:
+                raise Fault(f'immediate mode alu instruction of type {funct3} with unknown subtype {imm_high}')
+
+            def execute_slli(m: Machine) -> None:
+                m.set(rd, m.get(rs1) << shamt)
+
+            return Instruction(address, inst, ['slli', r[rd], r[rs1], str(shamt)], execute_slli)
+
+        case 5:
+            if imm_high == 0x00:
+                def execute_srli(m: Machine) -> None:
+                    m.set(rd, unsigned(m.get(rs1)) >> shamt)
+
+                return Instruction(address, inst, ['srli', r[rd], r[rs1], str(shamt)], execute_srli)
+
+            elif imm_high == 0x10:
+                def execute_srai(m: Machine) -> None:
+                    m.set(rd, m.get(rs1) >> shamt)
+
+                return Instruction(address, inst, ['srai', r[rd], r[rs1], str(shamt)], execute_srai)
+
+            raise Fault(f'immediate mode alu instruction of type {funct3} with unknown subtype {imm_high}')
+
+    raise Fault(f'immediate mode alu instruction of unknown type {funct3}')
+
+def decode_alu_imm_w(labels: Machine, address: int, inst: int, funct3: int, rd: int, rs1: int, imm: int) -> Instruction:
+    shamt = imm & 0x1f
+    imm_high = imm>>5
+
+    match funct3:
+        case 0:
+            def execute_addiw(m: Machine) -> None:
+                m.set32(rd, m.get(rs1) + imm)
+
+            match (r[rd], r[rs1], imm):
+                case ('zero', 'zero', 0):
+                    fields=['nop']
+                case (_, 'zero', _):
+                    fields=['li', r[rd], str(imm)]
+                case _:
+                    fields=['addiw', r[rd], r[rs1], str(imm)]
+
+            return Instruction(address, inst, fields, execute_addiw)
+
+        case 1:
+            if imm_high != 0x00:
+                raise Fault(f'immediate mode alu w instruction of type {funct3} with unknown subtype {imm_high}')
+
+            def execute_slliw(m: Machine) -> None:
+                m.set32(rd, m.get(rs1) << shamt)
+
+            return Instruction(address, inst, ['slliw', r[rd], r[rs1], str(shamt)], execute_slliw)
+
+        case 5:
+            if imm_high == 0x00:
+                def execute_srliw(m: Machine) -> None:
+                    m.set32(rd, unsigned32(m.get(rs1)) >> shamt)
+
+                return Instruction(address, inst, ['srliw', r[rd], r[rs1], str(shamt)], execute_srliw)
+
+            elif imm_high == 0x20:
+                def execute_sraiw(m: Machine) -> None:
+                    m.set32(rd, clip32(m.get(rs1)) >> shamt)
+
+                return Instruction(address, inst, ['sraiw', r[rd], r[rs1], str(shamt)], execute_sraiw)
+
+            raise Fault(f'immediate mode alu w instruction of type {funct3} with unknown subtype {imm_high}')
+
+    raise Fault(f'immediate mode alu w instruction of unknown type {funct3}')
+
+def decode_alu(address: int, inst: int, funct3: int, rd: int, rs1: int, rs2: int, funct7: int) -> Instruction:
+    combined = (funct7 << 8) | funct3
+
+    match combined:
+        case 0x0000:
+            def execute_add(m: Machine) -> None:
+                m.set(rd, m.get(rs1) + m.get(rs2))
+
+            return Instruction(address, inst, ['add', r[rd], r[rs1], r[rs2]], execute_add)
+
+        case 0x2000:
+            def execute_sub(m: Machine) -> None:
+                m.set(rd, m.get(rs1) - m.get(rs2))
+
+            if r[rs1] == 'zero':
+                fields=['neg', r[rd], r[rs2]]
+            else:
+                fields=['sub', r[rd], r[rs1], r[rs2]]
+
+            return Instruction(address, inst, fields, execute_sub)
+
+        case 0x0001:
+            def execute_sll(m: Machine) -> None:
+                m.set(rd, m.get(rs1) << (m.get(rs2) & 0x3f))
+
+            return Instruction(address, inst, ['sll', r[rd], r[rs1], r[rs2]], execute_sll)
+
+        case 0x0002:
+            def execute_slt(m: Machine) -> None:
+                m.set(rd, 1 if m.get(rs1) < m.get(rs2) else 0)
+
+            if r[rs2] == 'zero':
+                fields=['sltz', r[rd], r[rs1]]
+            elif r[rs1] == 'zero':
+                fields=['sgtz', r[rd], r[rs2]]
+            else:
+                fields=['slt', r[rd], r[rs1], r[rs2]]
+
+            return Instruction(address, inst, fields, execute_slt)
+
+        case 0x0003:
+            def execute_sltu(m: Machine) -> None:
+                m.set(rd, 1 if unsigned(m.get(rs1)) < unsigned(m.get(rs2)) else 0)
+
+            if r[rs1] == 'zero':
+                fields=['snez', r[rd], r[rs2]]
+            else:
+                fields=['sltu', r[rd], r[rs1], r[rs2]]
+
+            return Instruction(address, inst, fields, execute_sltu)
+
+        case 0x0004:
+            def execute_xor(m: Machine) -> None:
+                m.set(rd, m.get(rs1) ^ m.get(rs2))
+
+            return Instruction(address, inst, ['xor', r[rd], r[rs1], r[rs2]], execute_xor)
+
+        case 0x0005:
+            def execute_srl(m: Machine) -> None:
+                m.set(rd, unsigned(m.get(rs1)) >> (m.get(rs2) & 0x3f))
+
+            return Instruction(address, inst, ['srl', r[rd], r[rs1], r[rs2]], execute_srl)
+
+        case 0x2005:
+            def execute_sra(m: Machine) -> None:
+                m.set(rd, m.get(rs1) >> (m.get(rs2) & 0x3f))
+
+            return Instruction(address, inst, ['sra', r[rd], r[rs1], r[rs2]], execute_sra)
+
+        case 0x0006:
+            def execute_or(m: Machine) -> None:
+                m.set(rd, m.get(rs1) | m.get(rs2))
+
+            return Instruction(address, inst, ['or', r[rd], r[rs1], r[rs2]], execute_or)
+
+        case 0x0007:
+            def execute_and(m: Machine) -> None:
+                m.set(rd, m.get(rs1) & m.get(rs2))
+
+            return Instruction(address, inst, ['and', r[rd], r[rs1], r[rs2]], execute_and)
+
+        case 0x0100:
+            def execute_mul(m: Machine) -> None:
+                m.set(rd, m.get(rs1) * m.get(rs2))
+
+            return Instruction(address, inst, ['mul', r[rd], r[rs1], r[rs2]], execute_mul)
+
+        case 0x0101:
+            def execute_mulh(m: Machine) -> None:
+                m.set(rd, (m.get(rs1) * m.get(rs2)) >> 64)
+
+            return Instruction(address, inst, ['mulh', r[rd], r[rs1], r[rs2]], execute_mulh)
+
+        case 0x0102:
+            def execute_mulhsu(m: Machine) -> None:
+                m.set(rd, (m.get(rs1) * unsigned(m.get(rs2))) >> 64)
+
+            return Instruction(address, inst, ['mulhsu', r[rd], r[rs1], r[rs2]], execute_mulhsu)
+
+        case 0x0103:
+            def execute_mulhu(m: Machine) -> None:
+                m.set(rd, (unsigned(m.get(rs1)) * unsigned(m.get(rs2))) >> 64)
+
+            return Instruction(address, inst, ['mulhu', r[rd], r[rs1], r[rs2]], execute_mulhu)
+
+        case 0x0104:
+            def execute_div(m: Machine) -> None:
+                if m.get(rs2) == 0:
+                    m.set(rd, -1)
+                else:
+                    m.set(rd, int(m.get(rs1) / m.get(rs2)))
+
+            return Instruction(address, inst, ['div', r[rd], r[rs1], r[rs2]], execute_div)
+
+        case 0x0105:
+            def execute_divu(m: Machine) -> None:
+                if m.get(rs2) == 0:
+                    m.set(rd, -1)
+                else:
+                    m.set(rd, unsigned(m.get(rs1)) // unsigned(m.get(rs2)))
+
+            return Instruction(address, inst, ['divu', r[rd], r[rs1], r[rs2]], execute_divu)
+
+        case 0x0106:
+            def execute_rem(m: Machine) -> None:
+                if m.get(rs2) == 0:
+                    m.set(rd, m.get(rs1))
+                else:
+                    m.set(rd, m.get(rs1) - int(m.get(rs1) / m.get(rs2)) * m.get(rs2))
+
+            return Instruction(address, inst, ['rem', r[rd], r[rs1], r[rs2]], execute_rem)
+
+        case 0x0107:
+            def execute_remu(m: Machine) -> None:
+                if m.get(rs2) == 0:
+                    m.set(rd, m.get(rs1))
+                else:
+                    m.set(rd, unsigned(m.get(rs1)) % unsigned(m.get(rs2)))
+
+            return Instruction(address, inst, ['remu', r[rd], r[rs1], r[rs2]], execute_remu)
+
+    raise Fault(f'alu instruction of unknown type {funct3} subtype {funct7}')
+
+def decode_alu_w(address: int, inst: int, funct3: int, rd: int, rs1: int, rs2: int, funct7: int) -> Instruction:
+    combined = (funct7 << 8) | funct3
+
+    match combined:
+        case 0x0000:
+            def execute_addw(m: Machine) -> None:
+                m.set32(rd, m.get(rs1) + m.get(rs2))
+
+            return Instruction(address, inst, ['addw', r[rd], r[rs1], r[rs2]], execute_addw)
+
+        case 0x2000:
+            def execute_subw(m: Machine) -> None:
+                m.set32(rd, m.get(rs1) - m.get(rs2))
+
+            return Instruction(address, inst, ['subw', r[rd], r[rs1], r[rs2]], execute_subw)
+
+        case 0x0001:
+            def execute_sllw(m: Machine) -> None:
+                m.set32(rd, m.get(rs1) << (m.get(rs2) & 0x1f))
+
+            return Instruction(address, inst, ['sllw', r[rd], r[rs1], r[rs2]], execute_sllw)
+
+        case 0x0005:
+            def execute_srlw(m: Machine) -> None:
+                m.set32(rd, unsigned32(m.get(rs1)) >> (m.get(rs2) & 0x1f))
+
+            return Instruction(address, inst, ['srlw', r[rd], r[rs1], r[rs2]], execute_srlw)
+
+        case 0x2005:
+            def execute_sraw(m: Machine) -> None:
+                m.set32(rd, clip32(m.get(rs1)) >> (m.get(rs2) & 0x1f))
+
+            return Instruction(address, inst, ['sraw', r[rd], r[rs1], r[rs2]], execute_sraw)
+
+        case 0x0100:
+            def execute_mulw(m: Machine) -> None:
+                m.set32(rd, m.get(rs1) * m.get(rs2))
+
+            return Instruction(address, inst, ['mulw', r[rd], r[rs1], r[rs2]], execute_mulw)
+
+        case 0x0104:
+            def execute_divw(m: Machine) -> None:
+                if m.get(rs2) == 0:
+                    m.set32(rd, -1)
+                else:
+                    m.set32(rd, int(m.get(rs1) / m.get(rs2)))
+
+            return Instruction(address, inst, ['divw', r[rd], r[rs1], r[rs2]], execute_divw)
+
+        case 0x0105:
+            def execute_divuw(m: Machine) -> None:
+                if m.get(rs2) == 0:
+                    m.set32(rd, -1)
+                else:
+                    m.set32(rd, unsigned(m.get(rs1)) // unsigned(m.get(rs2)))
+
+            return Instruction(address, inst, ['divuw', r[rd], r[rs1], r[rs2]], execute_divuw)
+
+        case 0x0106:
+            def execute_remw(m: Machine) -> None:
+                if m.get(rs2) == 0:
+                    m.set32(rd, m.get(rs1))
+                else:
+                    m.set32(rd, m.get(rs1) - int(m.get(rs1) / m.get(rs2)) * m.get(rs2))
+
+            return Instruction(address, inst, ['remw', r[rd], r[rs1], r[rs2]], execute_remw)
+
+        case 0x0107:
+            def execute_remuw(m: Machine) -> None:
+                if m.get(rs2) == 0:
+                    m.set32(rd, m.get(rs1))
+                else:
+                    m.set32(rd, unsigned(m.get(rs1)) % unsigned(m.get(rs2)))
+
+            return Instruction(address, inst, ['remuw', r[rd], r[rs1], r[rs2]], execute_remuw)
+
+    raise Fault(f'alu w instruction of unknown type {funct3} subtype {funct7}')
+
+
+def decode_ecall(address: int, inst: int) -> Instruction:
+    def execute_ecall(m: Machine) -> None:
+        assert(m.effects is not None)
+        if m.get(17) == 63:
+            # read system call
+            m.effects.other_message = f'read({m.get(10)}, {hex(m.get(11))}, {m.get(12)})'
+            if m.get(10) != 0:
+                raise Fault(f'read syscall: only stdin (fd 0) supported, not {m.get(10)}')
+            if m.get(12) < 0:
+                raise Fault(f'read syscall: invalid buffer size: {m.get(12)}')
+
+            read_res = sys.stdin.buffer.read(m.get(12))
+            m.store(m.get(11), read_res)
+            m.set(10, len(read_res))
+            m.effects.stdin = read_res
+            m.stdin += read_res
+            return
+
+        if m.get(17) == 64:
+            # write system call
+            m.effects.other_message = f'write({m.get(10)}, {hex(m.get(11))}, {m.get(12)})'
+            if m.get(10) != 1:
+                raise Fault(f'write syscall: only stdout (fd 1) supported, not {m.get(10)}')
+            if m.get(12) < 0:
+                raise Fault(f'write syscall: invalid buffer size: {m.get(12)}')
+
+            buf = m.load(m.get(11), m.get(12))
+            m.set(10, len(buf))
+            m.effects.stdout = buf
+            m.stdout += buf
+            return
+
+        if m.get(17) == 93:
+            # exit system call
+            m.effects.other_message = f'exit({m.get(10)})'
+            m.effects.terminate = True
+            return
+
+        # unimplemented
+        raise Fault(f'unsupported syscall {m.get(17)}')
+
+    return Instruction(address, inst, ['ecall'], execute_ecall)
+
+def find_instruction(instructions: list[Instruction], address: int) -> int:
+    # jump to the approximate location in the list
+    # by pretending all instructions are the same length
+    from_start = address - instructions[0].address
+    span = instructions[-1].address - instructions[0].address
+    i = (len(instructions) * from_start) // span
+
+    # now correct
+    i = max(0, min(i, len(instructions) - 1))
+    while instructions[i].address > address:
+        i -= 1
+    while instructions[i].address < address:
+        i += 1
+    return i
+
+def pair_instructions(m: Machine, instructions: list[Instruction]) -> None:
+    i = 0
+    while i + 1 < len(instructions):
+        instruction = instructions[i]
+        instruction2 = instructions[i+1]
+        match (instruction, instruction2):
+            case (Instruction(fields=['auipc', rd0, imm0]),
+                  Instruction(fields=['addi', rd, rs1, imm])) if rd0 == rd and rs1 == rd:
+                addr = instruction.address + int(imm0) + int(imm)
+                sym = m.address_label(addr)
+
+                # wrapper to capture snapshots of the needed values
+                def wrap_la(target_reg: int, value: int, length: int) -> Callable[[Machine], None]:
+                    def execute_la(m: Machine) -> None:
+                        m.set(target_reg, value)
+                        m.set_pc(m.pc + length)
+                    return execute_la
+
+                # replace the auipc, addi sequence with la
+                length = instruction.length + instruction2.length
+                new_instruction = Instruction(
+                    instruction.address, 
+                    instruction.instruction << 32 | instruction2.instruction,
+                    ['la', rd0, sym],
+                    wrap_la(r.index(rd), addr, length),
+                    length=length)
+                instructions[i] = new_instruction
+                del instructions[i+1]
+            case (Instruction(fields=['auipc', rd0, imm0]),
+                  Instruction(fields=['jalr', rd, imm, '()', rs1])) if rd0 == rd and rs1 == rd and rd == 'ra':
+                addr = instruction.address + int(imm0) + int(imm)
+                sym = m.address_label(addr)
+
+                # wrapper to capture snapshots of the needed values
+                def wrap_call(ra_reg: int, target_addr: int, length: int) -> Callable[[Machine], None]:
+                    def execute_call(m: Machine) -> None:
+                        m.set(ra_reg, m.pc + length)
+                        m.set_pc(target_addr)
+                    return execute_call
+
+                # replace the auipc, addi sequence with la
+                length = instruction.length + instruction2.length
+                new_instruction = Instruction(
+                    instruction.address, 
+                    instruction.instruction << 32 | instruction2.instruction,
+                    ['call', sym],
+                    wrap_call(r.index(rd), addr, length),
+                    length=length)
+                instructions[i] = new_instruction
+                del instructions[i+1]
+
+                instruction.fields = ['auipc', rd0, imm0, f'[call {sym}]']
+        i += 1
+
+def add_labels(m: Machine, instructions: list[Instruction]) -> None:
+    # add labels from the symbol table and note branch targets
+    for instruction in instructions:
+        if instruction.address in m.address_symbols:
+            instruction.label = m.address_symbols[instruction.address]
+        if instruction.static_target is not None:
+            i = find_instruction(instructions, instruction.static_target)
+            instructions[i].is_target = True
+
+    # add numbered local labels
+    next_label = 1
+    next_fn = {}
+    prev = -1
+    for instruction in instructions:
+        if instruction.label is None and instruction.is_target:
+            instruction.label = str(next_label)
+            next_label += 1
+        elif instruction.label is not None:
+            next_label = 1
+            if prev >= 0:
+                next_fn[prev] = instruction.address
+            prev = instruction.address
+    if prev >= 0:
+        next_fn[prev] = m.text_end
+
+    # update branches to reference local labels
+    fn_start = 0
+    for instruction in instructions:
+        if instruction.label is not None and not instruction.label.isdigit():
+            fn_start = instruction.address
+            fn_end = next_fn[fn_start]
+        match instruction.fields:
+            case ['j', dest]:
+                pass
+            case ['beqz', _, dest]:
+                pass
+            case ['beq', _, _, dest]:
+                pass
+            case ['bnez', _, dest]:
+                pass
+            case ['bne', _, _, dest]:
+                pass
+            case ['bgtz', _, dest]:
+                pass
+            case ['bltz', _, dest]:
+                pass
+            case ['blt', _, _, dest]:
+                pass
+            case ['blez', _, dest]:
+                pass
+            case ['bgez', _, dest]:
+                pass
+            case ['bge', _, _, dest]:
+                pass
+            case ['bltu', _, _, dest]:
+                pass
+            case ['bgeu', _, _, dest]:
+                pass
+            case _:
+                continue
+        if not dest.isdigit():
+            continue
+
+        # ignore branches outside the current function
+        addr = int(dest)
+        if addr < fn_start or addr >= fn_end:
+            continue
+
+        i = find_instruction(instructions, addr)
+        target_label = instructions[i].label
+        assert(target_label is not None)
+        if target_label.isdigit():
+            if addr < instruction.address:
+                instruction.fields[-1] = f'{target_label}b'
+            elif addr > instruction.address:
+                instruction.fields[-1] = f'{target_label}f'
+
+def pre_trace(m: Machine, instructions: list[Instruction], echo_out: bool, echo_in: bool, lint: bool) -> list[Effects]:
+    context_stack: list[tuple[list[int], list[bool], int]] = []
+    entry_registers = list(range(32))
+    next_value_number = 32
+    regs = list(entry_registers)
+    valid = [True, False, True] + [False]*29
+    entry_sp = m.x[2]
+    memory = {}
+
+    sequence = []
+    i = -1
+    max_steps = 100000
+    while len(sequence) < max_steps:
+        # fetch the next instruction
+        i += 1
+        if i >= len(instructions) or instructions[i].address != m.pc:
+            i = find_instruction(instructions, m.pc)
+
+        instruction = instructions[i]
+        e = Effects(instruction)
+        m.effects = e
+        try:
+            instruction.execute(m)
+        except Fault as err:
+            e.other_message = err.msg
+            e.terminate = True
+        if e.pc == (0, 0):
+            m.set_pc(m.pc + instruction.length)
+        m.effects = None
+        sequence.append(e)
+        if echo_out and e.stdout is not None:
+            sys.stdout.buffer.write(e.stdout)
+            sys.stdout.flush()
+        if echo_in and e.stdin is not None and not sys.stdin.isatty():
+            sys.stdout.buffer.write(e.stdin)
+            sys.stdout.flush()
+        if e.terminate:
+            break
+
+        if not lint:
+            continue
+
+        # trace values
+        try:
+            # first check that all input registers are valid values
+            for elt in e.reg_reads:
+                x = elt.register
+                if not valid[x]:
+                    raise Fault(f'{r[x]} is uninitialized')
+
+            # next record register write
+            if e.reg_write is not None:
+                x = e.reg_write[1].register
+                valid[x] = True
+
+                # mv clones a value
+                if instruction.fields[0] == 'mv':
+                    assert(len(e.reg_reads) == 1)
+                    regs[x] = regs[e.reg_reads[0].register]
+                else:
+                    regs[x] = next_value_number
+                    next_value_number += 1
+
+                # sp must be aligned on 16-byte address
+                if x == 2 and m.x[x] & 0xf != 0:
+                    raise Fault('sp must be a multiple of 16')
+
+            match instruction.fields[0]:
+                case 'call' | 'jal' | 'jalr':
+                    # must use ra for return address
+                    match e.reg_write:
+                        case (_, RegisterValue(1, _)):
+                            pass
+                        case _:
+                            raise Fault('{instruction.fields[0]} did not use ra for return address')
+
+                    # must call named function
+                    if e.pc[1] not in m.address_symbols:
+                        raise Fault('{instruction.fields[0]} to unlabeled address')
+                    name = m.address_symbols[e.pc[1]]
+
+                    # push old register context and clone it as starting point
+                    context_stack.append( (entry_registers, valid, entry_sp) )
+                    valid = list(valid)
+                    entry_sp = m.x[2]
+                    e.function_start = m.x[2]
+
+                    # invalidate all t registers
+                    for x in t_regs:
+                        regs[x] = -1
+                        valid[x] = False
+
+                    arg_count = 8
+                    if name + '_args' in m.other_symbols:
+                        arg_count = m.other_symbols[name + '_args']
+
+                        # make sure func args are all valid values
+                        for x in a_regs[:arg_count]:
+                            if not valid[x]:
+                                raise Fault(f'argument in {r[x]} is uninitialized')
+                        for x in a_regs[arg_count:]:
+                            regs[x] = -1
+                            valid[x] = False
+                    else:
+                        # assume all a registers are function args
+                        for x in a_regs[:arg_count]:
+                            if regs[x] >= 0:
+                                valid[x] = True
+                            else:
+                                valid[x] = False
+
+                    # make sure all s registers have a number
+                    for x in s_regs:
+                        if regs[x] < 0:
+                            regs[x] = next_value_number
+                            next_value_number += 1
+                        valid[x] = True
+
+                    # record the registers at function entry time
+                    entry_registers = list(regs)
+
+                case 'ret':
+                    # ra, gp, and tp must match what they were at call time
+                    for x in [1, 3, 4]:
+                        if regs[x] != entry_registers[x]:
+                            print(f'{r[x]}: was {entry_registers[x]} now {regs[x]}')
+                            raise Fault(f'{r[x]} is not same value as when function called')
+
+                    # s registers must be same as at call time
+                    for x in s_regs:
+                        if regs[x] != entry_registers[x]:
+                            raise Fault(f'{r[x]} is not same value as when function called')
+
+                    # sp must have same address, but not necessarily same value
+                    if m.x[2] != entry_sp:
+                        raise Fault('sp is not same value as when function called')
+                    e.function_end = m.x[2]
+
+                    # pop previous function context
+                    (entry_registers, valid, entry_sp) = context_stack.pop()
+
+                    # invalidate t and a1+ registers
+                    for x in t_regs:
+                        regs[x] = -1
+                        valid[x] = False
+                    for x in a_regs[1:]:
+                        regs[x] = -1
+                        valid[x] = False
+
+                case 'sb' | 'sh' | 'sw' | 'sd':
+                    assert(e.mem_write is not None)
+                    (addr, size) = (e.mem_write[1].address, len(e.mem_write[1].value))
+
+                    # insist on aligned writes
+                    # partial register writes count as new values
+                    # since re-reading them does not restore a full register value
+                    rs2 = r.index(instruction.fields[1])
+                    match instruction.fields[0]:
+                        case 'sb':
+                            alignment = 0
+                            value_number = next_value_number
+                            next_value_number += 1
+                        case 'sh':
+                            alignment = 1
+                            value_number = next_value_number
+                            next_value_number += 1
+                        case 'sw':
+                            alignment = 3
+                            value_number = next_value_number
+                            next_value_number += 1
+                        case 'sd':
+                            alignment = 7
+                            value_number = regs[rs2]
+                    if addr & alignment != 0:
+                        raise Fault('unaligned write to memory')
+
+                    # record the memory write
+                    for address in range(addr, addr+size):
+                        memory[address] = (value_number, size)
+                    
+                case 'lb' | 'lh' | 'lw' | 'ld' | 'lbu' | 'lhu' | 'lwu':
+                    assert(e.mem_read is not None)
+                    (addr, size) = (e.mem_read.address, len(e.mem_read.value))
+
+                    # insist on aligned reads
+                    # partial register reads count as new values
+                    # since they do not restore a full register value
+                    rd = r.index(instruction.fields[1])
+                    match instruction.fields[0]:
+                        case 'lb' | 'lbu':
+                            alignment = 0
+                        case 'lh' | 'lhu':
+                            alignment = 1
+                        case 'lw' | 'lwu':
+                            alignment = 3
+                        case 'ld':
+                            alignment = 7
+                    if addr & alignment != 0:
+                        raise Fault('unaligned read from memory')
+
+                    # we accept two kinds of reads:
+                    # 1. a value that has not been written (recorded as a new number)
+                    # 2. a single value that is the same size as when written
+                    if addr in memory:
+                        value_number = memory[addr][0]
+                        for address in range(addr, addr+size):
+                            if address not in memory:
+                                raise Fault('reading data that was only partially written')
+                            (n, s) = memory[address]
+                            if n != value_number:
+                                raise Fault('reading data from multiple writes')
+                            if s != size:
+                                raise Fault('reading data with different size than when written')
+                    else:
+                        value_number = next_value_number
+                        next_value_number += 1
+                        for address in range(addr, addr+size):
+                            if address in memory:
+                                raise Fault('reading data that is only partially from a previous write')
+                    regs[rd] = value_number
+
+                case 'ecall':
+                    if e.mem_read is not None:
+                        # only allow bytes to the write syscall
+                        (addr, size) = (e.mem_read.address, len(e.mem_read.value))
+                        for address in range(addr, addr+size):
+                            if address in memory:
+                                (_, s) = memory[address]
+                                if s != 1:
+                                    raise Fault('write syscall on non-byte data')
+                    if e.mem_write is not None:
+                        (addr, size) = (e.mem_write[1].address, len(e.mem_write[1].value))
+                        for address in range(addr, addr+size):
+                            # do not allow overwrite of non-byte data
+                            if address in memory:
+                                (_, s) = memory[address]
+                                if s != 1:
+                                    raise Fault('read syscall overwriting non-byte data')
+
+                            # record data as individual bytes
+                            memory[address] = (next_value_number, 1)
+                            next_value_number += 1
+        except Fault as err:
+            e.other_message = err.msg
+            e.terminate = True
+            break
+
+    if len(sequence) >= max_steps:
+        e.other_message = f'stopped after {max_steps} steps'
+        e.terminate = True
+
+    return sequence
+
+def find_function_bounds(instructions: list[Instruction], pc_i: int) -> tuple[int, int]:
+    assert(pc_i >= 0 and pc_i < len(instructions))
+    for start_i in range(pc_i, -1, -1):
+        label = instructions[start_i].label
+        if label is not None and not label.isdigit():
+            break
+    for end_i in range(pc_i+1, len(instructions)):
+        label = instructions[end_i].label
+        if label is not None and not label.isdigit():
+            break
+    return (start_i, end_i)
+
+def calc_range(length: int, cursor: int, window_size: int) -> tuple[int, int]:
+    half = (window_size - 1) // 2
+    start = cursor - half
+    end = start + window_size
+    # shift up or down if it will fit more info
+    if start < 0:
+        shift = min(-start, max(0, length - end))
+        start += shift
+        end += shift
+    if end > length:
+        shift = min(end - length, max(0, start))
+        start -= shift
+        end -= shift
+    return (start, end)
+
+def ui(m: Machine, instructions: list[Instruction], sequence: list[Effects]) -> None:
+    # make sure stdin is connected to the tty
+    if not sys.stdin.isatty():
+        sys.stdin.close()
+        os.close(0)
+        sys.stdin = open('/dev/tty', 'r')
+
+    # take over terminal
+    stdscr = curses.initscr()
+    curses.noecho()
+    curses.cbreak()
+    stdscr.keypad(True)
+    stdscr.clear()
+    curses.curs_set(0)
+    curses.start_color()
+    curses.use_default_colors()
+    if curses.COLORS < 256:
+        print('This must be run in a terminal with support for at least 256 colors')
+        sys.exit(1)
+
+    # colors:
+    # 0 = normal line (white on black, built-in)
+    # 1 = current pc
+    curses.init_pair(1, curses.COLOR_BLACK, 71)
+    # 2 = cursor (if != pc)
+    curses.init_pair(2, curses.COLOR_BLACK, 102)
+    # 3 = current memory address
+    curses.init_pair(3, curses.COLOR_WHITE, 17)
+    # 10-16: memory, with pastel foreground colors
+    curses.init_pair(10, 102, 16)
+    curses.init_pair(11, 138, 16)
+    curses.init_pair(12, 144, 16)
+    curses.init_pair(13, 108, 16)
+    curses.init_pair(14, 109, 16)
+    curses.init_pair(15, 103, 16)
+    curses.init_pair(16, 139, 16)
+    data_color_pairs = [10, 11, 12, 13, 14, 15, 16]
+    data_colors = list(zip(sorted(m.address_symbols.keys()), itertools.cycle(data_color_pairs)))
+
+    # just in case there is no data segment
+    if len(data_colors) == 0:
+        data_colors.append((0, 0))
+
+    # handle screen resizes
+    (size_y, size_x) = (0, 0)
+    active = True
+    def resize() -> None:
+        nonlocal stdscr, size_y, size_x, active
+        (size_y, size_x) = stdscr.getmaxyx()
+        if size_y < 3 or size_x < 5:
+            active = False
+            return
+        active = True
+
+    def addcolorstr(y: int, x: int, line: str, width: int) -> None:
+        nonlocal stdscr
+        i = 0
+        color = 0
+        while len(line) > 0 and i < width:
+            if ord(line[0]) == 27:
+                # escape followed by 2-digit decimal color pair number
+                color = int(line[1:3])
+                line = line[3:]
+                continue
+            j = 0
+            while j < len(line) and i+j < width and ord(line[j]) != 27:
+                j += 1
+            chunk = line[:j]
+            line = line[j:]
+            stdscr.addstr(y, x+i, chunk, curses.color_pair(color))
+            i += j
+
+    (src_y, src_x) = (0, 0)
+    seq_i = 0
+    pc_i = find_instruction(instructions, sequence[seq_i].instruction.address)
+    cursor_i = pc_i
+    def draw() -> None:
+        nonlocal stdscr, size_y, size_x, src_y, src_x, seq_i, m, data_colors
+        if not active:
+            return
+        stdscr.erase()
+        stdscr.box()
+
+        # source view
+        (src_top, src_y, src_x) = (1, size_y-2, size_x-2)
+
+        # wide enough for memory view?
+        (stack_left, stack_top, stack_y, stack_x) = (-1, 1, size_y-2, 40)
+        (data_left, data_top, data_y, data_x) = (-1, 1, size_y-2, 40)
+        if src_x >= 80:
+            src_x -= data_x+1
+
+            # stack, data, or both?
+            if size_y >= 20 and m.data_start > 0:
+                stack_left = src_x+2
+                stack_y = (size_y - 3) // 3
+                data_left = src_x+2
+                data_top = stack_top + stack_y + 1
+                data_y = size_y - stack_y - 3
+            elif m.most_recent_memory >= m.stack_start:
+                stack_left = src_x+2
+            else:
+                data_left = src_x+2
+
+        # tall enough for register view?
+        (reg_top, reg_y, reg_x) = (-1, 4, src_x)
+        if src_y - (reg_y+1) >= 3:
+            src_y -= reg_y+1
+            reg_top = src_top + src_y + 1
+
+        # tall enough for output view?
+        (out_top, out_y, out_x) = (-1, 4, src_x)
+        if src_y - (out_y+1) >= 3:
+            src_y -= out_y+1
+            reg_top -= out_y+1
+            out_top = reg_top + reg_y + 1
+
+        # source/text view
+        status_line = f' Step {seq_i+1}/{len(sequence)} PC:{instructions[pc_i].address:x} '
+        stdscr.addstr(src_top-1, 2, status_line)
+
+        # draw arrows for taken branches
+        # or targets of taken branches
+        (arrow_top, arrow_top_addr) = ([], -1)
+        (arrow_bottom, arrow_bottom_addr) = ([], -1)
+
+        effects = sequence[seq_i]
+        instruction = effects.instruction
+        if      instruction.fields[-1][-1] in 'bf' and \
+                instruction.static_target is not None and instruction.return_target is None and \
+                effects.pc[1] == instruction.static_target and \
+                effects.pc[0] != effects.pc[1] and \
+                effects.pc[0] + 4 != effects.pc[1]:
+            is_back = effects.pc[1] < effects.pc[0]
+            (arrow_top, arrow_top_addr) = (
+                [curses.ACS_ULCORNER, curses.ACS_HLINE, curses.ACS_HLINE],
+                effects.pc[1] if is_back else effects.pc[0])
+            (arrow_bottom, arrow_bottom_addr) = (
+                [curses.ACS_LLCORNER, curses.ACS_HLINE, curses.ACS_HLINE],
+                effects.pc[0] if is_back else effects.pc[1])
+
+        (start, _) = calc_range(len(instructions), cursor_i, src_y)
+        extra = ''
+        for i in range(src_y):
+            i_i = start + i
+            if 0 <= i_i < len(instructions):
+                instruction = instructions[i_i]
+                addr = instruction.address
+                arrow = []
+                if addr == arrow_top_addr:
+                    arrow = arrow_top
+                elif addr == arrow_bottom_addr:
+                    arrow = arrow_bottom
+                elif arrow_top_addr < addr < arrow_bottom_addr:
+                    arrow = [curses.ACS_VLINE]
+                if i_i == pc_i:
+                    effects = sequence[seq_i]
+                    line = instruction.render()
+                    lines = effects.report()[:2]
+                    if lines[0] == '':
+                        del(lines[0])
+                    extra = ', '.join(lines)
+                    if extra != '':
+                        extra = f' {extra} '
+                    color = curses.color_pair(1)
+                else:
+                    line = instruction.render()
+                    if i_i == cursor_i:
+                        color = curses.color_pair(2)
+                    else:
+                        color = curses.color_pair(0)
+            else:
+                line = ''
+                color = curses.color_pair(0)
+                
+            stdscr.addstr(src_top+i, 1, line[:src_x].ljust(src_x), color)
+            for (j, ch) in enumerate(arrow):
+                stdscr.addch(src_top+i, 1+12+j, ch, color)
+
+        # memory view
+        if stack_left >= 0 or data_left >= 0:
+            stdscr.vline(1, max(data_left, stack_left)-1, curses.ACS_VLINE, size_y-2)
+            stdscr.addch(0, max(data_left, stack_left)-1, curses.ACS_TTEE)
+            stdscr.addch(size_y-1, max(data_left, stack_left)-1, curses.ACS_BTEE)
+            if stack_left >= 0 and data_left >= 0:
+                stdscr.hline(data_top-1, data_left, curses.ACS_HLINE, data_x)
+                stdscr.addch(data_top-1, data_left - 1, curses.ACS_LTEE)
+                stdscr.addch(data_top-1, data_left + data_x, curses.ACS_RTEE)
+            if stack_left >= 0:
+                status_line = ' Stack '[:stack_x-2]
+                stdscr.addstr(stack_top-1, stack_left+1, status_line)
+            if data_left >= 0:
+                status_line = ' Data '[:data_x-2]
+                stdscr.addstr(data_top-1, data_left+1, status_line)
+
+            # add stack frame boundaries to the color list
+            frames = m.stack_frames + [m.get(r.index('sp'))]
+            if len(frames) > 1 and frames[-1] == frames[-2]:
+                frames.pop()
+            stack_colors = list(reversed(list(zip(frames, itertools.cycle(data_color_pairs)))))
+            data_colors.extend(stack_colors)
+
+            (left, top) = (0, 1)
+            current_region = len(data_colors) - 1
+            def memory_line() -> None:
+                nonlocal current_region
+                while current_region > 0 and data_colors[current_region][0] > addr:
+                    current_region -= 1
+                (addr_s, hex_s, ascii_s) = (f'{"":7}', '', '')
+                color = 0
+                for j in range(addr, addr+8):
+                    if j >= m.data_start and j < m.data_end or j >= m.stack_start and j < m.stack_start+STACK_SIZE:
+                        addr_s = f'{addr:06x}:'
+
+                        # did we just hit a label?
+                        if current_region+1 < len(data_colors) and data_colors[current_region+1][0] == j:
+                            current_region += 1
+                        next_color = data_colors[current_region][1]
+
+                        (recent, size) = (m.most_recent_stack[0], m.most_recent_stack[1])
+                        if recent <= j < recent + size:
+                            next_color = 1
+                        (recent, size) = (m.most_recent_data[0], m.most_recent_data[1])
+                        if recent <= j < recent + size:
+                            next_color = 1
+                        
+                        # space between hex bytes
+                        if j > addr:
+                            # end the old color before the space
+                            if color != 0 and color != next_color:
+                                hex_s += '\03300'
+                            hex_s += ' '
+
+                        # start the new color
+                        if color != next_color:
+                            color = next_color
+                            hex_s += f'\033{color:02}'
+                            ascii_s += f'\033{color:02}'
+
+                        if m.is_valid_addr(j):
+                            n = m.load_int(j, 1, signed=False)
+                            hex_s += f'{n:02x}'
+                            if n >= ord(' ') and n <= ord('~'):
+                                ascii_s += chr(n)
+                            else:
+                                ascii_s += '·'
+                        else:
+                            hex_s += '  '
+                            ascii_s += ' '
+                    else:
+                        if color != 0:
+                            color = 0
+                            hex_s += '\03300'
+                            ascii_s += '\03300'
+                        hex_s += '   '
+                        ascii_s += ' '
+                if color != 0:
+                    hex_s += '\03300'
+                    ascii_s += '\03300'
+                stdscr.addstr(top+i, left, addr_s, color)
+                addcolorstr(top+i, left, f'{addr_s}{hex_s} {ascii_s}', data_x)
+
+            if stack_left >= 0:
+                left = stack_left
+                top = stack_top
+                current_region = len(data_colors) - 1
+                (_, end) = calc_range(
+                    (m.stack_end - m.stack_start)//8,
+                    (m.most_recent_stack[0] - m.stack_start)//8,
+                    stack_y)
+
+                for i in range(stack_y):
+                    addr = m.stack_start + (end - 1 - i)*8
+                    memory_line()
+            if data_left >= 0:
+                left = data_left
+                top = data_top
+                current_region = len(data_colors) - 1
+                (_, end) = calc_range(
+                    (m.data_end - m.data_start)//8,
+                    (m.most_recent_data[0] - m.data_start)//8,
+                    data_y)
+                for i in range(data_y):
+                    addr = m.data_start + (end - 1 - i)*8
+                    memory_line()
+
+            # clear the stack frame colors
+            del data_colors[len(data_colors) - len(stack_colors):]
+
+        # register view
+        if reg_top >= 0:
+            stdscr.hline(reg_top-1, 1, curses.ACS_HLINE, reg_x)
+            stdscr.addch(reg_top-1, 0, curses.ACS_LTEE)
+            stdscr.addch(reg_top-1, reg_x+1, curses.ACS_PLUS if reg_top == data_top else curses.ACS_RTEE)
+            status_line = ' Registers '[:reg_x-2]
+            stdscr.addstr(reg_top-1, 2, status_line)
+
+            lines = [
+                ' '.join([f'{x}:{m.get(r.index(x)):x}'
+                    for x in ('ra', 'sp', 'gp', 'tp')]),
+                ' '.join([f'{x}:{m.get(r.index(x)):x}'
+                    for x in ('a0', 'a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7')]),
+                ' '.join([f'{x}:{m.get(r.index(x)):x}'
+                    for x in ('t0', 't1', 't2', 't3', 't4', 't5', 't6')]),
+                ' '.join([f'{x}:{m.get(r.index(x)):x}'
+                    for x in ('s0', 's1', 's2', 's3', 's4', 's5', 's6', 's7', 's8', 's9', 's10', 's11')]),
+            ]
+            for (i, line) in enumerate(lines):
+                stdscr.addstr(reg_top+i, 1, line[:reg_x])
+
+        # output view
+        if out_top >= 0:
+            stdscr.hline(out_top-1, 1, curses.ACS_HLINE, out_x)
+            stdscr.addch(out_top-1, 0, curses.ACS_LTEE)
+            stdscr.addch(out_top-1, out_x+1, curses.ACS_PLUS if out_top == data_top else curses.ACS_RTEE)
+            status_line = ' Output '[:out_x-2]
+            stdscr.addstr(out_top-1, 2, status_line)
+
+            lines = m.stdout.decode().splitlines()[-out_y:]
+            for (i, line) in enumerate(lines):
+                stdscr.addstr(out_top+i, 1, line[:reg_x])
+
+        if extra != '':
+            stdscr.addstr(size_y-1, 2, extra[:size_x-4])
+        stdscr.refresh()
+
+    resize()
+    draw()
+
+    first = True
+    block = True
+    while True:
+        stdscr.nodelay(not block)
+        key = stdscr.getch()
+        if key == curses.KEY_RIGHT and seq_i+1 < len(sequence):
+            m.apply(sequence[seq_i], True)
+            seq_i += 1
+            m.set_most_recent_memory(sequence, seq_i)
+            pc_i = find_instruction(instructions, sequence[seq_i].instruction.address)
+            cursor_i = pc_i
+        elif key == curses.KEY_LEFT and seq_i > 0:
+            seq_i -= 1
+            m.apply(sequence[seq_i], False)
+            m.set_most_recent_memory(sequence, seq_i)
+            pc_i = find_instruction(instructions, sequence[seq_i].instruction.address)
+            cursor_i = pc_i
+        elif key == curses.KEY_UP:
+            cursor_i = max(0, cursor_i - 1)
+        elif key == curses.KEY_DOWN:
+            cursor_i = min(len(instructions) - 1, cursor_i + 1)
+        elif key == curses.KEY_PPAGE:
+            cursor_i = max(0, cursor_i - src_y)
+        elif key == curses.KEY_NPAGE:
+            cursor_i = min(len(instructions) - 1, cursor_i + src_y)
+        elif key in (curses.KEY_ENTER, ord('\n')):
+            # find the next time the pc reaches this address
+            for peek in range(seq_i+1, len(sequence)):
+                if find_instruction(instructions, sequence[peek].instruction.address) == cursor_i:
+                    # play the sequence forward to this point
+                    for seq_i in range(seq_i, peek):
+                        m.apply(sequence[seq_i], True)
+                    seq_i += 1
+                    m.set_most_recent_memory(sequence, seq_i)
+                    pc_i = find_instruction(instructions, sequence[seq_i].instruction.address)
+                    cursor_i = pc_i
+                    break
+        elif key in (curses.KEY_BACKSPACE , ord('\b'), ord('\x7f')):
+            # find the previous time the pc was at this address
+            for peek in range(seq_i-1, -1, -1):
+                if find_instruction(instructions, sequence[peek].instruction.address) == cursor_i:
+                    # play the sequence backward to this point
+                    for seq_i in range(seq_i-1, peek-1, -1):
+                        m.apply(sequence[seq_i], False)
+                    m.set_most_recent_memory(sequence, seq_i)
+                    pc_i = find_instruction(instructions, sequence[seq_i].instruction.address)
+                    cursor_i = pc_i
+                    break
+        elif key == curses.KEY_HOME:
+            # jump back to when current function was called
+            (func_start_i, func_end_i) = find_function_bounds(instructions, pc_i)
+
+            first = True
+            for seq_i in range(seq_i, -1, -1):
+                pc_i = find_instruction(instructions, sequence[seq_i].instruction.address)
+                cursor_i = pc_i
+                if first:
+                    first = False
+                else:
+                    m.apply(sequence[seq_i], False)
+                if func_start_i <= pc_i < func_end_i and (seq_i == 0 or sequence[seq_i-1].instruction.fields[0] == 'call'):
+                    break
+            m.set_most_recent_memory(sequence, seq_i)
+        elif key == curses.KEY_END:
+            # find the next return (or end of program) from current function
+            (func_start_i, func_end_i) = find_function_bounds(instructions, pc_i)
+            for seq_i in range(seq_i, len(sequence)):
+                pc_i = find_instruction(instructions, sequence[seq_i].instruction.address)
+                cursor_i = pc_i
+                if func_start_i <= pc_i < func_end_i and sequence[seq_i].instruction.fields[0] == 'ret':
+                    break
+                m.apply(sequence[seq_i], True)
+            m.set_most_recent_memory(sequence, seq_i)
+
+        elif key == curses.KEY_RESIZE:
+            resize()
+
+        elif key == ord('q'):
+            break
+
+        if key == -1:
+            draw()
+            if first:
+                draw()
+                first = False
+        block = key == -1
+
+    # restore terminal
+    curses.nocbreak()
+    stdscr.keypad(False)
+    curses.echo()
+    curses.endwin()
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-m', '--mode',
+        choices=['run', 'trace', 'dasm', 'debug'],
+        default='debug')
+    parser.add_argument('-e', '--executable',
+        default='a.out')
+    parser.add_argument('-l', '--lint',
+        choices=['true', 'false'],
+        default='true')
+    args = parser.parse_args()
+
+    # load the program from disk and form the
+    # simulated address space and cpu
+    m = load_elf(args.executable)
+
+    # disassemble the entire text segment
+    instructions = []
+    for pc in range(m.text_start, m.text_end, 4):
+        inst = m.load_instruction(pc)
+        instruction = decode(m, pc, inst)
+        instructions.append(instruction)
+    pair_instructions(m, instructions)
+
+    add_labels(m, instructions)
+
+    if args.mode == 'dasm':
+        for pc in range(m.text_start, m.text_end, 4):
+            instruction = instructions[pc]
+            line = instruction.render()
+            print(line)
+        return
+
+    # trace the entire execution
+    # for run mode, have pre_trace echo output as it goes
+    # so inputs and outputs are correctly interleved
+    sequence = pre_trace(m, instructions,
+        args.mode in ('run', 'debug'),
+        args.mode == 'debug',
+        args.lint == 'true')
+
+    if args.mode == 'trace':
+        for effects in sequence:
+            print(effects.instruction.render(), end='')
+            for line in effects.report():
+                print(f'{"":16}{line}')
+
+    if args.mode == 'debug':
+        # reload to reset memory state
+        m.reset()
+        m.set_most_recent_memory(sequence, 0)
+        ui(m, instructions, sequence)
+
+    # should have ended with exit(0)
+    effects = sequence[-1]
+    if effects.instruction.fields[0] == 'ecall' and effects.other_message is not None:
+        parts = re.match(r'exit\((\d+)\)', effects.other_message)
+        if parts is not None:
+            sys.exit(int(parts[1]))
+    print(effects.other_message, file=sys.stderr)
+    sys.exit(1)
+
+main()

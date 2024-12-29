@@ -1,35 +1,36 @@
 .SUFFIXES:
-.SUFFIXES: .rs .out .xml .lock
+.SUFFIXES: .pl .out .xml
+
+PROLOGSOURCE=$(wildcard *.pl)
 
 STEPPER_DELAY=0.01
-STEPPER_WARMUPDELAY=0.1
+STEPPER_WARMUPDELAY=0.25
 STEPPER_POSTCRASHLINES=15
 STEPPER_WRONGLINES=10
 STEPPER_SUFFIX=input
 STEPPER_INDIR=inputs
 STEPPER_OUTDIR=inputs
-STEPPER_CMD=target/debug/student
+STEPPER_CMD=swipl -qs $(PROLOGSOURCE)
 export STEPPER_DELAY STEPPER_WARMUPDELAY STEPPER_POSTCRASHLINES STEPPER_WRONGLINES
 export STEPPER_SUFFIX STEPPER_INDIR STEPPER_OUTDIR STEPPER_CMD
 
 all:	step
 
-grade:	target/debug/student
+step:
+	python3 lib/stepper
+
+grade:
 	rm -f test_detail.xml inputs/*.actual
 	python3 lib/grader
 
-run:	target/debug/student
-	target/debug/student
+shell:
+	swipl
 
-step:	target/debug/student
-	python3 lib/stepper
-
-target/debug/student:	src/*.rs Cargo.toml
-	cargo build
+run:	
+	$(STEPPER_CMD)
 
 setup:
-	sudo apt install -y cargo icdiff make python3
+	sudo apt install -y icdiff make python3 swi-prolog
 
 clean:
-	cargo clean
-	rm -f *.lock *.xml
+	rm -f tests/*.actual test_detail.xml

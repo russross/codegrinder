@@ -445,14 +445,7 @@ func fixLineEndings(s []byte) []byte {
 }
 
 func fixNewLines(s []byte) []byte {
-	s = append(bytes.Replace(s, []byte("\r\n"), []byte("\n"), -1), '\n')
-	for bytes.HasSuffix(s, []byte("\n\n")) {
-		s = s[:len(s)-1]
-	}
-	if bytes.Equal(s, []byte("\n")) {
-		s = []byte{}
-	}
-	return s
+	return bytes.Replace(s, []byte("\r\n"), []byte("\n"), -1)
 }
 
 func loggedErrorf(f string, params ...interface{}) error {
