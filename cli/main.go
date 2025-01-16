@@ -196,6 +196,13 @@ func main() {
 			Run: CommandExportQuizzes,
 		}
 		cmdGrind.AddCommand(cmdExportQuizzes)
+
+		cmdScaffold := &cobra.Command{
+			Use:	"scaffold <assignment name>",
+			Short:	"create the files/folders common to each problem",
+			Run:	CommandScaffold,
+		}
+		cmdGrind.AddCommand(cmdScaffold)
 	}
 
 	cmdGrind.Execute()
