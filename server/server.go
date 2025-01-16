@@ -429,6 +429,9 @@ func main() {
 			fmt.Fprintf(w, "\n}\n")
 		})
 
+		// templates
+		r.Get("/v2/templates/:test_type", counter, withTx, authorOnly, SendTemplate)
+
 		// LTI
 		r.Get("/v2/lti/config.xml", counter, GetConfigXML)
 		//r.Post("/v2/lti/problem_sets", counter, gunzip, binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblemSets)
