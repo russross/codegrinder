@@ -2,6 +2,7 @@ import ast
 import os
 import sys
 import trace
+from typing import get_origin, get_args, Any
 import unittest
 
 class ASTTest(unittest.TestCase):
@@ -18,6 +19,8 @@ class ASTTest(unittest.TestCase):
         if parse_file:
             self.tree = ast.parse(text)
         f.close()
+
+        self.generic_type_hint_error_message = "Invalid parameters defined."
 
     def find_all(self, node_type, start_node=None):
         """Returns all of the AST nodes matching the given node type. Optional
@@ -100,6 +103,93 @@ class ASTTest(unittest.TestCase):
             if call.func.id == "print":
                 return True
         return False
+
+    def validate_type_hints(self, student_func: ast.FunctionDef, type_hints: list, return_type: Any) -> None:
+        """
+        Validates all type hints
+
+        Args:
+            student_func: function to validate type hints against
+            type_hints: list of parameter type hints, for example `[str, int, list[str]]` or `[list[dict[str, dict[str, list[dict[int, list[list[str]]]]]]]]`
+            return_type: return type hint, for example `bool` or `dict[str, int]`
+        """
+        expected_param_types: list = [generate_default_value(type_hint) for type_hint in type_hints]
+        expected_return_type = generate_default_value(return_type)
+
+        # Validate param types
+        for i, expected in enumerate(expected_param_types):
+            param: ast.arg = student_func.args.args[i]
+            if isinstance(expected, list):
+                self.assertIsNotNone(param.annotation, self.generic_type_hint_error_message)
+                self._validate_list_param(param.annotation, expected)
+            elif isinstance(expected, dict):
+                self.assertIsNotNone(param.annotation, self.generic_type_hint_error_message)
+                self._validate_dict_param(param.annotation, expected)
+            else:
+                self.assertTrue(isinstance(param.annotation, ast.Name), self.generic_type_hint_error_message)
+                self.assertTrue(param.annotation.id == type(expected).__name__, self.generic_type_hint_error_message)
+
+        # Validate return type
+        actual_return_type = student_func.returns
+        self.assertIsNotNone(actual_return_type, self.generic_type_hint_error_message)
+        if isinstance(expected_return_type, list):
+            self._validate_list_param(actual_return_type, expected_return_type)
+        elif isinstance(expected_return_type, dict):
+            self._validate_dict_param(actual_return_type, expected_return_type)
+        else:
+            self.assertTrue(isinstance(actual_return_type, ast.Name), self.generic_type_hint_error_message)
+            self.assertTrue(actual_return_type.id == type(expected_return_type).__name__, self.generic_type_hint_error_message)
+
+    def _validate_list_param(self, param: ast.Subscript, expected_list: list) -> None:
+        """
+        A recursive helper function to test list type hints.
+        """
+
+        # Check if no type is specified for the list
+        if len(expected_list) == 0:
+            # There isn't a specific param type for the list, so none should be specified
+            self.assertTrue(isinstance(param, ast.Name), self.generic_type_hint_error_message)
+            self.assertTrue(param.id == "list", self.generic_type_hint_error_message)
+            return
+
+        expected_list_type = expected_list[0]
+
+        # Validate the list type
+        if isinstance(expected_list_type, list):
+            self._validate_list_param(param.slice, expected_list_type)
+        elif isinstance(expected_list_type, dict):
+            self._validate_dict_param(param.slice, expected_list_type)
+        else:
+            self.assertTrue(param.slice.id == type(expected_list_type).__name__, self.generic_type_hint_error_message)
+
+    def _validate_dict_param(self, actual_dict: ast.Subscript, expected_dict: dict) -> None:
+        """
+        A recursive helper function to test dict type hints.
+        """
+
+        # Check if dict has specific types
+        if len(expected_dict) == 0:
+            self.assertTrue(actual_dict.id == "dict", self.generic_type_hint_error_message)
+            return
+
+        # Verify the student param is a dict
+        self.assertTrue(isinstance(actual_dict, ast.Subscript), self.generic_type_hint_error_message)
+        self.assertTrue(isinstance(actual_dict.slice, ast.Tuple), self.generic_type_hint_error_message)
+
+        # Extract the key/value from both expected and student param
+        expected_key, expected_value = list(expected_dict.items())[0]
+        actual_key, actual_value = actual_dict.slice.dims[0], actual_dict.slice.dims[1]
+
+        # Check the key. Note that since the key has to be hashable, we don't need to do anything complicated.
+        self.assertTrue(actual_key.id == type(expected_key).__name__)
+
+        # Check the value
+        if isinstance(expected_value, list):
+            self._validate_list_param(actual_value, expected_value)
+        elif isinstance(expected_value, dict):
+            self._validate_dict_param(actual_value, expected_value)
+        else:
+            self.assertTrue(actual_value.id == type(expected_value).__name__, self.generic_type_hint_error_message)
 
     def get_function_linenos(self):
         linenos = {}
@@ -192,6 +282,54 @@ def get_function_end_lineno(funcdef):
         last = last.body[-1]
     return last.lineno
 
+def generate_default_value(type_hint: Any) -> Any:
+    """
+    Given a type hint, convert it into a default object for use in type hint validation.
+
+    For example:
+    hint = list[dict[str, dict[str, list[dict[int, list[list[str]]]]]]]
+    generate_default_value(hint) -> [[{'': {'': [{0: [['']]}]}}]]
+    """
+    # Handle base types directly
+    if type_hint is str:
+        return ""
+    elif type_hint is int:
+        return 0
+    elif type_hint is float:
+        return 0.0
+    elif type_hint is bool:
+        return False
+    elif type_hint is None or type_hint is type(None):  # Handle NoneType
+        return None
+
+    origin = get_origin(type_hint)  # Get the generic type, e.g., list, dict, etc.
+    args = get_args(type_hint)      # Get the type arguments, e.g., (dict[str, list[int]])
+
+    # Handle generic types
+    if origin is list:
+        # Recursively generate a default value for the list's inner type
+        return [generate_default_value(args[0])] if args else []
+    elif origin is dict:
+        # Generate a default key-value pair using inner types
+        key_default = generate_default_value(args[0]) if args else ""
+        value_default = generate_default_value(args[1]) if len(args) > 1 else None
+        return {key_default: value_default}
+    elif origin is tuple:
+        # Generate a tuple with default values for each argument
+        return tuple(generate_default_value(arg) for arg in args)
+    elif origin is set:
+        # Generate a set with one default value of its inner type
+        return {generate_default_value(args[0])} if args else set()
+    elif type_hint is list:
+        # list is missing specific type
+        return []
+    elif type_hint is dict:
+        # dict is missing specific types
+        return {}
+
+    # Fallback for unsupported or unknown types
+    return None
+
 class FindExecutableLines(ast.NodeVisitor):
     """
     taken from pedal
@@ -235,3 +373,4 @@ class FindExecutableLines(ast.NodeVisitor):
     visit_Pass = _track_lines
     visit_Continue = _track_lines
     visit_Break = _track_lines
+
