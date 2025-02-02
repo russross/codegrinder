@@ -16,7 +16,7 @@ outdir          = os.environ['STEPPER_OUTDIR']
 cmd             = os.environ['STEPPER_CMD'].split()
 bufsize         = 2**16
 
-def main():
+def main() -> None:
     # get the list of input files to process
     infiles = sorted(glob.glob(os.path.join(indir, '*.' + suffix)))
 
@@ -32,7 +32,7 @@ def main():
         print(f'$ {" ".join(cmd)} < {infile}')
         run(infile, outfile)
 
-def run(inputfile, outputfile):
+def run(inputfile: str, outputfile: str) -> None:
     # read all of the input
     with open(inputfile, 'rb') as fp:
         inputData = fp.read()
@@ -44,6 +44,9 @@ def run(inputfile, outputfile):
     # launch the process
     proc = subprocess.Popen(cmd, bufsize=0,
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if proc.stdin is None or proc.stdout is None or proc.stderr is None:
+        print('unable to connect to IO of running process', file=sys.stderr)
+        sys.exit(1)
     stdin = proc.stdin.fileno()
     stdout = proc.stdout.fileno()
     stderr = proc.stderr.fileno()
@@ -55,7 +58,7 @@ def run(inputfile, outputfile):
 
     # the next chunk of input to feed to the process
     # this gets filled when we have a timeout while waiting for output
-    nextInput = ''
+    nextInput = b''
     partial = b''
     inputClosed = False
 
@@ -63,7 +66,7 @@ def run(inputfile, outputfile):
     warmup = True
     error = False
 
-    wrong = []
+    wrong: list[bytes] = []
 
     while keepGoing:
         # wait for some output, and if we have input ready
@@ -90,7 +93,7 @@ def run(inputfile, outputfile):
                 else:
                     nextInput = inputData[:newline+1]
             elif not inputClosed:
-                os.close(stdin)
+                proc.stdin.close()
                 inputClosed = True
 
         # handle each of the input/output channels that are ready
@@ -100,8 +103,8 @@ def run(inputfile, outputfile):
                 data = os.read(stdout, bufsize)
                 if len(data) == 0 and len(partial) > 0:
                     print('\n!!ERROR!! Program output ended without a newline:')
-                    for line in wrong:
-                        print(repr(line.decode('utf-8')))
+                    for bline in wrong:
+                        print(repr(bline.decode('utf-8')))
                     print(repr(partial.decode('utf-8')))
                     sys.exit(1)
                 elif len(data) == 0:
@@ -155,7 +158,7 @@ def run(inputfile, outputfile):
                 print(nextInput[:count].decode('utf-8'), end='')
 
                 inputData = inputData[count:]
-                nextInput = ''
+                nextInput = b''
 
     if len(wrong) > 0:
         # report incorrect output
@@ -165,8 +168,8 @@ def run(inputfile, outputfile):
             if len(wrong) >= wronglines+5:
                 wrong = wrong[:wronglines]
             print(f'\n!!INCORRECT OUTPUT!! Your next {len(wrong)} lines of output were:')
-        for line in wrong:
-            print(repr(line.decode('utf-8')))
+        for bline in wrong:
+            print(repr(bline.decode('utf-8')))
 
         # gather the same number of correct output lines if possible
         correct = []
@@ -184,17 +187,17 @@ def run(inputfile, outputfile):
             print('\nbut the next line of output expected was:')
         else:
             print(f'\nbut the next {len(correct)} lines of output expected were:')
-        for line in correct:
-            print(repr(line.decode('utf-8')))
+        for bline in correct:
+            print(repr(bline.decode('utf-8')))
         error = True
 
     # wait for the child process to end
     proc.kill()
     proc.wait()
-    os.close(stdout)
-    os.close(stderr)
+    proc.stdout.close()
+    proc.stderr.close()
     if not inputClosed:
-        os.close(stdin)
+        proc.stdin.close()
 
     # report an error if we noticed error output, wrong regular output, or
     # any input/output leftover that should have been consumed

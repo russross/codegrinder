@@ -7,4 +7,5 @@ PRAGMA locking_mode = NORMAL;
 PRAGMA synchronous = NORMAL;
 .headers on
 .mode table
+.nullvalue '␀'
 .output stdout

@@ -72,7 +72,7 @@ print_int:
                 sb      zero, (t0)
 
                 mv      a0, sp
-                call    print_string
+                jal     print_string
 5:              ld      ra, 24(sp)
                 addi    sp, sp, 32
                 ret
@@ -122,7 +122,7 @@ print_hex:
                 sb      zero, (t0)
 
                 mv      a0, sp
-                call    print_string
+                jal     print_string
 5:              ld      ra, 24(sp)
                 addi    sp, sp, 32
                 ret
@@ -152,7 +152,7 @@ print_set:
                 bgez    a2, 1b
 
                 mv      a0, a1
-                call    print_int
+                jal     print_int
 
                 ld      ra, 8(sp)
                 addi    sp, sp, 16
