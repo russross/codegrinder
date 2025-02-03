@@ -636,7 +636,7 @@ def decode_jal(labels: Machine, address: int, inst: int, rd: int, imm: int) -> I
     if r[rd] == 'zero':
         fields = ['j', dest]
     elif r[rd] == 'ra':
-        fields = ['call', dest]
+        fields = ['jal', dest]
     else:
         fields = ['jal', r[rd], dest]
     return Instruction(address, inst, fields, execute_jal,
@@ -1322,7 +1322,7 @@ def pair_instructions(m: Machine, instructions: list[Instruction]) -> None:
                         m.set_pc(target_addr)
                     return execute_call
 
-                # replace the auipc, addi sequence with la
+                # replace the auipc, jalr sequence with call
                 length = instruction.length + instruction2.length
                 new_instruction = Instruction(
                     instruction.address, 
@@ -1424,7 +1424,7 @@ def pre_trace(m: Machine, instructions: list[Instruction], echo_out: bool, echo_
 
     sequence = []
     i = -1
-    max_steps = 100000
+    max_steps = 10000000
     while len(sequence) < max_steps:
         # fetch the next instruction
         i += 1
@@ -1491,7 +1491,7 @@ def pre_trace(m: Machine, instructions: list[Instruction], echo_out: bool, echo_
 
                     # must call named function
                     if e.pc[1] not in m.address_symbols:
-                        raise Fault('{instruction.fields[0]} to unlabeled address')
+                        raise Fault(f'{instruction.fields[0]} to unlabeled address')
                     name = m.address_symbols[e.pc[1]]
 
                     # push old register context and clone it as starting point
@@ -1837,11 +1837,11 @@ def ui(m: Machine, instructions: list[Instruction], sequence: list[Effects]) -> 
         (start, _) = calc_range(len(instructions), cursor_i, src_y)
         extra = ''
         for i in range(src_y):
+            arrow = []
             i_i = start + i
             if 0 <= i_i < len(instructions):
                 instruction = instructions[i_i]
                 addr = instruction.address
-                arrow = []
                 if addr == arrow_top_addr:
                     arrow = arrow_top
                 elif addr == arrow_bottom_addr:
@@ -2082,7 +2082,7 @@ def ui(m: Machine, instructions: list[Instruction], sequence: list[Effects]) -> 
                     first = False
                 else:
                     m.apply(sequence[seq_i], False)
-                if func_start_i <= pc_i < func_end_i and (seq_i == 0 or sequence[seq_i-1].instruction.fields[0] == 'call'):
+                if func_start_i <= pc_i < func_end_i and (seq_i == 0 or sequence[seq_i-1].instruction.fields[0] in ('call', 'jal')):
                     break
             m.set_most_recent_memory(sequence, seq_i)
         elif key == curses.KEY_END:
@@ -2142,8 +2142,7 @@ def main() -> None:
     add_labels(m, instructions)
 
     if args.mode == 'dasm':
-        for pc in range(m.text_start, m.text_end, 4):
-            instruction = instructions[pc]
+        for instruction in instructions:
             line = instruction.render()
             print(line)
         return

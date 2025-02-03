@@ -35,7 +35,7 @@ amd64: .proxy-cpp .proxy-go
 	docker build --pull -t codegrinder/python python
 	touch .proxy-python
 
-.proxy-riscv: python/Dockerfile
+.proxy-riscv: riscv/Dockerfile
 	docker build --pull -t codegrinder/riscv riscv
 	touch .proxy-riscv
 

@@ -1,27 +1,11 @@
 .SUFFIXES:
 .SUFFIXES: .o .s .si .out .xml .input .expected .actual
 
-ASFLAGS=-g --warn --fatal-warnings -march=rv64im
-LDFLAGS=--fatal-warnings
-ifneq ("$(shell which riscv64-linux-gnu-as)", "")
-	PREFIX=riscv64-linux-gnu-
-else ifneq ("$(shell which riscv64-unknown-elf-as)", "")
-	PREFIX=riscv64-unknown-elf-
-else ifneq ("$(shell which riscv64-alpine-linux-musl-as)", "")
-	PREFIX=riscv64-alpine-linux-musl-
-else
-	PREFIX=unknown
-endif
-
-ifeq ("$(shell uname -m)", "riscv64")
-	AS=as
-	LD=ld
-	AOUT=./a.out
-else
-	AS=$(PREFIX)as
-	LD=$(PREFIX)ld
-	AOUT=python3 lib/rv64sim -m run
-endif
+ASFLAGS=-g -Wall -Werror -target riscv64-unknown-elf -march=rv64im
+LDFLAGS=-g -Wl,--discard-locals -Wall -Werror -target riscv64-unknown-elf -march=rv64im -nostdlib
+AS=clang
+LD=clang
+AOUT=python3 lib/rv64sim -m run
 
 ALLOBJECT=$(sort $(patsubst %.s,%.o,$(wildcard *.s)))
 START=$(filter start.o, $(ALLOBJECT))
@@ -53,23 +37,17 @@ step:	a.out
 trace:	a.out
 	python3 lib/rv64sim -m trace
 
-disassemble:	a.out
-	python3 lib/rv64sim -m dasm
-
 debug:	a.out
 	python3 lib/rv64sim -m debug
 
 .s.o:
-ifeq ("$(shell which $(AS))", "")
-	$(error this should only be run on a machine with riscv support installed)
-endif
-	$(AS) $(ASFLAGS) $< -o $@
+	$(AS) $(ASFLAGS) -c $<
 
 a.out:	$(AOUTOBJECT)
 	$(LD) $(LDFLAGS) $^
 
 setup:
-	sudo apt install curl gcc-riscv64-linux-gnu gdb-multiarch icdiff make python3 qemu-user-binfmt
+	sudo apt install curl clang lld lldb icdiff make python3 qemu-user-binfmt
 
 clean:
 	rm -f *.o *.out *.xml core

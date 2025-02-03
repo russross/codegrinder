@@ -15,7 +15,7 @@ outdir          = os.environ['STEPPER_OUTDIR']
 cmd             = os.environ['STEPPER_CMD'].split()
 outname         = 'test_detail.xml'
 
-def main():
+def main() -> None:
     if os.path.exists(outname): os.remove(outname)
 
     # get the list of input files to process
@@ -36,14 +36,12 @@ def main():
         actualfile = os.path.join(outdir, base[:-len('.' + suffix)] + '.actual')
 
         # get the input
-        fp = open(infile, 'rb')
-        input = fp.read()
-        fp.close()
+        with open(infile, 'rb') as fp:
+            input = fp.read()
 
         # get the expected output
-        fp = open(outfile, 'rb')
-        expected = fp.read()
-        fp.close()
+        with open(outfile, 'rb') as fp:
+            expected = fp.read()
 
         # report the result in XML
         case = ET.SubElement(suite, 'testcase')
@@ -58,9 +56,8 @@ def main():
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         (actual, stderr) = proc.communicate(input)
         seconds = time.time() - start
-        fp = open(actualfile, 'wb')
-        fp.write(actual)
-        fp.close()
+        with open(actualfile, 'wb') as fp:
+            fp.write(actual)
 
         # check the output
         passed = True
@@ -91,8 +88,8 @@ def main():
             proc = subprocess.Popen(diff,
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
             (output, errout) = proc.communicate(b'')
-            if len(output) > 0 and output[-1] == '\n':
-                output = output[:-1]
+            if output.endswith(b'\n'):
+                output = output[:-len(b'\n')]
             msg += str(output, 'utf-8')
             print(msg)
             body += msg + '\n'

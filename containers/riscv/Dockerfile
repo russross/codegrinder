@@ -7,5 +7,5 @@ RUN apk add --no-cache \
     make \
     python3
 RUN apk add --no-cache \
-    binutils-riscv64 \
-    qemu-riscv64
+    clang \
+    lld
