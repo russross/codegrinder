@@ -172,6 +172,9 @@ class ASTTest(unittest.TestCase):
         """
         A recursive helper function to test list type hints.
         """
+        # Make sure param is a list
+        self.assertTrue(isinstance(param, ast.Subscript), type_hint_error_message)
+        self.assertTrue(param.value.id == "list", type_hint_error_message)
 
         # Check if no type is specified for the list
         if len(expected_list) == 0:
@@ -194,6 +197,9 @@ class ASTTest(unittest.TestCase):
         """
         A recursive helper function to test dict type hints.
         """
+        # Make sure param is a dict
+        self.assertTrue(isinstance(actual_dict, ast.Subscript), type_hint_error_message)
+        self.assertTrue(actual_dict.value.id == "dict", type_hint_error_message)
 
         # Check if dict has specific types
         if len(expected_dict) == 0:
