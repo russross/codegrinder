@@ -128,7 +128,7 @@ class ASTTest(unittest.TestCase):
         for i in range(1, len(expected_param_types)):
             param: ast.arg = student_method.args.args[i]
             self.assertIsNotNone(param.annotation, self.generic_type_hint_error_message)
-            self._validate_type_hint(param.annotation, expected_param_types[i])
+            self._validate_type_hint(param.annotation, expected_param_types[i-1]) # -1 because we are skipping self in the actual args
 
     def validate_function_param_type_hints(self, student_func: ast.FunctionDef, type_hints: list) -> None:
         """
