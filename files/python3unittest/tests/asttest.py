@@ -47,7 +47,7 @@ class ASTTest(unittest.TestCase):
         with find_all."""
         return ast.dump(self.tree)
 
-    def get_function_calls(self, start_node=None):
+    def get_function_calls(self, start_node=None) -> list[str]:
         """Helper to find all of the function calls in the submission."""
         names = []
         for func in self.find_all(ast.Call, start_node):
@@ -55,7 +55,7 @@ class ASTTest(unittest.TestCase):
                 names.append(func.func.id)
         return names
 
-    def find_function_calls(self, func_name):
+    def find_function_calls(self, func_name: str):
         """Finds all of the function calls that match a certain name and
         returns their nodes."""
         calls = []
@@ -64,7 +64,7 @@ class ASTTest(unittest.TestCase):
                 calls.append(call)
         return calls
 
-    def get_method_calls(self, start_node=None):
+    def get_method_calls(self, start_node: ast.Call | None = None):
         """Helper to find all of the function calls in the submission."""
         names = []
         for func in self.find_all(ast.Call, start_node):
@@ -72,7 +72,7 @@ class ASTTest(unittest.TestCase):
                 names.append(func.func.attr)
         return names
 
-    def find_method_calls(self, func_name):
+    def find_method_calls(self, func_name: str):
         """Finds all of the method calls that match a certain name and returns
         their nodes."""
         calls = []
@@ -172,16 +172,16 @@ class ASTTest(unittest.TestCase):
         """
         A recursive helper function to test list type hints.
         """
-        # Make sure param is a list
-        self.assertTrue(isinstance(param, ast.Subscript), type_hint_error_message)
-        self.assertTrue(param.value.id == "list", type_hint_error_message)
-
         # Check if no type is specified for the list
         if len(expected_list) == 0:
             # There isn't a specific param type for the list, so none should be specified
             self.assertTrue(isinstance(param, ast.Name), type_hint_error_message)
             self.assertTrue(param.id == "list", type_hint_error_message)
             return
+
+        # Make sure param is a list
+        self.assertTrue(isinstance(param, ast.Subscript), type_hint_error_message)
+        self.assertTrue(param.value.id == "list", type_hint_error_message)
 
         expected_list_type = expected_list[0]
 
@@ -197,14 +197,15 @@ class ASTTest(unittest.TestCase):
         """
         A recursive helper function to test dict type hints.
         """
+        # Check if dict has specific types
+        if len(expected_dict) == 0:
+            self.assertTrue(isinstance(actual_dict, ast.Name), type_hint_error_message)
+            self.assertTrue(actual_dict.id == "dict", type_hint_error_message)
+            return
+
         # Make sure param is a dict
         self.assertTrue(isinstance(actual_dict, ast.Subscript), type_hint_error_message)
         self.assertTrue(actual_dict.value.id == "dict", type_hint_error_message)
-
-        # Check if dict has specific types
-        if len(expected_dict) == 0:
-            self.assertTrue(actual_dict.id == "dict", type_hint_error_message)
-            return
 
         # Verify the student param is a dict
         self.assertTrue(isinstance(actual_dict, ast.Subscript), type_hint_error_message)
