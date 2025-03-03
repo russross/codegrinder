@@ -1,7 +1,8 @@
 .SUFFIXES:
 .SUFFIXES: .o .c .out .xml .log .input .expected .actual
 
-CFLAGS=-g -Og -std=c17 -Wpedantic -Wall -Wextra -Werror
+CFLAGS=-g -Og -std=c17 -Wpedantic -Wall -Wextra -Werror -Wshadow -Wnull-dereference -Wunreachable-code
+LDFLAGS=-g
 AOUTOBJECT=$(patsubst %.c,%.o,$(wildcard *.c))
 STEPPER_DELAY=0.01
 STEPPER_WARMUPDELAY=0.1
@@ -34,18 +35,15 @@ step:	a.out
 debug:	a.out $(HOME)/.gdbinit
 	gdb ./a.out
 
-$(HOME)/.gdbinit:
-	echo set auto-load safe-path / > $(HOME)/.gdbinit
-
 .c.o:
-	gcc $(CFLAGS) $< -c -o $@
+	clang $(CFLAGS) $< -c -o $@
 
 a.out:	$(AOUTOBJECT)
-	gcc $(CFLAGS) $^ -o $@
+	clang $(LDFLAGS) $^ -o $@
 
 setup:
 	# install build tools, unit test library, and valgrind
-	sudo apt install -y build-essential curl gdb icdiff make python3 valgrind
+	sudo apt install -y clang lldb curl icdiff make python3 valgrind
 
 clean:
 	rm -f $(AOUTOBJECT) *.out *.xml *.log core
