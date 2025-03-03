@@ -7,5 +7,7 @@ RUN apk add --no-cache \
     make \
     python3
 RUN apk add --no-cache \
-    build-base \
+    clang \
+    lld
+RUN apk add --no-cache \
     valgrind
