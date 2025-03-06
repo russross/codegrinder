@@ -836,7 +836,7 @@ func (n *Nanny) Exec(cmd []string) (stdout, stderr, script *bytes.Buffer, status
 	// inspect
 	var inspect struct {
 		ExitCode int
-		Running bool
+		Running  bool
 	}
 
 	err = getObject(fmt.Sprintf("/exec/%s/json", result.Id), nil, &result)
@@ -999,12 +999,12 @@ type StartResponse struct {
 }
 
 type CreateExecConfig struct {
-	AttachStdin bool
+	AttachStdin  bool
 	AttachStdout bool
 	AttachStderr bool
-	Tty bool
-	Cmd []string
-	User string
+	Tty          bool
+	Cmd          []string
+	User         string
 }
 
 type CreateExecResponse struct {
@@ -1012,7 +1012,7 @@ type CreateExecResponse struct {
 }
 
 type StartExecConfig struct {
-	Tty bool
+	Tty         bool
 	RawTerminal bool
 }
 
@@ -1030,7 +1030,7 @@ func startExec(id string, stdin io.Reader, stdout io.Writer, stderr io.Writer) e
 	// prepare the body of the request
 	upload := map[string]bool{
 		"Detach": false,
-		"Tty": false,
+		"Tty":    false,
 	}
 	payload, err := json.Marshal(upload)
 	if err != nil {
