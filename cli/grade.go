@@ -23,7 +23,7 @@ func CommandGrade(cmd *cobra.Command, args []string) {
 	user := new(User)
 	mustGetObject("/users/me", nil, user)
 
-	_, problem, _, commit, dotfile, _ := gatherStudent(now, ".")
+	_, problem, _, _, commit, dotfile, _ := gatherStudent(now, ".")
 	commit.Action = "grade"
 	commit.Note = "grind grade"
 	unsigned := &CommitBundle{

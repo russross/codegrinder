@@ -21,11 +21,8 @@ func CommandReset(cmd *cobra.Command, args []string) {
 	user := new(User)
 	mustGetObject("/users/me", nil, user)
 
-	problemType, problem, assignment, _, dotfile, problemDir := gatherStudent(now, ".")
+	problemType, problem, step, assignment, _, dotfile, problemDir := gatherStudent(now, ".")
 	info := dotfile.Problems[problem.Unique]
-
-	step := new(ProblemStep)
-	mustGetObject(fmt.Sprintf("/problems/%d/steps/%d", problem.ID, info.Step), nil, step)
 
 	listed := make(map[string]struct{})
 	for _, requested := range args {

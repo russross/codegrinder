@@ -22,7 +22,7 @@ func CommandSync(cmd *cobra.Command, args []string) {
 	user := new(User)
 	mustGetObject("/users/me", nil, user)
 
-	_, problem, _, commit, _, _ := gatherStudent(now, ".")
+	_, problem, _, _, commit, _, _ := gatherStudent(now, ".")
 	commit.Action = ""
 	commit.Note = "grind sync"
 	unsigned := &CommitBundle{

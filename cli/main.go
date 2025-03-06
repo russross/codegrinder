@@ -136,6 +136,9 @@ func main() {
 			"Note: this has the side effect of saving your code.", os.Args[0]),
 		Run: CommandAction,
 	}
+	if isInstructor {
+		cmdAction.Flags().String("daycare", "", "specify a daycare server to connect to directly (instructor only)")
+	}
 	cmdGrind.AddCommand(cmdAction)
 
 	cmdReset := &cobra.Command{
