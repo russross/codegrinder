@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	. "github.com/russross/codegrinder/types"
+	. "github.com/greganderson/codegrinder/types"
 	"github.com/spf13/cobra"
 )
 

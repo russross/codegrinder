@@ -45,7 +45,7 @@ func getTemplate(testType string) (string, error) {
 	}
 
 	template := testTemplates[testType]
-	templateFile := filepath.Join(root, "files", template)
+	templateFile := filepath.Join(root, "files/templates", template)
 	_, err := os.Stat(templateFile)
 	if err != nil {
 		log.Printf("Unable to locate %s for %s", templateFile, testType)

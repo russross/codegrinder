@@ -31,6 +31,8 @@ github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZb
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/russross/blackfriday/v2 v2.1.0 h1:JIOH55/0cWyOuilr9/qlrm0BSXldqnqwMsf35Ld67mk=
 github.com/russross/blackfriday/v2 v2.1.0/go.mod h1:+Rmxgy9KzJVeS9/2gXHxylqXiyQDYRxCVz55jmeOWTM=
+github.com/russross/codegrinder v0.0.0-20241229191501-7855f1d8d662 h1:qtkyfHACLM6GFjzVj5BM4YK5alcKX8O/TlVIg2XJHBg=
+github.com/russross/codegrinder v0.0.0-20241229191501-7855f1d8d662/go.mod h1:VMGvhJA5mi74xfsDtiLBd+is33mhHx3C6EFiqY7SmZE=
 github.com/russross/meddler v1.0.1 h1:JLR7Z4M4iGm1nr7DIURBq18UW8cTrm+qArUFgOhELo8=
 github.com/russross/meddler v1.0.1/go.mod h1:GzGDChbFHuzxlFwt8gnJMRRNyFSQDSudmy2kHh7GYnQ=
 github.com/spf13/cobra v1.8.0 h1:7aJaZx1B85qltLMc546zn58BxxfZdR/W22ej9CFoEf0=

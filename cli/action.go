@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	. "github.com/russross/codegrinder/types"
+	. "github.com/greganderson/codegrinder/types"
 	"github.com/spf13/cobra"
 )
 
@@ -72,9 +72,9 @@ func CommandAction(cmd *cobra.Command, args []string) {
 
 func runInteractiveSession(bundle *CommitBundle, args []string, directory string) {
 	endpoint := &url.URL{
-		Scheme:   "wss",
-		Host:     bundle.Hostname,
-		Path:     urlPrefix + "/sockets/" + bundle.ProblemType.Name + "/" + bundle.Commit.Action,
+		Scheme: "wss",
+		Host:   bundle.Hostname,
+		Path:   urlPrefix + "/sockets/" + bundle.ProblemType.Name + "/" + bundle.Commit.Action,
 	}
 
 	socket, resp, err := websocket.DefaultDialer.Dial(endpoint.String(), nil)

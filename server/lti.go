@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/go-martini/martini"
-	. "github.com/russross/codegrinder/types"
+	. "github.com/greganderson/codegrinder/types"
 	"github.com/russross/meddler"
 )
 
