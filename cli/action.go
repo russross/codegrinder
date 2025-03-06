@@ -28,6 +28,32 @@ func CommandAction(cmd *cobra.Command, args []string) {
 		action = args[0]
 	}
 
+	// Check if the --daycare flag is set (instructor only)
+	daycareFlag := cmd.Flag("daycare")
+	if daycareFlag != nil && daycareFlag.Value.String() != "" {
+		// Instructor is using a direct daycare connection
+		daycareHost := formatDaycareURL(daycareFlag.Value.String())
+
+		// Extract the hostname part for the signature
+		parsedURL, err := url.Parse(daycareHost)
+		if err != nil {
+			log.Fatalf("invalid daycare URL: %v", err)
+		}
+
+		// Prepare the signed bundle
+		bundle, err := prepareSignedBundle(now, action, parsedURL.Host)
+		if err != nil {
+			log.Fatalf("error preparing signed bundle: %v", err)
+		}
+
+		fmt.Printf("starting interactive session for %s step %d with daycare server %s\n",
+			bundle.Problem.Unique, bundle.Commit.Step, daycareHost)
+
+		// Connect to the specified daycare server directly
+		runInteractiveSession(bundle, nil, ".")
+		return
+	}
+
 	// do not allow grade as an interactive action
 	if action == "grade" {
 		log.Printf("'%s action' is for testing code, not for grading", os.Args[0])
@@ -38,7 +64,7 @@ func CommandAction(cmd *cobra.Command, args []string) {
 	user := new(User)
 	mustGetObject("/users/me", nil, user)
 
-	problemType, problem, _, commit, _, _ := gatherStudent(now, ".")
+	problemType, problem, _, _, commit, _, _ := gatherStudent(now, ".")
 	commit.Action = action
 	commit.Note = "grind action " + action
 	unsigned := &CommitBundle{
@@ -72,9 +98,9 @@ func CommandAction(cmd *cobra.Command, args []string) {
 
 func runInteractiveSession(bundle *CommitBundle, args []string, directory string) {
 	endpoint := &url.URL{
-		Scheme:   "wss",
-		Host:     bundle.Hostname,
-		Path:     urlPrefix + "/sockets/" + bundle.ProblemType.Name + "/" + bundle.Commit.Action,
+		Scheme: "wss",
+		Host:   bundle.Hostname,
+		Path:   urlPrefix + "/sockets/" + bundle.ProblemType.Name + "/" + bundle.Commit.Action,
 	}
 
 	socket, resp, err := websocket.DefaultDialer.Dial(endpoint.String(), nil)

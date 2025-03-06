@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -27,9 +26,7 @@ func CommandSolve(cmd *cobra.Command, args []string) {
 		log.Fatalf("you must be an author or admin to use this command")
 	}
 
-	_, problem, _, commit, _, problemDir := gatherStudent(now, ".")
-	step := new(ProblemStep)
-	mustGetObject(fmt.Sprintf("/problems/%d/steps/%d", problem.ID, commit.Step), nil, step)
+	_, _, step, _, _, _, problemDir := gatherStudent(now, ".")
 
 	if step.Solution == nil || len(step.Solution) == 0 {
 		log.Fatalf("no solution files found")

@@ -124,7 +124,7 @@ func updateFiles(directory string, files map[string][]byte, oldFiles map[string]
 	}
 }
 
-func gatherStudent(now time.Time, startDir string) (*ProblemType, *Problem, *Assignment, *Commit, *DotFileInfo, string) {
+func gatherStudent(now time.Time, startDir string) (*ProblemType, *Problem, *ProblemStep, *Assignment, *Commit, *DotFileInfo, string) {
 	// find the .grind file containing the problem set info
 	dotfile, problemSetDir, problemDir := findDotFile(startDir)
 
@@ -208,7 +208,7 @@ func gatherStudent(now time.Time, startDir string) (*ProblemType, *Problem, *Ass
 		UpdatedAt:    now,
 	}
 
-	return problemType, problem, assignment, commit, dotfile, problemDir
+	return problemType, problem, step, assignment, commit, dotfile, problemDir
 }
 
 func findDotFile(startDir string) (dotfile *DotFileInfo, problemSetDir, problemDir string) {
