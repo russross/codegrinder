@@ -26,7 +26,7 @@ var BeginningOfTime = time.Date(2016, 1, 1, 0, 0, 0, 0, time.UTC)
 type ProblemType struct {
 	Name    string                        `json:"name" meddler:"name"`
 	Image   string                        `json:"image" meddler:"image"`
-	Files   map[string][]byte             `json:"files,omitempty" meddler:"-"`
+	Files   map[string][]byte             `json:"files" meddler:"-"`
 	Actions map[string]*ProblemTypeAction `json:"actions" meddler:"-"`
 }
 
@@ -34,11 +34,11 @@ type ProblemType struct {
 // single problem type action.
 type ProblemTypeAction struct {
 	ProblemType string `json:"problemType" meddler:"problem_type"`
-	Action      string `json:"action,omitempty" meddler:"action"`
-	Command     string `json:"command,omitempty" meddler:"command"`
+	Action      string `json:"action" meddler:"action"`
+	Command     string `json:"command" meddler:"command"`
 	Parser      string `json:"parser,omitempty" meddler:"parser,zeroisnull"`
-	Message     string `json:"message,omitempty" meddler:"message"`
-	Interactive bool   `json:"interactive,omitempty" meddler:"interactive"`
+	Message     string `json:"message" meddler:"message"`
+	Interactive bool   `json:"interactive" meddler:"interactive"`
 
 	MaxCPU      int64 `json:"maxCPU" meddler:"max_cpu"`
 	MaxSession  int64 `json:"maxSession" meddler:"max_session"`
