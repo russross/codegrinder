@@ -67,6 +67,7 @@ var Config struct {
 var root string
 
 const daycareRegistrationInterval = 10 * time.Second
+const nonTLSAddress = ":8080"
 
 func main() {
 	log.SetFlags(log.Lshortfile)
@@ -82,9 +83,10 @@ func main() {
 	log.Printf("CODEGRINDERROOT set to %s", root)
 
 	// parse command line
-	var ta, daycare bool
+	var ta, daycare, use_tls bool
 	flag.BoolVar(&ta, "ta", false, "Serve the TA role")
 	flag.BoolVar(&daycare, "daycare", false, "Serve the daycare role")
+	flag.BoolVar(&use_tls, "tls", true, "Use TLS (https/wss) with automatic certificates")
 	flag.Parse()
 
 	if !ta && !daycare {
@@ -514,65 +516,75 @@ func main() {
 		r.Post("/v2/responses", counter, withTx, withCurrentUser, gunzip, binding.Json(Response{}), PostResponse)
 	}
 
-	// set up automatic TLS certificates
-	var acmeClient *acme.Client
-	if Config.AcmeURL != "" {
-		acmeClient = &acme.Client{DirectoryURL: Config.AcmeURL}
-	}
-	lem := autocert.Manager{
-		Prompt:     autocert.AcceptTOS,
-		Cache:      autocert.DirCache(Config.AcmeCache),
-		HostPolicy: autocert.HostWhitelist(Config.Hostname),
-		Email:      Config.AcmeEmail,
-		Client:     acmeClient,
-	}
+	if use_tls {
+		// set up automatic TLS certificates
+		var acmeClient *acme.Client
+		if Config.AcmeURL != "" {
+			acmeClient = &acme.Client{DirectoryURL: Config.AcmeURL}
+		}
+		lem := autocert.Manager{
+			Prompt:     autocert.AcceptTOS,
+			Cache:      autocert.DirCache(Config.AcmeCache),
+			HostPolicy: autocert.HostWhitelist(Config.Hostname),
+			Email:      Config.AcmeEmail,
+			Client:     acmeClient,
+		}
 
-	// set up the https server
-	log.Printf("accepting https connections")
-	server := &http.Server{
-		Addr:    ":https",
-		Handler: m,
-		TLSConfig: &tls.Config{
-			PreferServerCipherSuites: true,
-			MinVersion:               tls.VersionTLS12,
-			GetCertificate:           lem.GetCertificate,
-		},
-	}
+		// set up the https server
+		log.Printf("accepting https connections")
+		server := &http.Server{
+			Addr:    ":https",
+			Handler: m,
+			TLSConfig: &tls.Config{
+				PreferServerCipherSuites: true,
+				MinVersion:               tls.VersionTLS12,
+				GetCertificate:           lem.GetCertificate,
+			},
+		}
 
-	// set up the http server
-	// it is necessary for ACME challenges
-	// it forwards other requests to https, but only if the host name was correct
-	forwarder := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// get the address of the client
-		addr := r.Header.Get("X-Real-IP")
-		if addr == "" {
-			addr = r.Header.Get("X-Forwarded-For")
+		// set up the http server
+		// it is necessary for ACME challenges
+		// it forwards other requests to https, but only if the host name was correct
+		forwarder := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// get the address of the client
+			addr := r.Header.Get("X-Real-IP")
 			if addr == "" {
-				addr = r.RemoteAddr
+				addr = r.Header.Get("X-Forwarded-For")
+				if addr == "" {
+					addr = r.RemoteAddr
+				}
 			}
-		}
 
-		// make sure the request is for the right host name
-		if Config.Hostname != r.Host {
-			http.Error(w, "http request to invalid host", http.StatusBadRequest)
-			return
-		}
-		var u url.URL = *r.URL
-		u.Scheme = "https"
-		u.Host = Config.Hostname
-		log.Printf("redirecting http request from %s to %s", addr, u.String())
-		w.Header().Set("Connection", "close")
-		http.Redirect(w, r, u.String(), http.StatusFound)
-	})
+			// make sure the request is for the right host name
+			if Config.Hostname != r.Host {
+				http.Error(w, "http request to invalid host", http.StatusBadRequest)
+				return
+			}
+			var u url.URL = *r.URL
+			u.Scheme = "https"
+			u.Host = Config.Hostname
+			log.Printf("redirecting http request from %s to %s", addr, u.String())
+			w.Header().Set("Connection", "close")
+			http.Redirect(w, r, u.String(), http.StatusFound)
+		})
 
-	// start both servers
-	go func() {
-		if err := http.ListenAndServe(":http", lem.HTTPHandler(forwarder)); err != nil {
+		// start both servers
+		go func() {
+			if err := http.ListenAndServe(":http", lem.HTTPHandler(forwarder)); err != nil {
+				log.Fatalf("ListenAndServe: %v", err)
+			}
+		}()
+		if err := server.ListenAndServeTLS("", ""); err != nil {
+			log.Fatalf("ListenAndServeTLS: %v", err)
+		}
+	} else {
+		// run without TLS
+		// note: this will work behind a TLS proxy or for debugging with some calls
+		// but LTI will refuse to connect to an insecure host
+		log.Printf("accepting http connections on %s", nonTLSAddress)
+		if err := http.ListenAndServe(nonTLSAddress, m); err != nil {
 			log.Fatalf("ListenAndServe: %v", err)
 		}
-	}()
-	if err := server.ListenAndServeTLS("", ""); err != nil {
-		log.Fatalf("ListenAndServeTLS: %v", err)
 	}
 }
 
