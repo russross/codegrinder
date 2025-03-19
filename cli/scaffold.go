@@ -114,11 +114,12 @@ func buildTemplate(dir string, test_name string) {
 func getTemplateFile(problemType string) (string, error) {
 	var response FileResponse
 	path := fmt.Sprintf("/templates/%s", problemType)
-	success := getObject(path, nil, &response)
+	// success := getObject(path, nil, &response)
+	mustGetObject(path, nil, &response)
 
-	if !success {
-		return "", fmt.Errorf("failed to retrieve template for %s", problemType)
-	}
+	// if !success {
+	// 	return "", fmt.Errorf("failed to retrieve template for %s", problemType)
+	// }
 
 	err := os.WriteFile(response.Filename, response.Content, 0644)
 	if err != nil {

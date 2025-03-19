@@ -16,7 +16,7 @@ import (
 	"strings"
 
 	"github.com/blang/semver"
-	. "github.com/russross/codegrinder/types"
+	. "github.com/greganderson/codegrinder/types"
 	"github.com/spf13/cobra"
 )
 
