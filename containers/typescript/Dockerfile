@@ -12,5 +12,6 @@ RUN npm install -g typescript
 RUN npm install \
     jest
     @types/jest
+    jest-junit
     ts-jest
     ts-node
