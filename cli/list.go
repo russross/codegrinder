@@ -6,7 +6,7 @@ import (
 	"os"
 	"strconv"
 
-	. "github.com/greganderson/codegrinder/types"
+	. "github.com/russross/codegrinder/types"
 	"github.com/spf13/cobra"
 )
 

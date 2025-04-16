@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	. "github.com/greganderson/codegrinder/types"
+	. "github.com/russross/codegrinder/types"
 )
 
 func nextStep(directory string, info *ProblemInfo, problem *Problem, commit *Commit, types map[string]*ProblemType) bool {

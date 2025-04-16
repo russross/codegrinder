@@ -1,17 +1,15 @@
-FROM arm64v8/alpine:edge
+FROM alpine:edge
 
 RUN mkdir /home/student && chmod 777 /home/student
 WORKDIR /home/student
+
 RUN apk add --no-cache \
-    icdiff
-    make
-    nodejs
-RUN apk add --no-cache \
+    icdiff \
+    make \
+    nodejs \
     npm
-RUN npm install -g typescript
-RUN npm install \
-    jest
-    @types/jest
-    jest-junit
-    ts-jest
-    ts-node
+
+RUN npm install @types/jest jest jest-junit ts-jest ts-node typescript --prefix /home
+
+# Clean up npm cache to reduce image size
+RUN npm cache clean --force

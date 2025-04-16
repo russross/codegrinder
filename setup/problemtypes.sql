@@ -61,5 +61,5 @@ INSERT INTO problem_type_actions (problem_type, action, command, parser, message
 INSERT INTO problem_types (name, image) VALUES ('standardmlunittest', 'codegrinder/standardml');
 INSERT INTO problem_type_actions (problem_type, action, command, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('standardmlunittest', 'grade', 'make grade', 'xunit', 'Grading‥', 0, 10, 20, 20, 100, 10, 256, 200);
 
-INSERT INTO problem_types (name, image) VALUES ('typescriptunittest', 'codegrinder/typsecript');
+INSERT INTO problem_types (name, image) VALUES ('typescriptunittest', 'codegrinder/typescript');
 INSERT INTO problem_type_actions (problem_type, action, command, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('typescriptunittest', 'grade', 'make grade', 'xunit', 'Grading‥', 0, 10, 20, 20, 100, 10, 256, 200);

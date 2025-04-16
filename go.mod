@@ -1,4 +1,4 @@
-module github.com/greganderson/codegrinder
+module github.com/russross/codegrinder
 
 go 1.21.0
 

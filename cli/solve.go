@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
-	. "github.com/greganderson/codegrinder/types"
+	. "github.com/russross/codegrinder/types"
 	"github.com/spf13/cobra"
 )
 

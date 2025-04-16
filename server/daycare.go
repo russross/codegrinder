@@ -22,8 +22,8 @@ import (
 
 	"github.com/go-martini/martini"
 	"github.com/gorilla/websocket"
-	. "github.com/greganderson/codegrinder/types"
 	"github.com/russross/codegrinder/stdcopy"
+	. "github.com/russross/codegrinder/types"
 )
 
 type limits struct {
