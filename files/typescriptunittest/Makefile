@@ -2,8 +2,10 @@
 
 ifeq ($(shell pwd),/home/student)
   JEST := ../node_modules/.bin/jest
+  LINT := ../node_modules/.bin/eslint.js
 else
   JEST := node_modules/.bin/jest
+  LINT := node_modules/.bin/eslint.js
 endif
 
 all: test
@@ -13,13 +15,16 @@ setup:
 		npm install; \
 	fi
 
-typecheck: setup
+linter: setup
+	$(LINT) . --config tests/eslint.config.mjs --no-cache
+
+typecheck: linter
 	npm run typecheck
 
 test: typecheck
 	$(JEST) --config=tests/jest.config.ts
 
-grade: setup
+grade: linter 
 	rm -f test_detail.xml
 	JEST_JUNIT_OUTPUT_DIR="./" JEST_JUNIT_OUTPUT_NAME="test_detail.xml" $(JEST) --config=tests/jest.config.ts --no-cache --reporters=default --reporters=jest-junit
 
