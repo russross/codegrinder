@@ -2,10 +2,10 @@
 
 ifeq ($(shell pwd),/home/student)
   JEST := ../node_modules/.bin/jest
-  LINT := ../node_modules/.bin/eslint.js
+  LINT := ../node_modules/.bin/eslint
 else
   JEST := node_modules/.bin/jest
-  LINT := node_modules/.bin/eslint.js
+  LINT := node_modules/.bin/eslint
 endif
 
 all: test
