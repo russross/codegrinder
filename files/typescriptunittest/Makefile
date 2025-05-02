@@ -22,7 +22,7 @@ typecheck: linter
 	npm run typecheck
 
 test: typecheck
-	$(JEST) --config=tests/jest.config.ts
+	rm *.js && $(JEST) --config=tests/jest.config.ts
 
 grade: linter 
 	rm -f test_detail.xml
