@@ -11,7 +11,7 @@ endif
 all: test
 
 setup:
-	@if [ `pwd` != "/home/student" ]; then \
+	@if [ "$(shell pwd)" != "/home/student" ]; then \
 		npm install; \
 	fi
 
