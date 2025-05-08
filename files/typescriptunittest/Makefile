@@ -12,7 +12,9 @@ all: test
 
 setup:
 	@if [ "$(shell pwd)" != "/home/student" ]; then \
-		npm install; \
+		if [ ! -d "./node_modules" ]; then \
+			npm install; \
+		fi; \
 	fi
 
 linter: setup
