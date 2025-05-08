@@ -31,4 +31,4 @@ grade: linter
 	JEST_JUNIT_OUTPUT_DIR="./" JEST_JUNIT_OUTPUT_NAME="test_detail.xml" $(JEST) --config=tests/jest.config.ts --no-cache --reporters=default --reporters=jest-junit
 
 clean:
-	rm -rf node_modules dist coverage test_detail.xml
+	rm -rf node_modules dist coverage test_detail.xml package-lock.json
