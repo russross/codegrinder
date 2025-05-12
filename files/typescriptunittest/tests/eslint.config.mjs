@@ -5,6 +5,7 @@ import noUntypedVarsExceptLoopsAndFunctions from './eslint-custom/arrow-loop-exc
 export default [
   {
     files: ['**/*.ts'],
+    ignores: ["_starter/*", "tests/*"],
     languageOptions: {
       parser: tsParser,
       parserOptions: {
@@ -25,11 +26,11 @@ export default [
       '@typescript-eslint/explicit-function-return-type': 'error',
       '@typescript-eslint/explicit-module-boundary-types': 'error',
       'no-var': 'error',
-      
+
       '@typescript-eslint/typedef': 'off',
-      
+
       'custom/no-untyped-vars-except-loops-and-functions': 'error',
-      
+
       '@typescript-eslint/no-inferrable-types': 'off',
     },
   },
