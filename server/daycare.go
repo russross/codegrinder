@@ -552,22 +552,11 @@ func NewNanny(ctx context.Context, problemType *ProblemType, problem *Problem, a
 		},
 		Hostname: name,
 		Mounts: []Mount{
-			//{
-			//	Destination: "/proc",
-			//	Type:        "proc",
-			//	Source:      "proc",
-			//},
 			{
 				Destination: "/dev",
 				Type:        "tmpfs",
 				Source:      "tmpfs",
 			},
-			//{
-			//	Destination: "/sys",
-			//	Type:        "sysfs",
-			//	Source:      "sysfs",
-			//	Options:     []string{"nosuid", "noexec", "nodev", "ro"},
-			//},
 			{
 				Destination: "/home/student",
 				Type:        "tmpfs",
@@ -1009,10 +998,9 @@ func removeContainer(name string) {
 	// note: this gives an error when it actually kills one,
 	// and returns success when there was nothing to kill
 	if out, err := cmd.CombinedOutput(); err != nil {
-		log.Printf("error killing container: %v with output %q", err, out)
+		//log.Printf("error killing container: %v with output %q", err, out)
 	}
 
-	log.Printf("about to runsc delete")
 	cmd = exec.Command(
 		"runsc",
 		"-root", stateDir,
@@ -1025,7 +1013,6 @@ func removeContainer(name string) {
 	// note: this gives an error when it actually kills one,
 	// and returns success when there was nothing to kill
 	if out, err := cmd.CombinedOutput(); err != nil {
-		log.Printf("error deleting container: %v with output %q", err, out)
+		//log.Printf("error deleting container: %v with output %q", err, out)
 	}
-	log.Printf("runsc delete finished")
 }
