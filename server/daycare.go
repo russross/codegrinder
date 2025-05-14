@@ -1010,8 +1010,7 @@ func removeContainer(name string) {
 		//"-rootless",
 		"-debug-log", "/dev/log",
 		"-debug",
-		"kill", "-all", "SIGKILL",
-		name,
+		"kill", name, "SIGKILL", "-all",
 	)
 
 	// note: this gives an error when it actually kills one,
