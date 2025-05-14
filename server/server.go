@@ -172,9 +172,6 @@ func main() {
 		if len(Config.ProblemTypes) == 0 {
 			log.Fatalf("cannot run Daycare role with no problemTypes in the config file")
 		}
-		if Config.Capacity <= 0 {
-			log.Fatalf("Daycare capacity must be greater than zero")
-		}
 
 		r.Get("/v2/sockets/:problem_type/:action", SocketProblemTypeAction)
 	}
