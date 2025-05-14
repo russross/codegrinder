@@ -16,7 +16,6 @@ require (
 	github.com/russross/blackfriday/v2 v2.1.0
 	github.com/russross/meddler v1.0.1
 	github.com/spf13/cobra v1.8.0
-	golang.org/x/crypto v0.22.0
 	golang.org/x/net v0.24.0
 	gopkg.in/gcfg.v1 v1.2.3
 )
@@ -27,6 +26,5 @@ require (
 	github.com/oxtoacart/bpool v0.0.0-20190530202638-03653db5a59c // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/stretchr/testify v1.8.4 // indirect
-	golang.org/x/text v0.14.0 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 )

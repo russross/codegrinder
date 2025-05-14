@@ -1,11 +1,9 @@
 package main
 
 import (
-	"bytes"
 	"compress/gzip"
 	"crypto/hmac"
 	"crypto/sha256"
-	"crypto/tls"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -15,7 +13,6 @@ import (
 	"io/ioutil"
 	"log"
 	"math/rand"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -34,8 +31,6 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	. "github.com/russross/codegrinder/types"
 	"github.com/russross/meddler"
-	"golang.org/x/crypto/acme"
-	"golang.org/x/crypto/acme/autocert"
 )
 
 // Config holds site-specific configuration data.
@@ -44,8 +39,6 @@ var Config struct {
 	// required parameters
 	Hostname      string `json:"hostname"`      // Hostname for the site: "your.host.goes.here"
 	DaycareSecret string `json:"daycareSecret"` // Random string used to sign daycare requests: `head -c 32 /dev/urandom | base64`
-	AcmeEmail     string `json:"acmeEmail"`     // Email address to register TLS certificates: "foo@bar.com"
-	AcmeURL       string `json:"acmeURL"`       // URL of ACME certificate provider. If omitted, use letsencrypt
 
 	// ta-only required parameters
 	LTISecret     string `json:"ltiSecret"`     // LTI authentication shared secret. Must match that given to Canvas course: `head -c 32 /dev/urandom | base64`
@@ -60,14 +53,13 @@ var Config struct {
 	ToolName        string      `json:"toolName"`        // LTI human readable name: default "CodeGrinder"
 	ToolID          string      `json:"toolID"`          // LTI unique ID: default "codegrinder"
 	ToolDescription string      `json:"toolDescription"` // LTI description: default "Programming exercises with grading"
-	AcmeCache       string      `json:"acmeDir"`         // Full path of Acme cache file: default "$CODEGRINDERROOT/acme"
 	SQLite3Path     string      `json:"sqlite3Path"`     // path to the sqlite database file: default "$CODEGRINDERROOT/db/codegrinder.db"
 	SessionsExpire  []time.Time `json:"sessionsExpire"`  // times/dates when sessions should expire (year is ignored)
 }
 var root string
+var port string
 
 const daycareRegistrationInterval = 10 * time.Second
-const nonTLSAddress = ":8080"
 
 func main() {
 	log.SetFlags(log.Lshortfile)
@@ -82,11 +74,17 @@ func main() {
 	}
 	log.Printf("CODEGRINDERROOT set to %s", root)
 
+	port = ":" + os.Getenv("PORT")
+	if port == ":" {
+		port = ":8080"
+	}
+	log.Printf("port set to %s", port)
+
 	// parse command line
-	var ta, daycare, use_tls bool
+	var ta, daycare, use_config bool
 	flag.BoolVar(&ta, "ta", false, "Serve the TA role")
 	flag.BoolVar(&daycare, "daycare", false, "Serve the daycare role")
-	flag.BoolVar(&use_tls, "tls", true, "Use TLS (https/wss) with automatic certificates")
+	flag.BoolVar(&use_config, "config", false, "Use config.json for config data (for testing)")
 	flag.Parse()
 
 	if !ta && !daycare {
@@ -97,19 +95,27 @@ func main() {
 	Config.ToolName = "CodeGrinder"
 	Config.ToolID = "codegrinder"
 	Config.ToolDescription = "Programming exercises with grading"
-	Config.AcmeCache = filepath.Join(root, "acme")
 	Config.SQLite3Path = filepath.Join(root, "db", "codegrinder.db")
 	Config.SessionsExpire = []time.Time{
 		time.Date(2020, 1, 1, 0, 0, 0, 0, time.Local),
 		time.Date(2020, 7, 1, 0, 0, 0, 0, time.Local),
 	}
 
-	// load config file
-	configFile := filepath.Join(root, "config.json")
-	if raw, err := ioutil.ReadFile(configFile); err != nil {
-		log.Fatalf("failed to load config file %q: %v", configFile, err)
-	} else if err := json.Unmarshal(raw, &Config); err != nil {
-		log.Fatalf("failed to parse config file: %v", err)
+	// load config
+	if use_config {
+		configFile := filepath.Join(root, "config.json")
+		if raw, err := ioutil.ReadFile(configFile); err != nil {
+			log.Fatalf("failed to load config file %q: %v", configFile, err)
+		} else if err := json.Unmarshal(raw, &Config); err != nil {
+			log.Fatalf("failed to parse config file: %v", err)
+		}
+	} else {
+		Config.Hostname = os.Getenv("CODEGRINDER_HOSTNAME")
+		Config.DaycareSecret = os.Getenv("CODEGRINDER_DAYCARESECRET")
+		Config.LTISecret = os.Getenv("CODEGRINDER_LTISECRET")
+		Config.SessionSecret = os.Getenv("CODEGRINDER_SESSIONSECRET")
+		Config.TAHostname = os.Getenv("CODEGRINDER_TAHOSTNAME")
+		Config.ProblemTypes = strings.Split(os.Getenv("CODEGRINDER_PROBLEMTYPES"), ",")
 	}
 	Config.SessionSecret = unBase64(Config.SessionSecret)
 	Config.DaycareSecret = unBase64(Config.DaycareSecret)
@@ -120,7 +126,6 @@ func main() {
 	if Config.DaycareSecret == "" {
 		log.Fatalf("cannot run with no daycareSecret in the config file")
 	}
-	// Config.AcmeEmail is optional
 
 	// set up martini
 	r := martini.NewRouter()
@@ -171,85 +176,7 @@ func main() {
 			log.Fatalf("Daycare capacity must be greater than zero")
 		}
 
-		// attach to docker via the API and try a ping
-		dockerTransport = &http.Client{
-			Transport: &http.Transport{
-				Dial: func(_, _ string) (net.Conn, error) {
-					return net.Dial("unix", dockerPath)
-				},
-			},
-		}
-		if err := getObject("/_ping", nil, nil); err != nil {
-			log.Printf("Ping: %v", err)
-		}
-
 		r.Get("/v2/sockets/:problem_type/:action", SocketProblemTypeAction)
-
-		// register with the TA periodically
-		go func() {
-			if ta {
-				// it we are also the TA, give the server a chance to start listening
-				time.Sleep(2 * time.Second)
-			}
-			status := ""
-			client := &http.Client{Timeout: time.Second * 5}
-
-			for {
-				start := time.Now()
-				reg := DaycareRegistration{
-					Hostname:     Config.Hostname,
-					ProblemTypes: Config.ProblemTypes,
-					Capacity:     Config.Capacity,
-					Time:         time.Now(),
-					Version:      CurrentVersion.Version,
-				}
-				reg.Signature = reg.ComputeSignature(Config.DaycareSecret)
-				raw, err := json.MarshalIndent(&reg, "", "    ")
-				if err != nil {
-					log.Fatalf("encoding daycare registration: %v", err)
-				}
-				url := fmt.Sprintf("https://%s/v2/daycare_registrations", Config.TAHostname)
-
-				body := ioutil.NopCloser(bytes.NewReader(raw))
-				req, err := http.NewRequest("POST", url, body)
-				if err != nil {
-					log.Fatalf("forming http request for daycare registration: %v", err)
-				}
-				req.Header.Add("Content-Type", "application/json")
-				res, err := client.Do(req)
-				if err != nil {
-					if status != "failed" {
-						log.Printf("error connecting to register daycare: %v", err)
-						log.Printf("attempt took %v", time.Since(start))
-					}
-					status = "failed"
-				} else {
-					body, err := ioutil.ReadAll(res.Body)
-					if err != nil {
-						body = []byte(fmt.Sprintf("error reading response body: %v", err))
-					}
-					res.Body.Close()
-					if res.StatusCode == http.StatusOK {
-						if status != "succeeded" {
-							log.Printf("registered with %s", url)
-							log.Printf("attempt took %v", time.Since(start))
-						}
-						status = "succeeded"
-					} else {
-						if status != "failed" {
-							log.Printf("unexpected status from %s: %v", url, res.Status)
-							for _, line := range bytes.Split(body, []byte("\n")) {
-								if len(line) > 0 {
-									log.Printf("--> %s", line)
-								}
-							}
-						}
-						status = "failed"
-					}
-				}
-				time.Sleep(daycareRegistrationInterval)
-			}
-		}()
 	}
 
 	// set up TA role
@@ -513,75 +440,11 @@ func main() {
 		r.Post("/v2/responses", counter, withTx, withCurrentUser, gunzip, binding.Json(Response{}), PostResponse)
 	}
 
-	if use_tls {
-		// set up automatic TLS certificates
-		var acmeClient *acme.Client
-		if Config.AcmeURL != "" {
-			acmeClient = &acme.Client{DirectoryURL: Config.AcmeURL}
-		}
-		lem := autocert.Manager{
-			Prompt:     autocert.AcceptTOS,
-			Cache:      autocert.DirCache(Config.AcmeCache),
-			HostPolicy: autocert.HostWhitelist(Config.Hostname),
-			Email:      Config.AcmeEmail,
-			Client:     acmeClient,
-		}
-
-		// set up the https server
-		log.Printf("accepting https connections")
-		server := &http.Server{
-			Addr:    ":https",
-			Handler: m,
-			TLSConfig: &tls.Config{
-				PreferServerCipherSuites: true,
-				MinVersion:               tls.VersionTLS12,
-				GetCertificate:           lem.GetCertificate,
-			},
-		}
-
-		// set up the http server
-		// it is necessary for ACME challenges
-		// it forwards other requests to https, but only if the host name was correct
-		forwarder := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// get the address of the client
-			addr := r.Header.Get("X-Real-IP")
-			if addr == "" {
-				addr = r.Header.Get("X-Forwarded-For")
-				if addr == "" {
-					addr = r.RemoteAddr
-				}
-			}
-
-			// make sure the request is for the right host name
-			if Config.Hostname != r.Host {
-				http.Error(w, "http request to invalid host", http.StatusBadRequest)
-				return
-			}
-			var u url.URL = *r.URL
-			u.Scheme = "https"
-			u.Host = Config.Hostname
-			log.Printf("redirecting http request from %s to %s", addr, u.String())
-			w.Header().Set("Connection", "close")
-			http.Redirect(w, r, u.String(), http.StatusFound)
-		})
-
-		// start both servers
-		go func() {
-			if err := http.ListenAndServe(":http", lem.HTTPHandler(forwarder)); err != nil {
-				log.Fatalf("ListenAndServe: %v", err)
-			}
-		}()
-		if err := server.ListenAndServeTLS("", ""); err != nil {
-			log.Fatalf("ListenAndServeTLS: %v", err)
-		}
-	} else {
-		// run without TLS
-		// note: this will work behind a TLS proxy or for debugging with some calls
-		// but LTI will refuse to connect to an insecure host
-		log.Printf("accepting http connections on %s", nonTLSAddress)
-		if err := http.ListenAndServe(nonTLSAddress, m); err != nil {
-			log.Fatalf("ListenAndServe: %v", err)
-		}
+	// note: this will work behind a TLS proxy or for debugging with some calls
+	// but LTI will refuse to connect to an insecure host
+	log.Printf("accepting http connections on %s", port)
+	if err := http.ListenAndServe(port, m); err != nil {
+		log.Fatalf("ListenAndServe: %v", err)
 	}
 }
 

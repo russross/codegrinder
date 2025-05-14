@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/xml"
 	"fmt"
 	"regexp"
@@ -66,11 +67,11 @@ type XUnitSkipped struct {
 	Body    string `xml:",chardata"`
 }
 
-func runAndParseXUnit(n *Nanny, cmd []string) {
+func runAndParseXUnit(ctx context.Context, n *Nanny, cmd []string) {
 	filename := "test_detail.xml"
 
 	// run tests with XML output
-	_, _, _, status, err := n.Exec(cmd)
+	status, err := n.Exec(ctx, cmd)
 	if err != nil {
 		n.ReportCard.LogAndFailf("Error running unit tests: %v", err)
 		return
@@ -84,7 +85,7 @@ func runAndParseXUnit(n *Nanny, cmd []string) {
 	n.ReportCard.Passed = status == 0
 
 	// parse the test results
-	xmlfiles, err := n.GetFiles([]string{filename})
+	xmlfiles, err := n.GetFiles(ctx, []string{filename})
 	if err != nil {
 		n.ReportCard.LogAndFailf("Error getting unit test results")
 		return
@@ -199,11 +200,11 @@ type CheckXMLTest struct {
 	Message     string  `xml:"message"`
 }
 
-func runAndParseCheckXML(n *Nanny, cmd []string) {
+func runAndParseCheckXML(ctx context.Context, n *Nanny, cmd []string) {
 	filename := "test_detail.xml"
 
 	// run tests with XML output
-	_, _, _, status, err := n.Exec(cmd)
+	status, err := n.Exec(ctx, cmd)
 	if err != nil {
 		n.ReportCard.LogAndFailf("Error running unit tests: %v", err)
 		return
@@ -217,7 +218,7 @@ func runAndParseCheckXML(n *Nanny, cmd []string) {
 	n.ReportCard.Passed = status == 0
 
 	// parse the test results
-	xmlfiles, err := n.GetFiles([]string{filename})
+	xmlfiles, err := n.GetFiles(ctx, []string{filename})
 	if err != nil {
 		n.ReportCard.LogAndFailf("Error getting unit test results")
 		return
