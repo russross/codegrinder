@@ -994,11 +994,8 @@ func removeContainer(name string) {
 		"-network", "none",
 		"kill", "-all", name, "9",
 	)
-
-	// note: this gives an error when it actually kills one,
-	// and returns success when there was nothing to kill
-	if out, err := cmd.CombinedOutput(); err != nil {
-		//log.Printf("error killing container: %v with output %q", err, out)
+	if err := cmd.Run(); err != nil {
+		//log.Printf("error killing container: %v", err)
 	}
 
 	cmd = exec.Command(
@@ -1009,10 +1006,7 @@ func removeContainer(name string) {
 		"delete", "-force",
 		name,
 	)
-
-	// note: this gives an error when it actually kills one,
-	// and returns success when there was nothing to kill
-	if out, err := cmd.CombinedOutput(); err != nil {
-		//log.Printf("error deleting container: %v with output %q", err, out)
+	if err := cmd.Run(); err != nil {
+		//log.Printf("error deleting container: %v", err)
 	}
 }
