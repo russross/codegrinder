@@ -627,7 +627,7 @@ func NewNanny(ctx context.Context, problemType *ProblemType, problem *Problem, a
 	cmd := exec.CommandContext(ctx,
 		"runsc",
 		"-root", stateDir,
-		//"-rootless",
+		"-rootless",
 		"-network", "none",
 		"-debug-log", "/var/log/debug.log",
 		"-debug",
@@ -737,7 +737,7 @@ func (n *Nanny) PutFiles(ctx context.Context, files map[string][]byte, mode int6
 	cmd := exec.CommandContext(ctx,
 		"runsc",
 		"-root", stateDir,
-		//"-rootless",
+		"-rootless",
 		"-network", "none",
 		"-debug-log", "/var/log/debug.log",
 		"-debug",
@@ -780,7 +780,7 @@ func (n *Nanny) GetFiles(ctx context.Context, filenames []string) (map[string][]
 		cmd := exec.CommandContext(ctx,
 			"runsc",
 			"-root", stateDir,
-			//"-rootless",
+			"-rootless",
 			"-network", "none",
 			"exec",
 			n.Name,
@@ -935,7 +935,7 @@ func (n *Nanny) Exec(ctx context.Context, execCmd []string) (status int, err err
 	args := append(
 		[]string{
 			"-root", stateDir,
-			//"-rootless",
+			"-rootless",
 			"-network", "none",
 			"-debug-log", "/var/log/debug.log",
 			"-debug",
@@ -1007,7 +1007,7 @@ func removeContainer(name string) {
 	cmd := exec.Command(
 		"runsc",
 		"-root", stateDir,
-		//"-rootless",
+		"-rootless",
 		"-network", "none",
 		"-debug-log", "/var/log/debug.log",
 		"-debug",
@@ -1024,7 +1024,7 @@ func removeContainer(name string) {
 	cmd = exec.Command(
 		"runsc",
 		"-root", stateDir,
-		//"-rootless",
+		"-rootless",
 		"-network", "none",
 		"-debug-log", "/var/log/debug.log",
 		"-debug",
