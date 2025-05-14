@@ -1008,6 +1008,7 @@ func removeContainer(name string) {
 		"runsc",
 		"-root", stateDir,
 		//"-rootless",
+		"-network", "none",
 		"-debug-log", "/dev/log",
 		"-debug",
 		"kill", "-all", name, "9",
@@ -1019,10 +1020,12 @@ func removeContainer(name string) {
 		log.Printf("error killing container: %v with output %q", err, out)
 	}
 
+	log.Printf("about to runsc delete")
 	cmd = exec.Command(
 		"runsc",
 		"-root", stateDir,
 		//"-rootless",
+		"-network", "none",
 		"-debug-log", "/dev/log",
 		"-debug",
 		"delete", "-force",
@@ -1034,4 +1037,5 @@ func removeContainer(name string) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		log.Printf("error deleting container: %v with output %q", err, out)
 	}
+	log.Printf("runsc delete finished")
 }
