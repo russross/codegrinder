@@ -746,9 +746,7 @@ func (n *Nanny) PutFiles(ctx context.Context, files map[string][]byte, mode int6
 		"/bin/tar", "x", "-f", "-", "-C", "/home/student",
 	)
 	cmd.Stdin = buf
-	log.Printf("PutFiles: about to call CombinedOutput")
 	out, err := cmd.CombinedOutput()
-	log.Printf("PutFiles: CombinedOutput returned")
 	if len(out) != 0 {
 		log.Printf("tar output: %q", out)
 		//return fmt.Errorf("tar gave non-empty output when extracting files into container")
@@ -830,12 +828,10 @@ func (n *Nanny) GetFiles(ctx context.Context, filenames []string) (map[string][]
 			name := filepath.Clean(header.Name)
 			n.Files[name] = contents
 		}
-		log.Printf("GetFiles: read %d files from tar output, about to Wait", len(n.Files))
 		if err := cmd.Wait(); err != nil {
 			log.Printf("waiting for tar command to finish to download files: %v", err)
 			return nil, err
 		}
-		log.Printf("GetFiles: Wait returned")
 
 		if tarErr.Len() != 0 {
 			log.Printf("tar gave non-empty error output when gathering files from container: %q", tarErr.String())
@@ -959,7 +955,6 @@ func (n *Nanny) Exec(ctx context.Context, execCmd []string) (status int, err err
 
 	// start
 	exitStatus := 0
-	log.Printf("Exec: about to Run")
 	if err := cmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			exitStatus = exitErr.ExitCode()
@@ -968,7 +963,6 @@ func (n *Nanny) Exec(ctx context.Context, execCmd []string) (status int, err err
 			return 0, err
 		}
 	}
-	log.Printf("Exec: Run returned")
 
 	n.Events <- &EventMessage{
 		Time:       time.Now(),
@@ -1022,8 +1016,8 @@ func removeContainer(name string) {
 
 	// note: this gives an error when it actually kills one,
 	// and returns success when there was nothing to kill
-	if err := cmd.Run(); err != nil {
-		log.Printf("error killing container: %v", err)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		log.Printf("error killing container: %v with output %q", err, out)
 	}
 
 	cmd = exec.Command(
@@ -1038,7 +1032,7 @@ func removeContainer(name string) {
 
 	// note: this gives an error when it actually kills one,
 	// and returns success when there was nothing to kill
-	if err := cmd.Run(); err != nil {
-		log.Printf("error deleting container: %v", err)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		log.Printf("error deleting container: %v with output %q", err, out)
 	}
 }
