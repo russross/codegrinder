@@ -16,12 +16,14 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/go-martini/martini"
@@ -174,6 +176,26 @@ func main() {
 		}
 
 		r.Get("/v2/sockets/:problem_type/:action", SocketProblemTypeAction)
+
+		// start a zombie reaper
+		ch := make(chan os.Signal, 1)
+		signal.Notify(ch, syscall.SIGCHLD)
+		go func() {
+			for {
+				<-ch
+				for {
+					var status syscall.WaitStatus
+					pid, err := syscall.Wait4(-1, &status, syscall.WNOHANG, nil)
+
+					if pid <= 0 || err != nil {
+						// No more children to reap or error occurred
+						break
+					}
+
+					log.Printf("reaped PID: %d with status: %d\n", pid, status.ExitStatus())
+				}
+			}
+		}()
 	}
 
 	// set up TA role
