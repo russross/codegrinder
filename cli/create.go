@@ -99,7 +99,7 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 			CommitSignature:      signed.CommitSignatures[step-1],
 		}
 
-		runInteractiveSession(unvalidated, nil, stepDir)
+		runInteractiveSession(unvalidated, nil, stepDir, "wss")
 		return
 	}
 

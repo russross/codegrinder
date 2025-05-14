@@ -50,7 +50,7 @@ func CommandAction(cmd *cobra.Command, args []string) {
 			bundle.Problem.Unique, bundle.Commit.Step, daycareHost)
 
 		// Connect to the specified daycare server directly
-		runInteractiveSession(bundle, nil, ".")
+		runInteractiveSession(bundle, nil, ".", parsedURL.Scheme)
 		return
 	}
 
@@ -93,12 +93,12 @@ func CommandAction(cmd *cobra.Command, args []string) {
 		log.Fatalf("server was unable to find a suitable daycare, unable to run action")
 	}
 	fmt.Printf("starting interactive session for %s step %d\n", problem.Unique, commit.Step)
-	runInteractiveSession(signed, nil, ".")
+	runInteractiveSession(signed, nil, ".", "wss")
 }
 
-func runInteractiveSession(bundle *CommitBundle, args []string, directory string) {
+func runInteractiveSession(bundle *CommitBundle, args []string, directory string, scheme string) {
 	endpoint := &url.URL{
-		Scheme: "wss",
+		Scheme: scheme,
 		Host:   bundle.Hostname,
 		Path:   urlPrefix + "/sockets/" + bundle.ProblemType.Name + "/" + bundle.Commit.Action,
 	}
