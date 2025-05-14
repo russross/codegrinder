@@ -552,22 +552,22 @@ func NewNanny(ctx context.Context, problemType *ProblemType, problem *Problem, a
 		},
 		Hostname: name,
 		Mounts: []Mount{
-			{
-				Destination: "/proc",
-				Type:        "proc",
-				Source:      "proc",
-			},
+			//{
+			//	Destination: "/proc",
+			//	Type:        "proc",
+			//	Source:      "proc",
+			//},
 			{
 				Destination: "/dev",
 				Type:        "tmpfs",
 				Source:      "tmpfs",
 			},
-			{
-				Destination: "/sys",
-				Type:        "sysfs",
-				Source:      "sysfs",
-				Options:     []string{"nosuid", "noexec", "nodev", "ro"},
-			},
+			//{
+			//	Destination: "/sys",
+			//	Type:        "sysfs",
+			//	Source:      "sysfs",
+			//	Options:     []string{"nosuid", "noexec", "nodev", "ro"},
+			//},
 			{
 				Destination: "/home/student",
 				Type:        "tmpfs",
