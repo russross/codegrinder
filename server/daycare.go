@@ -433,9 +433,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	}
 
 	// shutdown the nanny
-	if err := n.Shutdown("action finished"); err != nil {
-		logAndTransmitErrorf("nanny shutdown error: %v", err)
-	}
+	n.Shutdown("action finished")
 
 	// wait for listener to finish
 	close(n.Events)
@@ -623,14 +621,15 @@ func NewNanny(ctx context.Context, problemType *ProblemType, problem *Problem, a
 		limits.maxCPU, limits.maxFD, limits.maxFileSize, limits.maxMemory, limits.maxThreads)
 
 	// kill any existing container for this user
-	_ = removeContainer(name)
+	removeContainer(name)
 
 	// Run the container with runsc
 	cmd := exec.CommandContext(ctx,
 		"runsc",
 		"-root", stateDir,
-		"-rootless",
+		//"-rootless",
 		"-network", "none",
+		"-debug-log", "/dev/log",
 		"-debug",
 		"run",
 		"-bundle", containerDir,
@@ -660,20 +659,16 @@ func NewNanny(ctx context.Context, problemType *ProblemType, problem *Problem, a
 	return nanny, nil
 }
 
-func (n *Nanny) Shutdown(msg string) error {
+func (n *Nanny) Shutdown(msg string) {
 	if n.Closed {
-		return nil
+		return
 	}
 	n.Closed = true
 
 	// shut down the container
 	log.Printf("shutting down %s: %s", n.Name, msg)
-	err := removeContainer(n.Name)
+	removeContainer(n.Name)
 	releaseUID(n.UID)
-	if err != nil {
-		return fmt.Errorf("Nanny.Shutdown: %v", err)
-	}
-	return nil
 }
 
 // PutFiles copies a set of files to the given container.
@@ -742,8 +737,9 @@ func (n *Nanny) PutFiles(ctx context.Context, files map[string][]byte, mode int6
 	cmd := exec.CommandContext(ctx,
 		"runsc",
 		"-root", stateDir,
-		"-rootless",
+		//"-rootless",
 		"-network", "none",
+		"-debug-log", "/dev/log",
 		"-debug",
 		"exec",
 		n.Name,
@@ -786,7 +782,7 @@ func (n *Nanny) GetFiles(ctx context.Context, filenames []string) (map[string][]
 		cmd := exec.CommandContext(ctx,
 			"runsc",
 			"-root", stateDir,
-			"-rootless",
+			//"-rootless",
 			"-network", "none",
 			"exec",
 			n.Name,
@@ -943,8 +939,9 @@ func (n *Nanny) Exec(ctx context.Context, execCmd []string) (status int, err err
 	args := append(
 		[]string{
 			"-root", stateDir,
-			"-rootless",
+			//"-rootless",
 			"-network", "none",
+			"-debug-log", "/dev/log",
 			"-debug",
 			"exec",
 			n.Name,
@@ -1012,20 +1009,36 @@ func uidgid(uid int64) string {
 	return fmt.Sprintf("%d:%d", uid, uid)
 }
 
-func removeContainer(name string) error {
+func removeContainer(name string) {
 	cmd := exec.Command(
 		"runsc",
 		"-root", stateDir,
-		"-rootless",
+		//"-rootless",
+		"-debug-log", "/dev/log",
+		"-debug",
+		"kill", "-all", "SIGKILL",
+		name,
+	)
+
+	// note: this gives an error when it actually kills one,
+	// and returns success when there was nothing to kill
+	if err := cmd.Run(); err != nil {
+		log.Printf("error killing container: %v", err)
+	}
+
+	cmd = exec.Command(
+		"runsc",
+		"-root", stateDir,
+		//"-rootless",
+		"-debug-log", "/dev/log",
+		"-debug",
 		"delete", "-force",
 		name,
 	)
 
 	// note: this gives an error when it actually kills one,
 	// and returns success when there was nothing to kill
-	err := cmd.Run()
-	if err != nil {
-		return fmt.Errorf("error killing container: %v", err)
+	if err := cmd.Run(); err != nil {
+		log.Printf("error deleting container: %v", err)
 	}
-	return nil
 }
