@@ -2,7 +2,7 @@ export default {
   meta: {
     type: "suggestion",
     docs: {
-      description: "Require type annotations for variables except in for loops and arrow functions"
+      description: "Require type annotations for variables except in for loops, arrow functions, and destructuring patterns"
     },
     schema: []
   },
@@ -22,6 +22,10 @@ export default {
           }
           
           if (declaration.init.type === "ArrowFunctionExpression") {
+            return;
+          }
+          
+          if (declaration.id.type === "ObjectPattern" || declaration.id.type === "ArrayPattern") {
             return;
           }
           
