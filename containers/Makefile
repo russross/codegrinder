@@ -5,7 +5,7 @@ all:	amd64
 
 arm64: .proxy-c .proxy-cpp .proxy-go .proxy-python .proxy-riscv .proxy-rust .proxy-sqlite .proxy-prolog
 
-amd64: .proxy-c .proxy-go .proxy-python .proxy-riscv .proxy-rust .proxy-sqlite
+amd64: .proxy-c .proxy-go .proxy-python .proxy-riscv .proxy-rust .proxy-sqlite .proxy-server
 
 .proxy-c: c/Dockerfile
 	docker build --pull -t codegrinder/c c
@@ -50,3 +50,7 @@ amd64: .proxy-c .proxy-go .proxy-python .proxy-riscv .proxy-rust .proxy-sqlite
 .proxy-standardml: standardml/Dockerfile
 	docker build --pull -t codegrinder/standardml standardml
 	touch .proxy-standardml
+
+.proxy-server: server/Dockerfile
+	docker build --pull -t codegrinder/server server
+	touch .proxy-server

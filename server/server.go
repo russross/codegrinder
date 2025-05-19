@@ -192,7 +192,7 @@ func main() {
 						break
 					}
 
-					log.Printf("reaped PID: %d with status: %d\n", pid, status.ExitStatus())
+					//log.Printf("reaped PID: %d with status: %d\n", pid, status.ExitStatus())
 				}
 			}
 		}()

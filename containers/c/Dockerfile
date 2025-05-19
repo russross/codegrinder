@@ -9,5 +9,3 @@ RUN apk add --no-cache \
 RUN apk add --no-cache \
     clang \
     lld
-RUN apk add --no-cache \
-    valgrind
