@@ -29,8 +29,8 @@ INSERT INTO problem_types (name, image) VALUES ('prologunittest', 'codegrinder/p
 INSERT INTO problem_type_actions (problem_type, action, command, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('prologunittest', 'grade', 'make grade', 'xunit', 'Grading‥', 0, 10, 20, 20, 100, 10, 256, 20);
 
 INSERT INTO problem_types (name, image) VALUES ('python3inout', 'codegrinder/python');
-INSERT INTO problem_type_actions (problem_type, action, command, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('python3inout', 'grade', 'make grade', 'xunit', 'Grading‥', 0, 120, 120, 120, 100, 10, 256, 30);
-INSERT INTO problem_type_actions (problem_type, action, command, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('python3inout', 'step', 'make step', NULL, 'Stepping‥', 0, 120, 240, 240, 100, 10, 256, 30);
+INSERT INTO problem_type_actions (problem_type, action, command, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('python3inout', 'grade', 'make grade', 'xunit', 'Grading‥', 0, 120, 120, 120, 100, 100, 256, 30);
+INSERT INTO problem_type_actions (problem_type, action, command, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('python3inout', 'step', 'make step', NULL, 'Stepping‥', 0, 120, 240, 240, 100, 100, 256, 30);
 
 INSERT INTO problem_types (name, image) VALUES ('python3unittest', 'codegrinder/python');
 INSERT INTO problem_type_actions (problem_type, action, command, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('python3unittest', 'grade', 'make grade', 'xunit', 'Grading‥', 0, 60, 120, 120, 100, 10, 512, 30);
