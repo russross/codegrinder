@@ -34,15 +34,6 @@ var Config struct {
 	apiDump   bool
 }
 
-var TestTmpl struct {
-	Name        string
-	ParamType   string
-	ReturnType  string
-	FuncToTest  string
-	ProblemType string
-	ParsedName  string
-}
-
 type DotFileInfo struct {
 	AssignmentID int64                   `json:"assignmentID"`
 	Problems     map[string]*ProblemInfo `json:"problems"`
@@ -208,18 +199,6 @@ func main() {
 			Run: CommandExportQuizzes,
 		}
 		cmdGrind.AddCommand(cmdExportQuizzes)
-
-		cmdScaffold := &cobra.Command{
-			Use:   "scaffold <assignment name>",
-			Short: "create the files/folders common to each problem (authors only)",
-			Run:   CommandScaffold,
-		}
-		cmdScaffold.Flags().StringVar(&TestTmpl.Name, "test", "", "test class name")
-		cmdScaffold.Flags().StringVar(&TestTmpl.ParamType, "params", "", "function parameter types")
-		cmdScaffold.Flags().StringVar(&TestTmpl.ReturnType, "return", "", "function return type")
-		cmdScaffold.Flags().StringVar(&TestTmpl.FuncToTest, "function", "", "function to test")
-		cmdScaffold.Flags().StringVar(&TestTmpl.ProblemType, "type", "", "the problem type")
-		cmdGrind.AddCommand(cmdScaffold)
 	}
 
 	cmdGrind.Execute()
