@@ -1,11 +1,11 @@
-FROM codegrinder/server AS server
+FROM us-central1-docker.pkg.dev/codegrinder/codegrinder-images/server AS server
 FROM codegrinder/python AS studentimage
 
 # main container
 FROM alpine:latest
 
 # copy codegrinder executable
-COPY --from=server /go/bin/server /usr/local/bin/codegrinder
+COPY --from=server /usr/local/bin/codegrinder /usr/local/bin/codegrinder
 
 # install gVisor
 RUN wget https://storage.googleapis.com/gvisor/releases/release/latest/x86_64/runsc \

@@ -1,4 +1,4 @@
-FROM golang:alpine
+FROM golang:alpine AS builder
 RUN apk add --no-cache \
     git
 RUN git clone --depth=1 -b cloud https://github.com/russross/codegrinder.git
@@ -8,6 +8,7 @@ ENV CODEGRINDERROOT=/codegrinder
 RUN go install -tags netgo github.com/russross/codegrinder/server
 
 RUN mkdir -p "$CODEGRINDERROOT"/www
+
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go install -tags netgo github.com/russross/codegrinder/cli
 RUN mv `go env GOPATH`/bin/cli "$CODEGRINDERROOT"/www/grind.linux_amd64
 
@@ -28,3 +29,10 @@ RUN mv `go env GOPATH`/bin/darwin_arm64/cli "$CODEGRINDERROOT"/www/grind.darwin_
 
 RUN CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go install -tags netgo github.com/russross/codegrinder/cli
 RUN mv `go env GOPATH`/bin/windows_amd64/cli.exe "$CODEGRINDERROOT"/www/grind.exe
+
+# main container
+FROM alpine:latest
+
+COPY --from=builder /codegrinder /codegrinder
+COPY --from=builder /go/bin/server /usr/local/bin/codegrinder
+RUN mkdir -p /db
