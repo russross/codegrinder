@@ -52,5 +52,5 @@ amd64: .proxy-c .proxy-go .proxy-python .proxy-riscv .proxy-rust .proxy-sqlite .
 	touch .proxy-standardml
 
 .proxy-server: server/Dockerfile
-	docker build --pull -t codegrinder/server server
+	docker build --no-cache -t codegrinder/server server
 	touch .proxy-server

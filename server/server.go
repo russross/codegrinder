@@ -2,8 +2,6 @@ package main
 
 import (
 	"compress/gzip"
-	"crypto/hmac"
-	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -14,12 +12,10 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -43,12 +39,12 @@ var Config struct {
 	DaycareSecret string `json:"daycareSecret"` // Random string used to sign daycare requests: `head -c 32 /dev/urandom | base64`
 
 	// ta-only required parameters
-	LTISecret     string `json:"ltiSecret"`     // LTI authentication shared secret. Must match that given to Canvas course: `head -c 32 /dev/urandom | base64`
-	SessionSecret string `json:"sessionSecret"` // Random string used to sign cookie sessions: `head -c 32 /dev/urandom | base64`
+	LTISecret     string            `json:"ltiSecret"`     // LTI authentication shared secret. Must match that given to Canvas course: `head -c 32 /dev/urandom | base64`
+	SessionSecret string            `json:"sessionSecret"` // Random string used to sign cookie sessions: `head -c 32 /dev/urandom | base64`
+	DaycareHosts  map[string]string `json:"daycareHosts"`  // map from problem type to the daycare server that handles it
 
 	// daycare-only required parameters
 	TAHostname   string   `json:"taHostname"`   // Hostname for the TA: "your.host.goes.here". Defaults to Hostname
-	Capacity     int      `json:"capacity"`     // Relative capacity of this daycare for containers: 1
 	ProblemTypes []string `json:"problemTypes"` // List of problem types this daycare host supports: [ "python3unittest", "gotest", ... ]
 
 	// ta-only parameters where the default is usually sufficient
@@ -60,8 +56,6 @@ var Config struct {
 }
 var root string
 var port string
-
-const daycareRegistrationInterval = 10 * time.Second
 
 func main() {
 	log.SetFlags(log.Lshortfile)
@@ -116,8 +110,20 @@ func main() {
 		Config.DaycareSecret = os.Getenv("CODEGRINDER_DAYCARESECRET")
 		Config.LTISecret = os.Getenv("CODEGRINDER_LTISECRET")
 		Config.SessionSecret = os.Getenv("CODEGRINDER_SESSIONSECRET")
+		Config.DaycareHosts = make(map[string]string)
+		for _, elt := range strings.Split(os.Getenv("CODEGRINDER_DAYCAREHOSTS"), ",") {
+			parts := strings.SplitN(strings.TrimSpace(elt), ":", 2)
+			if len(parts) == 2 {
+				Config.DaycareHosts[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+			} else {
+				log.Printf("Warning: malformed CODEGRINDER_DAYCAREHOSTS entry: %q", elt)
+			}
+		}
 		Config.TAHostname = os.Getenv("CODEGRINDER_TAHOSTNAME")
 		Config.ProblemTypes = strings.Split(os.Getenv("CODEGRINDER_PROBLEMTYPES"), ",")
+		if os.Getenv("CODEGRINDER_SQLITE3PATH") != "" {
+			Config.SQLite3Path = os.Getenv("CODEGRINDER_SQLITE3PATH")
+		}
 	}
 	Config.SessionSecret = unBase64(Config.SessionSecret)
 	Config.DaycareSecret = unBase64(Config.DaycareSecret)
@@ -347,21 +353,6 @@ func main() {
 			render.JSON(http.StatusOK, &CurrentVersion)
 		})
 
-		// daycare registration
-		r.Get("/v2/daycare_registrations",
-			func(w http.ResponseWriter, render render.Render) {
-				daycareRegistrations.Expire()
-				render.JSON(http.StatusOK, daycareRegistrations.daycares)
-			})
-		r.Post("/v2/daycare_registrations", gunzip, binding.Json(DaycareRegistration{}),
-			func(w http.ResponseWriter, reg DaycareRegistration) {
-				daycareRegistrations.Expire()
-				if err := daycareRegistrations.Insert(&reg); err != nil {
-					loggedHTTPErrorf(w, http.StatusBadRequest, "bad daycare registration: %v", err)
-					return
-				}
-			})
-
 		// stats
 		r.Get("/v2/stats", withTx, withCurrentUser, authorOnly, func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -475,8 +466,8 @@ func setupDB(path string) *sql.DB {
 			"&" + "_busy_timeout=10000" +
 			"&" + "_cache_size=-20000" +
 			"&" + "_foreign_keys=ON" +
-			"&" + "_journal_mode=WAL" +
-			"&" + "_synchronous=NORMAL" +
+			"&" + "_journal_mode=TRUNCATE" +
+			"&" + "_synchronous=FULL" +
 			"&" + "_temp_store=MEMORY"
 	db, err := sql.Open("sqlite3", path+options)
 	if err != nil {
@@ -573,138 +564,6 @@ func unBase64(s string) string {
 		return string(raw)
 	}
 	return s
-}
-
-type daycares struct {
-	sync.Mutex
-	daycares map[string]*DaycareRegistration
-}
-
-var daycareRegistrations daycares
-
-func init() {
-	daycareRegistrations.daycares = make(map[string]*DaycareRegistration)
-}
-
-func (m *daycares) Expire() {
-	m.Lock()
-	defer m.Unlock()
-
-	for host, elt := range m.daycares {
-		if time.Since(elt.Time) > 2*daycareRegistrationInterval {
-			log.Printf("daycare registration for %s has expired", host)
-			delete(m.daycares, host)
-		}
-	}
-}
-
-func (m *daycares) Insert(reg *DaycareRegistration) error {
-	m.Lock()
-	defer m.Unlock()
-
-	// check the signature
-	sig := reg.ComputeSignature(Config.DaycareSecret)
-	if sig != reg.Signature {
-		return fmt.Errorf("signature mismatch: computed %s but found %s", sig, reg.Signature)
-	}
-	if reg.Version != CurrentVersion.Version {
-		return fmt.Errorf("version mismatch: daycare is %s, but ta is %s", reg.Version, CurrentVersion.Version)
-	}
-	drift := time.Since(reg.Time)
-	if drift < 0 {
-		drift = -drift
-	}
-	if drift > time.Minute {
-		return fmt.Errorf("time drift is too great")
-	}
-
-	// clean it up a bit
-	sort.Strings(reg.ProblemTypes)
-	reg.Time = time.Now()
-	reg.Version = ""
-	reg.Signature = ""
-	if m.daycares[reg.Hostname] == nil {
-		log.Printf("daycare registration for %s added", reg.Hostname)
-	}
-	m.daycares[reg.Hostname] = reg
-
-	return nil
-}
-
-func (m *daycares) Assign(problemTypes map[string]bool) (string, error) {
-	m.Lock()
-	defer m.Unlock()
-
-	// gather the total weights of all of the eligible daycare hosts
-	totalWeight := 0
-	for _, elt := range m.daycares {
-		// does this daycare support all required problem types?
-		supported := true
-		for problemType := range problemTypes {
-			n := sort.SearchStrings(elt.ProblemTypes, problemType)
-			if n >= len(elt.ProblemTypes) || elt.ProblemTypes[n] != problemType {
-				supported = false
-				break
-			}
-		}
-		if supported {
-			totalWeight += elt.Capacity
-		}
-	}
-	if totalWeight == 0 {
-		return "", fmt.Errorf("no eligible daycare found")
-	}
-
-	// pick a random point in pool of weights
-	point := rand.Intn(totalWeight)
-	skippedWeight := 0
-	for host, elt := range m.daycares {
-		supported := true
-		for problemType := range problemTypes {
-			n := sort.SearchStrings(elt.ProblemTypes, problemType)
-			if n >= len(elt.ProblemTypes) || elt.ProblemTypes[n] != problemType {
-				supported = false
-				break
-			}
-		}
-		if supported {
-			skippedWeight += elt.Capacity
-		}
-		if point < skippedWeight {
-			return host, nil
-		}
-	}
-	return "", fmt.Errorf("failed to find daycare, please report this error")
-}
-
-type DaycareRegistration struct {
-	Hostname     string    `json:"hostname"`
-	ProblemTypes []string  `json:"problemTypes"`
-	Capacity     int       `json:"capacity"`
-	Time         time.Time `json:"time"`
-	Version      string    `json:"version,omitempty"`
-	Signature    string    `json:"signature,omitempty"`
-}
-
-func (reg *DaycareRegistration) ComputeSignature(secret string) string {
-	v := make(url.Values)
-
-	// gather all relevant fields
-	v.Add("hostname", reg.Hostname)
-	sort.Strings(reg.ProblemTypes)
-	for n, elt := range reg.ProblemTypes {
-		v.Add(fmt.Sprintf("problemType-%d", n), elt)
-	}
-	v.Add("capacity", strconv.Itoa(reg.Capacity))
-	v.Add("time", reg.Time.Round(time.Second).UTC().Format(time.RFC3339))
-	v.Add("version", reg.Version)
-
-	// compute signature
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write(encode(v))
-	sum := mac.Sum(nil)
-	sig := base64.StdEncoding.EncodeToString(sum)
-	return sig
 }
 
 var (

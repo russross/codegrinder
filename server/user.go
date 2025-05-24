@@ -769,13 +769,11 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 
 	// assign a daycare host if needed
 	if bundle.Hostname == "" {
-		typeSet := map[string]bool{problemType.Name: true}
-
-		host, err := daycareRegistrations.Assign(typeSet)
-		if err != nil {
-			log.Printf("error assigning a daycare for this commit: %v", err)
-		} else {
+		host, present := Config.DaycareHosts[problemType.Name]
+		if present {
 			bundle.Hostname = host
+		} else {
+			log.Printf("no daycare found for problem type %q", problemType.Name)
 		}
 	}
 

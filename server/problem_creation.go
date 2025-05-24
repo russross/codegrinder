@@ -390,18 +390,20 @@ func PostProblemBundleUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser
 	bundle.ProblemSignature = bundle.Problem.ComputeSignature(Config.DaycareSecret, bundle.ProblemSteps)
 
 	// assign a daycare host
-	host, err := daycareRegistrations.Assign(typeSet)
-	if err != nil {
-		names := ""
-		for name := range typeSet {
-			if names != "" {
-				names += ", "
-			}
-			names += name
+	// note: all problem types must be handled by the same daycare
+	// this is a dumb limit that we should probably fix
+	host := ""
+	for typeName := range typeSet {
+		elt, present := Config.DaycareHosts[typeName]
+		if present && (host == "" || host == elt) {
+			host = elt
+		} else if !present {
+			loggedHTTPErrorf(w, http.StatusInternalServerError, "failed to find daycare for problem type %s", typeName)
+			return
+		} else {
+			loggedHTTPErrorf(w, http.StatusInternalServerError, "steps of this problem require multiple daycares, which is not currently supported")
+			return
 		}
-		loggedHTTPErrorf(w, http.StatusInternalServerError,
-			"failed to find daycare for problem type(s) %s: %v", names, err)
-		return
 	}
 	bundle.Hostname = host
 
