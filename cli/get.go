@@ -46,9 +46,6 @@ func CommandGet(cmd *cobra.Command, args []string) {
 		// look it up by ID
 		assignment = new(Assignment)
 		mustGetObject(fmt.Sprintf("/assignments/%d", id), nil, assignment)
-		if assignment.ProblemSetID < 1 {
-			log.Fatalf("cannot download quiz assignments")
-		}
 	} else {
 		// parse the course label and the problem unique id
 		parts := strings.Split(name, "/")
@@ -66,7 +63,6 @@ func CommandGet(cmd *cobra.Command, args []string) {
 		params.Add("course_lti_label", label)
 		params.Add("problem_unique", unique)
 		mustGetObject(fmt.Sprintf("/users/%d/assignments", user.ID), params, &assignmentList)
-		assignmentList = filterOutQuizzes(assignmentList)
 		if len(assignmentList) == 0 {
 			log.Printf("no matching assignment found")
 			log.Printf("   run '%s get [id]'", os.Args[0])

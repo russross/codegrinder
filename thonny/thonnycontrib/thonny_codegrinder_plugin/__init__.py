@@ -1,6 +1,6 @@
 '''Thonny plugin to integrate with CodeGrinder for coding practice'''
 
-__version__ = '2.6.16'
+__version__ = '2.7.0'
 
 import base64
 import certifi
@@ -792,7 +792,7 @@ class CommitBundle(DataClassJsonMixin):
 # constants
 perUserDotFile = '.codegrinderrc'
 perProblemSetDotFile = '.grind'
-urlPrefix = '/v2'
+urlPrefix = ''
 
 CONFIG = Config('', 'codegrinder=not_logged_in')
 VERSION_WARNING = False

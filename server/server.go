@@ -183,7 +183,7 @@ func main() {
 			log.Printf("Ping: %v", err)
 		}
 
-		r.Get("/v2/sockets/:problem_type/:action", SocketProblemTypeAction)
+		r.Get("/sockets/:problem_type/:action", SocketProblemTypeAction)
 
 		// register with the TA periodically
 		go func() {
@@ -208,7 +208,7 @@ func main() {
 				if err != nil {
 					log.Fatalf("encoding daycare registration: %v", err)
 				}
-				url := fmt.Sprintf("https://%s/v2/daycare_registrations", Config.TAHostname)
+				url := fmt.Sprintf("https://%s/daycare_registrations", Config.TAHostname)
 
 				body := ioutil.NopCloser(bytes.NewReader(raw))
 				req, err := http.NewRequest("POST", url, body)
@@ -397,17 +397,20 @@ func main() {
 		}
 
 		// version
+		r.Get("/version", counter, func(w http.ResponseWriter, render render.Render) {
+			render.JSON(http.StatusOK, &CurrentVersion)
+		})
 		r.Get("/v2/version", counter, func(w http.ResponseWriter, render render.Render) {
 			render.JSON(http.StatusOK, &CurrentVersion)
 		})
 
 		// daycare registration
-		r.Get("/v2/daycare_registrations",
+		r.Get("/daycare_registrations",
 			func(w http.ResponseWriter, render render.Render) {
 				daycareRegistrations.Expire()
 				render.JSON(http.StatusOK, daycareRegistrations.daycares)
 			})
-		r.Post("/v2/daycare_registrations", gunzip, binding.Json(DaycareRegistration{}),
+		r.Post("/daycare_registrations", gunzip, binding.Json(DaycareRegistration{}),
 			func(w http.ResponseWriter, reg DaycareRegistration) {
 				daycareRegistrations.Expire()
 				if err := daycareRegistrations.Insert(&reg); err != nil {
@@ -417,7 +420,7 @@ func main() {
 			})
 
 		// stats
-		r.Get("/v2/stats", withTx, withCurrentUser, authorOnly, func(w http.ResponseWriter, r *http.Request) {
+		r.Get("/stats", withTx, withCurrentUser, authorOnly, func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			fmt.Fprintf(w, "{\n")
 			first := true
@@ -432,85 +435,64 @@ func main() {
 		})
 
 		// LTI
-		r.Get("/v2/lti/config.xml", counter, GetConfigXML)
-		//r.Post("/v2/lti/problem_sets", counter, gunzip, binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblemSets)
-		r.Post("/v2/lti/problem_sets/:ui/:unique", counter, gunzip, binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblemSet)
-		r.Post("/v2/lti/quizzes", counter, gunzip, binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiQuizzes)
+		r.Get("/lti/config.xml", counter, GetConfigXML)
+		//r.Post("/lti/problem_sets", counter, gunzip, binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblemSets)
+		r.Post("/lti/problem_sets/:ui/:unique", counter, gunzip, binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblemSet)
 
 		// problem bundles--for problem creation only
-		r.Post("/v2/problem_bundles/unconfirmed", counter, withTx, withCurrentUser, authorOnly, gunzip, binding.Json(ProblemBundle{}), PostProblemBundleUnconfirmed)
-		r.Post("/v2/problem_bundles/confirmed", counter, withTx, withCurrentUser, authorOnly, gunzip, binding.Json(ProblemBundle{}), PostProblemBundleConfirmed)
-		r.Put("/v2/problem_bundles/:problem_id", counter, withTx, withCurrentUser, authorOnly, gunzip, binding.Json(ProblemBundle{}), PutProblemBundle)
+		r.Post("/problem_bundles/unconfirmed", counter, withTx, withCurrentUser, authorOnly, gunzip, binding.Json(ProblemBundle{}), PostProblemBundleUnconfirmed)
+		r.Post("/problem_bundles/confirmed", counter, withTx, withCurrentUser, authorOnly, gunzip, binding.Json(ProblemBundle{}), PostProblemBundleConfirmed)
+		r.Put("/problem_bundles/:problem_id", counter, withTx, withCurrentUser, authorOnly, gunzip, binding.Json(ProblemBundle{}), PutProblemBundle)
 
 		// problem set bundles--for problem set creation only
-		r.Post("/v2/problem_set_bundles", counter, withTx, withCurrentUser, authorOnly, gunzip, binding.Json(ProblemSetBundle{}), PostProblemSetBundle)
-		r.Put("/v2/problem_set_bundles/:problem_set_id", counter, withTx, withCurrentUser, authorOnly, gunzip, binding.Json(ProblemSetBundle{}), PutProblemSetBundle)
+		r.Post("/problem_set_bundles", counter, withTx, withCurrentUser, authorOnly, gunzip, binding.Json(ProblemSetBundle{}), PostProblemSetBundle)
+		r.Put("/problem_set_bundles/:problem_set_id", counter, withTx, withCurrentUser, authorOnly, gunzip, binding.Json(ProblemSetBundle{}), PutProblemSetBundle)
 
 		// problem types
-		r.Get("/v2/problem_types", counter, auth, withTx, GetProblemTypes)
-		r.Get("/v2/problem_types/:name", counter, auth, withTx, GetProblemType)
+		r.Get("/problem_types", counter, auth, withTx, GetProblemTypes)
+		r.Get("/problem_types/:name", counter, auth, withTx, GetProblemType)
 
 		// problems
-		r.Get("/v2/problems", counter, withTx, withCurrentUser, GetProblems)
-		r.Get("/v2/problems/:problem_id", counter, withTx, withCurrentUser, GetProblem)
-		r.Get("/v2/problems/:problem_id/steps", counter, withTx, withCurrentUser, GetProblemSteps)
-		r.Get("/v2/problems/:problem_id/steps/:step", counter, withTx, withCurrentUser, GetProblemStep)
-		r.Delete("/v2/problems/:problem_id", counter, withTx, withCurrentUser, administratorOnly, DeleteProblem)
+		r.Get("/problems", counter, withTx, withCurrentUser, GetProblems)
+		r.Get("/problems/:problem_id", counter, withTx, withCurrentUser, GetProblem)
+		r.Get("/problems/:problem_id/steps", counter, withTx, withCurrentUser, GetProblemSteps)
+		r.Get("/problems/:problem_id/steps/:step", counter, withTx, withCurrentUser, GetProblemStep)
+		r.Delete("/problems/:problem_id", counter, withTx, withCurrentUser, administratorOnly, DeleteProblem)
 
 		// problem sets
-		r.Get("/v2/problem_sets", counter, withTx, withCurrentUser, GetProblemSets)
-		r.Get("/v2/problem_sets/:problem_set_id", counter, withTx, withCurrentUser, GetProblemSet)
-		r.Get("/v2/problem_sets/:problem_set_id/problems", counter, withTx, withCurrentUser, GetProblemSetProblems)
-		r.Delete("/v2/problem_sets/:problem_set_id", counter, withTx, withCurrentUser, administratorOnly, DeleteProblemSet)
+		r.Get("/problem_sets", counter, withTx, withCurrentUser, GetProblemSets)
+		r.Get("/problem_sets/:problem_set_id", counter, withTx, withCurrentUser, GetProblemSet)
+		r.Get("/problem_sets/:problem_set_id/problems", counter, withTx, withCurrentUser, GetProblemSetProblems)
+		r.Delete("/problem_sets/:problem_set_id", counter, withTx, withCurrentUser, administratorOnly, DeleteProblemSet)
 
 		// courses
-		r.Get("/v2/courses", counter, withTx, withCurrentUser, GetCourses)
-		r.Get("/v2/courses/:course_id", counter, withTx, withCurrentUser, GetCourse)
-		r.Delete("/v2/courses/:course_id", counter, withTx, withCurrentUser, administratorOnly, DeleteCourse)
+		r.Get("/courses", counter, withTx, withCurrentUser, GetCourses)
+		r.Get("/courses/:course_id", counter, withTx, withCurrentUser, GetCourse)
+		r.Delete("/courses/:course_id", counter, withTx, withCurrentUser, administratorOnly, DeleteCourse)
 
 		// users
-		r.Get("/v2/users", counter, withTx, withCurrentUser, GetUsers)
-		r.Get("/v2/users/me", counter, withTx, withCurrentUser, GetUserMe)
-		r.Get("/v2/users/session", counter, GetUserSession)
-		r.Get("/v2/users/:user_id", counter, withTx, withCurrentUser, GetUser)
-		r.Get("/v2/courses/:course_id/users", counter, withTx, withCurrentUser, GetCourseUsers)
-		r.Delete("/v2/users/:user_id", counter, withTx, withCurrentUser, administratorOnly, DeleteUser)
+		r.Get("/users", counter, withTx, withCurrentUser, GetUsers)
+		r.Get("/users/me", counter, withTx, withCurrentUser, GetUserMe)
+		r.Get("/users/session", counter, GetUserSession)
+		r.Get("/users/:user_id", counter, withTx, withCurrentUser, GetUser)
+		r.Get("/courses/:course_id/users", counter, withTx, withCurrentUser, GetCourseUsers)
+		r.Delete("/users/:user_id", counter, withTx, withCurrentUser, administratorOnly, DeleteUser)
 
 		// assignments
-		r.Get("/v2/users/:user_id/assignments", counter, withTx, withCurrentUser, GetUserAssignments)
-		r.Get("/v2/courses/:course_id/users/:user_id/assignments", counter, withTx, withCurrentUser, GetCourseUserAssignments)
-		r.Get("/v2/assignments", counter, withTx, withCurrentUser, GetAssignments)
-		r.Get("/v2/assignments/:assignment_id", counter, withTx, withCurrentUser, GetAssignment)
-		r.Delete("/v2/assignments/:assignment_id", counter, withTx, withCurrentUser, administratorOnly, DeleteAssignment)
+		r.Get("/users/:user_id/assignments", counter, withTx, withCurrentUser, GetUserAssignments)
+		r.Get("/courses/:course_id/users/:user_id/assignments", counter, withTx, withCurrentUser, GetCourseUserAssignments)
+		r.Get("/assignments", counter, withTx, withCurrentUser, GetAssignments)
+		r.Get("/assignments/:assignment_id", counter, withTx, withCurrentUser, GetAssignment)
+		r.Delete("/assignments/:assignment_id", counter, withTx, withCurrentUser, administratorOnly, DeleteAssignment)
 
 		// commits
-		r.Get("/v2/assignments/:assignment_id/problems/:problem_id/commits/last", counter, withTx, withCurrentUser, GetAssignmentProblemCommitLast)
-		r.Get("/v2/assignments/:assignment_id/problems/:problem_id/steps/:step/commits/last", counter, withTx, withCurrentUser, GetAssignmentProblemStepCommitLast)
-		r.Delete("/v2/commits/:commit_id", counter, withTx, withCurrentUser, administratorOnly, DeleteCommit)
+		r.Get("/assignments/:assignment_id/problems/:problem_id/commits/last", counter, withTx, withCurrentUser, GetAssignmentProblemCommitLast)
+		r.Get("/assignments/:assignment_id/problems/:problem_id/steps/:step/commits/last", counter, withTx, withCurrentUser, GetAssignmentProblemStepCommitLast)
+		r.Delete("/commits/:commit_id", counter, withTx, withCurrentUser, administratorOnly, DeleteCommit)
 
 		// commit bundles
-		r.Post("/v2/commit_bundles/unsigned", counter, withTx, withCurrentUser, gunzip, binding.Json(CommitBundle{}), PostCommitBundlesUnsigned)
-		r.Post("/v2/commit_bundles/signed", counter, withTx, withCurrentUser, gunzip, binding.Json(CommitBundle{}), PostCommitBundlesSigned)
-
-		// quizzes
-		r.Get("/v2/assignments/:assignment_id/quizzes", counter, withTx, withCurrentUser, GetAssignmentQuizzes)
-		r.Get("/v2/quizzes/:quiz_id", counter, withTx, withCurrentUser, GetQuiz)
-		r.Patch("/v2/quizzes/:quiz_id", counter, withTx, withCurrentUser, gunzip, binding.Json(QuizPatch{}), PatchQuiz)
-		r.Post("/v2/quizzes", counter, withTx, withCurrentUser, gunzip, binding.Json(Quiz{}), PostQuiz)
-		r.Delete("/v2/quizzes/:quiz_id", counter, withTx, withCurrentUser, DeleteQuiz)
-
-		// questions
-		r.Get("/v2/quizzes/:quiz_id/questions", counter, withTx, withCurrentUser, GetQuizQuestions)
-		r.Get("/v2/assignments/:assignment_id/questions/open", counter, withTx, withCurrentUser, GetAssignmentQuestionsOpen)
-		//r.Get("/v2/assignments/:assignment_id/questions/mock", counter, withTx, withCurrentUser, MockGetAssignmentQuestionsOpen)
-		r.Get("/v2/questions/:question_id", counter, withTx, withCurrentUser, GetQuestion)
-		r.Patch("/v2/questions/:question_id", counter, withTx, withCurrentUser, gunzip, binding.Json(QuestionPatch{}), PatchQuestion)
-		r.Post("/v2/questions", counter, withTx, withCurrentUser, gunzip, binding.Json(Question{}), PostQuestion)
-		r.Delete("/v2/questions/:question_id", counter, withTx, withCurrentUser, DeleteQuestion)
-
-		// responses
-		r.Get("/v2/questions/:question_id/responses", counter, withTx, withCurrentUser, GetQuestionResponses)
-		r.Post("/v2/responses", counter, withTx, withCurrentUser, gunzip, binding.Json(Response{}), PostResponse)
+		r.Post("/commit_bundles/unsigned", counter, withTx, withCurrentUser, gunzip, binding.Json(CommitBundle{}), PostCommitBundlesUnsigned)
+		r.Post("/commit_bundles/signed", counter, withTx, withCurrentUser, gunzip, binding.Json(CommitBundle{}), PostCommitBundlesSigned)
 	}
 
 	if use_tls {

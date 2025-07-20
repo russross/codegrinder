@@ -107,7 +107,7 @@ CREATE UNIQUE INDEX users_canvas_id ON users (canvas_id);
 CREATE TABLE assignments (
     id                      integer PRIMARY KEY,
     course_id               integer NOT NULL,
-    problem_set_id          integer,
+    problem_set_id          integer NOT NULL,
     user_id                 integer NOT NULL,
     roles                   text NOT NULL,
     instructor              boolean NOT NULL,

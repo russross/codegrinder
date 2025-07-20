@@ -24,7 +24,6 @@ const (
 	perUserDotFile       = ".codegrinderrc"
 	instructorFile       = ".codegrinderinstructor"
 	perProblemSetDotFile = ".grind"
-	urlPrefix            = "/v2"
 )
 
 var Config struct {
@@ -188,17 +187,6 @@ func main() {
 		cmdType.Flags().BoolP("remove", "r", false, "remove problem type files")
 		cmdType.Flags().BoolP("list", "l", false, "list known problem types and then quit")
 		cmdGrind.AddCommand(cmdType)
-
-		cmdExportQuizzes := &cobra.Command{
-			Use:   "exportquizzes <assignment id>",
-			Short: "export all of the quizzes and questions for an assignment",
-			Long: fmt.Sprintf("Give the numeric ID (given at the start of each listing)\n\n"+
-				"User '%s list' to see a list of assignments available to you.\n\n"+
-				"The quizzes will be exported into a newly-created directory\n"+
-				"as a series of JSON files, one per quiz and one per question in each quiz.", os.Args[0]),
-			Run: CommandExportQuizzes,
-		}
-		cmdGrind.AddCommand(cmdExportQuizzes)
 	}
 
 	cmdGrind.Execute()
@@ -265,7 +253,7 @@ func doRequest(path string, params url.Values, method string, upload interface{}
 	if method != "GET" && method != "POST" && method != "PUT" && method != "DELETE" {
 		log.Panicf("doRequest only recognizes GET, POST, PUT, and DELETE methods")
 	}
-	url := fmt.Sprintf("https://%s%s%s", Config.Host, urlPrefix, path)
+	url := fmt.Sprintf("https://%s%s", Config.Host, path)
 	req, err := http.NewRequest(method, url, nil)
 	if err != nil {
 		log.Fatalf("error creating http request: %v\n", err)

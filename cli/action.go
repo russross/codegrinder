@@ -100,7 +100,7 @@ func runInteractiveSession(bundle *CommitBundle, args []string, directory string
 	endpoint := &url.URL{
 		Scheme: "wss",
 		Host:   bundle.Hostname,
-		Path:   urlPrefix + "/sockets/" + bundle.ProblemType.Name + "/" + bundle.Commit.Action,
+		Path:   "/sockets/" + bundle.ProblemType.Name + "/" + bundle.Commit.Action,
 	}
 
 	socket, resp, err := websocket.DefaultDialer.Dial(endpoint.String(), nil)
