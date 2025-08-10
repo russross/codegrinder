@@ -1,4 +1,4 @@
-FROM arm64v8/debian:bookworm
+FROM debian:bookworm
 
 RUN mkdir /home/student && chmod 777 /home/student
 WORKDIR /home/student
@@ -6,7 +6,6 @@ WORKDIR /home/student
 RUN apt update
 
 RUN apt install -y --no-install-recommends \
-    icdiff \
     make \
     python3
 RUN apt install -y --no-install-recommends \

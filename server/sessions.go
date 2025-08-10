@@ -35,7 +35,7 @@ func NewSession(id int64) *CookieSession {
 	return &CookieSession{
 		ExpiresAt: expires,
 		UserID:    id,
-		path:      "/v2/",
+		path:      "/",
 	}
 }
 

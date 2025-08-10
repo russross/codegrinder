@@ -453,7 +453,7 @@ func NewNanny(problemType *ProblemType, problem *Problem, action string, args []
 		NetworkDisabled: true,
 		HostConfig: HostConfig{
 			Memory:     int64(mem),
-			MemorySwap: -1,
+			MemorySwap: int64(mem),
 			CapDrop: []string{
 				"NET_RAW",
 				"NET_BIND_SERVICE",
@@ -475,7 +475,7 @@ func NewNanny(problemType *ProblemType, problem *Problem, action string, args []
 			Ulimits: []Ulimit{
 				{Name: "core", Soft: 0, Hard: 0},
 				{Name: "cpu", Soft: limits.maxCPU, Hard: limits.maxCPU},
-				{Name: "data", Soft: mem, Hard: mem},
+				//{Name: "data", Soft: mem, Hard: mem},
 				{Name: "fsize", Soft: disk, Hard: disk},
 				{Name: "memlock", Soft: 0, Hard: 0},
 				{Name: "nofile", Soft: limits.maxFD, Hard: limits.maxFD},

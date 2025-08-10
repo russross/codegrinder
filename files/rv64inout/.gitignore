@@ -1,5 +1,0 @@
-core
-*.o
-*.out
-*.xml
-.gdb_history

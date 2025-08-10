@@ -12,6 +12,7 @@ import (
 	"expvar"
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"math/rand"
@@ -68,6 +69,19 @@ var root string
 
 const daycareRegistrationInterval = 10 * time.Second
 const nonTLSAddress = ":8080"
+
+// filter for TLS logs to ignore failed handshakes
+type filterWriter struct {
+	dst io.Writer
+}
+
+func (f *filterWriter) Write(p []byte) (int, error) {
+	if bytes.Contains(p, []byte("TLS handshake error")) {
+		// suppress the noisy line
+		return len(p), nil
+	}
+	return f.dst.Write(p)
+}
 
 func main() {
 	log.SetFlags(log.Lshortfile)
@@ -519,40 +533,10 @@ func main() {
 				MinVersion:               tls.VersionTLS12,
 				GetCertificate:           lem.GetCertificate,
 			},
+			ErrorLog: log.New(&filterWriter{
+				dst: log.Default().Writer(),
+			}, "", log.Lshortfile),
 		}
-
-		// set up the http server
-		// it is necessary for ACME challenges
-		// it forwards other requests to https, but only if the host name was correct
-		forwarder := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// get the address of the client
-			addr := r.Header.Get("X-Real-IP")
-			if addr == "" {
-				addr = r.Header.Get("X-Forwarded-For")
-				if addr == "" {
-					addr = r.RemoteAddr
-				}
-			}
-
-			// make sure the request is for the right host name
-			if Config.Hostname != r.Host {
-				http.Error(w, "http request to invalid host", http.StatusBadRequest)
-				return
-			}
-			var u url.URL = *r.URL
-			u.Scheme = "https"
-			u.Host = Config.Hostname
-			log.Printf("redirecting http request from %s to %s", addr, u.String())
-			w.Header().Set("Connection", "close")
-			http.Redirect(w, r, u.String(), http.StatusFound)
-		})
-
-		// start both servers
-		go func() {
-			if err := http.ListenAndServe(":http", lem.HTTPHandler(forwarder)); err != nil {
-				log.Fatalf("ListenAndServe: %v", err)
-			}
-		}()
 		if err := server.ListenAndServeTLS("", ""); err != nil {
 			log.Fatalf("ListenAndServeTLS: %v", err)
 		}

@@ -1,13 +1,11 @@
-FROM alpine:latest
+FROM debian:stable-slim
 
 RUN mkdir /home/student && chmod 777 /home/student
 WORKDIR /home/student
-RUN apk add --no-cache \
-    icdiff \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     make \
-    python3
-RUN apk add --no-cache \
+    python3 \
     clang \
-    lld
-RUN apk add --no-cache \
-    valgrind
+    clang-tidy \
+    libclang-rt-dev \
+    && rm -rf /var/lib/apt/lists/*

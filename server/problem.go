@@ -14,7 +14,7 @@ import (
 	"github.com/russross/meddler"
 )
 
-// GetProblemTypes handles a request to /v2/problemtypes,
+// GetProblemTypes handles a request to /problemtypes,
 // returning a complete list of problem types.
 func GetProblemTypes(w http.ResponseWriter, tx *sql.Tx, render render.Render) {
 	problemTypes := []*ProblemType{}
@@ -35,7 +35,7 @@ func GetProblemTypes(w http.ResponseWriter, tx *sql.Tx, render render.Render) {
 	render.JSON(http.StatusOK, problemTypes)
 }
 
-// GetProblemType handles a request to /v2/problemtypes/:name,
+// GetProblemType handles a request to /problemtypes/:name,
 // returning a single problem type with the given name.
 func GetProblemType(w http.ResponseWriter, tx *sql.Tx, params martini.Params, render render.Render) {
 	name := params["name"]
@@ -100,7 +100,7 @@ func getProblemType(tx *sql.Tx, name string) (*ProblemType, error) {
 	return problemType, nil
 }
 
-// GetProblems handles a request to /v2/problems,
+// GetProblems handles a request to /problems,
 // returning a list of all problems.
 //
 // If parameter unique=<...> present, results will be filtered by matching Unique field.
@@ -142,7 +142,7 @@ func GetProblems(w http.ResponseWriter, r *http.Request, tx *sql.Tx, currentUser
 	render.JSON(http.StatusOK, problems)
 }
 
-// GetProblem handles a request to /v2/problems/:problem_id,
+// GetProblem handles a request to /problems/:problem_id,
 // returning a single problem.
 func GetProblem(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
 	problemID, err := parseID(w, "problem_id", params["problem_id"])
@@ -169,7 +169,7 @@ func GetProblem(w http.ResponseWriter, tx *sql.Tx, params martini.Params, curren
 	render.JSON(http.StatusOK, problem)
 }
 
-// DeleteProblem handles request to /v2/problems/:problem_id,
+// DeleteProblem handles request to /problems/:problem_id,
 // deleting the given problem.
 // Note: this deletes all steps, assignments, and commits related to the problem,
 // and it removes it from any problem sets it was part of.
@@ -186,7 +186,7 @@ func DeleteProblem(w http.ResponseWriter, tx *sql.Tx, params martini.Params, ren
 	}
 }
 
-// GetProblemSteps handles a request to /v2/problems/:problem_id/steps,
+// GetProblemSteps handles a request to /problems/:problem_id/steps,
 // returning a list of all steps for a problem.
 func GetProblemSteps(w http.ResponseWriter, r *http.Request, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
 	problemID, err := parseID(w, "problem_id", params["problem_id"])
@@ -226,7 +226,7 @@ func GetProblemSteps(w http.ResponseWriter, r *http.Request, tx *sql.Tx, params 
 	render.JSON(http.StatusOK, problemSteps)
 }
 
-// GetProblemStep handles a request to /v2/problems/:problem_id/steps/:step,
+// GetProblemStep handles a request to /problems/:problem_id/steps/:step,
 // returning a single problem step.
 func GetProblemStep(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
 	problemID, err := parseID(w, "problem_id", params["problem_id"])
@@ -260,7 +260,7 @@ func GetProblemStep(w http.ResponseWriter, tx *sql.Tx, params martini.Params, cu
 	render.JSON(http.StatusOK, problemStep)
 }
 
-// GetProblemSets handles a request to /v2/problem_sets,
+// GetProblemSets handles a request to /problem_sets,
 // returning a list of all problem sets.
 //
 // If parameter unique=<...> present, results will be filtered by matching Unique field.
@@ -322,7 +322,7 @@ func GetProblemSets(w http.ResponseWriter, r *http.Request, tx *sql.Tx, currentU
 	render.JSON(http.StatusOK, problemSets)
 }
 
-// GetProblemSet handles a request to /v2/problem_sets/:problem_set_id,
+// GetProblemSet handles a request to /problem_sets/:problem_set_id,
 // returning a single problem set.
 func GetProblemSet(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
 	problemSetID, err := parseID(w, "problem_set_id", params["problem_set_id"])
@@ -349,7 +349,7 @@ func GetProblemSet(w http.ResponseWriter, tx *sql.Tx, params martini.Params, cur
 	render.JSON(http.StatusOK, problemSet)
 }
 
-// GetProblemSetProblems handles a request to /v2/problem_sets/:problem_set_id/problems,
+// GetProblemSetProblems handles a request to /problem_sets/:problem_set_id/problems,
 // returning a list of all problems set problems for a given problem set.
 func GetProblemSetProblems(w http.ResponseWriter, r *http.Request, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
 	problemSetID, err := parseID(w, "problem_set_id", params["problem_set_id"])
@@ -381,7 +381,7 @@ func GetProblemSetProblems(w http.ResponseWriter, r *http.Request, tx *sql.Tx, p
 	render.JSON(http.StatusOK, problemSetProblems)
 }
 
-// DeleteProblemSet handles request to /v2/problem_sets/:problem_set_id,
+// DeleteProblemSet handles request to /problem_sets/:problem_set_id,
 // deleting the given problem set.
 // Note: this deletes all assignments and commits related to the problem set.
 func DeleteProblemSet(w http.ResponseWriter, tx *sql.Tx, params martini.Params, render render.Render) {

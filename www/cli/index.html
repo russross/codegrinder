@@ -151,45 +151,34 @@
 <h2>For students using the command-line tool</h2>
 <p>You must install the <tt>grind</tt> command-line tool to interact with CodeGrinder and complete this assignment.</p>
 
-<h3>Installing/upgrading <tt>grind</tt> on Linux (64-bit x86)</h3>
+<h3>Installing <tt>grind</tt></h3>
 <div>
-  <p>Type the following commands to download the <tt>grind</tt> tool. These instructions apply to downloading it for the first time, and also to upgrading it to a new version:</p>
-  <pre>sudo curl --compressed -o /usr/local/bin/grind <script>document.write(document.location.origin)</script>/grind.linux_amd64<br>sudo chmod 755 /usr/local/bin/grind</pre>
+  <p>Run following command in a command-line shell to download the <tt>grind</tt> tool.
+     These instructions apply to downloading it for the first time, and also to upgrading it to a new version:</p>
+  <div style="position: relative; background-color: #f4f4f4; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-family: monospace;">
+    <code id="install-command">curl -s https://codegrinder.russross.com/install-grind.sh | sudo sh</code>
+    <button onclick="copyCommand()" style="position: absolute; top: 10px; right: 10px; background: none; border: none; cursor: pointer;" title="Copy to clipboard">
+        &#128203; <!-- This is a clipboard emoji as a standard copy icon -->
+    </button>
+    <span id="copy-message" style="position: absolute; top: 10px; right: 40px; color: #28a745; display: none;">Copied!</span>
+  </div>
+  <script>
+      function copyCommand() {
+          var text = document.getElementById('install-command').innerText;
+          navigator.clipboard.writeText(text).then(function() {
+              var message = document.getElementById('copy-message');
+              message.style.display = 'inline';
+              setTimeout(function() {
+                  message.style.display = 'none';
+              }, 2000); // Hide after 2 seconds
+          }, function(err) {
+              console.error('Failed to copy: ', err);
+          });
+      }
+  </script>
   <p>Type <tt>grind</tt> and hit enter to make sure the command is recognized. If not (if you see the message “grind: command not found”), get help.</p>
-  <p>Note: if it is not working for you, please seek help! Do not fall behind on your assignments just because you ran into problems getting the tools set up. Your instructor will be happy to sit down with you and help you get it running.</p>
-</div>
-
-<h3>Installing/upgrading <tt>grind</tt> on Linux on a Raspberry Pi (or other ARM 32-bit device)</h3>
-<div>
-  <p>Note: you can ignore this if you are working on leghorn. It already has the <tt>grind</tt> command installed.</p>
-  <p>Type the following commands to download the <tt>grind</tt> tool. These instructions apply to downloading it for the first time, and also to upgrading it to a new version:</p>
-  <pre>sudo curl --compressed -o /usr/local/bin/grind <script>document.write(document.location.origin)</script>/grind.linux_arm<br>sudo chmod 755 /usr/local/bin/grind</pre>
-  <p>Type <tt>grind</tt> and hit enter to make sure the command is recognized. If not (if you see the message “grind: command not found”), get help.</p>
-  <p>Note: if it is not working for you, please seek help! Do not fall behind on your assignments just because you ran into problems getting the tools set up. Your instructor will be happy to sit down with you and help you get it running.</p>
-</div>
-
-<h3>Installing/upgrading <tt>grind</tt> on Linux on a Mac OS VM (or other ARM 64-bit device)</h3>
-<div>
-  <p>Type the following commands to download the <tt>grind</tt> tool. These instructions apply to downloading it for the first time, and also to upgrading it to a new version:</p>
-  <pre>sudo curl --compressed -o /usr/local/bin/grind <script>document.write(document.location.origin)</script>/grind.linux_arm64<br>sudo chmod 755 /usr/local/bin/grind</pre>
-  <p>Type <tt>grind</tt> and hit enter to make sure the command is recognized. If not (if you see the message “grind: command not found”), get help.</p>
-  <p>Note: if it is not working for you, please seek help! Do not fall behind on your assignments just because you ran into problems getting the tools set up. Your instructor will be happy to sit down with you and help you get it running.</p>
-</div>
-
-<h3>Installing/upgrading <tt>grind</tt> on macOS (Intel)</h3>
-<div>
-  <p>Type the following commands to download the <tt>grind</tt> tool. These instructions apply to downloading it for the first time, and also to upgrading it to a new version:</p>
-  <pre>sudo curl --compressed -o /usr/local/bin/grind <script>document.write(document.location.origin)</script>/grind.darwin_amd64<br>sudo chmod 755 /usr/local/bin/grind</pre>
-  <p>Type <tt>grind</tt> and hit enter to make sure the command is recognized. If not (if you see the message “grind: command not found”), get help.</p>
-  <p>Note: if it is not working for you, please seek help! Do not fall behind on your assignments just because you ran into problems getting the tools set up. Your instructor will be happy to sit down with you and help you get it running.</p>
-</div>
-
-<h3>Installing/upgrading <tt>grind</tt> on macOS (Apple Silicon)</h3>
-<div>
-  <p>Type the following commands to download the <tt>grind</tt> tool. These instructions apply to downloading it for the first time, and also to upgrading it to a new version:</p>
-  <pre>sudo curl --compressed -o /usr/local/bin/grind <script>document.write(document.location.origin)</script>/grind.darwin_arm64<br>sudo chmod 755 /usr/local/bin/grind</pre>
-  <p>Type <tt>grind</tt> and hit enter to make sure the command is recognized. If not (if you see the message “grind: command not found”), get help.</p>
-  <p>Note: if it is not working for you, please seek help! Do not fall behind on your assignments just because you ran into problems getting the tools set up. Your instructor will be happy to sit down with you and help you get it running.</p>
+  <p>Note: if it is not working for you, please seek help! Do not fall behind on your assignments just because you ran into problems getting the tools set up.
+     A TA or your instructor will be happy to sit down with you and help you get it running.</p>
 </div>
 
 <h3>Logging in</h3>
