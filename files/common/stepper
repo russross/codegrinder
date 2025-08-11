@@ -201,7 +201,7 @@ def run_test_case(cmd: List[str], transcript_path: Path, timeout: float, post_er
 
             if expected_action == '<':
                 # --- Handle Expected Input ---
-                print_color(expected_content.strip(), Colors.BLUE)
+                print_color(expected_content.rstrip('\n') + '⏎', Colors.BLUE)
                 try:
                     proc.stdin.write(expected_content.encode('utf-8'))
                     proc.stdin.flush()
@@ -249,7 +249,8 @@ def run_test_case(cmd: List[str], transcript_path: Path, timeout: float, post_er
 
                 # Success, print and continue
                 color = "" if is_stdout else Colors.YELLOW
-                print(f"{color}{actual_line.strip()}{Colors.ENDC}")
+                no_newline = actual_line.rstrip('\n')
+                print(f"{color}{no_newline}{Colors.ENDC}")
                 expected_actions.popleft()
 
         # --- Post-Loop Checks ---
@@ -374,13 +375,14 @@ def handle_error(reason: str, proc: subprocess.Popen[bytes], sel: selectors.Defa
     while '\n' in partial_stdout and lines_shown < post_error_lines:
         line, partial_stdout = partial_stdout.split('\n', 1)
         prefix = f"{'SUBSEQUENT STDOUT:':<{ERROR_PREFIX_WIDTH}}"
-        log_and_print(f"{prefix}{repr(line + 'n')}", Colors.YELLOW)
+        newline = '\n'
+        log_and_print(f"{prefix}{repr(line + newline)}", Colors.YELLOW)
         lines_shown += 1
     
     while '\n' in partial_stderr and lines_shown < post_error_lines:
         line, partial_stderr = partial_stderr.split('\n', 1)
         prefix = f"{'SUBSEQUENT STDERR:':<{ERROR_PREFIX_WIDTH}}"
-        log_and_print(f"{prefix}{repr(line + 'n')}", Colors.YELLOW)
+        log_and_print(f"{prefix}{repr(line + newline)}", Colors.YELLOW)
         lines_shown += 1
 
     # Drain subsequent output from the process itself

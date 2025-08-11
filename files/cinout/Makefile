@@ -2,11 +2,14 @@
 .SUFFIXES: .o .opt.o .c .out .xml .input .transcript
 .PHONY: all grade run step setup clean
 
-CLANG_TIDY_CHECKS='-checks=bugprone-*,cert-*,clang-analyzer-*,readability-*,performance-*,-readability-magic-numbers,-readability-identifier-length,-readability-braces-around-statements'
-DEBUG_CFLAGS=-g -Os -std=c2x -Wpedantic -Wall -Wextra -Werror -Wshadow -Wnull-dereference -Wunreachable-code -fsanitize=address -fsanitize=undefined
-DEBUG_LDFLAGS=-g -fsanitize=address -fsanitize=undefined
-OPT_CFLAGS=-g -Os -std=c2x -Wpedantic -Wall -Wextra -Werror -Wshadow -Wnull-dereference -Wunreachable-code
-OPT_LDFLAGS=-g
+CSTD=-std=c18
+SAN=-fsanitize=address,undefined -fno-omit-frame-pointer
+WARN=-Wall -Wextra -Wpedantic -Wshadow -Wpointer-arith -Wcast-qual -Wwrite-strings -Wvla -Wstrict-prototypes -Wold-style-definition -Wformat=2 -Wswitch-enum
+CLANG_TIDY_CHECKS=clang-analyzer-*,-clang-analyzer-osx*,-clang-analyzer-cplusplus*,bugprone-assignment-in-if-condition,bugprone-sizeof-expression,bugprone-suspicious-memset-usage,bugprone-suspicious-string-compare,bugprone-unhandled-self-assignment,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,-clang-analyzer-security.insecureAPI.strcpy
+DEBUG_CFLAGS=$(CSTD) -O0 -g $(WARN) -Werror $(SAN)
+DEBUG_LDFLAGS=$(SAN)
+OPT_CFLAGS=$(CSTD) -O3 -g $(WARN) -Werror
+OPT_LDFLAGS=
 
 DEBUG_SOURCES=$(filter-out %-opt.c, $(wildcard *.c))
 OPT_SOURCES=$(filter-out %-test.c, $(wildcard *.c))
@@ -34,21 +37,17 @@ step:	a.out
 	python3 lib/stepper
 
 .c.o:
-	clang-tidy -quiet -warnings-as-errors $(CLANG_TIDY_CHECKS) $< -- $(DEBUG_CFLAGS)
-	clang $(DEBUG_CFLAGS) $< -c -o $@
+	clang-tidy -quiet -warnings-as-errors='*' -checks=$(CLANG_TIDY_CHECKS) $< -- $(DEBUG_CFLAGS)
+	clang $(DEBUG_CFLAGS) -c $< -o $@
 
 .c.opt.o:
-	clang $(OPT_CFLAGS) $< -c -o $@
+	clang $(OPT_CFLAGS) -c $< -o $@
 
 a.out:	$(DEBUG_OBJECTS)
 	clang $(DEBUG_LDFLAGS) $^ -o $@
 
 opt.out: $(OPT_OBJECTS)
 	clang $(OPT_LDFLAGS) $^ -o $@
-
-setup:
-	# install build tools
-	sudo apt install -y curl clang lldb make python3
 
 clean:
 	rm -f core *.o *.opt.o *.out *.xml *.plist

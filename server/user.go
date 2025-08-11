@@ -837,7 +837,7 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 		} else {
 			fmt.Fprintf(&report, "<h1>Grading transcript</h1>\n")
 		}
-		fmt.Fprintf(&report, "<pre>%s</pre>\n", html.EscapeString(transcript.String()))
+		fmt.Fprintf(&report, "%s\n", ANSIToHTMLPre(transcript.String()))
 
 		// add all of the student files
 		var names []string
