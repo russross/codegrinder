@@ -279,7 +279,20 @@ func main() {
 			log.Fatalf("cannot run TA role with no sqlite3Path in the config file")
 		}
 
-		m.Use(mgzip.All())
+		// skipMiddleware wraps a martini.Handler, skipping it if the request path
+		// starts with the given prefix.
+		skipMiddleware := func(prefix string, middleware martini.Handler) martini.Handler {
+			return func(c martini.Context, w http.ResponseWriter, r *http.Request) {
+				// If the path matches the prefix, skip this middleware and call the next handler.
+				if strings.HasPrefix(r.URL.Path, prefix) {
+					c.Next()
+				} else {
+					// Otherwise, execute the middleware as usual.
+					c.Invoke(middleware)
+				}
+			}
+		}
+		m.Use(skipMiddleware("/sockets/", mgzip.All()))
 		m.Use(martini.Static(filepath.Join(root, "www"), martini.StaticOptions{SkipLogging: true}))
 		m.Use(render.Renderer(render.Options{IndentJSON: false}))
 

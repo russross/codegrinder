@@ -19,22 +19,70 @@ from pathlib import Path
 from typing import List, IO, Tuple, cast, Optional, Deque, Dict, Any
 from collections import deque
 
-# ANSI color codes for console output
-class Colors:
-    RED = '\033[91m'
-    YELLOW = '\033[93m'
-    BLUE = '\033[94m'
-    GREEN = '\033[92m'
-    BOLD = '\033[1m'
-    ENDC = '\033[0m'
+# ANSI color codes for console output, organized by semantic meaning.
+class AnsiColors:
+    # --- Semantic Colors ---
+    RED = '\033[91m'     # Used for failures, errors, and fatal warnings.
+    YELLOW = '\033[93m'  # Used for non-fatal warnings, stderr, and context info.
+    BLUE = '\033[94m'    # Used for stdin and informational headers.
+    GREEN = '\033[92m'   # Used for success messages.
 
+    # --- Modifiers ---
+    BOLD = '\033[1m'
+    ENDC = '\033[0m'     # Resets all formatting.
+
+    # --- Darker shades for End-of-Line markers ---
+    # These use the 256-color palette for more subtle shades.
+    DARK_BLUE = '\033[38;5;20m'   # For stdin's EOL marker.
+    DARK_YELLOW = '\033[38;5;94m' # For stderr's EOL marker.
+    DARK_GREY = '\033[38;5;240m'  # For stdout's EOL marker.
+
+# The symbol to print at the end of echoed I/O lines.
+EOL_SYMBOL = '⏎'
 # Width for aligning prefixes in error reports for readability
 ERROR_PREFIX_WIDTH = 20
 
-def print_color(text: str, color: str, bold: bool = False) -> None:
-    """Prints text to the console with specified ANSI color."""
-    bold_code = Colors.BOLD if bold else ""
-    print(f"{bold_code}{color}{text}{Colors.ENDC}", flush=True)
+# --- Semantic Print Functions ---
+
+def print_stdin(text: str) -> None:
+    """Prints text representing stdin, with a colored EOL marker."""
+    print(f"{AnsiColors.BLUE}{text}{AnsiColors.DARK_BLUE}{EOL_SYMBOL}{AnsiColors.ENDC}", flush=True)
+
+def print_stdout(text: str) -> None:
+    """Prints text representing stdout, with a colored EOL marker."""
+    # stdout is default terminal color.
+    print(f"{text}{AnsiColors.DARK_GREY}{EOL_SYMBOL}{AnsiColors.ENDC}", flush=True)
+
+def print_stderr(text: str) -> None:
+    """Prints text representing stderr, with a colored EOL marker."""
+    print(f"{AnsiColors.YELLOW}{text}{AnsiColors.DARK_YELLOW}{EOL_SYMBOL}{AnsiColors.ENDC}", flush=True)
+
+def print_fatal(text: str) -> None:
+    """Prints a bold, red fatal error message."""
+    print(f"{AnsiColors.BOLD}{AnsiColors.RED}{text}{AnsiColors.ENDC}", flush=True)
+
+def print_warning(text: str) -> None:
+    """Prints a yellow warning message."""
+    print(f"{AnsiColors.YELLOW}{text}{AnsiColors.ENDC}", flush=True)
+
+def print_success(text: str) -> None:
+    """Prints a bold, green success message."""
+    print(f"{AnsiColors.BOLD}{AnsiColors.GREEN}{text}{AnsiColors.ENDC}", flush=True)
+
+def print_info(text: str) -> None:
+    """Prints an informational message (e.g., the command being run)."""
+    print(f"{AnsiColors.YELLOW}{text}{AnsiColors.ENDC}", flush=True)
+
+def print_header(text: str, color: str, bold: bool = True) -> None:
+    """Prints a generic colored header line."""
+    bold_code = AnsiColors.BOLD if bold else ""
+    print(f"{bold_code}{color}{text}{AnsiColors.ENDC}", flush=True)
+
+def print_summary(text: str, success: bool) -> None:
+    """Prints a final summary line in green for success or red for failure."""
+    color = AnsiColors.GREEN if success else AnsiColors.RED
+    print(f"{AnsiColors.BOLD}{color}{text}{AnsiColors.ENDC}", flush=True)
+
 
 def generate_xml_report(results: List[Dict[str, Any]], tests: int, failures: int, total_time: float) -> None:
     """
@@ -77,7 +125,7 @@ def generate_xml_report(results: List[Dict[str, Any]], tests: int, failures: int
         tree = ET.ElementTree(element=testsuites)
         tree.write(outname, encoding='utf-8', xml_declaration=True)
     except IOError as e:
-        print_color(f"FATAL: Could not write XML report to '{outname}': {e}", Colors.RED, bold=True)
+        print_fatal(f"FATAL: Could not write XML report to '{outname}': {e}")
 
 
 def main() -> None:
@@ -95,17 +143,17 @@ def main() -> None:
         # Check for STEPPER_GRADE to enable grade mode
         grade_mode = os.environ.get('STEPPER_GRADE', 'false').lower() == 'true'
     except (KeyError, ValueError) as e:
-        print_color(f"FATAL: Invalid or missing environment variable: {e}", Colors.RED, bold=True)
+        print_fatal(f"FATAL: Invalid or missing environment variable: {e}")
         sys.exit(1)
 
     if not stepper_dir.is_dir():
-        print_color(f"FATAL: STEPPER_DIR '{stepper_dir}' is not a valid directory.", Colors.RED, bold=True)
+        print_fatal(f"FATAL: STEPPER_DIR '{stepper_dir}' is not a valid directory.")
         sys.exit(1)
 
     # --- 2. Find and Run Test Cases ---
     transcript_files = sorted(list(stepper_dir.glob('*.transcript')))
     if not transcript_files:
-        print_color(f"WARNING: No *.transcript files found in '{stepper_dir}'.", Colors.YELLOW)
+        print_warning(f"WARNING: No *.transcript files found in '{stepper_dir}'.")
         sys.exit(0)
 
     failed_tests = 0
@@ -116,7 +164,7 @@ def main() -> None:
         print("-" * 80)
         input_path = transcript_path.with_suffix('.input')
         run_command = f"$ {' '.join(cmd)} < {input_path}"
-        print_color(run_command, Colors.YELLOW)
+        print_info(run_command)
         print() # Add a newline for spacing
 
         test_start_time = time.monotonic()
@@ -135,19 +183,20 @@ def main() -> None:
             })
 
         if success:
-            print_color("\n✔ Test Passed", Colors.GREEN, bold=True)
+            print_success("\n✔ Test Passed")
         else:
             failed_tests += 1
             if not grade_mode:
-                print_color("\nExiting due to test failure.", Colors.RED, bold=True)
+                print_fatal("\nExiting due to test failure.")
                 break
     
     print("-" * 80)
-    summary_color = Colors.GREEN if failed_tests == 0 else Colors.RED
     total_tests = len(transcript_files)
     passed_tests = total_tests - failed_tests
     total_duration = time.monotonic() - total_start_time
-    print_color(f"Passed {passed_tests}/{total_tests} tests in {total_duration:.2f} seconds", summary_color, bold=True)
+    summary_text = f"Passed {passed_tests}/{total_tests} tests in {total_duration:.2f} seconds"
+    print_summary(summary_text, success=(failed_tests == 0))
+    
     if grade_mode:
         # In grade mode, generate the XML report
         generate_xml_report(test_results, total_tests, failed_tests, total_duration)
@@ -175,7 +224,7 @@ def run_test_case(cmd: List[str], transcript_path: Path, timeout: float, post_er
         expected_actions = parse_transcript(transcript_path)
     except (IOError, ValueError) as e:
         message = f"FATAL: Could not read or parse transcript '{transcript_path}': {e}"
-        print_color(message, Colors.RED, bold=True)
+        print_fatal(message)
         return False, message
 
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
@@ -201,7 +250,7 @@ def run_test_case(cmd: List[str], transcript_path: Path, timeout: float, post_er
 
             if expected_action == '<':
                 # --- Handle Expected Input ---
-                print_color(expected_content.rstrip('\n') + '⏎', Colors.BLUE)
+                print_stdin(expected_content.rstrip('\n'))
                 try:
                     proc.stdin.write(expected_content.encode('utf-8'))
                     proc.stdin.flush()
@@ -248,9 +297,11 @@ def run_test_case(cmd: List[str], transcript_path: Path, timeout: float, post_er
                     return False, error_log
 
                 # Success, print and continue
-                color = "" if is_stdout else Colors.YELLOW
-                no_newline = actual_line.rstrip('\n')
-                print(f"{color}{no_newline}{Colors.ENDC}")
+                text_to_print = actual_line.rstrip('\n')
+                if is_stdout:
+                    print_stdout(text_to_print)
+                else:
+                    print_stderr(text_to_print)
                 expected_actions.popleft()
 
         # --- Post-Loop Checks ---
@@ -289,7 +340,7 @@ def run_test_case(cmd: List[str], transcript_path: Path, timeout: float, post_er
 
     except (IOError, ValueError) as e:
         message = f"Stepper internal error: {e}"
-        print_color(message, Colors.RED, bold=True)
+        print_fatal(message)
         return False, message
     finally:
         # Ensure process and its resources are cleaned up
@@ -342,60 +393,81 @@ def handle_error(reason: str, proc: subprocess.Popen[bytes], sel: selectors.Defa
     """
     log_lines: List[str] = []
 
-    def log_and_print(text: str, color: str = "", bold: bool = False, plain_text: Optional[str] = None) -> None:
-        """Helper to print to console and append to log simultaneously."""
-        log_lines.append(plain_text if plain_text is not None else text)
-        if color:
-            print_color(text, color, bold)
-        else:
-            print(text)
-
-    log_and_print("\n" + "=" * 80, Colors.RED, bold=True)
-    log_and_print("TEST FAILED".center(80), Colors.RED, bold=True)
-    log_and_print("=" * 80, Colors.RED, bold=True)
+    # --- Print Failure Banner ---
+    banner = "\n" + "=" * 80
+    log_lines.append(banner)
+    print_header(banner, AnsiColors.RED)
     
-    log_and_print("\n--- Expected Next Steps ---", Colors.BLUE, bold=True)
+    fail_text = "TEST FAILED".center(80)
+    log_lines.append(fail_text)
+    print_header(fail_text, AnsiColors.RED)
+    
+    log_lines.append("=" * 80)
+    print_header("=" * 80, AnsiColors.RED)
+    
+    # --- Print Expected Actions ---
+    header_expected = "\n--- Expected Next Steps ---"
+    log_lines.append(header_expected)
+    print_header(header_expected, AnsiColors.BLUE)
+
     if not expected_actions:
-        log_and_print("(No more actions were expected from the transcript)")
+        no_actions_text = "(No more actions were expected from the transcript)"
+        log_lines.append(no_actions_text)
+        print(no_actions_text)
     for i, (action, content) in enumerate(expected_actions):
         if i >= post_error_lines: break
         prefix_str = "EXPECTED STDOUT:" if action == '>' else "EXPECTED STDERR:" if action == '!' else "EXPECTED STDIN:"
         prefix = f"{prefix_str:<{ERROR_PREFIX_WIDTH}}"
-        color = Colors.YELLOW if action == '!' else Colors.BLUE
-        log_and_print(f"{prefix}{repr(content)}", color, plain_text=f"{prefix}{repr(content)}")
+        line_text = f"{prefix}{repr(content)}"
+        log_lines.append(line_text)
+        color = AnsiColors.YELLOW if action == '!' else AnsiColors.BLUE
+        print_header(line_text, color, bold=False)
 
-    log_and_print("\n--- Actual Program Output (Context) ---", Colors.YELLOW, bold=True)
+    # --- Print Actual Program Output ---
+    header_actual = "\n--- Actual Program Output (Context) ---"
+    log_lines.append(header_actual)
+    print_header(header_actual, AnsiColors.YELLOW)
+
     lines_shown = 0
     if mismatched_line:
         prefix = f"{'MISMATCHED LINE:':<{ERROR_PREFIX_WIDTH}}"
-        log_and_print(f"{prefix}{repr(mismatched_line)}", Colors.YELLOW)
+        line_text = f"{prefix}{repr(mismatched_line)}"
+        log_lines.append(line_text)
+        print_warning(line_text)
         lines_shown += 1
     
     # Drain any lines already in the partial buffers
     while '\n' in partial_stdout and lines_shown < post_error_lines:
         line, partial_stdout = partial_stdout.split('\n', 1)
         prefix = f"{'SUBSEQUENT STDOUT:':<{ERROR_PREFIX_WIDTH}}"
-        newline = '\n'
-        log_and_print(f"{prefix}{repr(line + newline)}", Colors.YELLOW)
+        line_text = f"{prefix}{repr(line + chr(10))}"
+        log_lines.append(line_text)
+        print_warning(line_text)
         lines_shown += 1
     
     while '\n' in partial_stderr and lines_shown < post_error_lines:
         line, partial_stderr = partial_stderr.split('\n', 1)
         prefix = f"{'SUBSEQUENT STDERR:':<{ERROR_PREFIX_WIDTH}}"
-        log_and_print(f"{prefix}{repr(line + newline)}", Colors.YELLOW)
+        line_text = f"{prefix}{repr(line + chr(10))}"
+        log_lines.append(line_text)
+        print_warning(line_text)
         lines_shown += 1
 
     # Drain subsequent output from the process itself
     start_time = time.monotonic()
     while lines_shown < post_error_lines and time.monotonic() - start_time < timeout and proc.poll() is None:
         if expected_actions and expected_actions[0][0] == '<':
-            log_and_print("(Stopping output display as program is expected to wait for input next)", Colors.BLUE)
+            wait_text = "(Stopping output display as program is expected to wait for input next)"
+            log_lines.append(wait_text)
+            print_header(wait_text, AnsiColors.BLUE, bold=False)
             break
 
         line_out, partial_stdout = read_line_from_process(proc, sel, True, partial_stdout, 0.1)
         if line_out is not None:
             prefix = f"{'SUBSEQUENT STDOUT:':<{ERROR_PREFIX_WIDTH}}"
-            log_and_print(f"{prefix}{repr(line_out)}", Colors.YELLOW)
+            line_text = f"{prefix}{repr(line_out)}"
+            log_lines.append(line_text)
+            print_warning(line_text)
             lines_shown += 1
             if lines_shown >= post_error_lines: break
         
@@ -404,23 +476,41 @@ def handle_error(reason: str, proc: subprocess.Popen[bytes], sel: selectors.Defa
         line_err, partial_stderr = read_line_from_process(proc, sel, False, partial_stderr, 0.1)
         if line_err is not None:
             prefix = f"{'SUBSEQUENT STDERR:':<{ERROR_PREFIX_WIDTH}}"
-            log_and_print(f"{prefix}{repr(line_err)}", Colors.YELLOW)
+            line_text = f"{prefix}{repr(line_err)}"
+            log_lines.append(line_text)
+            print_warning(line_text)
             lines_shown += 1
 
     # Handle the "extra output" case cleanly
     if reason == "Program produced unexpected extra output after completion.":
         if partial_stdout:
-            log_and_print("\n--- EXTRA STDOUT ---", Colors.YELLOW)
-            log_and_print(repr(partial_stdout), Colors.YELLOW)
+            extra_out_header = "\n--- EXTRA STDOUT ---"
+            log_lines.append(extra_out_header)
+            print_warning(extra_out_header)
+            log_lines.append(repr(partial_stdout))
+            print_warning(repr(partial_stdout))
         if partial_stderr:
-            log_and_print("\n--- EXTRA STDERR ---", Colors.YELLOW)
-            log_and_print(repr(partial_stderr), Colors.YELLOW)
+            extra_err_header = "\n--- EXTRA STDERR ---"
+            log_lines.append(extra_err_header)
+            print_warning(extra_err_header)
+            log_lines.append(repr(partial_stderr))
+            print_warning(repr(partial_stderr))
     elif lines_shown == 0:
-        log_and_print("(No further output from program before timeout or exit)")
+        no_output_text = "(No further output from program before timeout or exit)"
+        log_lines.append(no_output_text)
+        print(no_output_text)
         
-    log_and_print("\n--- Failure Summary ---", Colors.RED, bold=True)
-    log_and_print(f"Reason: {reason}", Colors.RED)
-    log_and_print("=" * 80, Colors.RED, bold=True)
+    # --- Print Final Summary ---
+    summary_header = "\n--- Failure Summary ---"
+    log_lines.append(summary_header)
+    print_header(summary_header, AnsiColors.RED)
+    
+    reason_text = f"Reason: {reason}"
+    log_lines.append(reason_text)
+    print_header(reason_text, AnsiColors.RED, bold=False)
+    
+    log_lines.append("=" * 80)
+    print_header("=" * 80, AnsiColors.RED)
     
     return "\n".join(log_lines)
 

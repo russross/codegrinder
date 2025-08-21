@@ -1,5 +1,5 @@
 .SUFFIXES:
-.SUFFIXES: .o .s .si .out .xml .input .expected .actual
+.SUFFIXES: .o .s .si .out .xml .input .transcript
 
 ASFLAGS=-g -Wall -Werror -target riscv64-unknown-elf -march=rv64im
 LDFLAGS=-g -Wl,--discard-locals -Wall -Werror -target riscv64-unknown-elf -march=rv64im -nostdlib
