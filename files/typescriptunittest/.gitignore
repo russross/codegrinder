@@ -1,0 +1,11 @@
+node_modules/
+dist/
+coverage/
+*.js
+*.js.map
+test_detail.xml
+.DS_Store
+Makefile
+package.json
+package-lock.json
+tsconfig.json
