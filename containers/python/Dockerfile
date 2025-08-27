@@ -16,4 +16,12 @@ RUN apk add --no-cache \
     py3-setuptools \
     py3-six \
     diffutils
-RUN pip3 install --break-system-packages unittest-xml-reporting cisc108
+RUN pip3 install --break-system-packages \
+    unittest-xml-reporting \
+    cisc108 \
+    fastapi \
+    pydantic \
+    httpx \
+    sqlmodel \
+    python-decouple \
+    psycopg2-binary
