@@ -11,7 +11,7 @@ fi
 
 echo building grind for linux amd64
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go install -tags netgo github.com/russross/codegrinder/cli
-mv `go env GOPATH`/bin/linux_amd64/cli "$CODEGRINDERROOT"/www/grind.linux_amd64
+mv `go env GOPATH`/bin/cli "$CODEGRINDERROOT"/www/grind.linux_amd64
 
 echo building grind for linux arm32
 CGO_ENABLED=0 GOOS=linux GOARCH=arm go install -tags netgo github.com/russross/codegrinder/cli
@@ -19,7 +19,7 @@ mv `go env GOPATH`/bin/linux_arm/cli "$CODEGRINDERROOT"/www/grind.linux_arm
 
 echo building grind for linux arm64
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go install -tags netgo github.com/russross/codegrinder/cli
-mv `go env GOPATH`/bin/cli "$CODEGRINDERROOT"/www/grind.linux_arm64
+mv `go env GOPATH`/bin/linux_arm64/cli "$CODEGRINDERROOT"/www/grind.linux_arm64
 
 echo building grind for linux riscv64
 CGO_ENABLED=0 GOOS=linux GOARCH=riscv64 go install -tags netgo github.com/russross/codegrinder/cli

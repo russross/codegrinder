@@ -2,6 +2,7 @@ package main
 
 import (
 	"compress/gzip"
+	"crypto/tls"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -29,6 +31,8 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	. "github.com/russross/codegrinder/types"
 	"github.com/russross/meddler"
+	"golang.org/x/crypto/acme"
+	"golang.org/x/crypto/acme/autocert"
 )
 
 // Config holds site-specific configuration data.
@@ -37,11 +41,14 @@ var Config struct {
 	// required parameters
 	Hostname      string `json:"hostname"`      // Hostname for the site: "your.host.goes.here"
 	DaycareSecret string `json:"daycareSecret"` // Random string used to sign daycare requests: `head -c 32 /dev/urandom | base64`
+	AcmeEmail     string `json:"acmeEmail"`     // Email address to register TLS certificates: "foo@bar.com"
+	AcmeURL       string `json:"acmeURL"`       // URL of ACME certificate provider. If omitted, use letsencrypt
 
 	// ta-only required parameters
-	LTISecret     string            `json:"ltiSecret"`     // LTI authentication shared secret. Must match that given to Canvas course: `head -c 32 /dev/urandom | base64`
-	SessionSecret string            `json:"sessionSecret"` // Random string used to sign cookie sessions: `head -c 32 /dev/urandom | base64`
-	DaycareHosts  map[string]string `json:"daycareHosts"`  // map from problem type to the daycare server that handles it
+	LTISecret     string `json:"ltiSecret"`     // LTI authentication shared secret. Must match that given to Canvas course: `head -c 32 /dev/urandom | base64`
+	SessionSecret string `json:"sessionSecret"` // Random string used to sign cookie sessions: `head -c 32 /dev/urandom | base64`
+
+	DaycareHosts map[string]string `json:"daycareHosts"` // map from problem type to the daycare server that handles it
 
 	// daycare-only required parameters
 	TAHostname   string   `json:"taHostname"`   // Hostname for the TA: "your.host.goes.here". Defaults to Hostname
@@ -51,6 +58,7 @@ var Config struct {
 	ToolName        string      `json:"toolName"`        // LTI human readable name: default "CodeGrinder"
 	ToolID          string      `json:"toolID"`          // LTI unique ID: default "codegrinder"
 	ToolDescription string      `json:"toolDescription"` // LTI description: default "Programming exercises with grading"
+	AcmeCache       string      `json:"acmeDir"`         // Full path of Acme cache file: default "$CODEGRINDERROOT/acme"
 	SQLite3Path     string      `json:"sqlite3Path"`     // path to the sqlite database file: default "$CODEGRINDERROOT/db/codegrinder.db"
 	SessionsExpire  []time.Time `json:"sessionsExpire"`  // times/dates when sessions should expire (year is ignored)
 }
@@ -77,10 +85,12 @@ func main() {
 	log.Printf("port set to %s", port)
 
 	// parse command line
-	var ta, daycare, use_config bool
+	var ta, daycare, use_tls, use_config, reaper bool
 	flag.BoolVar(&ta, "ta", false, "Serve the TA role")
 	flag.BoolVar(&daycare, "daycare", false, "Serve the daycare role")
+	flag.BoolVar(&use_tls, "tls", true, "Use TLS (https/wss) with automatic certificates")
 	flag.BoolVar(&use_config, "config", false, "Use config.json for config data (for testing)")
+	flag.BoolVar(&reaper, "reaper", false, "Run a pid 1 orphan reaper (for daycares in containers")
 	flag.Parse()
 
 	if !ta && !daycare {
@@ -91,6 +101,7 @@ func main() {
 	Config.ToolName = "CodeGrinder"
 	Config.ToolID = "codegrinder"
 	Config.ToolDescription = "Programming exercises with grading"
+	Config.AcmeCache = filepath.Join(root, "acme")
 	Config.SQLite3Path = filepath.Join(root, "db", "codegrinder.db")
 	Config.SessionsExpire = []time.Time{
 		time.Date(2020, 1, 1, 0, 0, 0, 0, time.Local),
@@ -108,6 +119,8 @@ func main() {
 	} else {
 		Config.Hostname = os.Getenv("CODEGRINDER_HOSTNAME")
 		Config.DaycareSecret = os.Getenv("CODEGRINDER_DAYCARESECRET")
+		Config.AcmeEmail = os.Getenv("CODEGRINDER_ACMEEMAIL")
+		Config.AcmeURL = os.Getenv("CODEGRINDER_ACMEURL")
 		Config.LTISecret = os.Getenv("CODEGRINDER_LTISECRET")
 		Config.SessionSecret = os.Getenv("CODEGRINDER_SESSIONSECRET")
 		Config.DaycareHosts = make(map[string]string)
@@ -134,6 +147,7 @@ func main() {
 	if Config.DaycareSecret == "" {
 		log.Fatalf("cannot run with no daycareSecret in the config file")
 	}
+	// Config.AcmeEmail is optional
 
 	// set up martini
 	r := martini.NewRouter()
@@ -178,30 +192,32 @@ func main() {
 			Config.TAHostname = Config.Hostname
 		}
 		if len(Config.ProblemTypes) == 0 {
-			log.Fatalf("cannot run Daycare role with no problemTypes in the config file")
+			log.Fatalf("cannot run Daycare role with no problemTypes configured")
 		}
 
 		r.Get("/v2/sockets/:problem_type/:action", SocketProblemTypeAction)
 
 		// start a zombie reaper
-		ch := make(chan os.Signal, 1)
-		signal.Notify(ch, syscall.SIGCHLD)
-		go func() {
-			for {
-				<-ch
+		if reaper {
+			ch := make(chan os.Signal, 1)
+			signal.Notify(ch, syscall.SIGCHLD)
+			go func() {
 				for {
-					var status syscall.WaitStatus
-					pid, err := syscall.Wait4(-1, &status, syscall.WNOHANG, nil)
+					<-ch
+					for {
+						var status syscall.WaitStatus
+						pid, err := syscall.Wait4(-1, &status, syscall.WNOHANG, nil)
 
-					if pid <= 0 || err != nil {
-						// No more children to reap or error occurred
-						break
+						if pid <= 0 || err != nil {
+							// No more children to reap or error occurred
+							break
+						}
+
+						//log.Printf("reaped PID: %d with status: %d\n", pid, status.ExitStatus())
 					}
-
-					//log.Printf("reaped PID: %d with status: %d\n", pid, status.ExitStatus())
 				}
-			}
-		}()
+			}()
+		}
 	}
 
 	// set up TA role
@@ -450,11 +466,74 @@ func main() {
 		r.Post("/v2/responses", counter, withTx, withCurrentUser, gunzip, binding.Json(Response{}), PostResponse)
 	}
 
-	// note: this will work behind a TLS proxy or for debugging with some calls
-	// but LTI will refuse to connect to an insecure host
-	log.Printf("accepting http connections on %s", port)
-	if err := http.ListenAndServe(port, m); err != nil {
-		log.Fatalf("ListenAndServe: %v", err)
+	if use_tls {
+		// set up automatic TLS certificates
+		var acmeClient *acme.Client
+		if Config.AcmeURL != "" {
+			acmeClient = &acme.Client{DirectoryURL: Config.AcmeURL}
+		}
+		lem := autocert.Manager{
+			Prompt:     autocert.AcceptTOS,
+			Cache:      autocert.DirCache(Config.AcmeCache),
+			HostPolicy: autocert.HostWhitelist(Config.Hostname),
+			Email:      Config.AcmeEmail,
+			Client:     acmeClient,
+		}
+
+		// set up the https server
+		log.Printf("accepting https connections")
+		server := &http.Server{
+			Addr:    ":https",
+			Handler: m,
+			TLSConfig: &tls.Config{
+				PreferServerCipherSuites: true,
+				MinVersion:               tls.VersionTLS12,
+				GetCertificate:           lem.GetCertificate,
+			},
+		}
+
+		// set up the http server
+		// it is necessary for ACME challenges
+		// it forwards other requests to https, but only if the host name was correct
+		forwarder := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// get the address of the client
+			addr := r.Header.Get("X-Real-IP")
+			if addr == "" {
+				addr = r.Header.Get("X-Forwarded-For")
+				if addr == "" {
+					addr = r.RemoteAddr
+				}
+			}
+
+			// make sure the request is for the right host name
+			if Config.Hostname != r.Host {
+				http.Error(w, "http request to invalid host", http.StatusBadRequest)
+				return
+			}
+			var u url.URL = *r.URL
+			u.Scheme = "https"
+			u.Host = Config.Hostname
+			log.Printf("redirecting http request from %s to %s", addr, u.String())
+			w.Header().Set("Connection", "close")
+			http.Redirect(w, r, u.String(), http.StatusFound)
+		})
+
+		// start both servers
+		go func() {
+			if err := http.ListenAndServe(":http", lem.HTTPHandler(forwarder)); err != nil {
+				log.Fatalf("ListenAndServe: %v", err)
+			}
+		}()
+		if err := server.ListenAndServeTLS("", ""); err != nil {
+			log.Fatalf("ListenAndServeTLS: %v", err)
+		}
+	} else {
+		// note: this will work behind a TLS proxy or for debugging with some calls
+		// but LTI will refuse to connect to an insecure host
+		log.Printf("accepting http connections on %s", port)
+		if err := http.ListenAndServe(port, m); err != nil {
+			log.Fatalf("ListenAndServe: %v", err)
+		}
 	}
 }
 
@@ -466,8 +545,8 @@ func setupDB(path string) *sql.DB {
 			"&" + "_busy_timeout=10000" +
 			"&" + "_cache_size=-20000" +
 			"&" + "_foreign_keys=ON" +
-			"&" + "_journal_mode=TRUNCATE" +
-			"&" + "_synchronous=FULL" +
+			"&" + "_journal_mode=WAL" +
+			"&" + "_synchronous=NORMAL" +
 			"&" + "_temp_store=MEMORY"
 	db, err := sql.Open("sqlite3", path+options)
 	if err != nil {
