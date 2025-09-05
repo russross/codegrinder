@@ -2,7 +2,7 @@
 .SUFFIXES: .o .s .si .out .xml .input .transcript
 
 ASFLAGS=-g -Wall -Werror -target riscv64-unknown-elf -march=rv64im
-LDFLAGS=-g -Wl,--discard-locals -Wall -Werror -target riscv64-unknown-elf -march=rv64im -nostdlib
+LDFLAGS=-g -Wl,--discard-locals -Wall -Werror -target riscv64-unknown-elf -march=rv64im -nostdlib -fuse-ld=lld
 AS=clang
 LD=clang
 AOUT=risclet -m run

@@ -77,6 +77,8 @@ func (l *limits) override(options []string) {
 	}
 }
 
+var containerLimiter chan struct{}
+
 // SocketProblemTypeAction handles a request to /sockets/:problem_type/:action
 // It expects a websocket connection, which will receive a series of DaycareRequest objects
 // and will respond with DaycareResponse objects, though not in a one-to-one fashion.
@@ -253,6 +255,12 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	for name, contents := range req.CommitBundle.ProblemType.Files {
 		files[name] = contents
 	}
+
+	// limit the number of concurrent containers
+	containerLimiter <- struct{}{}
+	defer func() {
+		<-containerLimiter
+	}()
 
 	// launch a nanny process
 	nannyName := fmt.Sprintf("nanny-%d", req.CommitBundle.UserID)

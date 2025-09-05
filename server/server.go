@@ -54,7 +54,7 @@ var Config struct {
 
 	// daycare-only required parameters
 	TAHostname   string   `json:"taHostname"`   // Hostname for the TA: "your.host.goes.here". Defaults to Hostname
-	Capacity     int      `json:"capacity"`     // Relative capacity of this daycare for containers: 1
+	Capacity     int      `json:"capacity"`     // Maximum number of concurrent containers on this daycare: 1
 	ProblemTypes []string `json:"problemTypes"` // List of problem types this daycare host supports: [ "python3unittest", "gotest", ... ]
 
 	// ta-only parameters where the default is usually sufficient
@@ -173,6 +173,9 @@ func main() {
 	if daycare {
 		// initialize random number generator
 		rand.Seed(time.Now().UnixNano())
+
+		// init the container limiter channel
+		containerLimiter = make(chan struct{}, Config.Capacity)
 
 		// make sure relevant fields included in config file
 		if Config.TAHostname == "" {
@@ -573,7 +576,7 @@ func setupDB(path string) *sql.DB {
 			"&" + "_cache_size=-20000" +
 			"&" + "_foreign_keys=ON" +
 			"&" + "_journal_mode=WAL" +
-			"&" + "_synchronous=NORMAL" +
+			"&" + "_synchronous=FULL" +
 			"&" + "_temp_store=MEMORY"
 	db, err := sql.Open("sqlite3", path+options)
 	if err != nil {
