@@ -1,11 +1,10 @@
 INSERT INTO problem_types (name, image) VALUES ('cinout', 'codegrinder/c');
-INSERT INTO problem_type_actions (problem_type, action, command, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('cinout', 'grade', 'make grade', 'xunit', 'Grading‥', 0, 60, 120, 120, 100, 10, 256, 20);
-INSERT INTO problem_type_actions (problem_type, action, command, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('cinout', 'step', 'make step', NULL, 'Stepping‥', 0, 60, 1800, 300, 100, 10, 256, 20);
-INSERT INTO problem_type_actions (problem_type, action, command, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('cinout', 'valgrind', 'make valgrind', NULL, 'Running valgrind‥', 0, 60, 120, 120, 100, 10, 256, 20);
+INSERT INTO problem_type_actions (problem_type, action, command, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('cinout', 'grade', 'make grade', 'xunit', 'Grading‥', 0, 60, 120, 120, 100, 10, 512, 20);
+INSERT INTO problem_type_actions (problem_type, action, command, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('cinout', 'step', 'make step', NULL, 'Stepping‥', 0, 60, 1800, 300, 100, 10, 512, 20);
 
 INSERT INTO problem_types (name, image) VALUES ('cppunittest', 'codegrinder/cpp');
-INSERT INTO problem_type_actions (problem_type, action, command, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('cppunittest', 'grade', 'make grade', 'xunit', 'Grading‥', 0, 60, 120, 120, 100, 20, 256, 200);
-INSERT INTO problem_type_actions (problem_type, action, command, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('cppunittest', 'valgrind', 'make valgrind', NULL, 'Running valgrind‥', 0, 60, 120, 120, 100, 20, 256, 200);
+INSERT INTO problem_type_actions (problem_type, action, command, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('cppunittest', 'grade', 'make grade', 'xunit', 'Grading‥', 0, 60, 120, 120, 100, 20, 0, 200);
+INSERT INTO problem_type_actions (problem_type, action, command, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('cppunittest', 'valgrind', 'make valgrind', NULL, 'Running valgrind‥', 0, 60, 120, 120, 100, 20, 0, 200);
 
 INSERT INTO problem_types (name, image) VALUES ('forthinout', 'codegrinder/forth');
 INSERT INTO problem_type_actions (problem_type, action, command, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('forthinout', 'grade', 'make grade', 'xunit', 'Grading‥', 0, 10, 20, 20, 100, 10, 256, 50);
@@ -41,10 +40,6 @@ INSERT INTO problem_type_actions (problem_type, action, command, parser, message
 
 INSERT INTO problem_types (name, image) VALUES ('rustunittest', 'codegrinder/rust');
 INSERT INTO problem_type_actions (problem_type, action, command, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('rustunittest', 'grade', 'make grade', 'xunit', 'Grading‥', 0, 30, 60, 60, 100, 20, 1024, 200);
-
-INSERT INTO problem_types (name, image) VALUES ('rv64inout', 'codegrinder/riscv');
-INSERT INTO problem_type_actions (problem_type, action, command, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('rv64inout', 'grade', 'make grade', 'xunit', 'Grading‥', 0, 60, 120, 120, 100, 10, 256, 20);
-INSERT INTO problem_type_actions (problem_type, action, command, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('rv64inout', 'step', 'make step', NULL, 'Stepping‥', 0, 60, 1800, 300, 100, 10, 256, 20);
 
 INSERT INTO problem_types (name, image) VALUES ('rv64sim', 'codegrinder/riscv');
 INSERT INTO problem_type_actions (problem_type, action, command, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('rv64sim', 'grade', 'make grade', 'xunit', 'Grading‥', 0, 180, 180, 60, 100, 10, 1024, 20);

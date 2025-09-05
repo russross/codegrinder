@@ -272,7 +272,7 @@ func saveDotFile(dotfile *DotFileInfo) {
 func mustConfirmCommitBundle(bundle *CommitBundle, args []string) *CommitBundle {
 	// create a websocket connection to the server
 	headers := make(http.Header)
-	url := "wss://" + bundle.Hostname + urlPrefix + "/sockets/" + bundle.ProblemType.Name + "/" + bundle.Commit.Action
+	url := "wss://" + bundle.Hostname + "/sockets/" + bundle.ProblemType.Name + "/" + bundle.Commit.Action
 	socket, resp, err := websocket.DefaultDialer.Dial(url, headers)
 	if err != nil {
 		log.Printf("error dialing %s: %v", url, err)

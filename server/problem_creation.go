@@ -14,7 +14,7 @@ import (
 	"github.com/russross/meddler"
 )
 
-// PostProblemBundleConfirmed handles a request to /v2/problem_bundles/confirmed,
+// PostProblemBundleConfirmed handles a request to /problem_bundles/confirmed,
 // creating a new problem.
 // The bundle must have a full set of passing commits signed by the daycare.
 func PostProblemBundleConfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser *User, bundle ProblemBundle, render render.Render) {
@@ -30,7 +30,7 @@ func PostProblemBundleConfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser *
 	saveProblemBundleCommon(w, tx, currentUser, &bundle, render)
 }
 
-// PutProblemBundle handles a request to /v2/problem_bundles/:problem_id,
+// PutProblemBundle handles a request to /problem_bundles/:problem_id,
 // updating an existing problem.
 // The bundle must have a full set of passing commits signed by the daycare.
 // If any assignments exist that refer to this problem, then the updates cannot change the number
@@ -274,7 +274,7 @@ func saveProblemBundleCommon(w http.ResponseWriter, tx *sql.Tx, currentUser *Use
 	render.JSON(http.StatusOK, bundle)
 }
 
-// PostProblemBundleUnconfirmed handles a request to /v2/problem_bundles/unconfirmed,
+// PostProblemBundleUnconfirmed handles a request to /problem_bundles/unconfirmed,
 // signing a new/updated problem that has not yet been tested on the daycare.
 func PostProblemBundleUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser *User, bundle ProblemBundle, render render.Render) {
 	now := time.Now()
@@ -436,7 +436,7 @@ func PostProblemBundleUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser
 	render.JSON(http.StatusOK, &bundle)
 }
 
-// PostProblemSetBundle handles requests to /v2/problem_set_bundles,
+// PostProblemSetBundle handles requests to /problem_set_bundles,
 // creating a new problem set.
 func PostProblemSetBundle(w http.ResponseWriter, tx *sql.Tx, bundle ProblemSetBundle, render render.Render) {
 	now := time.Now()
@@ -486,7 +486,7 @@ func PostProblemSetBundle(w http.ResponseWriter, tx *sql.Tx, bundle ProblemSetBu
 	render.JSON(http.StatusOK, bundle)
 }
 
-// PutProblemSetBundle handles requests to /v2/problem_set_bundles/:problem_set_id,
+// PutProblemSetBundle handles requests to /problem_set_bundles/:problem_set_id,
 // updating an existing problem set.
 func PutProblemSetBundle(w http.ResponseWriter, tx *sql.Tx, bundle ProblemSetBundle, render render.Render) {
 	now := time.Now()

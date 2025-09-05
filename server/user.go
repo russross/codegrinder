@@ -22,7 +22,7 @@ import (
 
 const loginRecordTimeout = 5 * time.Minute
 
-// GetCourses handles /v2/courses requests,
+// GetCourses handles /courses requests,
 // returning a list of all courses.
 //
 // If parameter lti_label=<...> present, results will be filtered by matching lti_label field.
@@ -58,7 +58,7 @@ func GetCourses(w http.ResponseWriter, r *http.Request, tx *sql.Tx, currentUser 
 	render.JSON(http.StatusOK, courses)
 }
 
-// GetCourse handles /v2/courses/:course_id requests,
+// GetCourse handles /courses/:course_id requests,
 // returning a single course.
 func GetCourse(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
 	courseID, err := parseID(w, "course_id", params["course_id"])
@@ -84,7 +84,7 @@ func GetCourse(w http.ResponseWriter, tx *sql.Tx, params martini.Params, current
 	render.JSON(http.StatusOK, course)
 }
 
-// DeleteCourse handles /v2/courses/:course_id requests,
+// DeleteCourse handles /courses/:course_id requests,
 // deleting a single course.
 // This will also delete all assignments and commits related to the course.
 func DeleteCourse(w http.ResponseWriter, tx *sql.Tx, params martini.Params) {
@@ -99,7 +99,7 @@ func DeleteCourse(w http.ResponseWriter, tx *sql.Tx, params martini.Params) {
 	}
 }
 
-// GetUsers handles /v2/users requests,
+// GetUsers handles /users requests,
 // returning a list of all users.
 //
 // If parameter name=<...> present, results will be filtered by case-insensitive substring match on Name field.
@@ -156,13 +156,13 @@ func GetUsers(w http.ResponseWriter, r *http.Request, tx *sql.Tx, currentUser *U
 	render.JSON(http.StatusOK, users)
 }
 
-// GetUserMe handles /v2/users/me requests,
+// GetUserMe handles /users/me requests,
 // returning the current user.
 func GetUserMe(w http.ResponseWriter, tx *sql.Tx, currentUser *User, render render.Render) {
 	render.JSON(http.StatusOK, currentUser)
 }
 
-// GetUserSession handlers /v2/users/session requests,
+// GetUserSession handlers /users/session requests,
 // returning a cookie for a user session.
 //
 // Parameter key=<...> must be present, and must be a valid session key that was issued
@@ -189,7 +189,7 @@ func GetUserSession(w http.ResponseWriter, r *http.Request, render render.Render
 	render.JSON(http.StatusOK, result)
 }
 
-// GetUser handles /v2/users/:user_id requests,
+// GetUser handles /users/:user_id requests,
 // returning a single user.
 func GetUser(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
 	userID, err := parseID(w, "user_id", params["user_id"])
@@ -215,7 +215,7 @@ func GetUser(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUs
 	render.JSON(http.StatusOK, user)
 }
 
-// GetCourseUsers handles request to /v2/course/:course_id/users,
+// GetCourseUsers handles request to /course/:course_id/users,
 // returning a list of users in the given course.
 func GetCourseUsers(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
 	courseID, err := parseID(w, "course_id", params["course_id"])
@@ -252,7 +252,7 @@ func GetCourseUsers(w http.ResponseWriter, tx *sql.Tx, params martini.Params, cu
 	render.JSON(http.StatusOK, users)
 }
 
-// DeleteUser handles /v2/users/:user_id requests,
+// DeleteUser handles /users/:user_id requests,
 // deleting a single user.
 // This will also delete all assignments and commits related to the user.
 func DeleteUser(w http.ResponseWriter, tx *sql.Tx, params martini.Params) {
@@ -267,7 +267,7 @@ func DeleteUser(w http.ResponseWriter, tx *sql.Tx, params martini.Params) {
 	}
 }
 
-// GetAssignments handles requests to /v2/assignments,
+// GetAssignments handles requests to /assignments,
 // returning a list of assignments.
 //
 // If parameter search=<...> present (can be repeated), it will be interpreted as search terms,
@@ -307,7 +307,7 @@ func GetAssignments(w http.ResponseWriter, r *http.Request, tx *sql.Tx, currentU
 	render.JSON(http.StatusOK, assignments)
 }
 
-// GetUserAssignments handles requests to /v2/users/:user_id/assignments,
+// GetUserAssignments handles requests to /users/:user_id/assignments,
 // returning a list of assignments for the given user.
 func GetUserAssignments(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
 	userID, err := parseID(w, "user_id", params["user_id"])
@@ -337,7 +337,7 @@ func GetUserAssignments(w http.ResponseWriter, tx *sql.Tx, params martini.Params
 	render.JSON(http.StatusOK, assignments)
 }
 
-// GetCourseUserAssignments handles requests to /v2/courses/:course_id/users/:user_id/assignments,
+// GetCourseUserAssignments handles requests to /courses/:course_id/users/:user_id/assignments,
 // returning a list of assignments for the given user in the given course.
 func GetCourseUserAssignments(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
 	courseID, err := parseID(w, "course_id", params["course_id"])
@@ -376,7 +376,7 @@ func GetCourseUserAssignments(w http.ResponseWriter, tx *sql.Tx, params martini.
 	render.JSON(http.StatusOK, assignments)
 }
 
-// GetAssignment handles requests to /v2/assignments/:assignment_id,
+// GetAssignment handles requests to /assignments/:assignment_id,
 // returning the given assignment.
 func GetAssignment(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
 	assignmentID, err := parseID(w, "assignment_id", params["assignment_id"])
@@ -403,7 +403,7 @@ func GetAssignment(w http.ResponseWriter, tx *sql.Tx, params martini.Params, cur
 	render.JSON(http.StatusOK, assignment)
 }
 
-// DeleteAssignment handles requests to /v2/assignments/:assignment_id,
+// DeleteAssignment handles requests to /assignments/:assignment_id,
 // deleting the given assignment.
 func DeleteAssignment(w http.ResponseWriter, tx *sql.Tx, params martini.Params) {
 	assignmentID, err := parseID(w, "assignment_id", params["assignment_id"])
@@ -417,7 +417,7 @@ func DeleteAssignment(w http.ResponseWriter, tx *sql.Tx, params martini.Params) 
 	}
 }
 
-// GetAssignmentProblemCommitLast handles requests to /v2/assignments/:assignment_id/problems/:problem_id/commits/last,
+// GetAssignmentProblemCommitLast handles requests to /assignments/:assignment_id/problems/:problem_id/commits/last,
 // returning the most recent commit of the highest-numbered step for the given problem of the given assignment.
 func GetAssignmentProblemCommitLast(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
 	assignmentID, err := parseID(w, "assignment_id", params["assignment_id"])
@@ -449,7 +449,7 @@ func GetAssignmentProblemCommitLast(w http.ResponseWriter, tx *sql.Tx, params ma
 	render.JSON(http.StatusOK, commit)
 }
 
-// GetUserAssignmentProblemStepCommitLast handles requests to /v2/assignments/:assignment_id/problems/:problem_id/steps/:step/commits/last,
+// GetUserAssignmentProblemStepCommitLast handles requests to /assignments/:assignment_id/problems/:problem_id/steps/:step/commits/last,
 // returning the most recent commit for the given step of the given problem of the given assignment.
 func GetAssignmentProblemStepCommitLast(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
 	assignmentID, err := parseID(w, "assignment_id", params["assignment_id"])
@@ -485,7 +485,7 @@ func GetAssignmentProblemStepCommitLast(w http.ResponseWriter, tx *sql.Tx, param
 	render.JSON(http.StatusOK, commit)
 }
 
-// DeleteCommit handles requests to /v2/commits/:commit_id,
+// DeleteCommit handles requests to /commits/:commit_id,
 // deleting the given commit.
 func DeleteCommit(w http.ResponseWriter, tx *sql.Tx, params martini.Params) {
 	commitID, err := parseID(w, "commit_id", params["commit_id"])
@@ -499,7 +499,7 @@ func DeleteCommit(w http.ResponseWriter, tx *sql.Tx, params martini.Params) {
 	}
 }
 
-// PostCommitBundlesUnsigned handles requests to /v2/commit_bundles/unsigned,
+// PostCommitBundlesUnsigned handles requests to /commit_bundles/unsigned,
 // saving a new commit (or updating the most recent one), gathering the problem data,
 // signing everything, and returning it in a form ready to send to the daycare.
 func PostCommitBundlesUnsigned(w http.ResponseWriter, tx *sql.Tx, currentUser *User, bundle CommitBundle, render render.Render) {
@@ -529,7 +529,7 @@ func PostCommitBundlesUnsigned(w http.ResponseWriter, tx *sql.Tx, currentUser *U
 	saveCommitBundleCommon(now, w, tx, currentUser, bundle, render)
 }
 
-// PostCommitBundlesSigned handles requests to /v2/commit_bundles/signed,
+// PostCommitBundlesSigned handles requests to /commit_bundles/signed,
 // saving a new commit (or updating the most recent one), gathering the problem data,
 // verifying signatures, and posting a grade (if appropriate).
 func PostCommitBundlesSigned(w http.ResponseWriter, tx *sql.Tx, currentUser *User, bundle CommitBundle, render render.Render) {
@@ -837,7 +837,7 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 		} else {
 			fmt.Fprintf(&report, "<h1>Grading transcript</h1>\n")
 		}
-		fmt.Fprintf(&report, "<pre>%s</pre>\n", html.EscapeString(transcript.String()))
+		fmt.Fprintf(&report, "%s\n", ANSIToHTMLPre(transcript.String()))
 
 		// add all of the student files
 		var names []string

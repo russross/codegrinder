@@ -1,227 +1,518 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
-import glob
+"""
+Audits a student's command against a pre-generated transcript, ensuring
+that stdin, stdout, and stderr match the expected behavior precisely.
+
+In grade mode, it runs all tests, continues on error, and produces an
+XML report.
+"""
+
 import os
 import selectors
 import subprocess
 import sys
+import time
+import xml.etree.ElementTree as ET
+from pathlib import Path
+from typing import List, IO, Tuple, cast, Optional, Deque, Dict, Any
+from collections import deque
 
-delay           = float(os.environ['STEPPER_DELAY'])
-warmupdelay     = float(os.environ['STEPPER_WARMUPDELAY'])
-postcrashlines  = int(os.environ['STEPPER_POSTCRASHLINES'])
-wronglines      = int(os.environ['STEPPER_WRONGLINES'])
-suffix          = os.environ['STEPPER_SUFFIX']
-indir           = os.environ['STEPPER_INDIR']
-outdir          = os.environ['STEPPER_OUTDIR']
-cmd             = os.environ['STEPPER_CMD'].split()
-bufsize         = 2**16
+# ANSI color codes for console output, organized by semantic meaning.
+class AnsiColors:
+    # --- Semantic Colors ---
+    RED = '\033[91m'     # Used for failures, errors, and fatal warnings.
+    YELLOW = '\033[93m'  # Used for non-fatal warnings, stderr, and context info.
+    BLUE = '\033[94m'    # Used for stdin and informational headers.
+    GREEN = '\033[92m'   # Used for success messages.
+
+    # --- Modifiers ---
+    BOLD = '\033[1m'
+    ENDC = '\033[0m'     # Resets all formatting.
+
+    # --- Darker shades for End-of-Line markers ---
+    # These use the 256-color palette for more subtle shades.
+    DARK_BLUE = '\033[38;5;20m'   # For stdin's EOL marker.
+    DARK_YELLOW = '\033[38;5;94m' # For stderr's EOL marker.
+    DARK_GREY = '\033[38;5;240m'  # For stdout's EOL marker.
+
+# The symbol to print at the end of echoed I/O lines.
+EOL_SYMBOL = '⏎'
+# Width for aligning prefixes in error reports for readability
+ERROR_PREFIX_WIDTH = 20
+
+# --- Semantic Print Functions ---
+
+def print_stdin(text: str) -> None:
+    """Prints text representing stdin, with a colored EOL marker."""
+    print(f"{AnsiColors.BLUE}{text}{AnsiColors.DARK_BLUE}{EOL_SYMBOL}{AnsiColors.ENDC}", flush=True)
+
+def print_stdout(text: str) -> None:
+    """Prints text representing stdout, with a colored EOL marker."""
+    # stdout is default terminal color.
+    print(f"{text}{AnsiColors.DARK_GREY}{EOL_SYMBOL}{AnsiColors.ENDC}", flush=True)
+
+def print_stderr(text: str) -> None:
+    """Prints text representing stderr, with a colored EOL marker."""
+    print(f"{AnsiColors.YELLOW}{text}{AnsiColors.DARK_YELLOW}{EOL_SYMBOL}{AnsiColors.ENDC}", flush=True)
+
+def print_fatal(text: str) -> None:
+    """Prints a bold, red fatal error message."""
+    print(f"{AnsiColors.BOLD}{AnsiColors.RED}{text}{AnsiColors.ENDC}", flush=True)
+
+def print_warning(text: str) -> None:
+    """Prints a yellow warning message."""
+    print(f"{AnsiColors.YELLOW}{text}{AnsiColors.ENDC}", flush=True)
+
+def print_success(text: str) -> None:
+    """Prints a bold, green success message."""
+    print(f"{AnsiColors.BOLD}{AnsiColors.GREEN}{text}{AnsiColors.ENDC}", flush=True)
+
+def print_info(text: str) -> None:
+    """Prints an informational message (e.g., the command being run)."""
+    print(f"{AnsiColors.YELLOW}{text}{AnsiColors.ENDC}", flush=True)
+
+def print_header(text: str, color: str, bold: bool = True) -> None:
+    """Prints a generic colored header line."""
+    bold_code = AnsiColors.BOLD if bold else ""
+    print(f"{bold_code}{color}{text}{AnsiColors.ENDC}", flush=True)
+
+def print_summary(text: str, success: bool) -> None:
+    """Prints a final summary line in green for success or red for failure."""
+    color = AnsiColors.GREEN if success else AnsiColors.RED
+    print(f"{AnsiColors.BOLD}{color}{text}{AnsiColors.ENDC}", flush=True)
+
+
+def generate_xml_report(results: List[Dict[str, Any]], tests: int, failures: int, total_time: float) -> None:
+    """
+    Generates a JUnix-style XML report from the test results.
+    """
+    outname = 'test_detail.xml'
+    testsuites = ET.Element('testsuites')
+    suite = ET.SubElement(testsuites, 'testsuite')
+
+    for result in results:
+        case = ET.SubElement(suite, 'testcase')
+        case.set('name', result['name'])
+        case.set('time', f"{result['time']:.4f}")
+
+        if not result['passed']:
+            case.set('status', 'failed')
+            failure = ET.SubElement(case, 'failure')
+            failure.set('type', 'failure')
+            # The log contains the full context of the command and error.
+            failure.text = result['log']
+
+    suite.set('tests', str(tests))
+    suite.set('failures', str(failures))
+    suite.set('disabled', '0')
+    suite.set('skipped', '0')
+    suite.set('errors', '0')
+    suite.set('time', f"{total_time:.4f}")
+
+    # Set top-level attributes as well
+    testsuites.set('tests', str(tests))
+    testsuites.set('failures', str(failures))
+    testsuites.set('disabled', '0')
+    testsuites.set('skipped', '0')
+    testsuites.set('errors', '0')
+    testsuites.set('time', f"{total_time:.4f}")
+
+    try:
+        if os.path.exists(outname):
+            os.remove(outname)
+        tree = ET.ElementTree(element=testsuites)
+        tree.write(outname, encoding='utf-8', xml_declaration=True)
+    except IOError as e:
+        print_fatal(f"FATAL: Could not write XML report to '{outname}': {e}")
+
 
 def main() -> None:
-    # get the list of input files to process
-    infiles = sorted(glob.glob(os.path.join(indir, '*.' + suffix)))
-
-    first = True
-    for infile in infiles:
-        if not first:
-            print()
-        first = False
-
-        base = os.path.basename(infile)
-        outfile = os.path.join(outdir, base[:-len('.' + suffix)] + '.expected')
-
-        print(f'$ {" ".join(cmd)} < {infile}')
-        run(infile, outfile)
-
-def run(inputfile: str, outputfile: str) -> None:
-    # read all of the input
-    with open(inputfile, 'rb') as fp:
-        inputData = fp.read()
-
-    # read all of the expected output
-    with open(outputfile, 'rb') as fp:
-        outputData = fp.read()
-
-    # launch the process
-    proc = subprocess.Popen(cmd, bufsize=0,
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if proc.stdin is None or proc.stdout is None or proc.stderr is None:
-        print('unable to connect to IO of running process', file=sys.stderr)
+    """
+    Main entry point. Reads environment variables, finds transcript files,
+    and orchestrates the test runs.
+    """
+    # --- 1. Read and Validate Environment Variables ---
+    try:
+        cmd_str = os.environ['STEPPER_CMD']
+        cmd = cmd_str.split()
+        stepper_dir = Path(os.environ['STEPPER_DIR'])
+        post_error_lines = int(os.environ['STEPPER_POSTERRORLINES'])
+        timeout = float(os.environ['STEPPER_TIMEOUT'])
+        # Check for STEPPER_GRADE to enable grade mode
+        grade_mode = os.environ.get('STEPPER_GRADE', 'false').lower() == 'true'
+    except (KeyError, ValueError) as e:
+        print_fatal(f"FATAL: Invalid or missing environment variable: {e}")
         sys.exit(1)
-    stdin = proc.stdin.fileno()
-    stdout = proc.stdout.fileno()
-    stderr = proc.stderr.fileno()
 
-    # start monitoring the output channels
+    if not stepper_dir.is_dir():
+        print_fatal(f"FATAL: STEPPER_DIR '{stepper_dir}' is not a valid directory.")
+        sys.exit(1)
+
+    # --- 2. Find and Run Test Cases ---
+    transcript_files = sorted(list(stepper_dir.glob('*.transcript')))
+    if not transcript_files:
+        print_warning(f"WARNING: No *.transcript files found in '{stepper_dir}'.")
+        sys.exit(0)
+
+    failed_tests = 0
+    test_results: List[Dict[str, Any]] = []
+    total_start_time = time.monotonic()
+
+    for transcript_path in transcript_files:
+        print("-" * 80)
+        input_path = transcript_path.with_suffix('.input')
+        run_command = f"$ {' '.join(cmd)} < {input_path}"
+        print_info(run_command)
+        print() # Add a newline for spacing
+
+        test_start_time = time.monotonic()
+        success, error_log = run_test_case(cmd, transcript_path, timeout, post_error_lines)
+        duration = time.monotonic() - test_start_time
+
+        if grade_mode:
+            # In grade mode, always collect results for the XML report.
+            # The error log includes the command that was run for context.
+            full_log = f"{run_command}\n\n{error_log}"
+            test_results.append({
+                "name": transcript_path.name,
+                "time": duration,
+                "passed": success,
+                "log": full_log if not success else ""
+            })
+
+        if success:
+            print_success("\n✔ Test Passed")
+        else:
+            failed_tests += 1
+            if not grade_mode:
+                print_fatal("\nExiting due to test failure.")
+                break
+    
+    print("-" * 80)
+    total_tests = len(transcript_files)
+    passed_tests = total_tests - failed_tests
+    total_duration = time.monotonic() - total_start_time
+    summary_text = f"Passed {passed_tests}/{total_tests} tests in {total_duration:.2f} seconds"
+    print_summary(summary_text, success=(failed_tests == 0))
+    
+    if grade_mode:
+        # In grade mode, generate the XML report
+        generate_xml_report(test_results, total_tests, failed_tests, total_duration)
+
+    sys.exit(failed_tests)
+
+def parse_transcript(path: Path) -> Deque[Tuple[str, str]]:
+    """Reads a transcript file and parses it into a deque of (action, content) tuples."""
+    actions: Deque[Tuple[str, str]] = deque()
+    with open(path, 'r', encoding='utf-8') as f:
+        for line in f:
+            action = line[0]
+            content = line[2:]
+            if action not in ('<', '>', '!'):
+                raise ValueError(f"Invalid action character '{action}' in transcript '{path}'")
+            actions.append((action, content))
+    return actions
+
+def run_test_case(cmd: List[str], transcript_path: Path, timeout: float, post_error_lines: int) -> Tuple[bool, str]:
+    """
+    Runs and audits a single test case against its transcript.
+    Returns (True, "") on success, or (False, error_log) on failure.
+    """
+    try:
+        expected_actions = parse_transcript(transcript_path)
+    except (IOError, ValueError) as e:
+        message = f"FATAL: Could not read or parse transcript '{transcript_path}': {e}"
+        print_fatal(message)
+        return False, message
+
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+    
+    # Assertions to satisfy type checker
+    assert proc.stdin is not None
+    assert proc.stdout is not None
+    assert proc.stderr is not None
+
+    os.set_blocking(proc.stdout.fileno(), False)
+    os.set_blocking(proc.stderr.fileno(), False)
+
     sel = selectors.DefaultSelector()
-    sel.register(stdout, selectors.EVENT_READ, 'out')
-    sel.register(stderr, selectors.EVENT_READ, 'err')
+    sel.register(proc.stdout, selectors.EVENT_READ, data='stdout')
+    sel.register(proc.stderr, selectors.EVENT_READ, data='stderr')
 
-    # the next chunk of input to feed to the process
-    # this gets filled when we have a timeout while waiting for output
-    nextInput = b''
-    partial = b''
-    inputClosed = False
+    partial_stdout = ""
+    partial_stderr = ""
+    
+    try:
+        while expected_actions:
+            expected_action, expected_content = expected_actions[0]
 
-    keepGoing = True
-    warmup = True
-    error = False
+            if expected_action == '<':
+                # --- Handle Expected Input ---
+                print_stdin(expected_content.rstrip('\n'))
+                try:
+                    proc.stdin.write(expected_content.encode('utf-8'))
+                    proc.stdin.flush()
+                except (IOError, BrokenPipeError):
+                    error_log = handle_error("Program closed its input stream prematurely.", proc, sel, expected_actions, post_error_lines, timeout, "", "")
+                    return False, error_log
+                
+                expected_actions.popleft()
+                
+                # Close stdin once all input has been sent
+                if not any(a[0] == '<' for a in expected_actions):
+                    proc.stdin.close()
 
-    wrong: list[bytes] = []
-
-    while keepGoing:
-        # wait for some output, and if we have input ready
-        # check if we can send it
-        if len(nextInput) > 0:
-            sel.register(stdin, selectors.EVENT_WRITE, 'in')
-        events = sel.select(timeout=(warmupdelay if warmup else delay))
-        if len(nextInput) > 0:
-            sel.unregister(stdin)
-        warmup = False
-
-        # timeout? prepare some input to feed to the process
-        if len(events) == 0 and len(nextInput) == 0:
-            # if we timeout after bad output, do not feed input or wait any longer
-            if len(wrong) > 0:
-                keepGoing = False
-                break
-
-            if len(inputData) > 0:
-                # grab one line, or everything if there are no newlines
-                newline = inputData.find(b'\n')
-                if newline == -1:
-                    nextInput = inputData
+            elif expected_action in ('>', '!'):
+                # --- Handle Expected Output ---
+                is_stdout = expected_action == '>'
+                stream_name = "stdout" if is_stdout else "stderr"
+                partial_buffer = partial_stdout if is_stdout else partial_stderr
+                
+                actual_line: str
+                new_buffer: str
+                if '\n' in partial_buffer:
+                    line, new_buffer = partial_buffer.split('\n', 1)
+                    actual_line = line + '\n'
                 else:
-                    nextInput = inputData[:newline+1]
-            elif not inputClosed:
-                proc.stdin.close()
-                inputClosed = True
+                    line_from_proc, new_buffer = read_line_from_process(proc, sel, is_stdout, partial_buffer, timeout)
+                    if line_from_proc is None:
+                        reason = f"Timeout or EOF waiting for output on {stream_name}."
+                        if proc.poll() is not None:
+                            reason = f"Program exited before producing expected output on {stream_name}."
+                        updated_stdout = new_buffer if is_stdout else partial_stdout
+                        updated_stderr = new_buffer if not is_stdout else partial_stderr
+                        error_log = handle_error(reason, proc, sel, expected_actions, post_error_lines, timeout, updated_stdout, updated_stderr)
+                        return False, error_log
+                    actual_line = line_from_proc
 
-        # handle each of the input/output channels that are ready
-        for (key, mask) in events:
-            if key.data == 'out':
-                # there is stdout output ready
-                data = os.read(stdout, bufsize)
-                if len(data) == 0 and len(partial) > 0:
-                    print('\n!!ERROR!! Program output ended without a newline:')
-                    for bline in wrong:
-                        print(repr(bline.decode('utf-8')))
-                    print(repr(partial.decode('utf-8')))
-                    sys.exit(1)
-                elif len(data) == 0:
-                    keepGoing = False
-                    break
-                data = partial + data
-                partial = b''
+                if is_stdout:
+                    partial_stdout = new_buffer
+                else:
+                    partial_stderr = new_buffer
+                
+                if actual_line != expected_content:
+                    error_log = handle_error(f"Output mismatch on {stream_name}.", proc, sel, expected_actions, post_error_lines, timeout, partial_stdout, partial_stderr, actual_line)
+                    return False, error_log
 
-                # compare it to the expected output one line at a time
-                while len(data) > 0:
-                    newline = data.find(b'\n')
-                    if newline < 0:
-                        # save this partial line until more input is available
-                        partial = data
-                        break
+                # Success, print and continue
+                text_to_print = actual_line.rstrip('\n')
+                if is_stdout:
+                    print_stdout(text_to_print)
+                else:
+                    print_stderr(text_to_print)
+                expected_actions.popleft()
 
-                    chunk = data[:newline+1]
-                    data = data[len(chunk):]
-
-                    # is this line incorrect or does it follow an incorrect line?
-                    if len(wrong) > 0 or not outputData.startswith(chunk):
-                        wrong.append(chunk)
-
-                        # stop after a while
-                        if len(wrong) >= wronglines+5:
-                            keepGoing = False
-                            break
-
-                    # does it match what we expected?
-                    else:
-                        print(chunk.decode('utf-8'), end='')
-                        outputData = outputData[len(chunk):]
-
-            if key.data == 'err':
-                # there is stderr output ready
-                data = os.read(stderr, bufsize)
-                if len(data) == 0:
-                    keepGoing = False
-                    break
-                print('\n!!ERROR OUTPUT!!')
-                print(data.decode('utf-8'), end='')
-                keepGoing = False
-                error = True
-
-            if key.data == 'in':
-                # the stdin pipe is ready to receive data
-                count = os.write(stdin, nextInput)
-                if count == 0:
-                    keepGoing = False
-                    break
-                print(nextInput[:count].decode('utf-8'), end='')
-
-                inputData = inputData[count:]
-                nextInput = b''
-
-    if len(wrong) > 0:
-        # report incorrect output
-        if len(wrong) == 1:
-            print('\n!!INCORRECT OUTPUT!! Your next line of output was:')
-        else:
-            if len(wrong) >= wronglines+5:
-                wrong = wrong[:wronglines]
-            print(f'\n!!INCORRECT OUTPUT!! Your next {len(wrong)} lines of output were:')
-        for bline in wrong:
-            print(repr(bline.decode('utf-8')))
-
-        # gather the same number of correct output lines if possible
-        correct = []
-        for i in range(len(wrong)):
-            newline = outputData.find(b'\n')
-            if newline < 0:
-                correct.append(outputData)
+        # --- Post-Loop Checks ---
+        extra_out = partial_stdout
+        extra_err = partial_stderr
+        
+        # Drain any remaining output from the process
+        while proc.poll() is None or sel.get_map():
+            events = sel.select(0.1) 
+            if not events and proc.poll() is not None:
                 break
-            else:
-                correct.append(outputData[:newline+1])
-                outputData = outputData[newline+1:]
 
-        # report expected output
-        if len(correct) == 1:
-            print('\nbut the next line of output expected was:')
-        else:
-            print(f'\nbut the next {len(correct)} lines of output expected were:')
-        for bline in correct:
-            print(repr(bline.decode('utf-8')))
-        error = True
+            for key, _ in events:
+                fileobj = cast(IO[bytes], key.fileobj)
+                try:
+                    data = fileobj.read()
+                    if not data:
+                        sel.unregister(fileobj)
+                        continue
+                    
+                    decoded_data = data.decode('utf-8')
+                    if key.data == 'stdout': extra_out += decoded_data
+                    else: extra_err += decoded_data
+                except (BlockingIOError, UnicodeDecodeError):
+                    continue
+        
+        exit_code = proc.returncode if proc.returncode is not None else proc.wait()
 
-    # wait for the child process to end
-    proc.kill()
-    proc.wait()
-    proc.stdout.close()
-    proc.stderr.close()
-    if not inputClosed:
-        proc.stdin.close()
+        if extra_out or extra_err:
+            error_log = handle_error("Program produced unexpected extra output after completion.", proc, sel, deque(), post_error_lines, timeout, extra_out, extra_err)
+            return False, error_log
 
-    # report an error if we noticed error output, wrong regular output, or
-    # any input/output leftover that should have been consumed
-    if not error and len(inputData) > 0:
-        print('\n!!ERROR!! Program ended without reading all input. Unused input was:')
-        lines = inputData.decode('utf-8').split('\n')[:-1]
-        if len(lines) < postcrashlines+5:
-            for line in lines:
-                print(repr(line + '\n'))
-        else:
-            for line in lines[:postcrashlines]:
-                print(repr(line + '\n'))
-            print(f'... (skipped {len(lines)-postcrashlines} additional lines of unread input)')
-    if not error and len(outputData) > 0:
-        print('\n!!ERROR!! Program ended but more output was expected. Expected output was:')
-        lines = outputData.decode('utf-8').split('\n')[:-1]
-        if len(lines) < postcrashlines+5:
-            for line in lines:
-                print(repr(line + '\n'))
-        else:
-            for line in lines[:postcrashlines]:
-                print(repr(line + '\n'))
-            print(f'... (skipped {len(lines)-postcrashlines} additional lines of expected output)')
-    if error or len(inputData) > 0 or len(outputData) > 0:
-        sys.exit(1)
+        if exit_code != 0:
+            error_log = handle_error(f"Program exited with non-zero status code: {exit_code}", proc, sel, deque(), post_error_lines, timeout, "", "")
+            return False, error_log
 
-main()
+    except (IOError, ValueError) as e:
+        message = f"Stepper internal error: {e}"
+        print_fatal(message)
+        return False, message
+    finally:
+        # Ensure process and its resources are cleaned up
+        if proc.poll() is None:
+            proc.terminate()
+            proc.wait()
+        sel.close()
+        for p in [proc.stdin, proc.stdout, proc.stderr]:
+            if p and not p.closed:
+                p.close()
+
+    return True, ""
+
+def read_line_from_process(proc: subprocess.Popen[bytes], sel: selectors.DefaultSelector, from_stdout: bool, buffer: str, timeout: float) -> Tuple[Optional[str], str]:
+    """Reads from process until a full line is available or timeout occurs."""
+    start_time = time.monotonic()
+    stream_name = 'stdout' if from_stdout else 'stderr'
+    
+    while time.monotonic() - start_time < timeout:
+        remaining_time = timeout - (time.monotonic() - start_time)
+        if remaining_time <= 0: break
+        
+        events = sel.select(remaining_time)
+        if not events:
+            return None, buffer # Timeout
+
+        for key, _ in events:
+            if key.data != stream_name:
+                continue
+            
+            fileobj = cast(IO[bytes], key.fileobj)
+            try:
+                data = fileobj.read()
+                if not data: # EOF
+                    return None, buffer
+                buffer += data.decode('utf-8')
+            except (BlockingIOError, UnicodeDecodeError):
+                continue
+            
+            if '\n' in buffer:
+                line, new_buffer = buffer.split('\n', 1)
+                return line + '\n', new_buffer
+    
+    return None, buffer # Timeout
+
+def handle_error(reason: str, proc: subprocess.Popen[bytes], sel: selectors.DefaultSelector, expected_actions: Deque[Tuple[str, str]], post_error_lines: int, timeout: float, partial_stdout: str, partial_stderr: str, mismatched_line: Optional[str] = None) -> str:
+    """
+    Prints a centralized error report to the console and returns the
+    uncolored report as a string for logging.
+    """
+    log_lines: List[str] = []
+
+    # --- Print Failure Banner ---
+    banner = "\n" + "=" * 80
+    log_lines.append(banner)
+    print_header(banner, AnsiColors.RED)
+    
+    fail_text = "TEST FAILED".center(80)
+    log_lines.append(fail_text)
+    print_header(fail_text, AnsiColors.RED)
+    
+    log_lines.append("=" * 80)
+    print_header("=" * 80, AnsiColors.RED)
+    
+    # --- Print Expected Actions ---
+    header_expected = "\n--- Expected Next Steps ---"
+    log_lines.append(header_expected)
+    print_header(header_expected, AnsiColors.BLUE)
+
+    if not expected_actions:
+        no_actions_text = "(No more actions were expected from the transcript)"
+        log_lines.append(no_actions_text)
+        print(no_actions_text)
+    for i, (action, content) in enumerate(expected_actions):
+        if i >= post_error_lines: break
+        prefix_str = "EXPECTED STDOUT:" if action == '>' else "EXPECTED STDERR:" if action == '!' else "EXPECTED STDIN:"
+        prefix = f"{prefix_str:<{ERROR_PREFIX_WIDTH}}"
+        line_text = f"{prefix}{repr(content)}"
+        log_lines.append(line_text)
+        color = AnsiColors.YELLOW if action == '!' else AnsiColors.BLUE
+        print_header(line_text, color, bold=False)
+
+    # --- Print Actual Program Output ---
+    header_actual = "\n--- Actual Program Output (Context) ---"
+    log_lines.append(header_actual)
+    print_header(header_actual, AnsiColors.YELLOW)
+
+    lines_shown = 0
+    if mismatched_line:
+        prefix = f"{'MISMATCHED LINE:':<{ERROR_PREFIX_WIDTH}}"
+        line_text = f"{prefix}{repr(mismatched_line)}"
+        log_lines.append(line_text)
+        print_warning(line_text)
+        lines_shown += 1
+    
+    # Drain any lines already in the partial buffers
+    while '\n' in partial_stdout and lines_shown < post_error_lines:
+        line, partial_stdout = partial_stdout.split('\n', 1)
+        prefix = f"{'SUBSEQUENT STDOUT:':<{ERROR_PREFIX_WIDTH}}"
+        line_text = f"{prefix}{repr(line + chr(10))}"
+        log_lines.append(line_text)
+        print_warning(line_text)
+        lines_shown += 1
+    
+    while '\n' in partial_stderr and lines_shown < post_error_lines:
+        line, partial_stderr = partial_stderr.split('\n', 1)
+        prefix = f"{'SUBSEQUENT STDERR:':<{ERROR_PREFIX_WIDTH}}"
+        line_text = f"{prefix}{repr(line + chr(10))}"
+        log_lines.append(line_text)
+        print_warning(line_text)
+        lines_shown += 1
+
+    # Drain subsequent output from the process itself
+    start_time = time.monotonic()
+    while lines_shown < post_error_lines and time.monotonic() - start_time < timeout and proc.poll() is None:
+        if expected_actions and expected_actions[0][0] == '<':
+            wait_text = "(Stopping output display as program is expected to wait for input next)"
+            log_lines.append(wait_text)
+            print_header(wait_text, AnsiColors.BLUE, bold=False)
+            break
+
+        line_out, partial_stdout = read_line_from_process(proc, sel, True, partial_stdout, 0.1)
+        if line_out is not None:
+            prefix = f"{'SUBSEQUENT STDOUT:':<{ERROR_PREFIX_WIDTH}}"
+            line_text = f"{prefix}{repr(line_out)}"
+            log_lines.append(line_text)
+            print_warning(line_text)
+            lines_shown += 1
+            if lines_shown >= post_error_lines: break
+        
+        if lines_shown >= post_error_lines: break
+
+        line_err, partial_stderr = read_line_from_process(proc, sel, False, partial_stderr, 0.1)
+        if line_err is not None:
+            prefix = f"{'SUBSEQUENT STDERR:':<{ERROR_PREFIX_WIDTH}}"
+            line_text = f"{prefix}{repr(line_err)}"
+            log_lines.append(line_text)
+            print_warning(line_text)
+            lines_shown += 1
+
+    # Handle the "extra output" case cleanly
+    if reason == "Program produced unexpected extra output after completion.":
+        if partial_stdout:
+            extra_out_header = "\n--- EXTRA STDOUT ---"
+            log_lines.append(extra_out_header)
+            print_warning(extra_out_header)
+            log_lines.append(repr(partial_stdout))
+            print_warning(repr(partial_stdout))
+        if partial_stderr:
+            extra_err_header = "\n--- EXTRA STDERR ---"
+            log_lines.append(extra_err_header)
+            print_warning(extra_err_header)
+            log_lines.append(repr(partial_stderr))
+            print_warning(repr(partial_stderr))
+    elif lines_shown == 0:
+        no_output_text = "(No further output from program before timeout or exit)"
+        log_lines.append(no_output_text)
+        print(no_output_text)
+        
+    # --- Print Final Summary ---
+    summary_header = "\n--- Failure Summary ---"
+    log_lines.append(summary_header)
+    print_header(summary_header, AnsiColors.RED)
+    
+    reason_text = f"Reason: {reason}"
+    log_lines.append(reason_text)
+    print_header(reason_text, AnsiColors.RED, bold=False)
+    
+    log_lines.append("=" * 80)
+    print_header("=" * 80, AnsiColors.RED)
+    
+    return "\n".join(log_lines)
+
+if __name__ == "__main__":
+    main()

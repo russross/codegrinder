@@ -23,7 +23,7 @@ import (
 )
 
 // bootstrap assignment URL is something like:
-// https://codegrinder.cs.utahtech.edu/v2/lti/problem_sets/cli/bootstrap-codegrinder
+// https://codegrinder.cs.utahtech.edu/lti/problem_sets/cli/bootstrap-codegrinder
 const bootstrapAssignmentName string = "bootstrap-codegrinder"
 const canvasDateFormat string = "2006-01-02T15:04:05Z"
 
@@ -167,7 +167,7 @@ func GetConfigXML(w http.ResponseWriter) {
 			// 	LTIConfigOptions{
 			// 		Name: "resource_selection",
 			// 		Options: []LTIConfigExtension{
-			// 			LTIConfigExtension{Name: "url", Value: "https://" + Config.Hostname + "/v2/lti/problem_sets"},
+			// 			LTIConfigExtension{Name: "url", Value: "https://" + Config.Hostname + "/lti/problem_sets"},
 			// 			LTIConfigExtension{Name: "text", Value: Config.ToolName},
 			// 			LTIConfigExtension{Name: "selection_width", Value: "320"},
 			// 			LTIConfigExtension{Name: "selection_height", Value: "640"},
