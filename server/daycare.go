@@ -19,7 +19,6 @@ import (
 )
 
 // containerEngine defines the command-line executable to use for container management.
-// This can be switched to "docker" for migration.
 const containerEngine = "docker"
 
 // studentUID defines the static user and group ID to be used inside containers.
@@ -263,7 +262,6 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 
 	// launch a nanny process
 	nannyName := fmt.Sprintf("nanny-%d", req.CommitBundle.UserID)
-	log.Printf("migration: launching container for %s", nannyName)
 	limits := newLimits(action)
 	limits.override(problem.Options)
 	n, err := NewNanny(req.CommitBundle.ProblemType, problem, action.Action, args, limits, nannyName)
@@ -344,7 +342,6 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	}
 
 	// run the action
-	log.Printf("migration: %s: %s", action.ProblemType, action.Message)
 	cmd := strings.Fields(action.Command)
 	switch {
 	case action.Parser == "xunit":
@@ -511,7 +508,6 @@ func (n *Nanny) Shutdown(msg string) error {
 	n.Closed = true
 
 	// shut down the container
-	log.Printf("migration: shutting down %s: %s", n.Name, msg)
 	if err := removeContainer(n.ID); err != nil {
 		return fmt.Errorf("Nanny.Shutdown: %v", err)
 	}
@@ -656,7 +652,6 @@ func (n *Nanny) GetFiles(filenames []string) (map[string][]byte, error) {
 				badpattern = pattern
 			} else if matched {
 				files[name] = contents
-				log.Printf("migration: getfiles: getting %s", name)
 				break
 			}
 		}

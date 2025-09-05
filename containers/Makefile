@@ -8,45 +8,45 @@ arm64: .proxy-c .proxy-cpp .proxy-go .proxy-python .proxy-riscv .proxy-rust .pro
 amd64: .proxy-c .proxy-go .proxy-python .proxy-riscv .proxy-rust .proxy-sqlite
 
 .proxy-c: c/Dockerfile
-	podman build --pull -t codegrinder/c c
+	docker build --pull -t codegrinder/c c
 	touch .proxy-c
 
 .proxy-cpp: cpp/Dockerfile
-	podman build --pull -t codegrinder/cpp cpp
+	docker build --pull -t codegrinder/cpp cpp
 	touch .proxy-cpp
 
 .proxy-forth: forth/Dockerfile
-	podman build --pull -t codegrinder/forth forth
+	docker build --pull -t codegrinder/forth forth
 	touch .proxy-forth
 
 .proxy-go: go/Dockerfile
-	podman build --pull -t codegrinder/go go
+	docker build --pull -t codegrinder/go go
 	touch .proxy-go
 
 .proxy-nand2tetris: nand2tetris/Dockerfile
-	podman build --pull -t codegrinder/nand2tetris nand2tetris
+	docker build --pull -t codegrinder/nand2tetris nand2tetris
 	touch .proxy-nand2tetris
 
 .proxy-prolog: prolog/Dockerfile
-	podman build --pull -t codegrinder/prolog prolog
+	docker build --pull -t codegrinder/prolog prolog
 	touch .proxy-prolog
 
 .proxy-python: python/Dockerfile
-	podman build --pull -t codegrinder/python python
+	docker build --pull -t codegrinder/python python
 	touch .proxy-python
 
 .proxy-riscv: riscv/Dockerfile
-	podman build --pull -t codegrinder/riscv riscv
+	docker build --pull -t codegrinder/riscv riscv
 	touch .proxy-riscv
 
 .proxy-rust: rust/Dockerfile
-	podman build --pull -t codegrinder/rust rust
+	docker build --pull -t codegrinder/rust rust
 	touch .proxy-rust
 
 .proxy-sqlite: sqlite/Dockerfile
-	podman build --pull -t codegrinder/sqlite sqlite
+	docker build --pull -t codegrinder/sqlite sqlite
 	touch .proxy-sqlite
 
 .proxy-standardml: standardml/Dockerfile
-	podman build --pull -t codegrinder/standardml standardml
+	docker build --pull -t codegrinder/standardml standardml
 	touch .proxy-standardml
