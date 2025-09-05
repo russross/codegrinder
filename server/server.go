@@ -16,7 +16,6 @@ import (
 	"io/ioutil"
 	"log"
 	"math/rand"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -186,18 +185,6 @@ func main() {
 		}
 		if Config.Capacity <= 0 {
 			log.Fatalf("Daycare capacity must be greater than zero")
-		}
-
-		// attach to docker via the API and try a ping
-		dockerTransport = &http.Client{
-			Transport: &http.Transport{
-				Dial: func(_, _ string) (net.Conn, error) {
-					return net.Dial("unix", dockerPath)
-				},
-			},
-		}
-		if err := getObject("/_ping", nil, nil); err != nil {
-			log.Printf("Ping: %v", err)
 		}
 
 		r.Get("/sockets/:problem_type/:action", SocketProblemTypeAction)

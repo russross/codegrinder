@@ -3,28 +3,27 @@ package main
 import (
 	"archive/tar"
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
-	"math/rand"
-	"net"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
+	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/go-martini/martini"
 	"github.com/gorilla/websocket"
-	"github.com/russross/codegrinder/stdcopy"
 	. "github.com/russross/codegrinder/types"
 )
+
+// containerEngine defines the command-line executable to use for container management.
+// This can be switched to "docker" for migration.
+const containerEngine = "docker"
+
+// studentUID defines the static user and group ID to be used inside containers.
+const studentUID = 1001
 
 type limits struct {
 	maxCPU      int64
@@ -264,7 +263,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 
 	// launch a nanny process
 	nannyName := fmt.Sprintf("nanny-%d", req.CommitBundle.UserID)
-	//log.Printf("launching container for %s", nannyName)
+	log.Printf("migration: launching container for %s", nannyName)
 	limits := newLimits(action)
 	limits.override(problem.Options)
 	n, err := NewNanny(req.CommitBundle.ProblemType, problem, action.Action, args, limits, nannyName)
@@ -272,6 +271,13 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		logAndTransmitErrorf("error creating container: %v", err)
 		return
 	}
+
+	// shutdown the container when finished
+	defer func() {
+		if err := n.Shutdown("action finished"); err != nil {
+			logAndTransmitErrorf("nanny shutdown error: %v", err)
+		}
+	}()
 
 	// relay container events to the socket
 	eventListenerClosed := make(chan struct{})
@@ -338,7 +344,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	}
 
 	// run the action
-	//log.Printf("%s: %s", action.ProblemType, action.Message)
+	log.Printf("migration: %s: %s", action.ProblemType, action.Message)
 	cmd := strings.Fields(action.Command)
 	switch {
 	case action.Parser == "xunit":
@@ -377,11 +383,6 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		} else if len(files) > 0 {
 			n.Events <- &EventMessage{Event: "files", Files: files}
 		}
-	}
-
-	// shutdown the nanny
-	if err := n.Shutdown("action finished"); err != nil {
-		logAndTransmitErrorf("nanny shutdown error: %v", err)
 	}
 
 	// wait for listener to finish
@@ -423,7 +424,6 @@ type Nanny struct {
 	Name       string
 	Start      time.Time
 	ID         string
-	UID        int64
 	ReportCard *ReportCard
 	Input      chan string
 	Events     chan *EventMessage
@@ -432,122 +432,75 @@ type Nanny struct {
 	Files      map[string][]byte
 }
 
-var getContainerIDRE = regexp.MustCompile(`The name .* is already in use by container (.*)\. You have to delete \(or rename\) that container to be able to reuse that name`)
-
-func getContainerID(msg string) string {
-	groups := getContainerIDRE.FindStringSubmatch(msg)
-	if len(groups) != 2 {
-		return ""
-	}
-	return groups[1]
-}
-
 func NewNanny(problemType *ProblemType, problem *Problem, action string, args []string, limits *limits, name string) (*Nanny, error) {
-	// create a container
-	mem := limits.maxMemory * 1024 * 1024
 	disk := limits.maxFileSize * 1024 * 1024
-	uid, err := allocUID()
-	if err != nil {
-		return nil, err
+	timeLimit := limits.maxCPU * 2
+	userAndGroup := fmt.Sprintf("%d:%d", studentUID, studentUID)
+	memStr := fmt.Sprintf("%dm", limits.maxMemory)
+
+	// construct the 'docker run' command arguments
+	cmdArgs := []string{
+		"run",
+		"-d", // detached mode.
+		"--name", name,
+		"--hostname", name,
+		"--user", userAndGroup,
+		"--net=none",
+
+		// cgroup-based resource limits.
+		"--memory", memStr,
+		"--memory-swap", memStr, // prevent swapping
+		"--pids-limit", strconv.FormatInt(limits.maxThreads, 10),
+
+		// security hardening flags.
+		"--cap-drop", "ALL",
+		"--security-opt", "no-new-privileges", // prevent privilege escalation
+		//"--security-opt", "seccomp=default",   // apply default syscall filter
+
+		// ulimits for resources not covered by cgroups.
+		// note: --pids-limit makes nproc redundant
+		// note: nofile is less critical with modern kernels
+		"--ulimit", fmt.Sprintf("core=0:0"),
+		"--ulimit", fmt.Sprintf("cpu=%d", limits.maxCPU),
+		"--ulimit", fmt.Sprintf("fsize=%d", disk),
 	}
 
-	timeLimit := limits.maxCPU * 2
-	config := ContainerConfig{
-		Hostname:        name,
-		User:            uidgid(uid),
-		Cmd:             []string{"/bin/sleep", strconv.FormatInt(timeLimit, 10) + "s"},
-		Env:             []string{"USER=student", "HOME=/home/student"},
-		Image:           problemType.Image,
-		NetworkDisabled: true,
-		HostConfig: HostConfig{
-			Memory:     int64(mem),
-			MemorySwap: int64(mem),
-			CapDrop: []string{
-				"NET_RAW",
-				"NET_BIND_SERVICE",
-				"AUDIT_READ",
-				"AUDIT_WRITE",
-				"DAC_OVERRIDE",
-				"SETFCAP",
-				"SETPCAP",
-				"SETGID",
-				"SETUID",
-				"MKNOD",
-				"CHOWN",
-				"FOWNER",
-				"FSETID",
-				"KILL",
-				"SYS_CHROOT",
-			},
-			PidsLimit: limits.maxThreads,
-			Ulimits: []Ulimit{
-				{Name: "core", Soft: 0, Hard: 0},
-				{Name: "cpu", Soft: limits.maxCPU, Hard: limits.maxCPU},
-				//{Name: "data", Soft: mem, Hard: mem},
-				{Name: "fsize", Soft: disk, Hard: disk},
-				{Name: "memlock", Soft: 0, Hard: 0},
-				{Name: "nofile", Soft: limits.maxFD, Hard: limits.maxFD},
-				{Name: "nproc", Soft: limits.maxThreads, Hard: limits.maxThreads},
-				//{Name: "stack", Soft: mem, Hard: mem},
-			},
-			Tmpfs: map[string]string{
-				"/home/student": fmt.Sprintf("rw,exec,nosuid,nodev,size=%dk,uid=%d,gid=%d", disk/1024, uid, uid),
-				"/tmp":          fmt.Sprintf("rw,exec,nosuid,nodev,size=%dk,uid=%d,gid=%d", disk/1024, uid, uid),
-			},
-			ReadonlyRootfs: true,
-		},
-	}
+	// main command just sleeps; this acts as a timeout mechanism for the whole container
+	cmdArgs = append(cmdArgs, problemType.Image, "/bin/sleep", strconv.FormatInt(timeLimit, 10)+"s")
 
 	log.Printf("new container %s; action %s on %s (%s); params cpu=%d, fd=%d, file=%d, mem=%d, threads=%d",
 		name, action, problem.Unique, problemType.Name,
 		limits.maxCPU, limits.maxFD, limits.maxFileSize, limits.maxMemory, limits.maxThreads)
 
-	params := make(url.Values)
-	params.Add("name", name)
-	var response CreateResponse
-	err = postObject("/containers/create", params, &config, &response)
+	// execute the command.
+	cmd := exec.Command(containerEngine, cmdArgs...)
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		if strings.HasPrefix(err.Error(), "409:") {
-			// container already exists with that name--try killing it
+		// if the container already exists, try to remove it and retry
+		// this prevents a single student running multiple graders concurrently
+		if strings.Contains(string(output), "is already in use") {
 			log.Printf("killing existing container with same name %s", name)
 			if err2 := removeContainer(name); err2 != nil {
-				releaseUID(uid)
 				return nil, err2
 			}
 
-			// try it one more time
-			err = postObject("/containers/create", params, &config, &response)
-			if err != nil {
-				log.Printf("second attempt create error %q", err)
-			}
+			// retry the command
+			output, err = exec.Command(containerEngine, cmdArgs...).CombinedOutput()
 		}
 		if err != nil {
-			releaseUID(uid)
-			return nil, fmt.Errorf("CreateContainer: %v", err)
+			return nil, fmt.Errorf("container run failed: %v\nOutput: %s", err, string(output))
 		}
 	}
 
-	// start it
-	err = postObject(fmt.Sprintf("/containers/%s/start", response.Id), nil, nil, nil)
-	if err != nil {
-		releaseUID(uid)
-		if err2 := removeContainer(response.Id); err2 != nil {
-			log.Printf("RemoveContainer: %v", err2)
-		}
-		return nil, err
-	}
+	containerID := strings.TrimSpace(string(output))
 
 	return &Nanny{
 		Name:       name,
 		Start:      time.Now(),
-		ID:         response.Id,
-		UID:        uid,
+		ID:         containerID,
 		ReportCard: NewReportCard(),
 		Input:      make(chan string),
 		Events:     make(chan *EventMessage),
-		Transcript: []*EventMessage{},
-		Closed:     false,
-		Files:      nil,
 	}, nil
 }
 
@@ -558,113 +511,94 @@ func (n *Nanny) Shutdown(msg string) error {
 	n.Closed = true
 
 	// shut down the container
-	//log.Printf("shutting down %s: %s", n.Name, msg)
-	err := removeContainer(n.ID)
-	releaseUID(n.UID)
-	if err != nil {
+	log.Printf("migration: shutting down %s: %s", n.Name, msg)
+	if err := removeContainer(n.ID); err != nil {
 		return fmt.Errorf("Nanny.Shutdown: %v", err)
 	}
 	return nil
 }
 
-// PutFiles copies a set of files to the given container.
-// The container must be running.
+// removeContainer forcefully stops and removes a container by its ID or name.
+func removeContainer(id string) error {
+	cmd := exec.Command(containerEngine, "rm", "-f", id)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("error killing container %s: %v", id, err)
+	}
+	return nil
+}
+
+// copy a set of files to the given container
+// by streaming a tarball to the 'docker cp' command
+// note: the container must be running
 func (n *Nanny) PutFiles(files map[string][]byte, mode int64) error {
-	// nothing to do?
 	if len(files) == 0 {
 		return nil
 	}
 
-	// tar the files
+	// create a tar archive in memory
 	nowish := time.Now().Add(-time.Second)
 	buf := new(bytes.Buffer)
 	writer := tar.NewWriter(buf)
 	dirs := make(map[string]bool)
 	for name, contents := range files {
 		dir := filepath.Dir(name)
-		if dir != "" && !dirs[dir] {
+		if dir != "" && dir != "." && !dirs[dir] {
 			dirs[dir] = true
 			header := &tar.Header{
 				Name:       dir,
 				Mode:       0777,
-				Uid:        int(n.UID),
-				Gid:        int(n.UID),
-				Size:       0,
+				Uid:        studentUID,
+				Gid:        studentUID,
 				ModTime:    nowish,
 				Typeflag:   tar.TypeDir,
-				Uname:      strconv.FormatInt(n.UID, 10),
-				Gname:      strconv.FormatInt(n.UID, 10),
+				Uname:      strconv.Itoa(studentUID),
+				Gname:      strconv.Itoa(studentUID),
 				AccessTime: nowish,
 				ChangeTime: nowish,
 			}
 			if err := writer.WriteHeader(header); err != nil {
-				log.Printf("writing tar header for directory: %v", err)
-				return err
+				return fmt.Errorf("writing tar header for directory: %v", err)
 			}
 		}
 		header := &tar.Header{
 			Name:       name,
 			Mode:       mode,
-			Uid:        int(n.UID),
-			Gid:        int(n.UID),
+			Uid:        studentUID,
+			Gid:        studentUID,
 			Size:       int64(len(contents)),
 			ModTime:    nowish,
 			Typeflag:   tar.TypeReg,
-			Uname:      strconv.FormatInt(n.UID, 10),
-			Gname:      strconv.FormatInt(n.UID, 10),
+			Uname:      strconv.Itoa(studentUID),
+			Gname:      strconv.Itoa(studentUID),
 			AccessTime: nowish,
 			ChangeTime: nowish,
 		}
 		if err := writer.WriteHeader(header); err != nil {
-			log.Printf("writing tar header: %v", err)
-			return err
+			return fmt.Errorf("writing tar header: %v", err)
 		}
 		if _, err := writer.Write(contents); err != nil {
-			log.Printf("writing to tar file: %v", err)
-			return err
+			return fmt.Errorf("writing to tar file: %v", err)
 		}
 	}
 	if err := writer.Close(); err != nil {
-		log.Printf("closing tar file: %v", err)
-		return err
+		return fmt.Errorf("closing tar file: %v", err)
 	}
 
-	// exec tar in the container
-	config := CreateExecConfig{
-		AttachStdin:  true,
-		AttachStdout: true,
-		AttachStderr: true,
-		Tty:          false,
-		Cmd:          []string{"/bin/tar", "xf", "-", "-C", "/home/student"},
-		User:         uidgid(n.UID),
-	}
-	var result CreateExecResponse
-	err := postObject(fmt.Sprintf("/containers/%s/exec", n.ID), nil, &config, &result)
-	if err != nil {
-		log.Printf("creating tar command to upload files: %v", err)
-		return err
-	}
-	out := new(bytes.Buffer)
-	err = startExec(result.Id, buf, out, out)
-	if err != nil {
-		log.Printf("running tar command to upload files: %v", err)
-		return err
-	}
-	if out.Len() != 0 {
-		log.Printf("tar output: %q", out.String())
-		return fmt.Errorf("tar gave non-empty output when extracting files into container")
-	}
+	// use 'docker cp' to copy the tarball into the /home/student directory.
+	// pipe the tar buffer to the command's stdin.
+	cmd := exec.Command(containerEngine, "cp", "-", n.ID+":/home/student/")
+	cmd.Stdin = buf
 
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("container cp failed: %v\nOutput: %s", err, string(output))
+	}
 	return nil
 }
 
-// GetFiles copies a set of files from the given container.
+// GetFiles copies files from the given container.
 // All student files are copied from the container on the first call to GetFiles.
-// Subsequent calls will just gather files from the collection.
-// The container must be running or the files must have already been fetched
-// by a previous call to GetFiles.
+// Subsequent calls will gather files from the cached collection.
 func (n *Nanny) GetFiles(filenames []string) (map[string][]byte, error) {
-	// nothing to do?
 	if len(filenames) == 0 {
 		return nil, nil
 	}
@@ -673,57 +607,40 @@ func (n *Nanny) GetFiles(filenames []string) (map[string][]byte, error) {
 	if n.Files == nil {
 		// cannot fetch files if the container is closed
 		if n.Closed {
-			return nil, nil
+			return nil, fmt.Errorf("cannot fetch files, container is closed")
 		}
 
-		// exec tar in the container
-		config := CreateExecConfig{
-			AttachStdin:  false,
-			AttachStdout: true,
-			AttachStderr: true,
-			Tty:          false,
-			Cmd:          []string{"/bin/tar", "cf", "-", "-C", "/home/student", "."},
-			User:         uidgid(n.UID),
-		}
-		var result CreateExecResponse
-		err := postObject(fmt.Sprintf("/containers/%s/exec", n.ID), nil, &config, &result)
-		if err != nil {
-			log.Printf("createing tar command to download files: %v", err)
-			return nil, err
-		}
-		tarFile := new(bytes.Buffer)
-		tarErr := new(bytes.Buffer)
-		err = startExec(result.Id, nil, tarFile, tarErr)
-		if err != nil {
-			log.Printf("running tar command to download files: %v", err)
-			return nil, err
-		}
-		if tarErr.Len() != 0 {
-			log.Printf("tar gave non-empty error output when gathering files from container: %q", tarErr.String())
-			return nil, err
+		// use 'docker cp' to get the /home/student directory as a tar stream
+		cmd := exec.Command(containerEngine, "cp", n.ID+":/home/student/.", "-")
+		var tarFile bytes.Buffer
+		cmd.Stdout = &tarFile
+
+		// capture stderr in case of error
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+
+		if err := cmd.Run(); err != nil {
+			return nil, fmt.Errorf("container cp from container failed: %v\nOutput: %s", err, tarFile.String())
 		}
 
 		// extract the files
 		n.Files = make(map[string][]byte)
-		reader := tar.NewReader(bytes.NewReader(tarFile.Bytes()))
+		reader := tar.NewReader(&tarFile)
 		for {
 			header, err := reader.Next()
 			if err == io.EOF {
 				break
 			}
 			if err != nil {
-				log.Printf("error decoding tar file: %v", err)
-				return nil, err
+				return nil, fmt.Errorf("error decoding tar file: %v", err)
 			}
 			if header.Typeflag != tar.TypeReg {
 				continue
 			}
-			contents := make([]byte, header.Size)
-			if _, err = io.ReadFull(reader, contents); err != nil {
-				log.Printf("error reading %q from tar file: %v", header.Name, err)
-				return nil, err
+			contents, err := io.ReadAll(reader)
+			if err != nil {
+				return nil, fmt.Errorf("error reading %q from tar file: %v", header.Name, err)
 			}
-
 			name := filepath.Clean(header.Name)
 			n.Files[name] = contents
 		}
@@ -739,7 +656,7 @@ func (n *Nanny) GetFiles(filenames []string) (map[string][]byte, error) {
 				badpattern = pattern
 			} else if matched {
 				files[name] = contents
-				//log.Printf("getfiles: getting %s", name)
+				log.Printf("migration: getfiles: getting %s", name)
 				break
 			}
 		}
@@ -751,356 +668,66 @@ func (n *Nanny) GetFiles(filenames []string) (map[string][]byte, error) {
 	return files, nil
 }
 
-type execOutput struct {
-	stdout bytes.Buffer
-	stderr bytes.Buffer
-	script bytes.Buffer
+// eventWriter is a helper type that implements io.Writer. It forwards writes
+// to an event channel for real-time streaming to the client.
+type eventWriter struct {
+	event  string
 	events chan *EventMessage
 }
 
-type execStdout execOutput
-
-func (out *execStdout) Write(data []byte) (n int, err error) {
-	n, err = out.stdout.Write(data)
-	if err != nil || n != len(data) {
-		log.Printf("execStdout.Write: error writing to stdout buffer: %v", err)
-		return n, err
-	}
-	n, err = out.script.Write(data)
-	if err != nil || n != len(data) {
-		log.Printf("execStdout.Write: error writing to script buffer: %v", err)
-		return n, err
-	}
-
-	clone := make([]byte, len(data))
-	copy(clone, data)
-	out.events <- &EventMessage{
+func (ew *eventWriter) Write(p []byte) (int, error) {
+	clone := make([]byte, len(p))
+	copy(clone, p)
+	ew.events <- &EventMessage{
 		Time:       time.Now(),
-		Event:      "stdout",
+		Event:      ew.event,
 		StreamData: clone,
 	}
-
-	return n, err
+	return len(p), nil
 }
 
-type execStderr execOutput
-
-func (out *execStderr) Write(data []byte) (n int, err error) {
-	n, err = out.stderr.Write(data)
-	if err != nil || n != len(data) {
-		log.Printf("execStderr.Write: error writing to stderr buffer: %v", err)
-		return n, err
-	}
-	n, err = out.script.Write(data)
-	if err != nil || n != len(data) {
-		log.Printf("execStderr.Write: error writing to script buffer: %v", err)
-		return n, err
-	}
-
-	clone := make([]byte, len(data))
-	copy(clone, data)
-	out.events <- &EventMessage{
-		Time:       time.Now(),
-		Event:      "stderr",
-		StreamData: clone,
-	}
-
-	return n, err
-}
-
+// Exec runs a command inside the container and captures its output
 func (n *Nanny) Exec(cmd []string) (stdout, stderr, script *bytes.Buffer, status int, err error) {
-	// log the event
 	n.Events <- &EventMessage{
 		Time:        time.Now(),
 		Event:       "exec",
 		ExecCommand: cmd,
 	}
 
-	// create
-	config := CreateExecConfig{
-		AttachStdin:  false,
-		AttachStdout: true,
-		AttachStderr: true,
-		Tty:          false,
-		Cmd:          cmd,
-		User:         uidgid(n.UID),
-	}
-	var result CreateExecResponse
-	err = postObject(fmt.Sprintf("/containers/%s/exec", n.ID), nil, &config, &result)
+	// construct the 'docker exec' command arguments.
+	execCmdArgs := []string{"exec", "--user", strconv.Itoa(studentUID), n.ID}
+	execCmdArgs = append(execCmdArgs, cmd...)
+	command := exec.Command(containerEngine, execCmdArgs...)
+
+	// buffers to capture the full output for return.
+	var stdoutBuf, stderrBuf, scriptBuf bytes.Buffer
+
+	// create writers that send events over the channel AND write to local buffers.
+	stdoutWriter := io.MultiWriter(&stdoutBuf, &scriptBuf, &eventWriter{event: "stdout", events: n.Events})
+	stderrWriter := io.MultiWriter(&stderrBuf, &scriptBuf, &eventWriter{event: "stderr", events: n.Events})
+
+	command.Stdout = stdoutWriter
+	command.Stderr = stderrWriter
+
+	// start the command
+	err = command.Run()
+
+	exitCode := 0
 	if err != nil {
-		return nil, nil, nil, -1, err
-	}
-
-	// gather output
-	var out execOutput
-	out.events = n.Events
-
-	// start
-	err = startExec(result.Id, nil, (*execStdout)(&out), (*execStderr)(&out))
-	if err != nil {
-		return nil, nil, nil, -1, err
-	}
-
-	// inspect
-	var inspect struct {
-		ExitCode int
-		Running  bool
-	}
-
-	err = getObject(fmt.Sprintf("/exec/%s/json", result.Id), nil, &result)
-	if err != nil {
-		return nil, nil, nil, -1, err
-	}
-	if inspect.Running {
-		return nil, nil, nil, -1, fmt.Errorf("process still running")
+		// try to extract the exit code from the error
+		if exitError, ok := err.(*exec.ExitError); ok {
+			exitCode = exitError.ExitCode()
+		} else {
+			// a different error occurred (e.g., command not found).
+			return &stdoutBuf, &stderrBuf, &scriptBuf, -1, fmt.Errorf("exec command failed: %v", err)
+		}
 	}
 
 	n.Events <- &EventMessage{
 		Time:       time.Now(),
 		Event:      "exit",
-		ExitStatus: inspect.ExitCode,
+		ExitStatus: exitCode,
 	}
 
-	return &out.stdout, &out.stderr, &out.script, inspect.ExitCode, nil
-}
-
-var uidsInUse map[int64]bool = make(map[int64]bool)
-var uidsMutex sync.Mutex
-
-func allocUID() (int64, error) {
-	uidsMutex.Lock()
-	defer uidsMutex.Unlock()
-	if len(uidsInUse) > 1000 {
-		err := fmt.Errorf("more than 1000 UIDs in use, cannot create more nanny containers")
-		log.Printf("%v", err)
-		return 0, err
-	}
-	for {
-		uid := rand.Int63n(1000) + 10000
-		if !uidsInUse[uid] {
-			uidsInUse[uid] = true
-			return uid, nil
-		}
-	}
-}
-
-func releaseUID(uid int64) {
-	uidsMutex.Lock()
-	defer uidsMutex.Unlock()
-	delete(uidsInUse, uid)
-}
-
-func uidgid(uid int64) string {
-	return fmt.Sprintf("%d:%d", uid, uid)
-}
-
-var dockerPath string = "/var/run/docker.sock"
-var dockerTransport *http.Client
-
-func getObject(path string, params url.Values, download interface{}) error {
-	return doRequest(path, params, "GET", nil, download)
-}
-
-func postObject(path string, params url.Values, upload interface{}, download interface{}) error {
-	return doRequest(path, params, "POST", upload, download)
-}
-
-func deleteObject(path string, params url.Values) error {
-	return doRequest(path, params, "DELETE", nil, nil)
-}
-
-func makeDockerURL(path string) string {
-	return fmt.Sprintf("http://localhost/v1.44%s", path)
-}
-
-func doRequest(path string, params url.Values, method string, upload interface{}, download interface{}) error {
-	if !strings.HasPrefix(path, "/") {
-		return fmt.Errorf("doRequest path must start with /")
-	}
-	if method != "GET" && method != "POST" && method != "PUT" && method != "DELETE" {
-		return fmt.Errorf("doRequest only recognizes GET, POST, PUT, and DELETE methods")
-	}
-	url := makeDockerURL(path)
-	req, err := http.NewRequest(method, url, nil)
-	if err != nil {
-		return fmt.Errorf("error creating http request: %v", err)
-	}
-
-	// add any parameters
-	if params != nil && len(params) > 0 {
-		req.URL.RawQuery = params.Encode()
-	}
-
-	// set the headers
-	if download != nil {
-		req.Header.Add("Accept", "application/json")
-	}
-
-	// upload the payload if any
-	if upload != nil && (method == "POST" || method == "PUT") {
-		req.Header.Add("Content-Type", "application/json")
-		payload := new(bytes.Buffer)
-		jw := json.NewEncoder(payload)
-		if err := jw.Encode(upload); err != nil {
-			return fmt.Errorf("doRequest: JSON error encoding object to upload: %v", err)
-		}
-		req.Body = ioutil.NopCloser(payload)
-	}
-
-	resp, err := dockerTransport.Do(req)
-	if err != nil {
-		return fmt.Errorf("error connecting to %s: %v", dockerPath, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode/100 != 2 {
-		log.Printf("unexpected status from %s: %s", url, resp.Status)
-		output := new(bytes.Buffer)
-		if resp.Body != nil {
-			io.Copy(output, resp.Body)
-		}
-		return fmt.Errorf("%d: error response body: %s", resp.StatusCode, output.String())
-	}
-
-	// parse the result if any
-	if download != nil {
-		decoder := json.NewDecoder(resp.Body)
-		if err := decoder.Decode(download); err != nil {
-			return fmt.Errorf("failed to parse result object from server: %v", err)
-		}
-	}
-	return nil
-}
-
-type Ulimit struct {
-	Name string
-	Hard int64
-	Soft int64
-}
-
-type HostConfig struct {
-	Memory         int64
-	MemorySwap     int64
-	CapDrop        []string
-	PidsLimit      int64
-	Ulimits        []Ulimit
-	Tmpfs          map[string]string
-	ReadonlyRootfs bool
-}
-
-type ContainerConfig struct {
-	Hostname        string
-	User            string
-	Cmd             []string
-	Env             []string
-	Image           string
-	NetworkDisabled bool
-	HostConfig      HostConfig
-}
-
-type CreateResponse struct {
-	Id       string
-	Warnings []string
-}
-
-type StartResponse struct {
-	Message string `json:"message"`
-}
-
-type CreateExecConfig struct {
-	AttachStdin  bool
-	AttachStdout bool
-	AttachStderr bool
-	Tty          bool
-	Cmd          []string
-	User         string
-}
-
-type CreateExecResponse struct {
-	Id string
-}
-
-type StartExecConfig struct {
-	Tty         bool
-	RawTerminal bool
-}
-
-func removeContainer(id string) error {
-	params := make(url.Values)
-	params.Add("force", "true")
-	err := deleteObject(fmt.Sprintf("/containers/%s", id), params)
-	if err != nil {
-		return fmt.Errorf("error killing container: %v", err)
-	}
-	return nil
-}
-
-func startExec(id string, stdin io.Reader, stdout io.Writer, stderr io.Writer) error {
-	// prepare the body of the request
-	upload := map[string]bool{
-		"Detach": false,
-		"Tty":    false,
-	}
-	payload, err := json.Marshal(upload)
-	if err != nil {
-		return fmt.Errorf("startExec: JSON error encoding object to upload: %v", err)
-	}
-
-	url := makeDockerURL(fmt.Sprintf("/exec/%s/start", id))
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(payload))
-	if err != nil {
-		return fmt.Errorf("startExec: error creating http request: %v", err)
-	}
-
-	// set the headers
-	req.Header.Add("Content-Type", "application/json")
-	req.Header.Set("Connection", "Upgrade")
-	req.Header.Set("Upgrade", "tcp")
-
-	// dial the connection
-	conn, err := net.Dial("unix", dockerPath)
-	if err != nil {
-		return fmt.Errorf("startExec: dial error: %v", err)
-	}
-
-	// run the normal part of the request
-	clientconn := httputil.NewClientConn(conn, nil)
-	defer clientconn.Close()
-	clientconn.Do(req)
-
-	// hijack the connection to stream io
-	rawconn, leftover := clientconn.Hijack()
-	defer rawconn.Close()
-
-	inerr := make(chan error)
-
-	// feed input to the exec
-	go func() {
-		var err error
-		if stdin != nil {
-			_, err = io.Copy(rawconn, stdin)
-			if closer, ok := stdin.(io.Closer); ok {
-				closer.Close()
-			}
-		}
-		rawconn.(interface {
-			CloseWrite() error
-		}).CloseWrite()
-		inerr <- err
-	}()
-
-	// gather output from the exec
-	if stdout == nil {
-		stdout = io.Discard
-	}
-	if stderr == nil {
-		stderr = io.Discard
-	}
-	_, err = stdcopy.StdCopy(stdout, stderr, leftover)
-	if err2 := <-inerr; err2 != nil {
-		return fmt.Errorf("startExec: error processing stdin: %v", err2)
-	} else if err != nil {
-		return fmt.Errorf("startExec: error processing output streams: %v", err2)
-	}
-
-	return nil
+	return &stdoutBuf, &stderrBuf, &scriptBuf, exitCode, nil
 }
