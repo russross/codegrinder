@@ -486,6 +486,7 @@ func restPostCommitBundlesSigned(w http.ResponseWriter, tx *sql.Tx, currentUser 
 func SetupTARest(r martini.Router, withTx func(func(*sql.Tx) error) error) {
 	// martini service: wrap handler in a transaction
 	martiniWithTx := func(c martini.Context, req *http.Request, w http.ResponseWriter) {
+		status := 0
 		err := withTx(func(tx *sql.Tx) error {
 			// pass it on to the main handler
 			c.Map(tx)
@@ -493,13 +494,15 @@ func SetupTARest(r martini.Router, withTx func(func(*sql.Tx) error) error) {
 
 			// check the result status
 			rw := w.(martini.ResponseWriter)
-			if rw.Status() >= http.StatusBadRequest {
-				return fmt.Errorf("handler returned status %d", rw.Status())
+			if status = rw.Status(); status >= http.StatusBadRequest {
+				return fmt.Errorf("handler returned status %d", status)
 			}
 			return nil
 		})
 		if err != nil {
-			loggedHTTPErrorf(w, http.StatusInternalServerError, "%v", err)
+			if status >= http.StatusBadRequest && status != http.StatusNotFound {
+				loggedHTTPErrorf(w, status, "%v", err)
+			}
 		}
 	}
 

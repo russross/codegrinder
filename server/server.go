@@ -66,6 +66,20 @@ var root string
 const daycareRegistrationInterval = 10 * time.Second
 const nonTLSAddress = ":8080"
 
+// combinedHandler routes requests based on path prefixes
+type combinedHandler struct {
+	martini http.Handler
+	ltiMux  *http.ServeMux
+}
+
+func (c *combinedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/lti/") {
+		c.ltiMux.ServeHTTP(w, r)
+	} else {
+		c.martini.ServeHTTP(w, r)
+	}
+}
+
 // filter for TLS logs to ignore failed handshakes
 type filterWriter struct {
 	dst io.Writer
@@ -312,7 +326,7 @@ func main() {
 		// withCurrentUser := func(cookieValue string, tx *sql.Tx) (*User, error) { ... }
 		// authorOnly := func(currentUser *User) error { ... }
 
-		// LTI - set up raw HTTP handlers (no martini)
+		// LTI - set up raw HTTP handlers
 		SetupLTI(http.DefaultServeMux, withTx)
 
 		// Set up all TA REST routes
@@ -337,7 +351,7 @@ func main() {
 		log.Printf("accepting https connections")
 		server := &http.Server{
 			Addr:    ":https",
-			Handler: m,
+			Handler: &combinedHandler{martini: m, ltiMux: http.DefaultServeMux},
 			TLSConfig: &tls.Config{
 				PreferServerCipherSuites: true,
 				MinVersion:               tls.VersionTLS12,
@@ -355,7 +369,7 @@ func main() {
 		// note: this will work behind a TLS proxy or for debugging with some calls
 		// but LTI will refuse to connect to an insecure host
 		log.Printf("accepting http connections on %s", nonTLSAddress)
-		if err := http.ListenAndServe(nonTLSAddress, m); err != nil {
+		if err := http.ListenAndServe(nonTLSAddress, &combinedHandler{martini: m, ltiMux: http.DefaultServeMux}); err != nil {
 			log.Fatalf("ListenAndServe: %v", err)
 		}
 	}

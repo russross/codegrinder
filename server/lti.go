@@ -340,7 +340,6 @@ func encode(v url.Values) []byte {
 	return buf.Bytes()
 }
 
-
 // get/create/update this user
 func getUpdateUser(tx *sql.Tx, form *LTIRequest, now time.Time) (*User, error) {
 	user := new(User)
