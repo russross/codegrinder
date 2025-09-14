@@ -39,19 +39,15 @@ func NewSession(id int64) *CookieSession {
 	}
 }
 
-func GetSession(r *http.Request) (*CookieSession, error) {
+// DecodeSession decodes a cookie value into a session
+func DecodeSession(cookieValue string) (*CookieSession, error) {
 	now := time.Now()
-
-	cookie, err := r.Cookie(CookieName)
-	if err != nil {
-		return nil, fmt.Errorf("unable to read session cookie")
-	}
 
 	// decode and verify signature
 	session := new(CookieSession)
 	secure := securecookie.New([]byte(Config.SessionSecret), nil)
 	secure.MaxAge(0)
-	if err = secure.Decode(CookieName, cookie.Value, session); err != nil {
+	if err := secure.Decode(CookieName, cookieValue, session); err != nil {
 		return nil, fmt.Errorf("unable to decode session cookie")
 	}
 
@@ -68,13 +64,31 @@ func GetSession(r *http.Request) (*CookieSession, error) {
 	return session, nil
 }
 
-func (session *CookieSession) Save(w http.ResponseWriter) string {
+func GetSession(r *http.Request) (*CookieSession, error) {
+	cookie, err := r.Cookie(CookieName)
+	if err != nil {
+		return nil, fmt.Errorf("unable to read session cookie")
+	}
+
+	return DecodeSession(cookie.Value)
+}
+
+// Encode encodes the session into a cookie value
+func (session *CookieSession) Encode() (string, error) {
 	// encode and sign
 	secure := securecookie.New([]byte(Config.SessionSecret), nil)
 	secure.MaxAge(0)
 	encoded, err := secure.Encode(CookieName, session)
 	if err != nil {
-		loggedHTTPErrorf(w, http.StatusInternalServerError, "creating session: %v", err)
+		return "", fmt.Errorf("creating session: %v", err)
+	}
+	return encoded, nil
+}
+
+func (session *CookieSession) Save(w http.ResponseWriter) string {
+	encoded, err := session.Encode()
+	if err != nil {
+		loggedHTTPErrorf(w, http.StatusInternalServerError, "%v", err)
 		return ""
 	}
 

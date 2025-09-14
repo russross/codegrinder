@@ -4,576 +4,302 @@ import (
 	"bytes"
 	"database/sql"
 	"fmt"
+	. "github.com/russross/codegrinder/types"
+	"github.com/russross/meddler"
 	"html"
 	"log"
 	"math/rand"
-	"net/http"
 	"sort"
 	"strconv"
 	"sync"
 	"time"
 	"unicode/utf8"
-
-	"github.com/go-martini/martini"
-	"github.com/martini-contrib/render"
-	. "github.com/russross/codegrinder/types"
-	"github.com/russross/meddler"
 )
 
 const loginRecordTimeout = 5 * time.Minute
 
-// GetCourses handles /courses requests,
-// returning a list of all courses.
-//
-// If parameter lti_label=<...> present, results will be filtered by matching lti_label field.
-// If parameter name=<...> present, results will be filtered by case-insensitive substring matching on name field.
-func GetCourses(w http.ResponseWriter, r *http.Request, tx *sql.Tx, currentUser *User, render render.Render) {
+// getCourses returns a list of courses filtered by the given parameters.
+// Authorization: currentUser must be logged in and sees only courses they are enrolled in.
+func getCourses(tx *sql.Tx, currentUser *User, ltiLabel, name string) ([]*Course, error) {
 	where := ""
 	args := []interface{}{}
 
-	if ltiLabel := r.FormValue("lti_label"); ltiLabel != "" {
+	if ltiLabel != "" {
 		where, args = addWhereEq(where, args, "lti_label", ltiLabel)
 	}
 
-	if name := r.FormValue("name"); name != "" {
+	if name != "" {
 		where, args = addWhereLike(where, args, "name", name)
 	}
 
+	where, args = addWhereEq(where, args, "assignments.user_id", currentUser.ID)
 	courses := []*Course{}
-	var err error
-
-	if currentUser.Admin {
-		err = meddler.QueryAll(tx, &courses, `SELECT * FROM courses`+where+` ORDER BY lti_label`, args...)
-	} else {
-		where, args = addWhereEq(where, args, "assignments.user_id", currentUser.ID)
-		err = meddler.QueryAll(tx, &courses, `SELECT DISTINCT courses.* `+
-			`FROM courses JOIN assignments ON courses.id = assignments.course_id`+
-			where+` ORDER BY lti_label`, args...)
-	}
+	err := meddler.QueryAll(tx, &courses, `SELECT DISTINCT courses.* `+
+		`FROM courses JOIN assignments ON courses.id = assignments.course_id`+
+		where+` ORDER BY lti_label`, args...)
 
 	if err != nil {
-		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-		return
+		return nil, err
 	}
-	render.JSON(http.StatusOK, courses)
+	return courses, nil
 }
 
-// GetCourse handles /courses/:course_id requests,
-// returning a single course.
-func GetCourse(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
-	courseID, err := parseID(w, "course_id", params["course_id"])
-	if err != nil {
-		return
-	}
-
+// getCourse returns a single course by ID.
+// Authorization: currentUser must be logged in and can only access courses they are enrolled in.
+func getCourse(tx *sql.Tx, courseID int64, currentUser *User) (*Course, error) {
 	course := new(Course)
 
-	if currentUser.Admin {
-		err = meddler.Load(tx, "courses", course, courseID)
-	} else {
-		err = meddler.QueryRow(tx, course, `SELECT courses.* `+
-			`FROM courses JOIN assignments ON courses.id = assignments.course_id `+
-			`WHERE assignments.user_id = ? AND assignments.course_id = ?`,
-			currentUser.ID, courseID)
+	err := meddler.QueryRow(tx, course, `SELECT courses.* `+
+		`FROM courses JOIN assignments ON courses.id = assignments.course_id `+
+		`WHERE assignments.user_id = ? AND assignments.course_id = ?`,
+		currentUser.ID, courseID)
+	if err != nil {
+		return nil, err
 	}
 
-	if err != nil {
-		loggedHTTPDBNotFoundError(w, err)
-		return
-	}
-	render.JSON(http.StatusOK, course)
+	return course, nil
 }
 
-// DeleteCourse handles /courses/:course_id requests,
-// deleting a single course.
-// This will also delete all assignments and commits related to the course.
-func DeleteCourse(w http.ResponseWriter, tx *sql.Tx, params martini.Params) {
-	courseID, err := parseID(w, "course_id", params["course_id"])
-	if err != nil {
-		return
-	}
-
-	if _, err := tx.Exec(`DELETE FROM courses WHERE id = ?`, courseID); err != nil {
-		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-		return
-	}
-}
-
-// GetUsers handles /users requests,
-// returning a list of all users.
-//
-// If parameter name=<...> present, results will be filtered by case-insensitive substring match on Name field.
-// If parameter email=<...> present, results will be filtered by case-insensitive substring match on Email field.
-// If parameter instructor=<...> present, results will be filtered matching instructor field (true or false).
-// If parameter admin=<...> present, results will be filtered matching admin field (true or false).
-func GetUsers(w http.ResponseWriter, r *http.Request, tx *sql.Tx, currentUser *User, render render.Render) {
+// getUsers returns a list of users filtered by the given parameters.
+// Authorization: currentUser must be logged in and sees only users they have a relationship with.
+func getUsers(tx *sql.Tx, currentUser *User, name, email, instructor, admin string) ([]*User, error) {
 	// build search terms
 	where := ""
 	args := []interface{}{}
 
-	if name := r.FormValue("name"); name != "" {
+	if name != "" {
 		where, args = addWhereLike(where, args, "name", name)
 	}
 
-	if email := r.FormValue("email"); email != "" {
+	if email != "" {
 		where, args = addWhereLike(where, args, "email", email)
 	}
 
-	if instructor := r.FormValue("instructor"); instructor != "" {
+	if instructor != "" {
 		val, err := strconv.ParseBool(instructor)
 		if err != nil {
-			loggedHTTPErrorf(w, http.StatusBadRequest, "error parsing instructor value as boolean: %v", err)
-			return
+			return nil, fmt.Errorf("error parsing instructor value as boolean: %v", err)
 		}
 		where, args = addWhereEq(where, args, "instructor", val)
 	}
 
-	if admin := r.FormValue("admin"); admin != "" {
+	if admin != "" {
 		val, err := strconv.ParseBool(admin)
 		if err != nil {
-			loggedHTTPErrorf(w, http.StatusBadRequest, "error parsing admin value as boolean: %v", err)
-			return
+			return nil, fmt.Errorf("error parsing admin value as boolean: %v", err)
 		}
 		where, args = addWhereEq(where, args, "admin", val)
 	}
 
+	where, args = addWhereEq(where, args, "user_users.user_id", currentUser.ID)
 	users := []*User{}
-	var err error
-
-	if currentUser.Admin {
-		err = meddler.QueryAll(tx, &users, `SELECT * FROM users`+where+` ORDER BY id`, args...)
-	} else {
-		where, args = addWhereEq(where, args, "user_users.user_id", currentUser.ID)
-		err = meddler.QueryAll(tx, &users, `SELECT users.* `+
-			`FROM users JOIN user_users ON users.id = user_users.other_user_id`+
-			where+` ORDER BY id`, args...)
-	}
+	err := meddler.QueryAll(tx, &users, `SELECT users.* `+
+		`FROM users JOIN user_users ON users.id = user_users.other_user_id`+
+		where+` ORDER BY id`, args...)
 
 	if err != nil {
-		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-		return
+		return nil, err
 	}
-	render.JSON(http.StatusOK, users)
+	return users, nil
 }
 
-// GetUserMe handles /users/me requests,
-// returning the current user.
-func GetUserMe(w http.ResponseWriter, tx *sql.Tx, currentUser *User, render render.Render) {
-	render.JSON(http.StatusOK, currentUser)
+// getUserMe returns the current user.
+// Authorization: currentUser must be logged in (returns their own data).
+func getUserMe(tx *sql.Tx, currentUser *User) (*User, error) {
+	return currentUser, nil
 }
 
-// GetUserSession handlers /users/session requests,
-// returning a cookie for a user session.
-//
-// Parameter key=<...> must be present, and must be a valid session key that was issued
-// within the last 5 minutes. The key is deleted after its first use.
-func GetUserSession(w http.ResponseWriter, r *http.Request, render render.Render) {
-	key := r.FormValue("key")
+// getUserSession returns a cookie for a user session given a key.
+// getUserSession validates a session key and returns the associated cookie.
+// Authorization: No authentication required (public endpoint for session validation).
+func getUserSession(key string) (string, error) {
 	if key == "" {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "missing key= parameter")
-		return
+		return "", fmt.Errorf("missing key parameter")
 	}
+
 	userID, err := loginRecords.Get(key)
 	if err != nil {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "%v", err)
-		return
+		return "", err
 	}
 	if userID < 1 {
-		loggedHTTPErrorf(w, http.StatusInternalServerError, "illegal user ID found: %d", userID)
-		return
+		return "", fmt.Errorf("illegal user ID found: %d", userID)
 	}
 	session := NewSession(userID)
-	cookie := session.Save(w)
-
-	result := map[string]string{"cookie": cookie}
-	render.JSON(http.StatusOK, result)
+	cookie, err := session.Encode()
+	if err != nil {
+		return "", err
+	}
+	return cookie, nil
 }
 
-// GetUser handles /users/:user_id requests,
-// returning a single user.
-func GetUser(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
-	userID, err := parseID(w, "user_id", params["user_id"])
-	if err != nil {
-		return
-	}
-
+// getUser returns a single user by ID.
+// Authorization: currentUser must be logged in and can only access users they have a relationship with.
+func getUser(tx *sql.Tx, userID int64, currentUser *User) (*User, error) {
 	user := new(User)
 
-	if currentUser.Admin {
-		err = meddler.Load(tx, "users", user, int64(userID))
-	} else {
-		err = meddler.QueryRow(tx, user, `SELECT users.* `+
-			`FROM users JOIN user_users ON users.id = user_users.other_user_id `+
-			`WHERE user_users.user_id = ? AND user_users.other_user_id = ?`,
-			currentUser.ID, userID)
+	err := meddler.QueryRow(tx, user, `SELECT users.* `+
+		`FROM users JOIN user_users ON users.id = user_users.other_user_id `+
+		`WHERE user_users.user_id = ? AND user_users.other_user_id = ?`,
+		currentUser.ID, userID)
+	if err != nil {
+		return nil, err
 	}
 
-	if err != nil {
-		loggedHTTPDBNotFoundError(w, err)
-		return
-	}
-	render.JSON(http.StatusOK, user)
+	return user, nil
 }
 
-// GetCourseUsers handles request to /course/:course_id/users,
-// returning a list of users in the given course.
-func GetCourseUsers(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
-	courseID, err := parseID(w, "course_id", params["course_id"])
-	if err != nil {
-		return
-	}
-
+// getCourseUsers returns a list of users in the given course.
+// Authorization: currentUser must be logged in and can only access courses they are enrolled in.
+func getCourseUsers(tx *sql.Tx, courseID int64, currentUser *User) ([]*User, error) {
 	users := []*User{}
 
-	if currentUser.Admin {
-		err = meddler.QueryAll(tx, &users, `SELECT DISTINCT users.* `+
-			`FROM users JOIN assignments ON users.id = assignments.user_id `+
-			`WHERE assignments.course_id = ? ORDER BY users.id`,
-			courseID)
-	} else {
-		err = meddler.QueryAll(tx, &users, `SELECT DISTINCT users.* `+
-			`FROM users JOIN assignments ON users.id = assignments.user_id `+
-			`JOIN user_users ON assignments.user_id = user_users.other_user_id `+
-			`WHERE assignments.course_id = ? AND user_users.user_id = ? `+
-			`ORDER BY users.id`,
-			courseID, currentUser.ID)
-	}
-
+	err := meddler.QueryAll(tx, &users, `SELECT DISTINCT users.* `+
+		`FROM users JOIN assignments ON users.id = assignments.user_id `+
+		`JOIN user_users ON assignments.user_id = user_users.other_user_id `+
+		`WHERE assignments.course_id = ? AND user_users.user_id = ? `+
+		`ORDER BY users.id`,
+		courseID, currentUser.ID)
 	if err != nil {
-		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-		return
+		return nil, err
 	}
 
 	if len(users) == 0 {
-		loggedHTTPErrorf(w, http.StatusNotFound, "not found")
-		return
+		return nil, fmt.Errorf("not found")
 	}
 
-	render.JSON(http.StatusOK, users)
+	return users, nil
 }
 
-// DeleteUser handles /users/:user_id requests,
-// deleting a single user.
-// This will also delete all assignments and commits related to the user.
-func DeleteUser(w http.ResponseWriter, tx *sql.Tx, params martini.Params) {
-	userID, err := parseID(w, "user_id", params["user_id"])
-	if err != nil {
-		return
-	}
-
-	if _, err := tx.Exec(`DELETE FROM users WHERE id = ?`, userID); err != nil {
-		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-		return
-	}
-}
-
-// GetAssignments handles requests to /assignments,
-// returning a list of assignments.
-//
-// If parameter search=<...> present (can be repeated), it will be interpreted as search terms,
-// and results will be filtered by case-insensitive substring match on several fields
-// related to the assignment, including the assignment canvas title, user name, user email, course name,
-// problem set unique ID, problem set note, and problem set tags. The returned assignments match
-// all search terms.
-func GetAssignments(w http.ResponseWriter, r *http.Request, tx *sql.Tx, currentUser *User, render render.Render) {
-	if err := r.ParseForm(); err != nil {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "parsing form data: %v", err)
-		return
-	}
-
+// getAssignments returns a list of assignments filtered by search terms.
+// Authorization: currentUser must be logged in and sees only assignments from courses they are enrolled in.
+func getAssignments(tx *sql.Tx, currentUser *User, searchTerms []string) ([]*Assignment, error) {
 	// build search terms
 	where := ""
 	args := []interface{}{}
-	for _, term := range r.Form["search"] {
+	for _, term := range searchTerms {
 		where, args = addWhereLike(where, args, "assignment_search_fields.search_text", term)
 	}
 
+	where, args = addWhereEq(where, args, "user_assignments.user_id", currentUser.ID)
 	assignments := []*Assignment{}
-	var err error
-	if currentUser.Admin {
-		err = meddler.QueryAll(tx, &assignments, `SELECT assignments.* FROM assignments JOIN assignment_search_fields `+
-			`ON assignments.id = assignment_search_fields.assignment_id`+where+` ORDER BY assignments.id`, args...)
-	} else {
-		where, args = addWhereEq(where, args, "user_assignments.user_id", currentUser.ID)
-		err = meddler.QueryAll(tx, &assignments, `SELECT assignments.* FROM assignments JOIN assignment_search_fields `+
-			`ON assignments.id = assignment_search_fields.assignment_id `+
-			`JOIN user_assignments ON user_assignments.assignment_id = assignments.id`+where+` ORDER BY assignments.id`, args...)
-	}
+	err := meddler.QueryAll(tx, &assignments, `SELECT assignments.* FROM assignments JOIN assignment_search_fields `+
+		`ON assignments.id = assignment_search_fields.assignment_id `+
+		`JOIN user_assignments ON user_assignments.assignment_id = assignments.id`+where+` ORDER BY assignments.id`, args...)
 
 	if err != nil {
-		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-		return
+		return nil, err
 	}
-	render.JSON(http.StatusOK, assignments)
+	return assignments, nil
 }
 
-// GetUserAssignments handles requests to /users/:user_id/assignments,
-// returning a list of assignments for the given user.
-func GetUserAssignments(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
-	userID, err := parseID(w, "user_id", params["user_id"])
-	if err != nil {
-		return
-	}
-
+// getUserAssignments returns a list of assignments for the given user.
+// Authorization: currentUser must be logged in and can only access assignments for users they have a relationship with.
+func getUserAssignments(tx *sql.Tx, userID int64, currentUser *User) ([]*Assignment, error) {
 	assignments := []*Assignment{}
 
-	if currentUser.Admin {
-		err = meddler.QueryAll(tx, &assignments, `SELECT * FROM assignments WHERE user_id = ? `+
-			`ORDER BY course_id, updated_at`,
-			userID)
-	} else {
-		err = meddler.QueryAll(tx, &assignments, `SELECT assignments.* `+
-			`FROM assignments JOIN user_assignments ON assignments.id = user_assignments.assignment_id `+
-			`WHERE assignments.user_id = ? AND user_assignments.user_id = ? `+
-			`ORDER BY course_id, updated_at`,
-			userID, currentUser.ID)
-	}
-
+	err := meddler.QueryAll(tx, &assignments, `SELECT assignments.* `+
+		`FROM assignments JOIN user_assignments ON assignments.id = user_assignments.assignment_id `+
+		`WHERE assignments.user_id = ? AND user_assignments.user_id = ? `+
+		`ORDER BY course_id, updated_at`,
+		userID, currentUser.ID)
 	if err != nil {
-		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-		return
+		return nil, err
 	}
 
-	render.JSON(http.StatusOK, assignments)
+	return assignments, nil
 }
 
-// GetCourseUserAssignments handles requests to /courses/:course_id/users/:user_id/assignments,
-// returning a list of assignments for the given user in the given course.
-func GetCourseUserAssignments(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
-	courseID, err := parseID(w, "course_id", params["course_id"])
-	if err != nil {
-		return
-	}
-	userID, err := parseID(w, "user_id", params["user_id"])
-	if err != nil {
-		return
-	}
-
+// getCourseUserAssignments returns a list of assignments for the given user in the given course.
+// Authorization: currentUser must be logged in and can only access courses they are enrolled in.
+func getCourseUserAssignments(tx *sql.Tx, courseID int64, userID int64, currentUser *User) ([]*Assignment, error) {
 	assignments := []*Assignment{}
 
-	if currentUser.Admin {
-		err = meddler.QueryAll(tx, &assignments, `SELECT * FROM assignments `+
-			`WHERE course_id = ? AND user_id = ? `+
-			`ORDER BY updated_at`,
-			courseID, userID)
-	} else {
-		err = meddler.QueryAll(tx, &assignments, `SELECT assignments.* `+
-			`FROM assignments JOIN user_assignments ON assignments.id = user_assignments.assignment_id `+
-			`WHERE course_id = ? AND assignments.user_id = ? AND user_assignments.user_id = ? `+
-			`ORDER BY updated_at`,
-			courseID, userID, currentUser.ID)
+	err := meddler.QueryAll(tx, &assignments, `SELECT assignments.* `+
+		`FROM assignments JOIN user_assignments ON assignments.id = user_assignments.assignment_id `+
+		`WHERE course_id = ? AND assignments.user_id = ? AND user_assignments.user_id = ? `+
+		`ORDER BY updated_at`,
+		courseID, userID, currentUser.ID)
+	if err != nil {
+		return nil, err
 	}
 
-	if err != nil {
-		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-		return
-	}
 	if len(assignments) == 0 {
-		loggedHTTPErrorf(w, http.StatusNotFound, "not found")
-		return
+		return nil, fmt.Errorf("not found")
 	}
 
-	render.JSON(http.StatusOK, assignments)
+	return assignments, nil
 }
 
-// GetAssignment handles requests to /assignments/:assignment_id,
-// returning the given assignment.
-func GetAssignment(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
-	assignmentID, err := parseID(w, "assignment_id", params["assignment_id"])
-	if err != nil {
-		return
-	}
-
+// getAssignment returns the given assignment.
+// Authorization: currentUser must be logged in and can only access assignments they are assigned to.
+func getAssignment(tx *sql.Tx, assignmentID int64, currentUser *User) (*Assignment, error) {
 	assignment := new(Assignment)
 
-	if currentUser.Admin {
-		err = meddler.QueryRow(tx, assignment, `SELECT * FROM assignments WHERE id = ?`, assignmentID)
-	} else {
-		err = meddler.QueryRow(tx, assignment, `SELECT assignments.* `+
-			`FROM assignments JOIN user_assignments ON assignments.id = user_assignments.assignment_id `+
-			`WHERE assignments.id = ? AND user_assignments.user_id = ?`,
-			assignmentID, currentUser.ID)
-	}
-
+	err := meddler.QueryRow(tx, assignment, `SELECT assignments.* `+
+		`FROM assignments JOIN user_assignments ON assignments.id = user_assignments.assignment_id `+
+		`WHERE assignments.id = ? AND user_assignments.user_id = ?`,
+		assignmentID, currentUser.ID)
 	if err != nil {
-		loggedHTTPDBNotFoundError(w, err)
-		return
+		return nil, err
 	}
 
-	render.JSON(http.StatusOK, assignment)
+	return assignment, nil
 }
 
-// DeleteAssignment handles requests to /assignments/:assignment_id,
-// deleting the given assignment.
-func DeleteAssignment(w http.ResponseWriter, tx *sql.Tx, params martini.Params) {
-	assignmentID, err := parseID(w, "assignment_id", params["assignment_id"])
-	if err != nil {
-		return
-	}
-
-	if _, err := tx.Exec(`DELETE FROM assignments WHERE id = ?`, assignmentID); err != nil {
-		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-		return
-	}
-}
-
-// GetAssignmentProblemCommitLast handles requests to /assignments/:assignment_id/problems/:problem_id/commits/last,
-// returning the most recent commit of the highest-numbered step for the given problem of the given assignment.
-func GetAssignmentProblemCommitLast(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
-	assignmentID, err := parseID(w, "assignment_id", params["assignment_id"])
-	if err != nil {
-		return
-	}
-	problemID, err := parseID(w, "problem_id", params["problem_id"])
-	if err != nil {
-		return
-	}
-
+// getAssignmentProblemCommitLast returns the most recent commit of the highest-numbered step for the given problem of the given assignment.
+// Authorization: currentUser must be logged in and can only access assignments they are assigned to.
+func getAssignmentProblemCommitLast(tx *sql.Tx, assignmentID int64, problemID int64, currentUser *User) (*Commit, error) {
 	commit := new(Commit)
 
-	if currentUser.Admin {
-		err = meddler.QueryRow(tx, commit, `SELECT * FROM commits WHERE assignment_id = ? AND problem_id = ? ORDER BY step DESC, updated_at DESC LIMIT 1`,
-			assignmentID, problemID)
-	} else {
-		err = meddler.QueryRow(tx, commit, `SELECT commits.* `+
-			`FROM commits JOIN user_assignments ON commits.assignment_id = user_assignments.assignment_id `+
-			`WHERE commits.assignment_id = ? AND problem_id = ? AND user_assignments.user_id = ? `+
-			`ORDER BY step DESC, updated_at DESC LIMIT 1`, assignmentID, problemID, currentUser.ID)
-	}
-
+	err := meddler.QueryRow(tx, commit, `SELECT commits.* `+
+		`FROM commits JOIN user_assignments ON commits.assignment_id = user_assignments.assignment_id `+
+		`WHERE commits.assignment_id = ? AND problem_id = ? AND user_assignments.user_id = ? `+
+		`ORDER BY step DESC, updated_at DESC LIMIT 1`, assignmentID, problemID, currentUser.ID)
 	if err != nil {
-		loggedHTTPDBNotFoundError(w, err)
-		return
+		return nil, err
 	}
 
-	render.JSON(http.StatusOK, commit)
+	return commit, nil
 }
 
-// GetUserAssignmentProblemStepCommitLast handles requests to /assignments/:assignment_id/problems/:problem_id/steps/:step/commits/last,
-// returning the most recent commit for the given step of the given problem of the given assignment.
-func GetAssignmentProblemStepCommitLast(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
-	assignmentID, err := parseID(w, "assignment_id", params["assignment_id"])
-	if err != nil {
-		return
-	}
-	problemID, err := parseID(w, "problem_id", params["problem_id"])
-	if err != nil {
-		return
-	}
-	step, err := parseID(w, "step", params["step"])
-	if err != nil {
-		return
-	}
-
+// getAssignmentProblemStepCommitLast returns the most recent commit for the given step of the given problem of the given assignment.
+// Authorization: currentUser must be logged in and can only access assignments they are assigned to.
+func getAssignmentProblemStepCommitLast(tx *sql.Tx, assignmentID int64, problemID int64, step int64, currentUser *User) (*Commit, error) {
 	commit := new(Commit)
 
-	if currentUser.Admin {
-		err = meddler.QueryRow(tx, commit, `SELECT * FROM commits WHERE assignment_id = ? AND problem_id = ? AND step = ? ORDER BY updated_at DESC LIMIT 1`, assignmentID, problemID, step)
-	} else {
-		err = meddler.QueryRow(tx, commit, `SELECT commits.* `+
-			`FROM commits JOIN user_assignments ON commits.assignment_id = user_assignments.assignment_id `+
-			`WHERE commits.assignment_id = ? AND problem_id = ? AND step = ? AND user_assignments.user_id = ? `+
-			`ORDER BY updated_at DESC LIMIT 1`,
-			assignmentID, problemID, step, currentUser.ID)
-	}
-
+	err := meddler.QueryRow(tx, commit, `SELECT commits.* `+
+		`FROM commits JOIN user_assignments ON commits.assignment_id = user_assignments.assignment_id `+
+		`WHERE commits.assignment_id = ? AND problem_id = ? AND step = ? AND user_assignments.user_id = ? `+
+		`ORDER BY updated_at DESC LIMIT 1`,
+		assignmentID, problemID, step, currentUser.ID)
 	if err != nil {
-		loggedHTTPDBNotFoundError(w, err)
-		return
+		return nil, err
 	}
 
-	render.JSON(http.StatusOK, commit)
+	return commit, nil
 }
 
-// DeleteCommit handles requests to /commits/:commit_id,
-// deleting the given commit.
-func DeleteCommit(w http.ResponseWriter, tx *sql.Tx, params martini.Params) {
-	commitID, err := parseID(w, "commit_id", params["commit_id"])
-	if err != nil {
-		return
-	}
-
-	if _, err = tx.Exec(`DELETE FROM commits WHERE id = ?`, commitID); err != nil {
-		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-		return
-	}
-}
-
-// PostCommitBundlesUnsigned handles requests to /commit_bundles/unsigned,
-// saving a new commit (or updating the most recent one), gathering the problem data,
-// signing everything, and returning it in a form ready to send to the daycare.
-func PostCommitBundlesUnsigned(w http.ResponseWriter, tx *sql.Tx, currentUser *User, bundle CommitBundle, render render.Render) {
-	now := time.Now()
-
-	if bundle.Commit == nil {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must include a commit object")
-		return
-	}
-	if len(bundle.CommitSignature) != 0 {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must not include commit signature")
-		return
-	}
-	if len(bundle.Hostname) != 0 {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must not include daycare hostname")
-		return
-	}
-	if bundle.Commit.Action == "" {
-	}
-
-	bundle.Hostname = ""
-	bundle.Commit.Transcript = []*EventMessage{}
-	bundle.Commit.ReportCard = nil
-	bundle.Commit.Score = 0.0
-	bundle.Commit.CreatedAt = now
-	bundle.Commit.UpdatedAt = now
-	saveCommitBundleCommon(now, w, tx, currentUser, bundle, render)
-}
-
-// PostCommitBundlesSigned handles requests to /commit_bundles/signed,
-// saving a new commit (or updating the most recent one), gathering the problem data,
-// verifying signatures, and posting a grade (if appropriate).
-func PostCommitBundlesSigned(w http.ResponseWriter, tx *sql.Tx, currentUser *User, bundle CommitBundle, render render.Render) {
-	now := time.Now()
-
-	if bundle.Commit == nil {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must include a commit object")
-		return
-	}
-	if len(bundle.CommitSignature) == 0 {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must include commit signature")
-		return
-	}
-	saveCommitBundleCommon(now, w, tx, currentUser, bundle, render)
-}
-
-func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, currentUser *User, bundle CommitBundle, render render.Render) {
+func saveCommitBundleCommon(now time.Time, tx *sql.Tx, currentUser *User, bundle *CommitBundle) (*CommitBundle, error) {
 	if bundle.ProblemType != nil {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must not include a problem type object")
-		return
+		return nil, fmt.Errorf("bundle must not include a problem type object")
 	}
 	if len(bundle.ProblemTypeSignature) != 0 {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must not include a problem type signature")
-		return
+		return nil, fmt.Errorf("bundle must not include a problem type signature")
 	}
 	if bundle.Problem != nil {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must not include a problem object")
-		return
+		return nil, fmt.Errorf("bundle must not include a problem object")
 	}
 	if len(bundle.ProblemSteps) != 0 {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must not include problem step objects")
-		return
+		return nil, fmt.Errorf("bundle must not include problem step objects")
 	}
 	if len(bundle.ProblemSignature) != 0 {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must not include problem signature")
-		return
+		return nil, fmt.Errorf("bundle must not include problem signature")
 	}
 	if len(bundle.CommitSignature) != 0 && len(bundle.Hostname) == 0 {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must include daycare hostname")
-		return
+		return nil, fmt.Errorf("bundle must include daycare hostname")
 	}
 	if bundle.UserID != currentUser.ID {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must include user's ID")
-		return
+		return nil, fmt.Errorf("bundle must include user's ID")
 	}
 	commit := bundle.Commit
 
@@ -590,8 +316,7 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 		}
 	}
 	if err != nil {
-		loggedHTTPDBNotFoundError(w, err)
-		return
+		return nil, err
 	}
 
 	// assignment cannot be past the lock date:
@@ -611,8 +336,7 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 	err = tx.QueryRow(`SELECT lock_at FROM assignments WHERE instructor AND lti_id = ? AND lock_at IS NOT NULL ORDER BY lock_at DESC LIMIT 1`,
 		assignment.LtiID).Scan(&courseWideLockAt)
 	if err != nil && err != sql.ErrNoRows {
-		loggedHTTPDBNotFoundError(w, err)
-		return
+		return nil, fmt.Errorf("db error: %v", err)
 	} else if err == nil {
 		// there is a course-wide deadline, should we reject?
 		if (assignment.LockAt != nil && now.After(*assignment.LockAt)) ||
@@ -620,49 +344,41 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 			course := new(Course)
 			err = meddler.Load(tx, "courses", course, assignment.CourseID)
 			if err != nil {
-				loggedHTTPDBNotFoundError(w, err)
-				return
+				return nil, fmt.Errorf("db error: %v", err)
 			}
-			loggedHTTPErrorf(w, http.StatusForbidden, "A commit cannot be submitted after the assignment is locked.\n\n"+
+			return nil, fmt.Errorf("A commit cannot be submitted after the assignment is locked.\n\n"+
 				"If the assignment has been extended then you must click on the assignment\n"+
 				"in Canvas before CodeGrinder will be updated. You can try this link:\n\n"+
 				"  https://%s/courses/%d/assignments/%d\n", assignment.CanvasAPIDomain, course.CanvasID, assignment.CanvasID)
-			return
 		}
 	}
 
 	// get the problem
 	problem := new(Problem)
 	if err = meddler.QueryRow(tx, problem, `SELECT * FROM problems WHERE id = ?`, commit.ProblemID); err != nil {
-		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-		return
+		return nil, fmt.Errorf("db error: %v", err)
 	}
 
 	// get the required step, but keep a slice with empty entries for the other steps
 	// this is for backward compatibility: we used to pass around the full list of steps
 	var stepCount int64
 	if err = tx.QueryRow(`SELECT COUNT(1) FROM problem_steps WHERE problem_id = ?`, commit.ProblemID).Scan(&stepCount); err != nil {
-		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-		return
+		return nil, fmt.Errorf("db error: %v", err)
 	}
 	if stepCount < 1 {
-		loggedHTTPErrorf(w, http.StatusInternalServerError, "no steps found for problem %d", commit.ProblemID)
-		return
+		return nil, fmt.Errorf("no steps found for problem %d", commit.ProblemID)
 	}
 	if commit.Step < 1 {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "commit has step number %d, which is invalid", commit.Step)
-		return
+		return nil, fmt.Errorf("commit has step number %d, which is invalid", commit.Step)
 	}
 	if commit.Step > stepCount {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "commit has step number %d, but there are only %d steps in the problem", commit.Step, stepCount)
-		return
+		return nil, fmt.Errorf("commit has step number %d, but there are only %d steps in the problem", commit.Step, stepCount)
 	}
 	steps := make([]*ProblemStep, stepCount)
 	var step ProblemStep
 	steps[commit.Step-1] = &step
 	if err = meddler.QueryRow(tx, &step, `SELECT * FROM problem_steps WHERE problem_id = ? AND step = ?`, commit.ProblemID, commit.Step); err != nil {
-		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-		return
+		return nil, fmt.Errorf("db error: %v", err)
 	}
 
 	// filter out solution
@@ -671,8 +387,7 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 	// get the problem type for this step
 	problemType, err := getProblemType(tx, step.ProblemType)
 	if err != nil {
-		loggedHTTPErrorf(w, http.StatusInternalServerError, "error loading problem type: %v", err)
-		return
+		return nil, fmt.Errorf("error loading problem type: %v", err)
 	}
 
 	if assignment.RawScores == nil {
@@ -683,8 +398,7 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 	scores := assignment.RawScores[problem.Unique]
 	for i := 0; i < int(commit.Step)-1; i++ {
 		if i >= len(scores) || scores[i] != 1.0 {
-			loggedHTTPErrorf(w, http.StatusBadRequest, "commit is for step %d, but user has not passed step %d", commit.Step, i+1)
-			return
+			return nil, fmt.Errorf("commit is for step %d, but user has not passed step %d", commit.Step, i+1)
 		}
 	}
 
@@ -692,18 +406,15 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 	var latestStep int64
 	if err = tx.QueryRow(`SELECT step FROM commits WHERE assignment_id = ? AND problem_id = ? ORDER BY step DESC LIMIT 1`, commit.AssignmentID, commit.ProblemID).Scan(&latestStep); err != nil {
 		if err != sql.ErrNoRows {
-			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-			return
+			return nil, fmt.Errorf("db error: %v", err)
 		}
 	} else if latestStep > commit.Step {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "commit is for step %d, but user has already started work on step %d", commit.Step, latestStep)
-		return
+		return nil, fmt.Errorf("commit is for step %d, but user has already started work on step %d", commit.Step, latestStep)
 	}
 
 	// validate commit
 	if err := commit.Normalize(now, step.Whitelist); err != nil {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "%v", err)
-		return
+		return nil, err
 	}
 
 	// update an existing commit if it exists
@@ -713,8 +424,7 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 		if err == sql.ErrNoRows {
 			commit.ID = 0
 		} else {
-			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-			return
+			return nil, fmt.Errorf("db error: %v", err)
 		}
 	} else {
 		commit.ID = openCommit.ID
@@ -729,16 +439,14 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 	// verify signature
 	if bundle.CommitSignature != "" {
 		if bundle.CommitSignature != commitSig {
-			loggedHTTPErrorf(w, http.StatusBadRequest, "found commit signature of %s, but expected %s", bundle.CommitSignature, commitSig)
-			return
+			return nil, fmt.Errorf("found commit signature of %s, but expected %s", bundle.CommitSignature, commitSig)
 		}
 		age := now.Sub(commit.UpdatedAt)
 		if age < 0 {
 			age = -age
 		}
 		if age > SignedCommitTimeout {
-			loggedHTTPErrorf(w, http.StatusBadRequest, "commit signature has expired")
-			return
+			return nil, fmt.Errorf("commit signature has expired")
 		}
 	}
 
@@ -752,16 +460,14 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 		log.Printf("instructor is testing student code, skipping save step")
 	} else {
 		if err := meddler.Save(tx, "commits", commit); err != nil {
-			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-			return
+			return nil, fmt.Errorf("db error: %v", err)
 		}
 
 		// save an updated timestamp on the assignment if it would otherwise not be updated
 		if commit.ReportCard == nil {
 			assignment.UpdatedAt = now
 			if err := meddler.Save(tx, "assignments", assignment); err != nil {
-				loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-				return
+				return nil, fmt.Errorf("db error: %v", err)
 			}
 		}
 	}
@@ -800,30 +506,26 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 		// get the weight of each step in the problem and problem in the set
 		majorWeights, minorWeights, err := GetProblemWeights(tx, assignment)
 		if err != nil {
-			loggedHTTPErrorf(w, http.StatusInternalServerError, "%v", err)
-			return
+			return nil, err
 		}
 
 		// compute an overall score
 		score, err := assignment.ComputeScore(majorWeights, minorWeights)
 		if err != nil {
-			loggedHTTPErrorf(w, http.StatusInternalServerError, "%v", err)
-			return
+			return nil, err
 		}
 		assignment.Score = score
 
 		// save the updates to the assignment
 		assignment.UpdatedAt = now
 		if err := meddler.Save(tx, "assignments", assignment); err != nil {
-			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-			return
+			return nil, err
 		}
 
 		// post grade to LMS using LTI
 		var transcript bytes.Buffer
 		if err := signed.Commit.DumpTranscript(&transcript); err != nil {
-			loggedHTTPErrorf(w, http.StatusInternalServerError, "error writing transcript: %v", err)
-			return
+			return nil, fmt.Errorf("error writing transcript: %v", err)
 		}
 
 		// record the grading transcript
@@ -898,7 +600,7 @@ func saveCommitBundleCommon(now time.Time, w http.ResponseWriter, tx *sql.Tx, cu
 			currentUser.Name, currentUser.ID, bundle.Commit.Action, problem.Note, bundle.Commit.Step, note)
 	}
 
-	render.JSON(http.StatusOK, &signed)
+	return signed, nil
 }
 
 type StepWeight struct {

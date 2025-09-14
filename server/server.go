@@ -2,14 +2,12 @@ package main
 
 import (
 	"bytes"
-	"compress/gzip"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/tls"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
-	"expvar"
 	"flag"
 	"fmt"
 	"io"
@@ -28,7 +26,6 @@ import (
 	"time"
 
 	"github.com/go-martini/martini"
-	"github.com/martini-contrib/binding"
 	mgzip "github.com/martini-contrib/gzip"
 	"github.com/martini-contrib/render"
 	_ "github.com/mattn/go-sqlite3"
@@ -143,29 +140,6 @@ func main() {
 	m.Use(martini.Recovery())
 	m.MapTo(r, (*martini.Routes)(nil))
 	m.Action(r.Handle)
-
-	counter := func(w http.ResponseWriter, r *http.Request, c martini.Context) {
-		start := time.Now()
-		c.Next()
-		now := time.Now()
-		seconds := now.Sub(start).Seconds()
-		hits++
-		hitsCounter.Add(1)
-		if seconds > slowest {
-			slowest = seconds
-			slowestCounter.Set(seconds)
-			slowestTimeCounter.Set(now.Format(time.RFC1123))
-			slowestPathCounter.Set(r.URL.Path)
-		}
-		totalSeconds += seconds
-		totalSecondsCounter.Add(seconds)
-		averageSecondsCounter.Set(totalSeconds / float64(hits))
-		rw := w.(martini.ResponseWriter)
-		if rw.Status() >= 400 {
-			errorsCounter.Add(1)
-		}
-		goroutineCounter.Set(int64(runtime.NumGoroutine()))
-	}
 
 	// set up daycare role
 	// note: this must come before TA role to avoid gzip handler for daycare requests
@@ -290,8 +264,8 @@ func main() {
 		db := setupDB(Config.SQLite3Path)
 		var dbMutex sync.Mutex
 
-		// martini service: wrap handler in a transaction
-		withTx := func(c martini.Context, r *http.Request, w http.ResponseWriter) {
+		// neutral function: execute handler within a transaction
+		withTx := func(handler func(*sql.Tx) error) error {
 			// start a transaction
 			dbMutex.Lock()
 			defer dbMutex.Unlock()
@@ -308,208 +282,41 @@ func main() {
 					default:
 						elapsed -= elapsed % (100 * time.Millisecond)
 					}
-					log.Printf("transaction took %v, req was %s", elapsed, r.RequestURI)
+					log.Printf("transaction took %v", elapsed)
 				}
 			}()
 			tx, err := db.Begin()
 			if err != nil {
-				loggedHTTPErrorf(w, http.StatusInternalServerError, "db error starting transaction: %v", err)
-				return
+				return fmt.Errorf("db error starting transaction: %v", err)
 			}
 
-			// pass it on to the main handler
-			c.Map(tx)
-			c.Next()
-
-			// was it a successful result?
-			rw := w.(martini.ResponseWriter)
-			if rw.Status() < http.StatusBadRequest {
-				// commit the transaction
-				if err := tx.Commit(); err != nil {
-					loggedHTTPErrorf(w, http.StatusInternalServerError, "db error committing transaction: %v", err)
-					return
-				}
-			} else {
-				// rollback
-				//log.Printf("rolling back transaction")
-				if err := tx.Rollback(); err != nil {
-					loggedHTTPErrorf(w, http.StatusInternalServerError, "db error rolling back transaction: %v", err)
-					return
-				}
-			}
-		}
-
-		// martini service: to require an active logged-in session
-		auth := func(w http.ResponseWriter, r *http.Request) {
-			_, err := GetSession(r)
+			// execute the handler
+			err = handler(tx)
 			if err != nil {
-				loggedHTTPErrorf(w, http.StatusUnauthorized, "authentication failed: try logging in again")
-				log.Printf("%v", err)
-				return
-			}
-		}
-
-		// martini service: include the current logged-in user (requires withTx)
-		withCurrentUser := func(c martini.Context, w http.ResponseWriter, r *http.Request, tx *sql.Tx) {
-			session, err := GetSession(r)
-			if err != nil {
-				loggedHTTPErrorf(w, http.StatusUnauthorized, "authentication failed: try logging in again")
-				log.Printf("%v", err)
-				return
-			}
-
-			// load the user record
-			userID := session.UserID
-			user := new(User)
-			if err := meddler.Load(tx, "users", user, userID); err != nil {
-				session.Delete(w)
-
-				if err == sql.ErrNoRows {
-					loggedHTTPErrorf(w, http.StatusUnauthorized, "user %d not found", userID)
-					return
+				// rollback on error
+				if rollbackErr := tx.Rollback(); rollbackErr != nil {
+					log.Printf("db error rolling back transaction: %v", rollbackErr)
 				}
-				loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-				return
+				return err
 			}
 
-			// map the current user to the request context
-			c.Map(user)
+			// commit the transaction
+			if err := tx.Commit(); err != nil {
+				return fmt.Errorf("db error committing transaction: %v", err)
+			}
+			return nil
 		}
 
-		// martini service: require logged in user to be an administrator (requires withCurrentUser)
-		administratorOnly := func(w http.ResponseWriter, currentUser *User) {
-			if !currentUser.Admin {
-				loggedHTTPErrorf(w, http.StatusUnauthorized, "user %d (%s) is not an administrator", currentUser.ID, currentUser.Email)
-				return
-			}
-		}
+		// neutral functions (commented out for now, will be uncommented in gRPC implementation)
+		// auth := func(cookieValue string) error { ... }
+		// withCurrentUser := func(cookieValue string, tx *sql.Tx) (*User, error) { ... }
+		// authorOnly := func(currentUser *User) error { ... }
 
-		// martini service: require logged in user to be an author or administrator (requires withCurrentUser)
-		authorOnly := func(w http.ResponseWriter, tx *sql.Tx, currentUser *User) {
-			if currentUser.Admin {
-				return
-			}
-			if !currentUser.Author {
-				loggedHTTPErrorf(w, http.StatusUnauthorized, "user %d (%s) is not an author", currentUser.ID, currentUser.Name)
-				return
-			}
-		}
+		// LTI - set up raw HTTP handlers (no martini)
+		SetupLTI(http.DefaultServeMux, withTx)
 
-		// martini middleware: decompress incoming requests
-		gunzip := func(c martini.Context, w http.ResponseWriter, r *http.Request) {
-			if r.Header.Get("Content-Encoding") != "gzip" {
-				return
-			}
-
-			r.Header.Del("Content-Encoding")
-			body := r.Body
-			var err error
-			r.Body, err = gzip.NewReader(body)
-			defer body.Close()
-			if err != nil {
-				loggedHTTPErrorf(w, http.StatusBadRequest, "gzip error in request: %v", err)
-				return
-			}
-			c.Next()
-		}
-
-		// version
-		r.Get("/version", counter, func(w http.ResponseWriter, render render.Render) {
-			render.JSON(http.StatusOK, &CurrentVersion)
-		})
-		r.Get("/v2/version", counter, func(w http.ResponseWriter, render render.Render) {
-			render.JSON(http.StatusOK, &CurrentVersion)
-		})
-
-		// daycare registration
-		r.Get("/daycare_registrations",
-			func(w http.ResponseWriter, render render.Render) {
-				daycareRegistrations.Expire()
-				render.JSON(http.StatusOK, daycareRegistrations.daycares)
-			})
-		r.Post("/daycare_registrations", gunzip, binding.Json(DaycareRegistration{}),
-			func(w http.ResponseWriter, reg DaycareRegistration) {
-				daycareRegistrations.Expire()
-				if err := daycareRegistrations.Insert(&reg); err != nil {
-					loggedHTTPErrorf(w, http.StatusBadRequest, "bad daycare registration: %v", err)
-					return
-				}
-			})
-
-		// stats
-		r.Get("/stats", withTx, withCurrentUser, authorOnly, func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			fmt.Fprintf(w, "{\n")
-			first := true
-			expvar.Do(func(kv expvar.KeyValue) {
-				if !first {
-					fmt.Fprintf(w, ",\n")
-				}
-				first = false
-				fmt.Fprintf(w, "%q: %s", kv.Key, kv.Value)
-			})
-			fmt.Fprintf(w, "\n}\n")
-		})
-
-		// LTI
-		r.Get("/lti/config.xml", counter, GetConfigXML)
-		//r.Post("/lti/problem_sets", counter, gunzip, binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblemSets)
-		r.Post("/lti/problem_sets/:ui/:unique", counter, gunzip, binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblemSet)
-
-		// problem bundles--for problem creation only
-		r.Post("/problem_bundles/unconfirmed", counter, withTx, withCurrentUser, authorOnly, gunzip, binding.Json(ProblemBundle{}), PostProblemBundleUnconfirmed)
-		r.Post("/problem_bundles/confirmed", counter, withTx, withCurrentUser, authorOnly, gunzip, binding.Json(ProblemBundle{}), PostProblemBundleConfirmed)
-		r.Put("/problem_bundles/:problem_id", counter, withTx, withCurrentUser, authorOnly, gunzip, binding.Json(ProblemBundle{}), PutProblemBundle)
-
-		// problem set bundles--for problem set creation only
-		r.Post("/problem_set_bundles", counter, withTx, withCurrentUser, authorOnly, gunzip, binding.Json(ProblemSetBundle{}), PostProblemSetBundle)
-		r.Put("/problem_set_bundles/:problem_set_id", counter, withTx, withCurrentUser, authorOnly, gunzip, binding.Json(ProblemSetBundle{}), PutProblemSetBundle)
-
-		// problem types
-		r.Get("/problem_types", counter, auth, withTx, GetProblemTypes)
-		r.Get("/problem_types/:name", counter, auth, withTx, GetProblemType)
-
-		// problems
-		r.Get("/problems", counter, withTx, withCurrentUser, GetProblems)
-		r.Get("/problems/:problem_id", counter, withTx, withCurrentUser, GetProblem)
-		r.Get("/problems/:problem_id/steps", counter, withTx, withCurrentUser, GetProblemSteps)
-		r.Get("/problems/:problem_id/steps/:step", counter, withTx, withCurrentUser, GetProblemStep)
-		r.Delete("/problems/:problem_id", counter, withTx, withCurrentUser, administratorOnly, DeleteProblem)
-
-		// problem sets
-		r.Get("/problem_sets", counter, withTx, withCurrentUser, GetProblemSets)
-		r.Get("/problem_sets/:problem_set_id", counter, withTx, withCurrentUser, GetProblemSet)
-		r.Get("/problem_sets/:problem_set_id/problems", counter, withTx, withCurrentUser, GetProblemSetProblems)
-		r.Delete("/problem_sets/:problem_set_id", counter, withTx, withCurrentUser, administratorOnly, DeleteProblemSet)
-
-		// courses
-		r.Get("/courses", counter, withTx, withCurrentUser, GetCourses)
-		r.Get("/courses/:course_id", counter, withTx, withCurrentUser, GetCourse)
-		r.Delete("/courses/:course_id", counter, withTx, withCurrentUser, administratorOnly, DeleteCourse)
-
-		// users
-		r.Get("/users", counter, withTx, withCurrentUser, GetUsers)
-		r.Get("/users/me", counter, withTx, withCurrentUser, GetUserMe)
-		r.Get("/users/session", counter, GetUserSession)
-		r.Get("/users/:user_id", counter, withTx, withCurrentUser, GetUser)
-		r.Get("/courses/:course_id/users", counter, withTx, withCurrentUser, GetCourseUsers)
-		r.Delete("/users/:user_id", counter, withTx, withCurrentUser, administratorOnly, DeleteUser)
-
-		// assignments
-		r.Get("/users/:user_id/assignments", counter, withTx, withCurrentUser, GetUserAssignments)
-		r.Get("/courses/:course_id/users/:user_id/assignments", counter, withTx, withCurrentUser, GetCourseUserAssignments)
-		r.Get("/assignments", counter, withTx, withCurrentUser, GetAssignments)
-		r.Get("/assignments/:assignment_id", counter, withTx, withCurrentUser, GetAssignment)
-		r.Delete("/assignments/:assignment_id", counter, withTx, withCurrentUser, administratorOnly, DeleteAssignment)
-
-		// commits
-		r.Get("/assignments/:assignment_id/problems/:problem_id/commits/last", counter, withTx, withCurrentUser, GetAssignmentProblemCommitLast)
-		r.Get("/assignments/:assignment_id/problems/:problem_id/steps/:step/commits/last", counter, withTx, withCurrentUser, GetAssignmentProblemStepCommitLast)
-		r.Delete("/commits/:commit_id", counter, withTx, withCurrentUser, administratorOnly, DeleteCommit)
-
-		// commit bundles
-		r.Post("/commit_bundles/unsigned", counter, withTx, withCurrentUser, gunzip, binding.Json(CommitBundle{}), PostCommitBundlesUnsigned)
-		r.Post("/commit_bundles/signed", counter, withTx, withCurrentUser, gunzip, binding.Json(CommitBundle{}), PostCommitBundlesSigned)
+		// Set up all TA REST routes
+		SetupTARest(r, withTx)
 	}
 
 	if use_tls {
@@ -793,17 +600,3 @@ func (reg *DaycareRegistration) ComputeSignature(secret string) string {
 	sig := base64.StdEncoding.EncodeToString(sum)
 	return sig
 }
-
-var (
-	hits                  int
-	hitsCounter           = expvar.NewInt("hits")
-	slowest               float64
-	slowestCounter        = expvar.NewFloat("slowestSeconds")
-	slowestPathCounter    = expvar.NewString("slowestPath")
-	slowestTimeCounter    = expvar.NewString("slowestTime")
-	totalSeconds          float64
-	totalSecondsCounter   = expvar.NewFloat("totalSeconds")
-	averageSecondsCounter = expvar.NewFloat("averageSeconds")
-	errorsCounter         = expvar.NewInt("errors")
-	goroutineCounter      = expvar.NewInt("goroutines")
-)

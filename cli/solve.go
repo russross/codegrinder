@@ -22,8 +22,8 @@ func CommandSolve(cmd *cobra.Command, args []string) {
 	// get the user ID
 	user := new(User)
 	mustGetObject("/users/me", nil, user)
-	if !user.Author && !user.Admin {
-		log.Fatalf("you must be an author or admin to use this command")
+	if !user.Author {
+		log.Fatalf("you must be an author to use this command")
 	}
 
 	_, _, step, _, _, _, problemDir := gatherStudent(now, ".")
