@@ -349,8 +349,8 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 
 	// generate steps
 	whitelist := make(map[string]bool)
-	blacklist := []string{"~", ".swp", ".o", ".pyc", ".out", ".DS_Store"}
-	blacklistDir := []string{"__pycache__"}
+	blacklist := []string{"~", ".swp", ".o", ".pyc", ".out", ".DS_Store", ".js", ".js.map", "package-lock.json"}
+	blacklistDir := []string{"__pycache__", "node_modules", "dist"}
 	for index, step := range steps {
 		i := int64(index + 1)
 		fmt.Printf("gathering step %d\n", i)

@@ -3,7 +3,7 @@
 
 all:	amd64
 
-arm64: .proxy-c .proxy-cpp .proxy-go .proxy-python .proxy-riscv .proxy-rust .proxy-sqlite .proxy-prolog
+arm64: .proxy-c .proxy-cpp .proxy-go .proxy-python .proxy-riscv .proxy-rust .proxy-sqlite .proxy-prolog .proxy-typescript
 
 amd64: .proxy-c .proxy-go .proxy-python .proxy-riscv .proxy-rust .proxy-sqlite
 
@@ -50,3 +50,7 @@ amd64: .proxy-c .proxy-go .proxy-python .proxy-riscv .proxy-rust .proxy-sqlite
 .proxy-standardml: standardml/Dockerfile
 	docker build --pull -t codegrinder/standardml standardml
 	touch .proxy-standardml
+
+.proxy-typescript: typescript/Dockerfile
+	docker build --pull -t codegrinder/typescript typescript
+	touch .proxy-typescript
