@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -481,8 +483,20 @@ func restPostCommitBundlesSigned(w http.ResponseWriter, tx *sql.Tx, currentUser 
 }
 
 // SetupTARest sets up all TA REST routes using martini.
+// It creates and configures the martini instance internally and returns it.
 // It takes the neutral withTx function and defines all martini middleware as closures.
-func SetupTARest(r martini.Router, withTx func(func(*sql.Tx) error) error) {
+func SetupTARest(root string, withTx func(func(*sql.Tx) error) error) *martini.Martini {
+	// Create and configure martini instance
+	m := martini.New()
+	m.Logger(log.New(os.Stderr, "", log.Lshortfile))
+	//m.Use(martini.Logger())
+	m.Use(martini.Recovery())
+	m.Use(martini.Static(filepath.Join(root, "www"), martini.StaticOptions{SkipLogging: true}))
+	m.Use(render.Renderer(render.Options{IndentJSON: false}))
+
+	r := martini.NewRouter()
+	m.MapTo(r, (*martini.Routes)(nil))
+	m.Action(r.Handle)
 	// martini service: wrap handler in a transaction
 	martiniWithTx := func(c martini.Context, req *http.Request, w http.ResponseWriter) {
 		status := 0
@@ -635,4 +649,6 @@ func SetupTARest(r martini.Router, withTx func(func(*sql.Tx) error) error) {
 	// commit bundles
 	r.Post("/commit_bundles/unsigned", martiniWithTx, martiniWithCurrentUser, gunzipMiddleware, binding.Json(CommitBundle{}), restPostCommitBundlesUnsigned)
 	r.Post("/commit_bundles/signed", martiniWithTx, martiniWithCurrentUser, gunzipMiddleware, binding.Json(CommitBundle{}), restPostCommitBundlesSigned)
+
+	return m
 }

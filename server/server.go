@@ -25,9 +25,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-martini/martini"
-	mgzip "github.com/martini-contrib/gzip"
-	"github.com/martini-contrib/render"
 	_ "github.com/mattn/go-sqlite3"
 	. "github.com/russross/codegrinder/types"
 	"github.com/russross/meddler"
@@ -146,14 +143,7 @@ func main() {
 	}
 	// Config.AcmeEmail is optional
 
-	// set up martini
-	r := martini.NewRouter()
-	m := martini.New()
-	m.Logger(log.New(os.Stderr, "", log.Lshortfile))
-	//m.Use(martini.Logger())
-	m.Use(martini.Recovery())
-	m.MapTo(r, (*martini.Routes)(nil))
-	m.Action(r.Handle)
+	var m http.Handler
 
 	// set up daycare role
 	// note: this must come before TA role to avoid gzip handler for daycare requests
@@ -175,7 +165,8 @@ func main() {
 			log.Fatalf("Daycare capacity must be greater than zero")
 		}
 
-		r.Get("/sockets/:problem_type/:action", SocketProblemTypeAction)
+		// Set up daycare websocket handler
+		SetupDaycareRest(http.DefaultServeMux)
 
 		// register with the TA periodically
 		go func() {
@@ -257,28 +248,11 @@ func main() {
 			log.Fatalf("cannot run TA role with no sqlite3Path in the config file")
 		}
 
-		// skipMiddleware wraps a martini.Handler, skipping it if the request path
-		// starts with the given prefix.
-		skipMiddleware := func(prefix string, middleware martini.Handler) martini.Handler {
-			return func(c martini.Context, w http.ResponseWriter, r *http.Request) {
-				// If the path matches the prefix, skip this middleware and call the next handler.
-				if strings.HasPrefix(r.URL.Path, prefix) {
-					c.Next()
-				} else {
-					// Otherwise, execute the middleware as usual.
-					c.Invoke(middleware)
-				}
-			}
-		}
-		m.Use(skipMiddleware("/sockets/", mgzip.All()))
-		m.Use(martini.Static(filepath.Join(root, "www"), martini.StaticOptions{SkipLogging: true}))
-		m.Use(render.Renderer(render.Options{IndentJSON: false}))
-
 		// set up the database
 		db := setupDB(Config.SQLite3Path)
 		var dbMutex sync.Mutex
 
-		// neutral function: execute handler within a transaction
+		// execute handler within a transaction
 		withTx := func(handler func(*sql.Tx) error) error {
 			// start a transaction
 			dbMutex.Lock()
@@ -321,16 +295,15 @@ func main() {
 			return nil
 		}
 
-		// neutral functions (commented out for now, will be uncommented in gRPC implementation)
-		// auth := func(cookieValue string) error { ... }
-		// withCurrentUser := func(cookieValue string, tx *sql.Tx) (*User, error) { ... }
-		// authorOnly := func(currentUser *User) error { ... }
+		// note: non-martini handlers for functionality of getting current
+		// user, checking if logged in, checking if author, might need to be
+		// added
 
 		// LTI - set up raw HTTP handlers
 		SetupLTI(http.DefaultServeMux, withTx)
 
 		// Set up all TA REST routes
-		SetupTARest(r, withTx)
+		m = SetupTARest(root, withTx)
 	}
 
 	if use_tls {
