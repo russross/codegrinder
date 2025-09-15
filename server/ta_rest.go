@@ -211,17 +211,16 @@ func restGetUserMe(w http.ResponseWriter, tx *sql.Tx, currentUser *User, render 
 // restGetUserSession handles GET /users/session
 func restGetUserSession(w http.ResponseWriter, r *http.Request, render render.Render) {
 	key := r.FormValue("key")
-	cookie, err := getUserSession(key)
+	session, err := getUserSession(key)
 	if err != nil {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "%v", err)
 		return
 	}
 
 	// Save the session to set the cookie
-	session, _ := DecodeSession(cookie)
-	session.Save(w)
+	cookieValue := session.Save(w)
 
-	result := map[string]string{"cookie": cookie}
+	result := map[string]string{"cookie": fmt.Sprintf("%s=%s", CookieName, cookieValue)}
 	render.JSON(http.StatusOK, result)
 }
 

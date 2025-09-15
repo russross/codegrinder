@@ -109,27 +109,23 @@ func getUserMe(tx *sql.Tx, currentUser *User) (*User, error) {
 	return currentUser, nil
 }
 
-// getUserSession returns a cookie for a user session given a key.
-// getUserSession validates a session key and returns the associated cookie.
+// getUserSession returns a user session given a key.
+// getUserSession validates a session key and returns the associated session.
 // Authorization: No authentication required (public endpoint for session validation).
-func getUserSession(key string) (string, error) {
+func getUserSession(key string) (*CookieSession, error) {
 	if key == "" {
-		return "", fmt.Errorf("missing key parameter")
+		return nil, fmt.Errorf("missing key parameter")
 	}
 
 	userID, err := loginRecords.Get(key)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if userID < 1 {
-		return "", fmt.Errorf("illegal user ID found: %d", userID)
+		return nil, fmt.Errorf("illegal user ID found: %d", userID)
 	}
 	session := NewSession(userID)
-	cookie, err := session.Encode()
-	if err != nil {
-		return "", err
-	}
-	return cookie, nil
+	return session, nil
 }
 
 // getUser returns a single user by ID.

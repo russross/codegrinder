@@ -101,7 +101,7 @@ func (session *CookieSession) Save(w http.ResponseWriter) string {
 		Secure:  true,
 	}
 	http.SetCookie(w, cookie)
-	return fmt.Sprintf("%s=%s", CookieName, encoded)
+	return encoded
 }
 
 func (session *CookieSession) Delete(w http.ResponseWriter) {
