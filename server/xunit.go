@@ -1,20 +1,13 @@
 package main
 
 import (
-	"bytes"
 	"encoding/xml"
 	"fmt"
-	"io"
 	"regexp"
 	"time"
-
-	. "github.com/russross/codegrinder/types"
 )
 
-// =================================================================================
-// XUnit XML Types
-// =================================================================================
-
+// XUnit types
 type XUnitProgram struct {
 	XMLName  xml.Name      `xml:"testsuites"`
 	Name     string        `xml:"name,attr"`
@@ -52,27 +45,136 @@ type XUnitCase struct {
 type XUnitFailure struct {
 	Message string `xml:"message,attr"`
 	Type    string `xml:"type,attr"`
-	Details string `xml:",chardata"`
+	Body    string `xml:",chardata"`
 }
 
 type XUnitError struct {
 	Message string `xml:"message,attr"`
 	Type    string `xml:"type,attr"`
-	Details string `xml:",chardata"`
+	Body    string `xml:",chardata"`
 }
 
 type XUnitDisabled struct {
 	Message string `xml:"message,attr"`
+	Type    string `xml:"type,attr"`
+	Body    string `xml:",chardata"`
 }
 
 type XUnitSkipped struct {
 	Message string `xml:"message,attr"`
+	Type    string `xml:"type,attr"`
+	Body    string `xml:",chardata"`
 }
 
-// =================================================================================
-// Check XML Types
-// =================================================================================
+func runAndParseXUnit(n *Nanny, cmd []string) {
+	filename := "test_detail.xml"
 
+	// run tests with XML output
+	_, _, _, status, err := n.Exec(cmd)
+	if err != nil {
+		n.ReportCard.LogAndFailf("Error running unit tests: %v", err)
+		return
+	}
+
+	// did it end in a segfault?
+	if status > 127 {
+		n.ReportCard.LogAndFailf("Crashed with exit status %d while running unit tests", status)
+		return
+	}
+	n.ReportCard.Passed = status == 0
+
+	// parse the test results
+	xmlfiles, err := n.GetFiles([]string{filename})
+	if err != nil {
+		n.ReportCard.LogAndFailf("Error getting unit test results")
+		return
+	}
+
+	parseXUnit(n, xmlfiles[filename])
+}
+
+var testFailureContextGTest = regexp.MustCompile(`^(tests/[^:/]*:\d+)`)
+var testFailureContextPython = regexp.MustCompile(`File "[^"]*/([^/]+)", line (\d+)`)
+
+func parseXUnit(n *Nanny, contents []byte) {
+	if len(contents) == 0 {
+		n.ReportCard.LogAndFailf("No unit test results found")
+		return
+	}
+
+	results := new(XUnitProgram)
+	if err := xml.Unmarshal(contents, results); err != nil {
+		// try parsing as a list of testsuite into the outer container
+		results.Suites = nil
+		err := xml.Unmarshal(contents, &results.Suites)
+		if err != nil {
+			n.ReportCard.LogAndFailf("error parsing unit test results: %v", err)
+			return
+		}
+	}
+
+	// build summary results
+	results.Tests = 0
+	results.Failures = 0
+	results.Disabled = 0
+	results.Skipped = 0
+	results.Errors = 0
+	results.Time = 0
+
+	for _, elt := range results.Suites {
+		results.Tests += elt.Tests
+		results.Failures += elt.Failures
+		results.Disabled += elt.Disabled
+		results.Skipped += elt.Skipped
+		results.Errors += elt.Errors
+		results.Time += elt.Time
+	}
+
+	// form a report card
+	fails := results.Failures + results.Disabled + results.Skipped + results.Errors
+	n.ReportCard.Note = fmt.Sprintf("Passed %d/%d tests in %v",
+		results.Tests-fails, results.Tests, time.Since(n.Start))
+	n.ReportCard.Passed = n.ReportCard.Passed && results.Tests > 0 && fails == 0
+
+	// prepare a report for each test case
+	for _, suite := range results.Suites {
+		for _, testCase := range suite.Cases {
+			name := testCase.Name
+			if testCase.ClassName != "" {
+				name = fmt.Sprintf("%s -> %s", testCase.ClassName, testCase.Name)
+			}
+			if (testCase.Status == "run" || testCase.Status == "") &&
+				testCase.Failure == nil &&
+				testCase.Error == nil &&
+				testCase.Disabled == nil &&
+				testCase.Skipped == nil {
+				n.ReportCard.AddPassedResult(name, "")
+			} else {
+				body := ""
+				if testCase.Failure != nil {
+					body = testCase.Failure.Body
+				} else if testCase.Error != nil {
+					body = testCase.Error.Body
+				} else if testCase.Disabled != nil {
+					body = testCase.Disabled.Body
+				} else if testCase.Skipped != nil {
+					body = testCase.Skipped.Body
+				}
+
+				// try to parse context
+				ctx := ""
+				if groups := testFailureContextGTest.FindStringSubmatch(body); len(groups) > 1 {
+					ctx = groups[1]
+				} else if groups := testFailureContextPython.FindStringSubmatch(body); len(groups) > 1 {
+					ctx = groups[1] + ":" + groups[2]
+				}
+				n.ReportCard.AddFailedResult(name, body, ctx)
+			}
+		}
+	}
+}
+
+// check XML types
 type CheckXMLProgram struct {
 	XMLName   xml.Name         `xml:"testsuites"`
 	NameSpace string           `xml:"xmlns,attr"`
@@ -97,119 +199,42 @@ type CheckXMLTest struct {
 	Message     string  `xml:"message"`
 }
 
-// =================================================================================
-// Regular Expressions for Context Extraction
-// =================================================================================
+func runAndParseCheckXML(n *Nanny, cmd []string) {
+	filename := "test_detail.xml"
 
-var testFailureContextGTest = regexp.MustCompile(`^(tests/[^:/]*:\d+)`)
-var testFailureContextPython = regexp.MustCompile(`File "[^"]*/([^/]+)", line (\d+)`)
-var checkLineRE = regexp.MustCompile(`(PASS|FAIL|ERROR):\s*(.*)`)
-
-// =================================================================================
-// Parsing Functions
-// =================================================================================
-
-// parseXUnitResults parses XUnit XML output and populates a report card
-func parseXUnitResults(reportCard *ReportCard, output io.Reader) {
-	contents, err := io.ReadAll(output)
+	// run tests with XML output
+	_, _, _, status, err := n.Exec(cmd)
 	if err != nil {
-		reportCard.LogAndFailf("Error reading test output: %v", err)
+		n.ReportCard.LogAndFailf("Error running unit tests: %v", err)
 		return
 	}
 
-	if len(contents) == 0 {
-		reportCard.LogAndFailf("No unit test results found")
+	// did it end in a segfault?
+	if status > 127 {
+		n.ReportCard.LogAndFailf("Crashed with exit status %d while running unit tests", status)
+		return
+	}
+	n.ReportCard.Passed = status == 0
+
+	// parse the test results
+	xmlfiles, err := n.GetFiles([]string{filename})
+	if err != nil {
+		n.ReportCard.LogAndFailf("Error getting unit test results")
 		return
 	}
 
-	results := new(XUnitProgram)
-	if err := xml.Unmarshal(contents, results); err != nil {
-		// try parsing as a list of testsuite into the outer container
-		results.Suites = nil
-		err := xml.Unmarshal(contents, &results.Suites)
-		if err != nil {
-			reportCard.LogAndFailf("error parsing unit test results: %v", err)
-			return
-		}
-	}
-
-	// build summary results
-	results.Tests = 0
-	results.Failures = 0
-	results.Disabled = 0
-	results.Skipped = 0
-	results.Errors = 0
-	results.Time = 0
-
-	for _, elt := range results.Suites {
-		results.Tests += elt.Tests
-		results.Failures += elt.Failures
-		results.Disabled += elt.Disabled
-		results.Skipped += elt.Skipped
-		results.Errors += elt.Errors
-		results.Time += elt.Time
-	}
-
-	// form a report card
-	fails := results.Failures + results.Disabled + results.Skipped + results.Errors
-	reportCard.Note = fmt.Sprintf("Passed %d/%d tests", results.Tests-fails, results.Tests)
-	reportCard.Passed = reportCard.Passed && results.Tests > 0 && fails == 0
-	reportCard.Duration = time.Duration(results.Time * float64(time.Second))
-
-	// prepare a report for each test case
-	for _, suite := range results.Suites {
-		for _, testCase := range suite.Cases {
-			name := testCase.Name
-			if testCase.ClassName != "" {
-				name = fmt.Sprintf("%s -> %s", testCase.ClassName, testCase.Name)
-			}
-			if (testCase.Status == "run" || testCase.Status == "") &&
-				testCase.Failure == nil &&
-				testCase.Error == nil &&
-				testCase.Disabled == nil &&
-				testCase.Skipped == nil {
-				reportCard.AddPassedResult(name, "")
-			} else {
-				body := ""
-				if testCase.Failure != nil {
-					body = testCase.Failure.Details
-				} else if testCase.Error != nil {
-					body = testCase.Error.Details
-				} else if testCase.Disabled != nil {
-					body = "Test disabled"
-				} else if testCase.Skipped != nil {
-					body = "Test skipped"
-				}
-
-				// try to parse context
-				ctx := ""
-				if groups := testFailureContextGTest.FindStringSubmatch(body); len(groups) > 1 {
-					ctx = groups[1]
-				} else if groups := testFailureContextPython.FindStringSubmatch(body); len(groups) > 1 {
-					ctx = groups[1] + ":" + groups[2]
-				}
-				reportCard.AddFailedResult(name, body, ctx)
-			}
-		}
-	}
+	parseCheckXML(n, xmlfiles[filename])
 }
 
-// parseCheckResults parses Check XML output and populates a report card
-func parseCheckResults(reportCard *ReportCard, output io.Reader) {
-	contents, err := io.ReadAll(output)
-	if err != nil {
-		reportCard.LogAndFailf("Error reading test output: %v", err)
-		return
-	}
-
+func parseCheckXML(n *Nanny, contents []byte) {
 	if len(contents) == 0 {
-		reportCard.LogAndFailf("No unit test results found")
+		n.ReportCard.LogAndFailf("No unit test results found")
 		return
 	}
 
 	results := new(CheckXMLProgram)
 	if err := xml.Unmarshal(contents, results); err != nil {
-		reportCard.LogAndFailf("error parsing unit test results: %v", err)
+		n.ReportCard.LogAndFailf("error parsing unit test results: %v", err)
 		return
 	}
 
@@ -219,51 +244,25 @@ func parseCheckResults(reportCard *ReportCard, output io.Reader) {
 			switch test.Result {
 			case "success":
 				successes++
-				reportCard.AddPassedResult(test.ID, test.Message)
+				n.ReportCard.AddPassedResult(test.ID, test.Message)
 			case "failure":
 				failures++
-				reportCard.AddFailedResult(test.ID, test.Message, test.Function)
+				n.ReportCard.AddFailedResult(test.ID, test.Message, test.Function)
 			case "error":
 				errors++
-				reportCard.AddFailedResult(test.ID, test.Message, test.Function)
+				n.ReportCard.AddFailedResult(test.ID, test.Message, test.Function)
 			default:
 				errors++
-				reportCard.AddFailedResult(test.ID, test.Message, test.Function)
+				n.ReportCard.AddFailedResult(test.ID, test.Message, test.Function)
 			}
 		}
 	}
 
 	// form a report card
-	reportCard.Passed = successes > 0 && failures == 0 && errors == 0
+	n.ReportCard.Passed = successes > 0 && failures == 0 && errors == 0
 	if successes+failures+errors < 1 {
-		reportCard.Note = "No test results found"
+		n.ReportCard.Note = fmt.Sprintf("No test results found in %v", time.Since(n.Start))
 	} else {
-		reportCard.Note = fmt.Sprintf("Passed %d/%d tests", successes, successes+failures+errors)
-	}
-	reportCard.Duration = time.Duration(results.Duration * float64(time.Second))
-}
-
-// parseCheckOutput parses simple check-style output (PASS:/FAIL:/ERROR: lines)
-func parseCheckOutput(reportCard *ReportCard, output io.Reader) {
-	contents, err := io.ReadAll(output)
-	if err != nil {
-		reportCard.LogAndFailf("Error reading test output: %v", err)
-		return
-	}
-
-	reportCard.Passed = true
-	for _, line := range bytes.Split(contents, []byte{'\n'}) {
-		if m := checkLineRE.FindSubmatch(line); m != nil {
-			switch string(m[1]) {
-			case "PASS":
-				reportCard.AddPassedResult(string(m[2]), "")
-			case "FAIL":
-				reportCard.Passed = false
-				reportCard.AddFailedResult(string(m[2]), "", "")
-			case "ERROR":
-				reportCard.Passed = false
-				reportCard.AddFailedResult(string(m[2]), "", "")
-			}
-		}
+		n.ReportCard.Note = fmt.Sprintf("Passed %d/%d tests in %v", successes, successes+failures+errors, time.Since(n.Start))
 	}
 }

@@ -3,7 +3,6 @@ package main
 import (
 	"archive/tar"
 	"bytes"
-	"context"
 	"fmt"
 	"io"
 	"log"
@@ -12,7 +11,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/go-martini/martini"
@@ -20,27 +18,11 @@ import (
 	. "github.com/russross/codegrinder/types"
 )
 
-// =================================================================================
-// Constants & Configuration
-// =================================================================================
-
-// containerEngine can be switched to a compatible alternative like "podman".
+// containerEngine defines the command-line executable to use for container management.
 const containerEngine = "docker"
+
+// studentUID defines the static user and group ID to be used inside containers.
 const studentUID = 1001
-
-// MAX_TRANSCRIPT_SIZE defines the maximum number of bytes to be collected for the
-// session transcript. Output beyond this limit will be discarded.
-const MAX_TRANSCRIPT_SIZE = 2 * 1024 * 1024 // 2MB
-
-// Global container engine instance, initialized at startup
-var daycareContainerEngine ContainerEngine
-
-// Global container limiter from server.go
-var containerLimiter chan struct{}
-
-// =================================================================================
-// Core Data Structures
-// =================================================================================
 
 type limits struct {
 	maxCPU      int64
@@ -70,7 +52,7 @@ func (l *limits) override(options []string) {
 		if len(parts) != 2 {
 			continue
 		}
-		val, err := strconv.ParseInt(strings.TrimSpace(parts[1]), 10, 64)
+		val, err := strconv.ParseInt(strings.TrimSpace(parts[1]), 10, 63)
 		if err != nil {
 			continue
 		}
@@ -93,53 +75,361 @@ func (l *limits) override(options []string) {
 	}
 }
 
-// =================================================================================
-// Container Abstraction Layer
-// =================================================================================
+var containerLimiter chan struct{}
 
-type Container interface {
-	ID() string
-	PutFiles(files map[string][]byte, mode int64) error
-	GetFiles(patterns []string) (map[string][]byte, error)
-	Exec(ctx context.Context, cmd []string, stdout, stderr io.Writer) (status int, err error)
-	Shutdown(ctx context.Context) error
-}
+// SocketProblemTypeAction handles a request to /sockets/:problem_type/:action
+// It expects a websocket connection, which will receive a series of DaycareRequest objects
+// and will respond with DaycareResponse objects, though not in a one-to-one fashion.
+// The first DaycareRequest must have the CommitBundle field present. Future requests
+// should only have Stdin present.
+func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params martini.Params) {
+	now := time.Now()
 
-type ContainerEngine interface {
-	CreateContainer(ctx context.Context, name, image string, limits *limits) (Container, error)
-}
+	// CORS header for browser-based requests if the TA is a different host than the daycare
+	w.Header().Set("Access-Control-Allow-Origin", "https://"+Config.TAHostname)
 
-type DockerContainer struct {
-	id   string
-	name string
-}
-
-type DockerContainerEngine struct {
-	activeContainersMu sync.Mutex
-	activeContainers   map[string]Container
-}
-
-func NewDockerContainerEngine() *DockerContainerEngine {
-	return &DockerContainerEngine{
-		activeContainers: make(map[string]Container),
+	// get a websocket
+	socket, err := websocket.Upgrade(w, r, nil, 1024, 1024)
+	if err != nil {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "websocket error: %v", err)
+		return
 	}
-}
-
-func (dce *DockerContainerEngine) CreateContainer(ctx context.Context, name, image string, limits *limits) (Container, error) {
-	dce.activeContainersMu.Lock()
-	defer dce.activeContainersMu.Unlock()
-
-	// If container with same name exists, shut it down first (single attempt as required)
-	if existing, ok := dce.activeContainers[name]; ok {
-		log.Printf("Container conflict for %s. Making single attempt to kill old container.", name)
-
-		// Create a short timeout context for cleanup - don't let this block too long
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		existing.Shutdown(cleanupCtx)
-		cancel()
-		delete(dce.activeContainers, name)
+	defer func() {
+		socket.WriteControl(websocket.CloseMessage, nil, time.Now().Add(5*time.Second))
+		socket.Close()
+	}()
+	logAndTransmitErrorf := func(format string, args ...interface{}) {
+		msg := fmt.Sprintf(format, args...)
+		log.Print(msg)
+		res := &DaycareResponse{Error: msg}
+		if err := socket.WriteJSON(res); err != nil {
+			// what can we do? we already logged the error
+		}
 	}
 
+	// get the first message
+	req := new(DaycareRequest)
+	if err := socket.ReadJSON(req); err != nil {
+		logAndTransmitErrorf("error reading first request message: %v", err)
+		return
+	}
+
+	// sanity check
+	if req.CommitBundle == nil {
+		logAndTransmitErrorf("first request message must include the commit bundle")
+		return
+	}
+	if req.CommitBundle.ProblemType == nil {
+		logAndTransmitErrorf("commit bundle must include the problem type")
+		return
+	}
+	if len(req.CommitBundle.ProblemTypeSignature) == 0 {
+		logAndTransmitErrorf("commit bundle must include the problem type signature")
+		return
+	}
+	if req.CommitBundle.ProblemType.Name != params["problem_type"] {
+		logAndTransmitErrorf("problem type in request URL must match problem type in bundle")
+		return
+	}
+	if params["action"] == "" {
+		logAndTransmitErrorf("action must be included in request URL")
+		return
+	}
+	if req.CommitBundle.ProblemType.Actions == nil || req.CommitBundle.ProblemType.Actions[params["action"]] == nil {
+		logAndTransmitErrorf("action %q not defined for problem type %s", params["action"], params["problem_type"])
+		return
+	}
+	action := req.CommitBundle.ProblemType.Actions[params["action"]]
+	if req.CommitBundle.Problem == nil {
+		logAndTransmitErrorf("commit bundle must include the problem")
+		return
+	}
+	if len(req.CommitBundle.ProblemSteps) == 0 {
+		logAndTransmitErrorf("commit bundle must include the problem steps")
+		return
+	}
+	if len(req.CommitBundle.ProblemSignature) == 0 {
+		logAndTransmitErrorf("commit bundle must include the problem signature")
+		return
+	}
+	if req.CommitBundle.Commit == nil {
+		logAndTransmitErrorf("commit bundle must include the commit")
+		return
+	}
+	if len(req.CommitBundle.CommitSignature) == 0 {
+		logAndTransmitErrorf("commit bundle must include the commit signature")
+		return
+	}
+	if len(req.CommitBundle.Hostname) == 0 {
+		logAndTransmitErrorf("commit bundle must include the daycare host name")
+		return
+	}
+	if req.CommitBundle.UserID < 1 {
+		logAndTransmitErrorf("commit bundle must include the user's ID")
+		return
+	}
+
+	// gather any args
+	r.ParseForm()
+	args := []string{}
+	for key, vals := range r.Form {
+		if len(vals) == 1 {
+			args = append(args, key+"="+vals[0])
+		}
+	}
+	if len(args) > 0 {
+		log.Printf("args: %v", args)
+	}
+
+	// check signatures
+	problemType := req.CommitBundle.ProblemType
+	typeSig := problemType.ComputeSignature(Config.DaycareSecret)
+	if req.CommitBundle.ProblemTypeSignature != typeSig {
+		logAndTransmitErrorf("problem type signature mismatch: found %s but expected %s", req.CommitBundle.ProblemTypeSignature, typeSig)
+		return
+	}
+	problem, steps := req.CommitBundle.Problem, req.CommitBundle.ProblemSteps
+	problemSig := problem.ComputeSignature(Config.DaycareSecret, steps)
+	if req.CommitBundle.ProblemSignature != problemSig {
+		logAndTransmitErrorf("problem signature mismatch: found %s but expected %s", req.CommitBundle.ProblemSignature, problemSig)
+		return
+	}
+	commit := req.CommitBundle.Commit
+	commitSig := commit.ComputeSignature(Config.DaycareSecret, typeSig, problemSig, req.CommitBundle.Hostname, req.CommitBundle.UserID)
+	if req.CommitBundle.CommitSignature != commitSig {
+		logAndTransmitErrorf("commit signature mismatch: found %s but expected %s", req.CommitBundle.CommitSignature, commitSig)
+		return
+	}
+	req.CommitBundle.CommitSignature = ""
+
+	// host must match
+	if req.CommitBundle.Hostname != Config.Hostname {
+		logAndTransmitErrorf("commit is signed for host %s, this is %s", req.CommitBundle.Hostname, Config.Hostname)
+		return
+	}
+
+	// commit must be recent
+	age := time.Since(commit.UpdatedAt)
+	if age < 0 {
+		// be forgiving of clock skew
+		age = -age
+	}
+	if age > MaxDaycareRequestAge {
+		logAndTransmitErrorf("commit signature is %v off, cannot be more than %v", age, MaxDaycareRequestAge)
+		return
+	}
+	if commit.Action != params["action"] {
+		logAndTransmitErrorf("commit says action is %s, but request says %s", commit.Action, params["action"])
+		return
+	}
+
+	// find the problem step
+	if commit.Step < 1 || commit.Step > int64(len(steps)) {
+		logAndTransmitErrorf("commit refers to step number %d, but there are %d steps in the problem", commit.Step, len(steps))
+		return
+	}
+	step := steps[commit.Step-1]
+	if step == nil {
+		logAndTransmitErrorf("required step %d is nil", commit.Step)
+		return
+	}
+	if step.Step != commit.Step {
+		logAndTransmitErrorf("step number %d in the problem thinks it is step number %d", commit.Step, step.Step)
+		return
+	}
+	if step.ProblemType != problemType.Name {
+		logAndTransmitErrorf("step number %d in the problem has problem type %q but the commit bundle included problem type %q", step.ProblemType, problemType)
+		return
+	}
+
+	// collect the files from the problem step, commit, and problem type
+	files := make(map[string][]byte)
+	for name, contents := range step.Files {
+		files[name] = contents
+	}
+	for name, contents := range commit.Files {
+		files[name] = contents
+	}
+	for name, contents := range req.CommitBundle.ProblemType.Files {
+		files[name] = contents
+	}
+
+	// limit the number of concurrent containers
+	containerLimiter <- struct{}{}
+	defer func() {
+		<-containerLimiter
+	}()
+
+	// launch a nanny process
+	nannyName := fmt.Sprintf("nanny-%d", req.CommitBundle.UserID)
+	limits := newLimits(action)
+	limits.override(problem.Options)
+	n, err := NewNanny(req.CommitBundle.ProblemType, problem, action.Action, args, limits, nannyName)
+	if err != nil {
+		logAndTransmitErrorf("error creating container: %v", err)
+		return
+	}
+
+	// shutdown the container when finished
+	defer func() {
+		if err := n.Shutdown("action finished"); err != nil {
+			logAndTransmitErrorf("nanny shutdown error: %v", err)
+		}
+	}()
+
+	// relay container events to the socket
+	eventListenerClosed := make(chan struct{})
+	go func() {
+		count, overflow, discarded := 0, 0, 0
+		for event := range n.Events {
+			if count > TranscriptDataLimit {
+				overflow += len(event.StreamData)
+			} else {
+				count += len(event.StreamData)
+
+				// record the event
+				if len(commit.Transcript) > 0 && commit.Transcript[len(commit.Transcript)-1].Event == event.Event &&
+					(event.Event == "stdin" || event.Event == "stdout" || event.Event == "stderr") {
+					// merge this with the previous event
+					prev := commit.Transcript[len(commit.Transcript)-1]
+
+					data := make([]byte, 0, len(prev.StreamData)+len(event.StreamData))
+					data = append(data, prev.StreamData...)
+					data = append(data, event.StreamData...)
+					prev.StreamData = data
+					prev.Time = event.Time
+				} else if len(commit.Transcript) < TranscriptEventCountLimit {
+					commit.Transcript = append(commit.Transcript, event)
+				} else {
+					discarded++
+				}
+			}
+
+			// transmit the message to the client
+			switch event.Event {
+			case "exec", "exit", "stdin", "stdout", "stderr", "stdinclosed", "error", "files":
+				if event.Event == "files" {
+					log.Printf("%s", event)
+				}
+				res := &DaycareResponse{Event: event}
+				if err := socket.WriteJSON(res); err != nil {
+					if strings.Contains(err.Error(), "use of closed network connection") {
+						// websocket closed
+					} else {
+						logAndTransmitErrorf("websocket write error: %v", err)
+					}
+
+					break
+				}
+
+			default:
+				// ignore other event types
+			}
+		}
+
+		// report any truncation
+		if overflow > 0 || discarded > 0 {
+			log.Printf("transcript truncated by %d events and %d bytes of stream data", discarded, overflow)
+		}
+
+		eventListenerClosed <- struct{}{}
+	}()
+
+	// copy the files to the container
+	if err = n.PutFiles(files, 0666); err != nil {
+		n.ReportCard.LogAndFailf("uploading files: %v", err)
+		return
+	}
+
+	// run the action
+	cmd := strings.Fields(action.Command)
+	switch {
+	case action.Parser == "xunit":
+		runAndParseXUnit(n, cmd)
+
+	case action.Parser == "check":
+		runAndParseCheckXML(n, cmd)
+
+	case action.Parser != "":
+		n.ReportCard.LogAndFailf("unknown parser %q for problem type %s action %s",
+			action.Parser, action.ProblemType, action.Action)
+		return
+
+	default:
+		_, _, _, status, err := n.Exec(cmd)
+		if err != nil {
+			n.ReportCard.LogAndFailf("%q exec error: %v", strings.Join(cmd, " "), err)
+		}
+		if status != 0 {
+			err := fmt.Errorf("%q failed with exit status %d", strings.Join(cmd, " "), status)
+			n.ReportCard.LogAndFailf("%v", err)
+		}
+	}
+
+	commit.ReportCard = n.ReportCard
+
+	// download any files?
+	for _, option := range problem.Options {
+		parts := strings.SplitN(option, "=", 2)
+		if len(parts) != 2 || parts[0] != "download" {
+			continue
+		}
+		files, err := n.GetFiles(strings.Split(parts[1], ","))
+		if err != nil {
+			log.Printf("error trying to download files from container: %v", err)
+		} else if len(files) > 0 {
+			n.Events <- &EventMessage{Event: "files", Files: files}
+		}
+	}
+
+	// wait for listener to finish
+	close(n.Events)
+	<-eventListenerClosed
+
+	// send the final commit back to the client
+	if commit.Action == "grade" {
+		// compute the score for this step on a scale of 0.0 to 1.0
+		if commit.ReportCard.Passed {
+			// award full credit for this step
+			commit.Score = 1.0
+		} else if len(commit.ReportCard.Results) == 0 {
+			// no results? fail...
+			commit.Score = 0.0
+		} else {
+			// compute partial credit for this step
+			passed := 0
+			for _, elt := range commit.ReportCard.Results {
+				if elt.Outcome == "passed" {
+					passed++
+				}
+			}
+			commit.Score = float64(passed) / float64(len(commit.ReportCard.Results))
+		}
+		commit.UpdatedAt = now
+		req.CommitBundle.CommitSignature = commit.ComputeSignature(Config.DaycareSecret, req.CommitBundle.ProblemTypeSignature, req.CommitBundle.ProblemSignature, req.CommitBundle.Hostname, req.CommitBundle.UserID)
+
+		res := &DaycareResponse{CommitBundle: req.CommitBundle}
+		if err := socket.WriteJSON(res); err != nil {
+			logAndTransmitErrorf("error writing final commit JSON: %v", err)
+			return
+		}
+	}
+	log.Printf("handler for %s finished", nannyName)
+}
+
+type Nanny struct {
+	Name       string
+	Start      time.Time
+	ID         string
+	ReportCard *ReportCard
+	Input      chan string
+	Events     chan *EventMessage
+	Transcript []*EventMessage
+	Closed     bool
+	Files      map[string][]byte
+}
+
+func NewNanny(problemType *ProblemType, problem *Problem, action string, args []string, limits *limits, name string) (*Nanny, error) {
 	disk := limits.maxFileSize * 1024 * 1024
 	timeLimit := limits.maxCPU * 2
 	userAndGroup := fmt.Sprintf("%d:%d", studentUID, studentUID)
@@ -162,37 +452,37 @@ func (dce *DockerContainerEngine) CreateContainer(ctx context.Context, name, ima
 		// security hardening flags.
 		"--cap-drop", "ALL",
 		"--security-opt", "no-new-privileges", // prevent privilege escalation
+		//"--security-opt", "seccomp=default",   // apply default syscall filter
 
 		// ulimits for resources not covered by cgroups.
+		// note: --pids-limit makes nproc redundant
+		// note: nofile is less critical with modern kernels
 		"--ulimit", fmt.Sprintf("core=0:0"),
 		"--ulimit", fmt.Sprintf("cpu=%d", limits.maxCPU),
 		"--ulimit", fmt.Sprintf("fsize=%d", disk),
 	}
 
 	// main command just sleeps; this acts as a timeout mechanism for the whole container
-	cmdArgs = append(cmdArgs, image, "/bin/sleep", strconv.FormatInt(timeLimit, 10)+"s")
+	cmdArgs = append(cmdArgs, problemType.Image, "/bin/sleep", strconv.FormatInt(timeLimit, 10)+"s")
 
-	log.Printf("Creating container %s with image %s", name, image)
+	log.Printf("new container %s; action %s on %s (%s); params cpu=%d, fd=%d, file=%d, mem=%d, threads=%d",
+		name, action, problem.Unique, problemType.Name,
+		limits.maxCPU, limits.maxFD, limits.maxFileSize, limits.maxMemory, limits.maxThreads)
 
-	// execute the command with context
-	cmd := exec.CommandContext(ctx, containerEngine, cmdArgs...)
+	// execute the command.
+	cmd := exec.Command(containerEngine, cmdArgs...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		// Check if context was cancelled first
-		if ctx.Err() != nil {
-			return nil, fmt.Errorf("container creation cancelled: %v", ctx.Err())
-		}
-
-		// if the container already exists, try to remove it and retry (single attempt)
+		// if the container already exists, try to remove it and retry
+		// this prevents a single student running multiple graders concurrently
 		if strings.Contains(string(output), "is already in use") {
 			log.Printf("killing existing container with same name %s", name)
-			if err2 := removeContainer(ctx, name); err2 != nil {
+			if err2 := removeContainer(name); err2 != nil {
 				return nil, err2
 			}
 
-			// retry the command once
-			cmd = exec.CommandContext(ctx, containerEngine, cmdArgs...)
-			output, err = cmd.CombinedOutput()
+			// retry the command
+			output, err = exec.Command(containerEngine, cmdArgs...).CombinedOutput()
 		}
 		if err != nil {
 			return nil, fmt.Errorf("container run failed: %v\nOutput: %s", err, string(output))
@@ -200,45 +490,43 @@ func (dce *DockerContainerEngine) CreateContainer(ctx context.Context, name, ima
 	}
 
 	containerID := strings.TrimSpace(string(output))
-	container := &DockerContainer{id: containerID, name: name}
 
-	dce.activeContainers[name] = container
-	return container, nil
+	return &Nanny{
+		Name:       name,
+		Start:      time.Now(),
+		ID:         containerID,
+		ReportCard: NewReportCard(),
+		Input:      make(chan string),
+		Events:     make(chan *EventMessage),
+	}, nil
 }
 
-func (dc *DockerContainer) ID() string {
-	return dc.id
-}
-
-func (dc *DockerContainer) Shutdown(ctx context.Context) error {
-	// Remove from active containers map
-	if dce, ok := daycareContainerEngine.(*DockerContainerEngine); ok {
-		dce.activeContainersMu.Lock()
-		delete(dce.activeContainers, dc.name)
-		dce.activeContainersMu.Unlock()
+func (n *Nanny) Shutdown(msg string) error {
+	if n.Closed {
+		return nil
 	}
+	n.Closed = true
 
-	log.Printf("Shutting down container %s", dc.id)
-	return removeContainer(ctx, dc.id)
+	// shut down the container
+	if err := removeContainer(n.ID); err != nil {
+		return fmt.Errorf("Nanny.Shutdown: %v", err)
+	}
+	return nil
 }
 
 // removeContainer forcefully stops and removes a container by its ID or name.
-func removeContainer(ctx context.Context, id string) error {
-	cmd := exec.CommandContext(ctx, containerEngine, "rm", "-f", id)
+func removeContainer(id string) error {
+	cmd := exec.Command(containerEngine, "rm", "-f", id)
 	if err := cmd.Run(); err != nil {
-		if ctx.Err() != nil {
-			// Context cancelled, but we still want to try cleanup without context
-			log.Printf("Context cancelled during container removal, attempting forced cleanup for %s", id)
-			cmd = exec.Command(containerEngine, "rm", "-f", id)
-			cmd.Run() // Best effort, ignore errors
-		}
 		return fmt.Errorf("error killing container %s: %v", id, err)
 	}
 	return nil
 }
 
 // copy a set of files to the given container
-func (dc *DockerContainer) PutFiles(files map[string][]byte, mode int64) error {
+// by streaming a tarball to the 'docker cp' command
+// note: the container must be running
+func (n *Nanny) PutFiles(files map[string][]byte, mode int64) error {
 	if len(files) == 0 {
 		return nil
 	}
@@ -248,7 +536,6 @@ func (dc *DockerContainer) PutFiles(files map[string][]byte, mode int64) error {
 	buf := new(bytes.Buffer)
 	writer := tar.NewWriter(buf)
 	dirs := make(map[string]bool)
-
 	for name, contents := range files {
 		dir := filepath.Dir(name)
 		if dir != "" && dir != "." && !dirs[dir] {
@@ -269,7 +556,6 @@ func (dc *DockerContainer) PutFiles(files map[string][]byte, mode int64) error {
 				return fmt.Errorf("writing tar header for directory: %v", err)
 			}
 		}
-
 		header := &tar.Header{
 			Name:       name,
 			Mode:       mode,
@@ -295,7 +581,8 @@ func (dc *DockerContainer) PutFiles(files map[string][]byte, mode int64) error {
 	}
 
 	// use 'docker cp' to copy the tarball into the /home/student directory.
-	cmd := exec.Command(containerEngine, "cp", "-", dc.id+":/home/student/")
+	// pipe the tar buffer to the command's stdin.
+	cmd := exec.Command(containerEngine, "cp", "-", n.ID+":/home/student/")
 	cmd.Stdin = buf
 
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -305,133 +592,85 @@ func (dc *DockerContainer) PutFiles(files map[string][]byte, mode int64) error {
 }
 
 // GetFiles copies files from the given container.
-func (dc *DockerContainer) GetFiles(filenames []string) (map[string][]byte, error) {
+// All student files are copied from the container on the first call to GetFiles.
+// Subsequent calls will gather files from the cached collection.
+func (n *Nanny) GetFiles(filenames []string) (map[string][]byte, error) {
 	if len(filenames) == 0 {
 		return nil, nil
 	}
 
-	// use 'docker cp' to get the /home/student directory as a tar stream
-	cmd := exec.Command(containerEngine, "cp", dc.id+":/home/student/.", "-")
-	var tarFile bytes.Buffer
-	cmd.Stdout = &tarFile
+	// do we need to fetch the files?
+	if n.Files == nil {
+		// cannot fetch files if the container is closed
+		if n.Closed {
+			return nil, fmt.Errorf("cannot fetch files, container is closed")
+		}
 
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("container cp from container failed: %v", err)
-	}
+		// use 'docker cp' to get the /home/student directory as a tar stream
+		cmd := exec.Command(containerEngine, "cp", n.ID+":/home/student/.", "-")
+		var tarFile bytes.Buffer
+		cmd.Stdout = &tarFile
 
-	// extract the files
-	files := make(map[string][]byte)
-	reader := tar.NewReader(&tarFile)
-	for {
-		header, err := reader.Next()
-		if err == io.EOF {
-			break
+		// capture stderr in case of error
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+
+		if err := cmd.Run(); err != nil {
+			return nil, fmt.Errorf("container cp from container failed: %v\nOutput: %s", err, tarFile.String())
 		}
-		if err != nil {
-			return nil, fmt.Errorf("error decoding tar file: %v", err)
+
+		// extract the files
+		n.Files = make(map[string][]byte)
+		reader := tar.NewReader(&tarFile)
+		for {
+			header, err := reader.Next()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return nil, fmt.Errorf("error decoding tar file: %v", err)
+			}
+			if header.Typeflag != tar.TypeReg {
+				continue
+			}
+			contents, err := io.ReadAll(reader)
+			if err != nil {
+				return nil, fmt.Errorf("error reading %q from tar file: %v", header.Name, err)
+			}
+			name := filepath.Clean(header.Name)
+			n.Files[name] = contents
 		}
-		if header.Typeflag != tar.TypeReg {
-			continue
-		}
-		contents, err := io.ReadAll(reader)
-		if err != nil {
-			return nil, fmt.Errorf("error reading %q from tar file: %v", header.Name, err)
-		}
-		name := filepath.Clean(header.Name)
-		files[name] = contents
 	}
 
 	// pick out the requested files
-	result := make(map[string][]byte)
-	for name, contents := range files {
+	files := make(map[string][]byte)
+	badpattern := ""
+	for name, contents := range n.Files {
 		for _, pattern := range filenames {
 			matched, err := filepath.Match(pattern, name)
 			if err != nil {
-				log.Printf("GetFiles: bad pattern found: %q", pattern)
+				badpattern = pattern
 			} else if matched {
-				result[name] = contents
+				files[name] = contents
 				break
 			}
 		}
 	}
-
-	return result, nil
-}
-
-// Exec runs a command inside the container and captures its output
-func (dc *DockerContainer) Exec(ctx context.Context, cmd []string, stdout, stderr io.Writer) (status int, err error) {
-	// construct the 'docker exec' command arguments.
-	execCmdArgs := []string{"exec", "--user", strconv.Itoa(studentUID), dc.id}
-	execCmdArgs = append(execCmdArgs, cmd...)
-	command := exec.CommandContext(ctx, containerEngine, execCmdArgs...)
-
-	command.Stdout = stdout
-	command.Stderr = stderr
-
-	// start the command
-	err = command.Run()
-
-	exitCode := 0
-	if err != nil {
-		// Check if context was cancelled first
-		if ctx.Err() != nil {
-			log.Printf("Container exec cancelled for %s: %v", dc.id, ctx.Err())
-			return -1, ctx.Err()
-		}
-
-		// try to extract the exit code from the error
-		if exitError, ok := err.(*exec.ExitError); ok {
-			exitCode = exitError.ExitCode()
-		} else {
-			// a different error occurred (e.g., command not found).
-			return -1, fmt.Errorf("exec command failed: %v", err)
-		}
+	if badpattern != "" {
+		log.Printf("GetFiles: bad pattern found: %q", badpattern)
 	}
 
-	return exitCode, nil
+	return files, nil
 }
 
-// =================================================================================
-// Utility Writers for Event Streaming
-// =================================================================================
-
-type TruncatingWriter struct {
-	w       io.Writer
-	max     int
-	current int
-	mu      sync.Mutex
-}
-
-func NewTruncatingWriter(w io.Writer, max int) *TruncatingWriter {
-	return &TruncatingWriter{w: w, max: max}
-}
-
-func (tw *TruncatingWriter) Write(p []byte) (n int, err error) {
-	tw.mu.Lock()
-	defer tw.mu.Unlock()
-	originalLen := len(p)
-	remaining := tw.max - tw.current
-	if remaining <= 0 {
-		return originalLen, nil
-	}
-	if len(p) > remaining {
-		p = p[:remaining]
-	}
-	n, err = tw.w.Write(p)
-	tw.current += n
-	return originalLen, err
-}
-
-// eventWriter forwards writes to an event channel for real-time streaming
+// eventWriter is a helper type that implements io.Writer. It forwards writes
+// to an event channel for real-time streaming to the client.
 type eventWriter struct {
 	event  string
-	events chan<- *EventMessage
+	events chan *EventMessage
 }
 
-func (ew *eventWriter) Write(p []byte) (n int, err error) {
-	if len(p) == 0 {
-		return 0, nil
-	}
+func (ew *eventWriter) Write(p []byte) (int, error) {
 	clone := make([]byte, len(p))
 	copy(clone, p)
 	ew.events <- &EventMessage{
@@ -442,492 +681,48 @@ func (ew *eventWriter) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
-// =================================================================================
-// Core Daycare Processing Logic
-// =================================================================================
-
-// HandleDaycareRequest processes a daycare request and returns the updated commit bundle
-func HandleDaycareRequest(ctx context.Context, req *DaycareRequest, responseChan chan<- *DaycareResponse, problemTypeName, action string, args []string) (*CommitBundle, error) {
-	// Ensure response channel is closed when function returns
-	defer close(responseChan)
-
-	now := time.Now()
-
-	// sanity check the request
-	if req.CommitBundle == nil {
-		return nil, fmt.Errorf("first request message must include the commit bundle")
-	}
-	if req.CommitBundle.ProblemType == nil {
-		return nil, fmt.Errorf("commit bundle must include the problem type")
-	}
-	if len(req.CommitBundle.ProblemTypeSignature) == 0 {
-		return nil, fmt.Errorf("commit bundle must include the problem type signature")
-	}
-	if req.CommitBundle.ProblemType.Name != problemTypeName {
-		return nil, fmt.Errorf("problem type in request URL must match problem type in bundle")
-	}
-	if action == "" {
-		return nil, fmt.Errorf("action must be included in request URL")
-	}
-	if req.CommitBundle.ProblemType.Actions == nil || req.CommitBundle.ProblemType.Actions[action] == nil {
-		return nil, fmt.Errorf("action %q not defined for problem type %s", action, problemTypeName)
-	}
-	actionDef := req.CommitBundle.ProblemType.Actions[action]
-	if req.CommitBundle.Problem == nil {
-		return nil, fmt.Errorf("commit bundle must include the problem")
-	}
-	if len(req.CommitBundle.ProblemSteps) == 0 {
-		return nil, fmt.Errorf("commit bundle must include the problem steps")
-	}
-	if len(req.CommitBundle.ProblemSignature) == 0 {
-		return nil, fmt.Errorf("commit bundle must include the problem signature")
-	}
-	if req.CommitBundle.Commit == nil {
-		return nil, fmt.Errorf("commit bundle must include the commit")
-	}
-	if len(req.CommitBundle.CommitSignature) == 0 {
-		return nil, fmt.Errorf("commit bundle must include the commit signature")
-	}
-	if len(req.CommitBundle.Hostname) == 0 {
-		return nil, fmt.Errorf("commit bundle must include the daycare host name")
-	}
-	if req.CommitBundle.UserID < 1 {
-		return nil, fmt.Errorf("commit bundle must include the user's ID")
-	}
-
-	if len(args) > 0 {
-		log.Printf("args: %v", args)
-	}
-
-	// check signatures
-	problemTypeObj := req.CommitBundle.ProblemType
-	typeSig := problemTypeObj.ComputeSignature(Config.DaycareSecret)
-	if req.CommitBundle.ProblemTypeSignature != typeSig {
-		return nil, fmt.Errorf("problem type signature mismatch: found %s but expected %s", req.CommitBundle.ProblemTypeSignature, typeSig)
-	}
-	problem, steps := req.CommitBundle.Problem, req.CommitBundle.ProblemSteps
-	problemSig := problem.ComputeSignature(Config.DaycareSecret, steps)
-	if req.CommitBundle.ProblemSignature != problemSig {
-		return nil, fmt.Errorf("problem signature mismatch: found %s but expected %s", req.CommitBundle.ProblemSignature, problemSig)
-	}
-	commit := req.CommitBundle.Commit
-	commitSig := commit.ComputeSignature(Config.DaycareSecret, typeSig, problemSig, req.CommitBundle.Hostname, req.CommitBundle.UserID)
-	if req.CommitBundle.CommitSignature != commitSig {
-		return nil, fmt.Errorf("commit signature mismatch: found %s but expected %s", req.CommitBundle.CommitSignature, commitSig)
-	}
-	req.CommitBundle.CommitSignature = ""
-
-	// host must match
-	if req.CommitBundle.Hostname != Config.Hostname {
-		return nil, fmt.Errorf("commit is signed for host %s, this is %s", req.CommitBundle.Hostname, Config.Hostname)
-	}
-
-	// commit must be recent
-	age := time.Since(commit.UpdatedAt)
-	if age < 0 {
-		// be forgiving of clock skew
-		age = -age
-	}
-	if age > MaxDaycareRequestAge {
-		return nil, fmt.Errorf("commit signature is %v off, cannot be more than %v", age, MaxDaycareRequestAge)
-	}
-	if commit.Action != action {
-		return nil, fmt.Errorf("commit says action is %s, but request says %s", commit.Action, action)
-	}
-
-	// find the problem step
-	if commit.Step < 1 || commit.Step > int64(len(steps)) {
-		return nil, fmt.Errorf("commit refers to step number %d, but there are %d steps in the problem", commit.Step, len(steps))
-	}
-	step := steps[commit.Step-1]
-	if step == nil {
-		return nil, fmt.Errorf("required step %d is nil", commit.Step)
-	}
-	if step.Step != commit.Step {
-		return nil, fmt.Errorf("step number %d in the problem thinks it is step number %d", commit.Step, step.Step)
-	}
-	if step.ProblemType != problemTypeObj.Name {
-		return nil, fmt.Errorf("step number %d in the problem has problem type %q but the commit bundle included problem type %q", commit.Step, step.ProblemType, problemTypeObj.Name)
-	}
-
-	// collect the files from the problem step, commit, and problem type
-	files := make(map[string][]byte)
-	for name, contents := range step.Files {
-		files[name] = contents
-	}
-	for name, contents := range commit.Files {
-		files[name] = contents
-	}
-	for name, contents := range req.CommitBundle.ProblemType.Files {
-		files[name] = contents
-	}
-
-	// limit the number of concurrent containers
-	containerLimiter <- struct{}{}
-	defer func() {
-		<-containerLimiter
-	}()
-
-	// create container
-	containerName := fmt.Sprintf("nanny-%d", req.CommitBundle.UserID)
-	limits := newLimits(actionDef)
-	limits.override(problem.Options)
-
-	container, err := daycareContainerEngine.CreateContainer(ctx, containerName, req.CommitBundle.ProblemType.Image, limits)
-	if err != nil {
-		return nil, fmt.Errorf("error creating container: %v", err)
-	}
-
-	// shutdown the container when finished - ALWAYS ensure cleanup
-	defer func() {
-		// Give cleanup a reasonable timeout, but not too long
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		if err := container.Shutdown(cleanupCtx); err != nil {
-			log.Printf("container shutdown error: %v", err)
-		}
-		log.Printf("Container %s cleanup completed", containerName)
-	}()
-
-	// Initialize report card and transcript
-	reportCard := NewReportCard()
-	var transcript []*EventMessage
-
-	// Create event listening goroutine with context monitoring
-	eventListenerClosed := make(chan struct{})
-	eventChan := make(chan *EventMessage, 100)
-
-	go func() {
-		defer func() { eventListenerClosed <- struct{}{} }()
-
-		count, overflow, discarded := 0, 0, 0
-		for {
-			select {
-			case <-ctx.Done():
-				// Context cancelled - stop processing events
-				log.Printf("Event processing stopped due to context cancellation: %v", ctx.Err())
-				return
-			case event, ok := <-eventChan:
-				if !ok {
-					// Channel closed normally
-					break
-				}
-
-				if count > TranscriptDataLimit {
-					overflow += len(event.StreamData)
-				} else {
-					count += len(event.StreamData)
-
-					// record the event in transcript
-					if len(event.StreamData) > 0 && len(transcript) > 0 && transcript[len(transcript)-1].Event == event.Event &&
-						(event.Event == "stdin" || event.Event == "stdout" || event.Event == "stderr") {
-						// merge this with the previous event
-						prev := transcript[len(transcript)-1]
-						data := make([]byte, 0, len(prev.StreamData)+len(event.StreamData))
-						data = append(data, prev.StreamData...)
-						data = append(data, event.StreamData...)
-						prev.StreamData = data
-						prev.Time = event.Time
-					} else if len(transcript) < TranscriptEventCountLimit {
-						transcript = append(transcript, event)
-					} else {
-						discarded++
-					}
-				}
-
-				// transmit the message to the client (non-blocking)
-				switch event.Event {
-				case "exec", "exit", "stdin", "stdout", "stderr", "stdinclosed", "error", "files":
-					select {
-					case responseChan <- &DaycareResponse{Event: event}:
-						// Sent successfully
-					case <-ctx.Done():
-						// Context cancelled while trying to send
-						log.Printf("Event transmission stopped due to context cancellation")
-						return
-					}
-				}
-			}
-		}
-
-		// report any truncation
-		if overflow > 0 || discarded > 0 {
-			log.Printf("transcript truncated by %d events and %d bytes of stream data", discarded, overflow)
-		}
-	}()
-
-	// copy the files to the container
-	if err = container.PutFiles(files, 0666); err != nil {
-		reportCard.LogAndFailf("uploading files: %v", err)
-		close(eventChan)
-		<-eventListenerClosed
-		return nil, err
-	}
-
-	// Send exec event
-	eventChan <- &EventMessage{
+// Exec runs a command inside the container and captures its output
+func (n *Nanny) Exec(cmd []string) (stdout, stderr, script *bytes.Buffer, status int, err error) {
+	n.Events <- &EventMessage{
 		Time:        time.Now(),
 		Event:       "exec",
-		ExecCommand: strings.Fields(actionDef.Command),
+		ExecCommand: cmd,
 	}
 
-	// run the action with context
-	cmd := strings.Fields(actionDef.Command)
+	// construct the 'docker exec' command arguments.
+	execCmdArgs := []string{"exec", "--user", strconv.Itoa(studentUID), n.ID}
+	execCmdArgs = append(execCmdArgs, cmd...)
+	command := exec.Command(containerEngine, execCmdArgs...)
+
+	// buffers to capture the full output for return.
 	var stdoutBuf, stderrBuf, scriptBuf bytes.Buffer
 
-	// create writers that send events AND write to local buffers
-	stdoutWriter := io.MultiWriter(&stdoutBuf, &scriptBuf, &eventWriter{event: "stdout", events: eventChan})
-	stderrWriter := io.MultiWriter(&stderrBuf, &scriptBuf, &eventWriter{event: "stderr", events: eventChan})
+	// create writers that send events over the channel AND write to local buffers.
+	stdoutWriter := io.MultiWriter(&stdoutBuf, &scriptBuf, &eventWriter{event: "stdout", events: n.Events})
+	stderrWriter := io.MultiWriter(&stderrBuf, &scriptBuf, &eventWriter{event: "stderr", events: n.Events})
 
-	status, err := container.Exec(ctx, cmd, stdoutWriter, stderrWriter)
+	command.Stdout = stdoutWriter
+	command.Stderr = stderrWriter
 
-	// Send exit event
-	eventChan <- &EventMessage{
+	// start the command
+	err = command.Run()
+
+	exitCode := 0
+	if err != nil {
+		// try to extract the exit code from the error
+		if exitError, ok := err.(*exec.ExitError); ok {
+			exitCode = exitError.ExitCode()
+		} else {
+			// a different error occurred (e.g., command not found).
+			return &stdoutBuf, &stderrBuf, &scriptBuf, -1, fmt.Errorf("exec command failed: %v", err)
+		}
+	}
+
+	n.Events <- &EventMessage{
 		Time:       time.Now(),
 		Event:      "exit",
-		ExitStatus: status,
+		ExitStatus: exitCode,
 	}
 
-	if err != nil {
-		reportCard.LogAndFailf("%q exec error: %v", strings.Join(cmd, " "), err)
-	} else if status != 0 {
-		reportCard.LogAndFailf("%q failed with exit status %d", strings.Join(cmd, " "), status)
-	}
-
-	// Parse the results based on the parser type
-	switch actionDef.Parser {
-	case "xunit":
-		parseXUnitResults(reportCard, &stdoutBuf)
-	case "check":
-		parseCheckResults(reportCard, &stdoutBuf)
-	case "":
-		// no parser, just use the exit status
-		reportCard.Passed = status == 0
-	default:
-		reportCard.LogAndFailf("unknown parser %q for problem type %s action %s",
-			actionDef.Parser, problemTypeName, action)
-	}
-
-	// download any files requested
-	for _, option := range problem.Options {
-		parts := strings.SplitN(option, "=", 2)
-		if len(parts) != 2 || parts[0] != "download" {
-			continue
-		}
-		files, err := container.GetFiles(strings.Split(parts[1], ","))
-		if err != nil {
-			log.Printf("error trying to download files from container: %v", err)
-		} else if len(files) > 0 {
-			eventChan <- &EventMessage{Event: "files", Files: files}
-		}
-	}
-
-	// wait for listener to finish
-	close(eventChan)
-	<-eventListenerClosed
-
-	// Update commit with results
-	commit.ReportCard = reportCard
-	commit.Transcript = transcript
-
-	// compute the score for this step on a scale of 0.0 to 1.0
-	if action == "grade" {
-		if commit.ReportCard.Passed {
-			// award full credit for this step
-			commit.Score = 1.0
-		} else if len(commit.ReportCard.Results) == 0 {
-			// no results? fail...
-			commit.Score = 0.0
-		} else {
-			// compute partial credit for this step
-			passed := 0
-			for _, elt := range commit.ReportCard.Results {
-				if elt.Outcome == "passed" {
-					passed++
-				}
-			}
-			commit.Score = float64(passed) / float64(len(commit.ReportCard.Results))
-		}
-		commit.UpdatedAt = now
-		req.CommitBundle.CommitSignature = commit.ComputeSignature(Config.DaycareSecret, req.CommitBundle.ProblemTypeSignature, req.CommitBundle.ProblemSignature, req.CommitBundle.Hostname, req.CommitBundle.UserID)
-
-		return req.CommitBundle, nil
-	}
-
-	return nil, nil
-}
-
-// =================================================================================
-// WebSocket Transport Layer
-// =================================================================================
-
-var upgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
-	CheckOrigin: func(r *http.Request) bool {
-		return true // Allow connections from any origin for now
-	},
-}
-
-// SocketProblemTypeAction handles WebSocket requests for daycare operations
-func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params martini.Params) {
-	problemType := params["problem_type"]
-	action := params["action"]
-
-	// We'll set the context timeout after we parse the request and know the limits
-	ctx := r.Context()
-	var cancel context.CancelFunc
-
-	// CORS header for browser-based requests if the TA is a different host than the daycare
-	w.Header().Set("Access-Control-Allow-Origin", "https://"+Config.TAHostname)
-
-	// get a websocket
-	socket, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "websocket error: %v", err)
-		return
-	}
-
-	// Ensure WebSocket is ALWAYS closed properly
-	defer func() {
-		// Send close frame with timeout
-		closeMsg := websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Session completed")
-		socket.WriteControl(websocket.CloseMessage, closeMsg, time.Now().Add(5*time.Second))
-		socket.Close()
-		log.Printf("WebSocket connection closed for %s/%s", problemType, action)
-	}()
-
-	logAndTransmitErrorf := func(format string, args ...interface{}) {
-		msg := fmt.Sprintf(format, args...)
-		log.Print(msg)
-		res := &DaycareResponse{Error: msg}
-		if err := socket.WriteJSON(res); err != nil {
-			// what can we do? we already logged the error
-		}
-	}
-
-	// gather any args from URL query parameters
-	r.ParseForm()
-	args := []string{}
-	for key, vals := range r.Form {
-		if len(vals) == 1 {
-			args = append(args, key+"="+vals[0])
-		}
-	}
-
-	// get the first message
-	req := new(DaycareRequest)
-	if err := socket.ReadJSON(req); err != nil {
-		logAndTransmitErrorf("error reading first request message: %v", err)
-		return
-	}
-
-	// Now we can set proper timeout based on the configuration
-	if req.CommitBundle != nil && req.CommitBundle.ProblemType != nil && req.CommitBundle.ProblemType.Actions != nil {
-		if actionDef, ok := req.CommitBundle.ProblemType.Actions[action]; ok {
-			// Use same calculation as container timeout: maxCPU * 2 + buffer for cleanup
-			timeLimit := time.Duration(actionDef.MaxCPU*2+10) * time.Second
-			ctx, cancel = context.WithTimeout(ctx, timeLimit)
-			defer cancel()
-			log.Printf("Session timeout set to %v for %s/%s", timeLimit, problemType, action)
-		} else {
-			// Fallback timeout if action not found
-			ctx, cancel = context.WithTimeout(ctx, 5*time.Minute)
-			defer cancel()
-		}
-	} else {
-		// Fallback timeout if request is malformed
-		ctx, cancel = context.WithTimeout(ctx, 5*time.Minute)
-		defer cancel()
-	}
-
-	// create output channel for responses
-	responseChan := make(chan *DaycareResponse, 10) // buffered channel to reduce waiting on websocket
-	finished := make(chan struct{})
-
-	// Monitor for early WebSocket disconnection
-	go func() {
-		for {
-			_, _, err := socket.ReadMessage()
-			if err != nil {
-				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-					log.Printf("WebSocket disconnected unexpectedly: %v", err)
-				} else {
-					log.Printf("WebSocket closed by client: %v", err)
-				}
-				// Cancel context to stop container processing
-				cancel()
-				return
-			}
-		}
-	}()
-
-	// start goroutine to read from channel and send to websocket
-	go func() {
-		defer func() { finished <- struct{}{} }()
-
-		broken := false
-		for {
-			select {
-			case <-ctx.Done():
-				log.Printf("WebSocket sender stopping due to context cancellation: %v", ctx.Err())
-				return
-			case res, ok := <-responseChan:
-				if !ok {
-					// Channel closed normally
-					return
-				}
-				if broken {
-					// on websocket error, continue draining channel but ignore values
-					continue
-				}
-				if err := socket.WriteJSON(res); err != nil {
-					// keep going to drain the channel so we can't block the sender
-					broken = true
-					if strings.Contains(err.Error(), "use of closed network connection") {
-						log.Printf("WebSocket connection closed during write")
-					} else {
-						logAndTransmitErrorf("websocket write error: %v", err)
-					}
-					// Cancel context when websocket fails
-					cancel()
-				}
-			}
-		}
-	}()
-
-	// call the common handler with context
-	commitBundle, err := HandleDaycareRequest(ctx, req, responseChan, problemType, action, args)
-
-	// wait for channel and any websocket writes from it
-	<-finished
-
-	// now check error
-	if err != nil {
-		logAndTransmitErrorf("daycare request error: %v", err)
-		return
-	}
-
-	// send the final commit back to the client if grading
-	if commitBundle != nil && action == "grade" {
-		res := &DaycareResponse{CommitBundle: commitBundle}
-		if err := socket.WriteJSON(res); err != nil {
-			logAndTransmitErrorf("error writing final commit JSON: %v", err)
-			return
-		}
-	}
-
-	log.Printf("daycare websocket handler finished for %s/%s", problemType, action)
-}
-
-// =================================================================================
-// Initialization
-// =================================================================================
-
-// InitDaycareEngine initializes the singleton container engine for the daycare service.
-// This must be called once by the main application during startup.
-func InitDaycareEngine() {
-	daycareContainerEngine = NewDockerContainerEngine()
-	log.Println("Daycare container engine initialized.")
+	return &stdoutBuf, &stderrBuf, &scriptBuf, exitCode, nil
 }
