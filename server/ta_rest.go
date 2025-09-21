@@ -1,21 +1,15 @@
 package main
 
 import (
-	"compress/gzip"
 	"database/sql"
 	"fmt"
-	"log"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/go-martini/martini"
-	"github.com/martini-contrib/binding"
 	"github.com/martini-contrib/render"
 	. "github.com/russross/codegrinder/types"
-	"github.com/russross/meddler"
 )
 
 // restGetProblemTypes handles GET /problem_types
@@ -480,175 +474,4 @@ func restPostCommitBundlesSigned(w http.ResponseWriter, tx *sql.Tx, currentUser 
 		return
 	}
 	render.JSON(http.StatusOK, result)
-}
-
-// SetupTARest sets up all TA REST routes using martini.
-// It creates and configures the martini instance internally and returns it.
-// It takes the neutral withTx function and defines all martini middleware as closures.
-func SetupTARest(root string, withTx func(func(*sql.Tx) error) error) *martini.Martini {
-	// Create and configure martini instance
-	m := martini.New()
-	m.Logger(log.New(os.Stderr, "", log.Lshortfile))
-	//m.Use(martini.Logger())
-	m.Use(martini.Recovery())
-	m.Use(martini.Static(filepath.Join(root, "www"), martini.StaticOptions{SkipLogging: true}))
-	m.Use(render.Renderer(render.Options{IndentJSON: false}))
-
-	r := martini.NewRouter()
-	m.MapTo(r, (*martini.Routes)(nil))
-	m.Action(r.Handle)
-	// martini service: wrap handler in a transaction
-	martiniWithTx := func(c martini.Context, req *http.Request, w http.ResponseWriter) {
-		status := 0
-		err := withTx(func(tx *sql.Tx) error {
-			// pass it on to the main handler
-			c.Map(tx)
-			c.Next()
-
-			// check the result status
-			rw := w.(martini.ResponseWriter)
-			if status = rw.Status(); status >= http.StatusBadRequest {
-				return fmt.Errorf("handler returned status %d", status)
-			}
-			return nil
-		})
-		if err != nil {
-			if status >= http.StatusBadRequest && status != http.StatusNotFound {
-				loggedHTTPErrorf(w, status, "%v", err)
-			}
-		}
-	}
-
-	// martini service: to require an active logged-in session
-	martiniAuth := func(w http.ResponseWriter, req *http.Request) {
-		_, err := GetSession(req)
-		if err != nil {
-			loggedHTTPErrorf(w, http.StatusUnauthorized, "authentication failed: try logging in again")
-			log.Printf("%v", err)
-			return
-		}
-	}
-
-	// martini service: include the current logged-in user (requires martiniWithTx)
-	martiniWithCurrentUser := func(c martini.Context, w http.ResponseWriter, req *http.Request, tx *sql.Tx) {
-		session, err := GetSession(req)
-		if err != nil {
-			loggedHTTPErrorf(w, http.StatusUnauthorized, "authentication failed: try logging in again")
-			log.Printf("%v", err)
-			return
-		}
-
-		// load the user record
-		userID := session.UserID
-		user := new(User)
-		if err := meddler.Load(tx, "users", user, userID); err != nil {
-			session.Delete(w)
-
-			if err == sql.ErrNoRows {
-				loggedHTTPErrorf(w, http.StatusUnauthorized, "user %d not found", userID)
-				return
-			}
-			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-			return
-		}
-
-		// map the current user to the request context
-		c.Map(user)
-	}
-
-	// martini service: require logged in user to be an author (requires martiniWithCurrentUser)
-	martiniAuthorOnly := func(w http.ResponseWriter, tx *sql.Tx, currentUser *User) {
-		if !currentUser.Author {
-			loggedHTTPErrorf(w, http.StatusUnauthorized, "user %d (%s) is not an author", currentUser.ID, currentUser.Name)
-			return
-		}
-	}
-
-	// martini middleware: decompress incoming requests
-	gunzipMiddleware := func(c martini.Context, w http.ResponseWriter, req *http.Request) {
-		if req.Header.Get("Content-Encoding") != "gzip" {
-			return
-		}
-
-		req.Header.Del("Content-Encoding")
-		body := req.Body
-		var err error
-		req.Body, err = gzip.NewReader(body)
-		defer body.Close()
-		if err != nil {
-			loggedHTTPErrorf(w, http.StatusBadRequest, "gzip error in request: %v", err)
-			return
-		}
-		c.Next()
-	}
-
-	// version
-	r.Get("/version", func(w http.ResponseWriter, render render.Render) {
-		render.JSON(http.StatusOK, &CurrentVersion)
-	})
-
-	// daycare registration
-	r.Get("/daycare_registrations",
-		func(w http.ResponseWriter, render render.Render) {
-			daycareRegistrations.Expire()
-			render.JSON(http.StatusOK, daycareRegistrations.daycares)
-		})
-	r.Post("/daycare_registrations", gunzipMiddleware, binding.Json(DaycareRegistration{}),
-		func(w http.ResponseWriter, reg DaycareRegistration) {
-			daycareRegistrations.Expire()
-			if err := daycareRegistrations.Insert(&reg); err != nil {
-				loggedHTTPErrorf(w, http.StatusBadRequest, "bad daycare registration: %v", err)
-				return
-			}
-		})
-
-	// problem bundles--for problem creation only
-	r.Post("/problem_bundles/unconfirmed", martiniWithTx, martiniWithCurrentUser, martiniAuthorOnly, gunzipMiddleware, binding.Json(ProblemBundle{}), restPostProblemBundleUnconfirmed)
-	r.Post("/problem_bundles/confirmed", martiniWithTx, martiniWithCurrentUser, martiniAuthorOnly, gunzipMiddleware, binding.Json(ProblemBundle{}), restPostProblemBundleConfirmed)
-	r.Put("/problem_bundles/:problem_id", martiniWithTx, martiniWithCurrentUser, martiniAuthorOnly, gunzipMiddleware, binding.Json(ProblemBundle{}), restPutProblemBundle)
-
-	// problem set bundles--for problem set creation only
-	r.Post("/problem_set_bundles", martiniWithTx, martiniWithCurrentUser, martiniAuthorOnly, gunzipMiddleware, binding.Json(ProblemSetBundle{}), restPostProblemSetBundle)
-	r.Put("/problem_set_bundles/:problem_set_id", martiniWithTx, martiniWithCurrentUser, martiniAuthorOnly, gunzipMiddleware, binding.Json(ProblemSetBundle{}), restPutProblemSetBundle)
-
-	// problem types
-	r.Get("/problem_types", martiniAuth, martiniWithTx, restGetProblemTypes)
-	r.Get("/problem_types/:name", martiniAuth, martiniWithTx, restGetProblemType)
-
-	// problems
-	r.Get("/problems", martiniWithTx, martiniWithCurrentUser, restGetProblems)
-	r.Get("/problems/:problem_id", martiniWithTx, martiniWithCurrentUser, restGetProblem)
-	r.Get("/problems/:problem_id/steps", martiniWithTx, martiniWithCurrentUser, restGetProblemSteps)
-	r.Get("/problems/:problem_id/steps/:step", martiniWithTx, martiniWithCurrentUser, restGetProblemStep)
-	// problem sets
-	r.Get("/problem_sets", martiniWithTx, martiniWithCurrentUser, restGetProblemSets)
-	r.Get("/problem_sets/:problem_set_id", martiniWithTx, martiniWithCurrentUser, restGetProblemSet)
-	r.Get("/problem_sets/:problem_set_id/problems", martiniWithTx, martiniWithCurrentUser, restGetProblemSetProblems)
-
-	// courses
-	r.Get("/courses", martiniWithTx, martiniWithCurrentUser, restGetCourses)
-	r.Get("/courses/:course_id", martiniWithTx, martiniWithCurrentUser, restGetCourse)
-
-	// users
-	r.Get("/users", martiniWithTx, martiniWithCurrentUser, restGetUsers)
-	r.Get("/users/me", martiniWithTx, martiniWithCurrentUser, restGetUserMe)
-	r.Get("/users/session", restGetUserSession)
-	r.Get("/users/:user_id", martiniWithTx, martiniWithCurrentUser, restGetUser)
-	r.Get("/courses/:course_id/users", martiniWithTx, martiniWithCurrentUser, restGetCourseUsers)
-
-	// assignments
-	r.Get("/users/:user_id/assignments", martiniWithTx, martiniWithCurrentUser, restGetUserAssignments)
-	r.Get("/courses/:course_id/users/:user_id/assignments", martiniWithTx, martiniWithCurrentUser, restGetCourseUserAssignments)
-	r.Get("/assignments", martiniWithTx, martiniWithCurrentUser, restGetAssignments)
-	r.Get("/assignments/:assignment_id", martiniWithTx, martiniWithCurrentUser, restGetAssignment)
-
-	// commits
-	r.Get("/assignments/:assignment_id/problems/:problem_id/commits/last", martiniWithTx, martiniWithCurrentUser, restGetAssignmentProblemCommitLast)
-	r.Get("/assignments/:assignment_id/problems/:problem_id/steps/:step/commits/last", martiniWithTx, martiniWithCurrentUser, restGetAssignmentProblemStepCommitLast)
-
-	// commit bundles
-	r.Post("/commit_bundles/unsigned", martiniWithTx, martiniWithCurrentUser, gunzipMiddleware, binding.Json(CommitBundle{}), restPostCommitBundlesUnsigned)
-	r.Post("/commit_bundles/signed", martiniWithTx, martiniWithCurrentUser, gunzipMiddleware, binding.Json(CommitBundle{}), restPostCommitBundlesSigned)
-
-	return m
 }

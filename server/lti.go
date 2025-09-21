@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"compress/gzip"
 	"crypto/hmac"
 	"crypto/sha1"
 	"database/sql"
@@ -13,12 +12,12 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/go-martini/martini"
 	. "github.com/russross/codegrinder/types"
 	"github.com/russross/meddler"
 )
@@ -340,6 +339,113 @@ func encode(v url.Values) []byte {
 	return buf.Bytes()
 }
 
+// LtiProblem handles /lti/problem_sets/:ui/:unique requests.
+// It creates the user/course/assignment if necessary, creates a session,
+// and redirects the user to the main UI URL.
+func LtiProblemSet(w http.ResponseWriter, r *http.Request, tx *sql.Tx, form LTIRequest, params martini.Params) {
+	ui := params["ui"]
+	if ui != "cli" && ui != "web" {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "UI type must be cli or web, not %q", ui)
+		return
+	}
+	unique := params["unique"]
+	if unique == "" {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "malformed URL: missing unique ID for problem")
+		return
+	}
+	if unique != url.QueryEscape(unique) {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "unique ID must be URL friendly: %s is escaped as %s", unique, url.QueryEscape(unique))
+		return
+	}
+
+	now := time.Now()
+
+	// Special case: the problem set named "bootstrap-codegrinder"
+	// does not map to an actual problem set. This is useful for creating
+	// the first user before a problem set has been created.
+
+	// load the problem set
+	problemSet := new(ProblemSet)
+
+	if unique != bootstrapAssignmentName {
+		if err := meddler.QueryRow(tx, problemSet, `SELECT * FROM problem_sets WHERE unique_id = ?`, unique); err != nil {
+			loggedHTTPDBNotFoundError(w, err)
+			return
+		}
+	}
+
+	// load the course
+	course, err := getUpdateCourse(tx, &form, now)
+	if err != nil {
+		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
+		return
+	}
+
+	// load the user
+	user, err := getUpdateUser(tx, &form, now)
+	if err != nil {
+		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
+		return
+	}
+
+	// load the assignment
+	asst := new(Assignment)
+
+	if unique != bootstrapAssignmentName {
+		if asst, err = getUpdateAssignment(tx, &form, now, course, problemSet, user); err != nil {
+			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
+			return
+		}
+	}
+
+	// sign the user in
+	session := NewSession(user.ID)
+	session.Save(w)
+
+	// redirect to the console
+	key := loginRecords.Insert(user.ID)
+	http.Redirect(w, r, fmt.Sprintf("/%s/?assignment=%d&session=%s", ui, asst.ID, key), http.StatusSeeOther)
+}
+
+// LtiQuizzes handles /lti/quizzes requests.
+// It creates the user/course/assignment if necessary, creates a session,
+// and redirects the user to the main UI URL.
+func LtiQuizzes(w http.ResponseWriter, r *http.Request, tx *sql.Tx, form LTIRequest, params martini.Params) {
+	now := time.Now()
+
+	// load the course
+	course, err := getUpdateCourse(tx, &form, now)
+	if err != nil {
+		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
+		return
+	}
+
+	// load the user
+	user, err := getUpdateUser(tx, &form, now)
+	if err != nil {
+		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
+		return
+	}
+
+	// load the assignment
+	asst := new(Assignment)
+	if asst, err = getUpdateAssignment(tx, &form, now, course, nil, user); err != nil {
+		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
+		return
+	}
+
+	// sign the user in
+	session := NewSession(user.ID)
+	session.Save(w)
+
+	// redirect to the console
+	if asst.Instructor {
+		http.Redirect(w, r, fmt.Sprintf("/quiz/console.html?assignment=%d", asst.ID), http.StatusSeeOther)
+	} else {
+		http.Redirect(w, r, fmt.Sprintf("/quiz/?assignment=%d", asst.ID), http.StatusSeeOther)
+	}
+}
+
 // get/create/update this user
 func getUpdateUser(tx *sql.Tx, form *LTIRequest, now time.Time) (*User, error) {
 	user := new(User)
@@ -632,211 +738,4 @@ func saveGrade(asst *Assignment, text string) error {
 	}
 
 	return nil
-}
-
-// bindLTIRequest binds form data to LTIRequest struct (replaces martini-contrib/binding)
-func bindLTIRequest(r *http.Request) LTIRequest {
-	form := LTIRequest{
-		PersonNameFull:                   r.FormValue("lis_person_name_full"),
-		PersonNameFamily:                 r.FormValue("lis_person_name_family"),
-		PersonNameGiven:                  r.FormValue("lis_person_name_given"),
-		PersonContactEmailPrimary:        r.FormValue("lis_person_contact_email_primary"),
-		UserID:                           r.FormValue("user_id"),
-		Roles:                            r.FormValue("roles"),
-		UserImage:                        r.FormValue("user_image"),
-		LTIMessageType:                   r.FormValue("lti_message_type"),
-		LTIVersion:                       r.FormValue("lti_version"),
-		LaunchPresentationDocumentTarget: r.FormValue("launch_presentation_document_target"),
-		LaunchPresentationLocale:         r.FormValue("launch_presentation_locale"),
-		TCInstanceName:                   r.FormValue("tool_consumer_instance_name"),
-		TCInstanceGUID:                   r.FormValue("tool_consumer_instance_guid"),
-		TCInstanceContactEmail:           r.FormValue("tool_consumer_instance_contact_email"),
-		TCInstanceVersion:                r.FormValue("tool_consumer_info_version"),
-		TCInfoProductFamilyCode:          r.FormValue("tool_consumer_info_product_family_code"),
-		CourseOfferingSourceDID:          r.FormValue("lis_course_offering_sourcedid"),
-		ContextTitle:                     r.FormValue("context_title"),
-		ContextLabel:                     r.FormValue("context_label"),
-		ContextID:                        r.FormValue("context_id"),
-		ResourceLinkTitle:                r.FormValue("resource_link_title"),
-		ResourceLinkID:                   r.FormValue("resource_link_id"),
-		PersonSourcedID:                  r.FormValue("lis_result_sourcedid"),
-		OutcomeServiceURL:                r.FormValue("lis_outcome_service_url"),
-		ExtIMSBasicOutcomeURL:            r.FormValue("ext_ims_lis_basic_outcome_url"),
-		ExtOutcomeDataValuesAccepted:     r.FormValue("ext_outcome_data_values_accepted"),
-		LaunchPresentationReturnURL:      r.FormValue("launch_presentation_return_url"),
-		CanvasUserLoginID:                r.FormValue("custom_canvas_user_login_id"),
-		CanvasEnrollmentState:            r.FormValue("custom_canvas_enrollment_state"),
-		CanvasAssignmentTitle:            r.FormValue("custom_canvas_assignment_title"),
-		CanvasAPIDomain:                  r.FormValue("custom_canvas_api_domain"),
-		OAuthVersion:                     r.FormValue("oauth_version"),
-		OAuthSignature:                   r.FormValue("oauth_signature"),
-		OAuthSignatureMethod:             r.FormValue("oauth_signature_method"),
-		OAuthConsumerKey:                 r.FormValue("oauth_consumer_key"),
-		OAuthNonce:                       r.FormValue("oauth_nonce"),
-		OAuthCallback:                    r.FormValue("oauth_callback"),
-		CanvasAssignmentUnlockAt:         r.FormValue("custom_canvas_assignment_unlock_at"),
-		CanvasAssignmentDueAt:            r.FormValue("custom_canvas_assignment_due_at"),
-		CanvasAssignmentLockAt:           r.FormValue("custom_canvas_assignment_lock_at"),
-	}
-
-	// Parse numeric fields
-	if val := r.FormValue("custom_canvas_assignment_points_possible"); val != "" {
-		if parsed, err := strconv.ParseFloat(val, 64); err == nil {
-			form.CanvasAssignmentPointsPossible = parsed
-		}
-	}
-	if val := r.FormValue("custom_canvas_course_id"); val != "" {
-		if parsed, err := strconv.ParseInt(val, 10, 64); err == nil {
-			form.CanvasCourseID = parsed
-		}
-	}
-	if val := r.FormValue("custom_canvas_user_id"); val != "" {
-		if parsed, err := strconv.ParseInt(val, 10, 64); err == nil {
-			form.CanvasUserID = parsed
-		}
-	}
-	if val := r.FormValue("custom_canvas_assignment_id"); val != "" {
-		if parsed, err := strconv.ParseInt(val, 10, 64); err == nil {
-			form.CanvasAssignmentID = parsed
-		}
-	}
-	if val := r.FormValue("oauth_timestamp"); val != "" {
-		if parsed, err := strconv.ParseInt(val, 10, 64); err == nil {
-			form.OAuthTimestamp = parsed
-		}
-	}
-
-	return form
-}
-
-// ltiProblemSetHandler handles LTI problem set requests (refactored from LtiProblemSet)
-func ltiProblemSetHandler(w http.ResponseWriter, r *http.Request, tx *sql.Tx, form LTIRequest, ui, unique string) error {
-	if ui != "cli" && ui != "web" {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "UI type must be cli or web, not %q", ui)
-		return fmt.Errorf("invalid UI type: %s", ui)
-	}
-	if unique == "" {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "malformed URL: missing unique ID for problem")
-		return fmt.Errorf("missing unique ID")
-	}
-	if unique != url.QueryEscape(unique) {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "unique ID must be URL friendly: %s is escaped as %s", unique, url.QueryEscape(unique))
-		return fmt.Errorf("invalid unique ID: %s", unique)
-	}
-
-	now := time.Now()
-
-	// Special case: the problem set named "bootstrap-codegrinder"
-	// does not map to an actual problem set. This is useful for creating
-	// the first user before a problem set has been created.
-
-	// load the problem set
-	problemSet := new(ProblemSet)
-
-	if unique != bootstrapAssignmentName {
-		if err := meddler.QueryRow(tx, problemSet, `SELECT * FROM problem_sets WHERE unique_id = ?`, unique); err != nil {
-			loggedHTTPDBNotFoundError(w, err)
-			return err
-		}
-	}
-
-	// load the course
-	course, err := getUpdateCourse(tx, &form, now)
-	if err != nil {
-		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-		return err
-	}
-
-	// load the user
-	user, err := getUpdateUser(tx, &form, now)
-	if err != nil {
-		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-		return err
-	}
-
-	// load the assignment
-	asst := new(Assignment)
-
-	if unique != bootstrapAssignmentName {
-		if asst, err = getUpdateAssignment(tx, &form, now, course, problemSet, user); err != nil {
-			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-			return err
-		}
-	}
-
-	// sign the user in
-	session := NewSession(user.ID)
-	session.Save(w)
-
-	// redirect to the console
-	key := loginRecords.Insert(user.ID)
-	http.Redirect(w, r, fmt.Sprintf("/%s/?assignment=%d&session=%s", ui, asst.ID, key), http.StatusSeeOther)
-	return nil
-}
-
-// SetupLTI registers LTI endpoints using raw HTTP handlers
-func SetupLTI(mux *http.ServeMux, withTxFunc func(func(*sql.Tx) error) error) {
-	// GET /lti/config.xml - already uses raw HTTP
-	mux.HandleFunc("/lti/config.xml", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "GET" {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		GetConfigXML(w)
-	})
-
-	// POST /lti/problem_sets/:ui/:unique - refactored from martini
-	problemSetPattern := regexp.MustCompile(`^/lti/problem_sets/([^/]+)/([^/]+)$`)
-	mux.HandleFunc("/lti/problem_sets/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "POST" {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		// Extract URL parameters
-		matches := problemSetPattern.FindStringSubmatch(r.URL.Path)
-		if matches == nil {
-			loggedHTTPErrorf(w, http.StatusNotFound, "Invalid LTI problem set URL format")
-			return
-		}
-		ui := matches[1]
-		unique := matches[2]
-
-		// Handle gzip decompression
-		if r.Header.Get("Content-Encoding") == "gzip" {
-			r.Header.Del("Content-Encoding")
-			body := r.Body
-			var err error
-			r.Body, err = gzip.NewReader(body)
-			defer body.Close()
-			if err != nil {
-				loggedHTTPErrorf(w, http.StatusBadRequest, "gzip error in request: %v", err)
-				return
-			}
-		}
-
-		// Parse the form to extract LTI request data
-		if err := r.ParseForm(); err != nil {
-			loggedHTTPErrorf(w, http.StatusBadRequest, "Failed to parse form: %v", err)
-			return
-		}
-
-		// Check OAuth signature
-		checkOAuthSignature(w, r)
-		// Check if there was an error written to the response
-		if w.Header().Get("Content-Type") != "" {
-			return // Error was already written
-		}
-
-		// Bind LTI form data to struct
-		form := bindLTIRequest(r)
-
-		// Execute within transaction
-		err := withTxFunc(func(tx *sql.Tx) error {
-			return ltiProblemSetHandler(w, r, tx, form, ui, unique)
-		})
-		if err != nil {
-			loggedHTTPErrorf(w, http.StatusInternalServerError, "%v", err)
-		}
-	})
 }

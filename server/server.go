@@ -2,12 +2,14 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/tls"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"expvar"
 	"flag"
 	"fmt"
 	"io"
@@ -25,6 +27,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-martini/martini"
+	"github.com/martini-contrib/binding"
+	mgzip "github.com/martini-contrib/gzip"
+	"github.com/martini-contrib/render"
 	_ "github.com/mattn/go-sqlite3"
 	. "github.com/russross/codegrinder/types"
 	"github.com/russross/meddler"
@@ -62,20 +68,6 @@ var root string
 
 const daycareRegistrationInterval = 10 * time.Second
 const nonTLSAddress = ":8080"
-
-// combinedHandler routes requests based on path prefixes
-type combinedHandler struct {
-	martini http.Handler
-	ltiMux  *http.ServeMux
-}
-
-func (c *combinedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if strings.HasPrefix(r.URL.Path, "/lti/") {
-		c.ltiMux.ServeHTTP(w, r)
-	} else {
-		c.martini.ServeHTTP(w, r)
-	}
-}
 
 // filter for TLS logs to ignore failed handshakes
 type filterWriter struct {
@@ -143,7 +135,14 @@ func main() {
 	}
 	// Config.AcmeEmail is optional
 
-	var m http.Handler
+	// set up martini
+	r := martini.NewRouter()
+	m := martini.New()
+	m.Logger(log.New(os.Stderr, "", log.Lshortfile))
+	//m.Use(martini.Logger())
+	m.Use(martini.Recovery())
+	m.MapTo(r, (*martini.Routes)(nil))
+	m.Action(r.Handle)
 
 	// set up daycare role
 	// note: this must come before TA role to avoid gzip handler for daycare requests
@@ -165,8 +164,7 @@ func main() {
 			log.Fatalf("Daycare capacity must be greater than zero")
 		}
 
-		// Set up daycare websocket handler
-		SetupDaycareRest(http.DefaultServeMux)
+		r.Get("/sockets/:problem_type/:action", SocketProblemTypeAction)
 
 		// register with the TA periodically
 		go func() {
@@ -248,12 +246,29 @@ func main() {
 			log.Fatalf("cannot run TA role with no sqlite3Path in the config file")
 		}
 
+		// skipMiddleware wraps a martini.Handler, skipping it if the request path
+		// starts with the given prefix.
+		skipMiddleware := func(prefix string, middleware martini.Handler) martini.Handler {
+			return func(c martini.Context, w http.ResponseWriter, r *http.Request) {
+				// If the path matches the prefix, skip this middleware and call the next handler.
+				if strings.HasPrefix(r.URL.Path, prefix) {
+					c.Next()
+				} else {
+					// Otherwise, execute the middleware as usual.
+					c.Invoke(middleware)
+				}
+			}
+		}
+		m.Use(skipMiddleware("/sockets/", mgzip.All()))
+		m.Use(martini.Static(filepath.Join(root, "www"), martini.StaticOptions{SkipLogging: true}))
+		m.Use(render.Renderer(render.Options{IndentJSON: false}))
+
 		// set up the database
 		db := setupDB(Config.SQLite3Path)
 		var dbMutex sync.Mutex
 
-		// execute handler within a transaction
-		withTx := func(handler func(*sql.Tx) error) error {
+		// martini service: wrap handler in a transaction
+		withTx := func(c martini.Context, r *http.Request, w http.ResponseWriter) {
 			// start a transaction
 			dbMutex.Lock()
 			defer dbMutex.Unlock()
@@ -270,40 +285,194 @@ func main() {
 					default:
 						elapsed -= elapsed % (100 * time.Millisecond)
 					}
-					log.Printf("transaction took %v", elapsed)
+					log.Printf("transaction took %v, req was %s", elapsed, r.RequestURI)
 				}
 			}()
 			tx, err := db.Begin()
 			if err != nil {
-				return fmt.Errorf("db error starting transaction: %v", err)
+				loggedHTTPErrorf(w, http.StatusInternalServerError, "db error starting transaction: %v", err)
+				return
 			}
 
-			// execute the handler
-			err = handler(tx)
-			if err != nil {
-				// rollback on error
-				if rollbackErr := tx.Rollback(); rollbackErr != nil {
-					log.Printf("db error rolling back transaction: %v", rollbackErr)
+			// pass it on to the main handler
+			c.Map(tx)
+			c.Next()
+
+			// was it a successful result?
+			rw := w.(martini.ResponseWriter)
+			if rw.Status() < http.StatusBadRequest {
+				// commit the transaction
+				if err := tx.Commit(); err != nil {
+					loggedHTTPErrorf(w, http.StatusInternalServerError, "db error committing transaction: %v", err)
+					return
 				}
-				return err
+			} else {
+				// rollback
+				//log.Printf("rolling back transaction")
+				if err := tx.Rollback(); err != nil {
+					loggedHTTPErrorf(w, http.StatusInternalServerError, "db error rolling back transaction: %v", err)
+					return
+				}
 			}
-
-			// commit the transaction
-			if err := tx.Commit(); err != nil {
-				return fmt.Errorf("db error committing transaction: %v", err)
-			}
-			return nil
 		}
 
-		// note: non-martini handlers for functionality of getting current
-		// user, checking if logged in, checking if author, might need to be
-		// added
+		// martini service: to require an active logged-in session
+		auth := func(w http.ResponseWriter, r *http.Request) {
+			_, err := GetSession(r)
+			if err != nil {
+				loggedHTTPErrorf(w, http.StatusUnauthorized, "authentication failed: try logging in again")
+				log.Printf("%v", err)
+				return
+			}
+		}
 
-		// LTI - set up raw HTTP handlers
-		SetupLTI(http.DefaultServeMux, withTx)
+		// martini service: include the current logged-in user (requires withTx)
+		withCurrentUser := func(c martini.Context, w http.ResponseWriter, r *http.Request, tx *sql.Tx) {
+			session, err := GetSession(r)
+			if err != nil {
+				loggedHTTPErrorf(w, http.StatusUnauthorized, "authentication failed: try logging in again")
+				log.Printf("%v", err)
+				return
+			}
 
-		// Set up all TA REST routes
-		m = SetupTARest(root, withTx)
+			// load the user record
+			userID := session.UserID
+			user := new(User)
+			if err := meddler.Load(tx, "users", user, userID); err != nil {
+				session.Delete(w)
+
+				if err == sql.ErrNoRows {
+					loggedHTTPErrorf(w, http.StatusUnauthorized, "user %d not found", userID)
+					return
+				}
+				loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
+				return
+			}
+
+			// map the current user to the request context
+			c.Map(user)
+		}
+
+		// martini service: require logged in user to be an author or administrator (requires withCurrentUser)
+		authorOnly := func(w http.ResponseWriter, tx *sql.Tx, currentUser *User) {
+			if currentUser.Admin {
+				return
+			}
+			if !currentUser.Author {
+				loggedHTTPErrorf(w, http.StatusUnauthorized, "user %d (%s) is not an author", currentUser.ID, currentUser.Name)
+				return
+			}
+		}
+
+		// martini middleware: decompress incoming requests
+		gunzip := func(c martini.Context, w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Content-Encoding") != "gzip" {
+				return
+			}
+
+			r.Header.Del("Content-Encoding")
+			body := r.Body
+			var err error
+			r.Body, err = gzip.NewReader(body)
+			defer body.Close()
+			if err != nil {
+				loggedHTTPErrorf(w, http.StatusBadRequest, "gzip error in request: %v", err)
+				return
+			}
+			c.Next()
+		}
+
+		// version
+		r.Get("/version", func(w http.ResponseWriter, render render.Render) {
+			render.JSON(http.StatusOK, &CurrentVersion)
+		})
+		r.Get("/v2/version", func(w http.ResponseWriter, render render.Render) {
+			render.JSON(http.StatusOK, &CurrentVersion)
+		})
+
+		// daycare registration
+		r.Get("/daycare_registrations",
+			func(w http.ResponseWriter, render render.Render) {
+				daycareRegistrations.Expire()
+				render.JSON(http.StatusOK, daycareRegistrations.daycares)
+			})
+		r.Post("/daycare_registrations", gunzip, binding.Json(DaycareRegistration{}),
+			func(w http.ResponseWriter, reg DaycareRegistration) {
+				daycareRegistrations.Expire()
+				if err := daycareRegistrations.Insert(&reg); err != nil {
+					loggedHTTPErrorf(w, http.StatusBadRequest, "bad daycare registration: %v", err)
+					return
+				}
+			})
+
+		// stats
+		r.Get("/stats", withTx, withCurrentUser, authorOnly, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			fmt.Fprintf(w, "{\n")
+			first := true
+			expvar.Do(func(kv expvar.KeyValue) {
+				if !first {
+					fmt.Fprintf(w, ",\n")
+				}
+				first = false
+				fmt.Fprintf(w, "%q: %s", kv.Key, kv.Value)
+			})
+			fmt.Fprintf(w, "\n}\n")
+		})
+
+		// LTI
+		r.Get("/lti/config.xml", GetConfigXML)
+		//r.Post("/lti/problem_sets", gunzip, binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblemSets)
+		r.Post("/lti/problem_sets/:ui/:unique", gunzip, binding.Bind(LTIRequest{}), checkOAuthSignature, withTx, LtiProblemSet)
+
+		// problem bundles--for problem creation only
+		r.Post("/problem_bundles/unconfirmed", withTx, withCurrentUser, authorOnly, gunzip, binding.Json(ProblemBundle{}), restPostProblemBundleUnconfirmed)
+		r.Post("/problem_bundles/confirmed", withTx, withCurrentUser, authorOnly, gunzip, binding.Json(ProblemBundle{}), restPostProblemBundleConfirmed)
+		r.Put("/problem_bundles/:problem_id", withTx, withCurrentUser, authorOnly, gunzip, binding.Json(ProblemBundle{}), restPutProblemBundle)
+
+		// problem set bundles--for problem set creation only
+		r.Post("/problem_set_bundles", withTx, withCurrentUser, authorOnly, gunzip, binding.Json(ProblemSetBundle{}), restPostProblemSetBundle)
+		r.Put("/problem_set_bundles/:problem_set_id", withTx, withCurrentUser, authorOnly, gunzip, binding.Json(ProblemSetBundle{}), restPutProblemSetBundle)
+
+		// problem types
+		r.Get("/problem_types", auth, withTx, restGetProblemTypes)
+		r.Get("/problem_types/:name", auth, withTx, restGetProblemType)
+
+		// problems
+		r.Get("/problems", withTx, withCurrentUser, restGetProblems)
+		r.Get("/problems/:problem_id", withTx, withCurrentUser, restGetProblem)
+		r.Get("/problems/:problem_id/steps", withTx, withCurrentUser, restGetProblemSteps)
+		r.Get("/problems/:problem_id/steps/:step", withTx, withCurrentUser, restGetProblemStep)
+
+		// problem sets
+		r.Get("/problem_sets", withTx, withCurrentUser, restGetProblemSets)
+		r.Get("/problem_sets/:problem_set_id", withTx, withCurrentUser, restGetProblemSet)
+		r.Get("/problem_sets/:problem_set_id/problems", withTx, withCurrentUser, restGetProblemSetProblems)
+
+		// courses
+		r.Get("/courses", withTx, withCurrentUser, restGetCourses)
+		r.Get("/courses/:course_id", withTx, withCurrentUser, restGetCourse)
+
+		// users
+		r.Get("/users", withTx, withCurrentUser, restGetUsers)
+		r.Get("/users/me", withTx, withCurrentUser, restGetUserMe)
+		r.Get("/users/session", restGetUserSession)
+		r.Get("/users/:user_id", withTx, withCurrentUser, restGetUser)
+		r.Get("/courses/:course_id/users", withTx, withCurrentUser, restGetCourseUsers)
+
+		// assignments
+		r.Get("/users/:user_id/assignments", withTx, withCurrentUser, restGetUserAssignments)
+		r.Get("/courses/:course_id/users/:user_id/assignments", withTx, withCurrentUser, restGetCourseUserAssignments)
+		r.Get("/assignments", withTx, withCurrentUser, restGetAssignments)
+		r.Get("/assignments/:assignment_id", withTx, withCurrentUser, restGetAssignment)
+
+		// commits
+		r.Get("/assignments/:assignment_id/problems/:problem_id/commits/last", withTx, withCurrentUser, restGetAssignmentProblemCommitLast)
+		r.Get("/assignments/:assignment_id/problems/:problem_id/steps/:step/commits/last", withTx, withCurrentUser, restGetAssignmentProblemStepCommitLast)
+
+		// commit bundles
+		r.Post("/commit_bundles/unsigned", withTx, withCurrentUser, gunzip, binding.Json(CommitBundle{}), restPostCommitBundlesUnsigned)
+		r.Post("/commit_bundles/signed", withTx, withCurrentUser, gunzip, binding.Json(CommitBundle{}), restPostCommitBundlesSigned)
 	}
 
 	if use_tls {
@@ -324,7 +493,7 @@ func main() {
 		log.Printf("accepting https connections")
 		server := &http.Server{
 			Addr:    ":https",
-			Handler: &combinedHandler{martini: m, ltiMux: http.DefaultServeMux},
+			Handler: m,
 			TLSConfig: &tls.Config{
 				PreferServerCipherSuites: true,
 				MinVersion:               tls.VersionTLS12,
@@ -342,7 +511,7 @@ func main() {
 		// note: this will work behind a TLS proxy or for debugging with some calls
 		// but LTI will refuse to connect to an insecure host
 		log.Printf("accepting http connections on %s", nonTLSAddress)
-		if err := http.ListenAndServe(nonTLSAddress, &combinedHandler{martini: m, ltiMux: http.DefaultServeMux}); err != nil {
+		if err := http.ListenAndServe(nonTLSAddress, m); err != nil {
 			log.Fatalf("ListenAndServe: %v", err)
 		}
 	}
