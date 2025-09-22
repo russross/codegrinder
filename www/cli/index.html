@@ -71,7 +71,32 @@
     a:hover {
       color:#ba1c21;
     }
-  </style>
+     .tab {
+       display: inline-block;
+       padding: 10px 15px;
+       background-color: #333;
+       color: #fff;
+       border-radius: 10px 10px 0 0;
+       cursor: pointer;
+       margin-right: 5px;
+     }
+
+     .tab.active {
+       background-color: #ba1c21;
+     }
+
+     .tab-content {
+       display: none;
+       border: 1px solid #333;
+       border-radius: 0 10px 10px 10px;
+       padding: 15px;
+       background-color: #f9f9f9;
+     }
+
+     .tab-content.active {
+       display: block;
+     }
+   </style>
 </head>
 <body>
 
@@ -100,16 +125,36 @@
             } else {
                 old_value.push(value);
             }
-        } 
+        }
         return query_string;
     })();
+
+    // Determine default tab based on course
+    var course = QueryString.course || '';
+    var normalizedCourse = course.replace(/[-\s]/g, '').toLowerCase();
+    var isThonny = ['cs1030', 'cs1400', 'cs1410'].includes(normalizedCourse);
+    var defaultTab = isThonny ? 'thonny' : 'cli';
+
+    function switchTab(tabName) {
+        var tabs = document.querySelectorAll('.tab');
+        var contents = document.querySelectorAll('.tab-content');
+        tabs.forEach(function(tab) {
+            tab.classList.remove('active');
+        });
+        contents.forEach(function(content) {
+            content.classList.remove('active');
+        });
+        document.getElementById(tabName + '-tab').classList.add('active');
+        document.getElementById(tabName + '-content').classList.add('active');
+    }
 </script>
 
 <h1>CodeGrinder</h1>
-<p>This assignment is now ready to use. If you already know how to use the <tt>grind</tt> command-line tool, or you already have Thonny set up with the CodeGrinder plugin, you can go directly to those tools, download the assignment, and begin working.</p>
-<p>If you need more help, click on one of the options below. Note: You should install the Thonny Plugin (for CS 1400 and CS 1410) OR the command-line tool, but you probably do NOT need both.</p>
 
-<h2>For students using Thonny (CS 1400 and CS 1410)</h2>
+<h2 class="tab" id="thonny-tab" onclick="switchTab('thonny')">CodeGrinder for Thonny (Python only)</h2>
+<h2 class="tab" id="cli-tab" onclick="switchTab('cli')">CodeGrinder for the command line</h2>
+
+<div id="thonny-content" class="tab-content">
 <p>Thonny is an Integrated Development Environment (IDE) designed for students learning to program in Python. You must install it on your computer and set it up with the CodeGrinder plugin in order to complete this assignment. <a href="https://www.youtube.com/watch?v=DGCeENx7Fsg" target="_blank">This 8-minute screencast will show you the basics.</a></p>
 
 <h3>Installing Thonny</h3>
@@ -145,10 +190,11 @@
 <h3>Starting a new assignment</h3>
 <div>
     <p>You have to click on each assignment in Canvas one time to activate it in CodeGrinder. After that, you can select the “Download new assignments” option from the “CodeGrinder” menu in Thonny to download the assignment to your computer. Make note of the directory where the assignment is downloaded (it assumes you are starting from your home directory) and then open the files directly in Thonny. Your instructor will demonstrate this in class.</p>
-    <p>If you have already downloaded an assignment, “Download new assignments” will not do anything.</p>
+     <p>If you have already downloaded an assignment, "Download new assignments" will not do anything.</p>
+</div>
 </div>
 
-<h2>For students using the command-line tool</h2>
+<div id="cli-content" class="tab-content">
 <p>You must install the <tt>grind</tt> command-line tool to interact with CodeGrinder and complete this assignment.</p>
 
 <h3>Installing <tt>grind</tt></h3>
@@ -185,7 +231,8 @@
 <div>
   <p>After you install <tt>grind</tt> you must log in. You will normally only need to do this once per semester. To do so, type this command:</p>
   <pre>grind login <script>document.write(document.location.hostname + ' ' + QueryString.session)</script></pre>
-  <p>Note that the command given above is custom to you, and will expire 5 minutes from when you first loaded this page. If you need a fresh login token, reload this page.</p>
+   <p>Note that the command given above is custom to you, and will expire 5 minutes from when you first loaded this page. If you need a fresh login token, reload this page.</p>
+</div>
 </div>
 
 
@@ -209,12 +256,22 @@
             }
         };
 
+        // Reorder tabs and contents so default is on the left
+        if (defaultTab === 'cli') {
+            var parent = document.body;
+            parent.insertBefore(document.getElementById('cli-tab'), document.getElementById('thonny-tab'));
+            parent.insertBefore(document.getElementById('cli-content'), document.getElementById('thonny-content'));
+        }
+
         var h3 = document.getElementsByTagName('h3');
         for (var i = 0; i < h3.length; i++) {
             h3[i].style.cursor = 'pointer';
             h3[i].nextElementSibling.style.display = 'none';
             h3[i].addEventListener('click', toggle);
         }
+
+        // Set default active tab
+        switchTab(defaultTab);
     })();
 </script>
 </body>

@@ -404,46 +404,7 @@ func LtiProblemSet(w http.ResponseWriter, r *http.Request, tx *sql.Tx, form LTIR
 
 	// redirect to the console
 	key := loginRecords.Insert(user.ID)
-	http.Redirect(w, r, fmt.Sprintf("/%s/?assignment=%d&session=%s", ui, asst.ID, key), http.StatusSeeOther)
-}
-
-// LtiQuizzes handles /lti/quizzes requests.
-// It creates the user/course/assignment if necessary, creates a session,
-// and redirects the user to the main UI URL.
-func LtiQuizzes(w http.ResponseWriter, r *http.Request, tx *sql.Tx, form LTIRequest, params martini.Params) {
-	now := time.Now()
-
-	// load the course
-	course, err := getUpdateCourse(tx, &form, now)
-	if err != nil {
-		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-		return
-	}
-
-	// load the user
-	user, err := getUpdateUser(tx, &form, now)
-	if err != nil {
-		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-		return
-	}
-
-	// load the assignment
-	asst := new(Assignment)
-	if asst, err = getUpdateAssignment(tx, &form, now, course, nil, user); err != nil {
-		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
-		return
-	}
-
-	// sign the user in
-	session := NewSession(user.ID)
-	session.Save(w)
-
-	// redirect to the console
-	if asst.Instructor {
-		http.Redirect(w, r, fmt.Sprintf("/quiz/console.html?assignment=%d", asst.ID), http.StatusSeeOther)
-	} else {
-		http.Redirect(w, r, fmt.Sprintf("/quiz/?assignment=%d", asst.ID), http.StatusSeeOther)
-	}
+	http.Redirect(w, r, fmt.Sprintf("/%s/?assignment=%d&session=%s&course=%s", ui, asst.ID, key, url.QueryEscape(course.Label)), http.StatusSeeOther)
 }
 
 // get/create/update this user
