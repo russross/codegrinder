@@ -129,7 +129,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	eventChan := make(chan *DaycareResponse)
 
 	// Launch the core logic in a goroutine.
-	go HandleProblemAction(req.CommitBundle, params["action"], args, eventChan)
+	go HandleProblemAction(req.CommitBundle, params["problem_type"], params["action"], args, eventChan)
 
 	// Bridge the event channel to the websocket.
 	for res := range eventChan {
@@ -146,7 +146,7 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 
 // HandleProblemAction contains the core logic for running a problem action,
 // completely decoupled from the websocket/HTTP transport layer.
-func HandleProblemAction(bundle *CommitBundle, actionParam string, args []string, eventChan chan<- *DaycareResponse) {
+func HandleProblemAction(bundle *CommitBundle, problemTypeParam, actionParam string, args []string, eventChan chan<- *DaycareResponse) {
 	defer close(eventChan)
 	now := time.Now()
 
@@ -156,7 +156,7 @@ func HandleProblemAction(bundle *CommitBundle, actionParam string, args []string
 		eventChan <- &DaycareResponse{Error: err.Error()}
 	}
 
-	action, err := validateAndExtractAction(bundle, actionParam)
+	action, err := validateAndExtractAction(bundle, problemTypeParam, actionParam)
 	if err != nil {
 		sendError(fmt.Errorf("validation error: %v", err))
 		return
@@ -267,7 +267,7 @@ func HandleProblemAction(bundle *CommitBundle, actionParam string, args []string
 }
 
 // validateAndExtractAction performs sanity checks and signature validation on the commit bundle.
-func validateAndExtractAction(bundle *CommitBundle, actionParam string) (*ProblemTypeAction, error) {
+func validateAndExtractAction(bundle *CommitBundle, problemTypeParam, actionParam string) (*ProblemTypeAction, error) {
 	if bundle.ProblemType == nil {
 		return nil, fmt.Errorf("commit bundle must include the problem type")
 	}
@@ -277,8 +277,8 @@ func validateAndExtractAction(bundle *CommitBundle, actionParam string) (*Proble
 	if bundle.Problem == nil {
 		return nil, fmt.Errorf("commit bundle must include the problem")
 	}
-	if bundle.ProblemType.Name != bundle.Problem.ProblemType {
-		return nil, fmt.Errorf("problem type in bundle's problemtype (%s) must match problem type in bundle's problem (%s)", bundle.ProblemType.Name, bundle.Problem.ProblemType)
+	if bundle.ProblemType.Name != problemTypeParam {
+		return nil, fmt.Errorf("problem type in URL (%s) must match problem type in bundle (%s)", problemTypeParam, bundle.ProblemType.Name)
 	}
 	if actionParam == "" {
 		return nil, fmt.Errorf("action must be included in request URL")
