@@ -80,15 +80,11 @@ var containerLimiter chan struct{}
 // SocketProblemTypeAction handles a request to /sockets/:problem_type/:action
 // It expects a websocket connection, which will receive a series of DaycareRequest objects
 // and will respond with DaycareResponse objects, though not in a one-to-one fashion.
-// The first DaycareRequest must have the CommitBundle field present. Future requests
-// should only have Stdin present.
+// The first DaycareRequest must have the CommitBundle field present.
 func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params martini.Params) {
-	now := time.Now()
-
-	// CORS header for browser-based requests if the TA is a different host than the daycare
+	// CORS header for browser-based requests
 	w.Header().Set("Access-Control-Allow-Origin", "https://"+Config.TAHostname)
 
-	// get a websocket
 	socket, err := websocket.Upgrade(w, r, nil, 1024, 1024)
 	if err != nil {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "websocket error: %v", err)
@@ -98,78 +94,29 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		socket.WriteControl(websocket.CloseMessage, nil, time.Now().Add(5*time.Second))
 		socket.Close()
 	}()
+
+	// This helper is used to transmit errors that occur before the main event loop starts.
 	logAndTransmitErrorf := func(format string, args ...interface{}) {
 		msg := fmt.Sprintf(format, args...)
 		log.Print(msg)
 		res := &DaycareResponse{Error: msg}
 		if err := socket.WriteJSON(res); err != nil {
-			// what can we do? we already logged the error
+			log.Printf("error writing error to websocket: %v", err)
 		}
 	}
 
-	// get the first message
 	req := new(DaycareRequest)
 	if err := socket.ReadJSON(req); err != nil {
 		logAndTransmitErrorf("error reading first request message: %v", err)
 		return
 	}
 
-	// sanity check
 	if req.CommitBundle == nil {
 		logAndTransmitErrorf("first request message must include the commit bundle")
 		return
 	}
-	if req.CommitBundle.ProblemType == nil {
-		logAndTransmitErrorf("commit bundle must include the problem type")
-		return
-	}
-	if len(req.CommitBundle.ProblemTypeSignature) == 0 {
-		logAndTransmitErrorf("commit bundle must include the problem type signature")
-		return
-	}
-	if req.CommitBundle.ProblemType.Name != params["problem_type"] {
-		logAndTransmitErrorf("problem type in request URL must match problem type in bundle")
-		return
-	}
-	if params["action"] == "" {
-		logAndTransmitErrorf("action must be included in request URL")
-		return
-	}
-	if req.CommitBundle.ProblemType.Actions == nil || req.CommitBundle.ProblemType.Actions[params["action"]] == nil {
-		logAndTransmitErrorf("action %q not defined for problem type %s", params["action"], params["problem_type"])
-		return
-	}
-	action := req.CommitBundle.ProblemType.Actions[params["action"]]
-	if req.CommitBundle.Problem == nil {
-		logAndTransmitErrorf("commit bundle must include the problem")
-		return
-	}
-	if len(req.CommitBundle.ProblemSteps) == 0 {
-		logAndTransmitErrorf("commit bundle must include the problem steps")
-		return
-	}
-	if len(req.CommitBundle.ProblemSignature) == 0 {
-		logAndTransmitErrorf("commit bundle must include the problem signature")
-		return
-	}
-	if req.CommitBundle.Commit == nil {
-		logAndTransmitErrorf("commit bundle must include the commit")
-		return
-	}
-	if len(req.CommitBundle.CommitSignature) == 0 {
-		logAndTransmitErrorf("commit bundle must include the commit signature")
-		return
-	}
-	if len(req.CommitBundle.Hostname) == 0 {
-		logAndTransmitErrorf("commit bundle must include the daycare host name")
-		return
-	}
-	if req.CommitBundle.UserID < 1 {
-		logAndTransmitErrorf("commit bundle must include the user's ID")
-		return
-	}
 
-	// gather any args
+	// Gather any args from the URL query.
 	r.ParseForm()
 	args := []string{}
 	for key, vals := range r.Form {
@@ -177,184 +124,92 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 			args = append(args, key+"="+vals[0])
 		}
 	}
-	if len(args) > 0 {
-		log.Printf("args: %v", args)
+
+	// Create a channel for HandleProblemAction to send responses.
+	eventChan := make(chan *DaycareResponse)
+
+	// Launch the core logic in a goroutine.
+	go HandleProblemAction(req.CommitBundle, params["action"], args, eventChan)
+
+	// Bridge the event channel to the websocket.
+	for res := range eventChan {
+		if err := socket.WriteJSON(res); err != nil {
+			if strings.Contains(err.Error(), "use of closed network connection") {
+				// Client disconnected, just break and let cleanup happen.
+				break
+			}
+			log.Printf("websocket write error: %v", err)
+			break
+		}
+	}
+}
+
+// HandleProblemAction contains the core logic for running a problem action,
+// completely decoupled from the websocket/HTTP transport layer.
+func HandleProblemAction(bundle *CommitBundle, actionParam string, args []string, eventChan chan<- *DaycareResponse) {
+	defer close(eventChan)
+	now := time.Now()
+
+	// Helper to send an error message over the event channel.
+	sendError := func(err error) {
+		log.Print(err)
+		eventChan <- &DaycareResponse{Error: err.Error()}
 	}
 
-	// check signatures
-	problemType := req.CommitBundle.ProblemType
-	typeSig := problemType.ComputeSignature(Config.DaycareSecret)
-	if req.CommitBundle.ProblemTypeSignature != typeSig {
-		logAndTransmitErrorf("problem type signature mismatch: found %s but expected %s", req.CommitBundle.ProblemTypeSignature, typeSig)
-		return
-	}
-	problem, steps := req.CommitBundle.Problem, req.CommitBundle.ProblemSteps
-	problemSig := problem.ComputeSignature(Config.DaycareSecret, steps)
-	if req.CommitBundle.ProblemSignature != problemSig {
-		logAndTransmitErrorf("problem signature mismatch: found %s but expected %s", req.CommitBundle.ProblemSignature, problemSig)
-		return
-	}
-	commit := req.CommitBundle.Commit
-	commitSig := commit.ComputeSignature(Config.DaycareSecret, typeSig, problemSig, req.CommitBundle.Hostname, req.CommitBundle.UserID)
-	if req.CommitBundle.CommitSignature != commitSig {
-		logAndTransmitErrorf("commit signature mismatch: found %s but expected %s", req.CommitBundle.CommitSignature, commitSig)
-		return
-	}
-	req.CommitBundle.CommitSignature = ""
-
-	// host must match
-	if req.CommitBundle.Hostname != Config.Hostname {
-		logAndTransmitErrorf("commit is signed for host %s, this is %s", req.CommitBundle.Hostname, Config.Hostname)
-		return
-	}
-
-	// commit must be recent
-	age := time.Since(commit.UpdatedAt)
-	if age < 0 {
-		// be forgiving of clock skew
-		age = -age
-	}
-	if age > MaxDaycareRequestAge {
-		logAndTransmitErrorf("commit signature is %v off, cannot be more than %v", age, MaxDaycareRequestAge)
-		return
-	}
-	if commit.Action != params["action"] {
-		logAndTransmitErrorf("commit says action is %s, but request says %s", commit.Action, params["action"])
-		return
-	}
-
-	// find the problem step
-	if commit.Step < 1 || commit.Step > int64(len(steps)) {
-		logAndTransmitErrorf("commit refers to step number %d, but there are %d steps in the problem", commit.Step, len(steps))
-		return
-	}
-	step := steps[commit.Step-1]
-	if step == nil {
-		logAndTransmitErrorf("required step %d is nil", commit.Step)
-		return
-	}
-	if step.Step != commit.Step {
-		logAndTransmitErrorf("step number %d in the problem thinks it is step number %d", commit.Step, step.Step)
-		return
-	}
-	if step.ProblemType != problemType.Name {
-		logAndTransmitErrorf("step number %d in the problem has problem type %q but the commit bundle included problem type %q", step.ProblemType, problemType)
-		return
-	}
-
-	// collect the files from the problem step, commit, and problem type
-	files := make(map[string][]byte)
-	for name, contents := range step.Files {
-		files[name] = contents
-	}
-	for name, contents := range commit.Files {
-		files[name] = contents
-	}
-	for name, contents := range req.CommitBundle.ProblemType.Files {
-		files[name] = contents
-	}
-
-	// limit the number of concurrent containers
-	containerLimiter <- struct{}{}
-	defer func() {
-		<-containerLimiter
-	}()
-
-	// launch a nanny process
-	nannyName := fmt.Sprintf("nanny-%d", req.CommitBundle.UserID)
-	limits := newLimits(action)
-	limits.override(problem.Options)
-	n, err := NewNanny(req.CommitBundle.ProblemType, problem, action.Action, args, limits, nannyName)
+	action, err := validateAndExtractAction(bundle, actionParam)
 	if err != nil {
-		logAndTransmitErrorf("error creating container: %v", err)
+		sendError(fmt.Errorf("validation error: %v", err))
 		return
 	}
 
-	// shutdown the container when finished
+	// The signature is now validated, so we can clear it to prevent potential re-use.
+	bundle.CommitSignature = ""
+
+	_, files, err := gatherFilesAndStep(bundle)
+	if err != nil {
+		sendError(fmt.Errorf("error gathering files: %v", err))
+		return
+	}
+
+	// Limit the number of concurrent containers.
+	containerLimiter <- struct{}{}
+	defer func() { <-containerLimiter }()
+
+	nannyName := fmt.Sprintf("nanny-%d", bundle.UserID)
+	limits := newLimits(action)
+	limits.override(bundle.Problem.Options)
+	n, err := NewNanny(bundle.ProblemType, bundle.Problem, action.Action, args, limits, nannyName)
+	if err != nil {
+		sendError(fmt.Errorf("error creating container: %v", err))
+		return
+	}
 	defer func() {
 		if err := n.Shutdown("action finished"); err != nil {
-			logAndTransmitErrorf("nanny shutdown error: %v", err)
+			log.Printf("nanny shutdown error: %v", err)
 		}
 	}()
 
-	// relay container events to the socket
-	eventListenerClosed := make(chan struct{})
-	go func() {
-		count, overflow, discarded := 0, 0, 0
-		for event := range n.Events {
-			if count > TranscriptDataLimit {
-				overflow += len(event.StreamData)
-			} else {
-				count += len(event.StreamData)
+	// Launch the event streamer.
+	eventListenerDone := make(chan struct{})
+	go streamNannyEvents(n, bundle.Commit, eventChan, eventListenerDone)
 
-				// record the event
-				if len(commit.Transcript) > 0 && commit.Transcript[len(commit.Transcript)-1].Event == event.Event &&
-					(event.Event == "stdin" || event.Event == "stdout" || event.Event == "stderr") {
-					// merge this with the previous event
-					prev := commit.Transcript[len(commit.Transcript)-1]
-
-					data := make([]byte, 0, len(prev.StreamData)+len(event.StreamData))
-					data = append(data, prev.StreamData...)
-					data = append(data, event.StreamData...)
-					prev.StreamData = data
-					prev.Time = event.Time
-				} else if len(commit.Transcript) < TranscriptEventCountLimit {
-					commit.Transcript = append(commit.Transcript, event)
-				} else {
-					discarded++
-				}
-			}
-
-			// transmit the message to the client
-			switch event.Event {
-			case "exec", "exit", "stdin", "stdout", "stderr", "stdinclosed", "error", "files":
-				if event.Event == "files" {
-					log.Printf("%s", event)
-				}
-				res := &DaycareResponse{Event: event}
-				if err := socket.WriteJSON(res); err != nil {
-					if strings.Contains(err.Error(), "use of closed network connection") {
-						// websocket closed
-					} else {
-						logAndTransmitErrorf("websocket write error: %v", err)
-					}
-
-					break
-				}
-
-			default:
-				// ignore other event types
-			}
-		}
-
-		// report any truncation
-		if overflow > 0 || discarded > 0 {
-			log.Printf("transcript truncated by %d events and %d bytes of stream data", discarded, overflow)
-		}
-
-		eventListenerClosed <- struct{}{}
-	}()
-
-	// copy the files to the container
 	if err = n.PutFiles(files, 0666); err != nil {
 		n.ReportCard.LogAndFailf("uploading files: %v", err)
+		close(n.Events) // Ensure the event streamer terminates.
+		<-eventListenerDone
 		return
 	}
 
-	// run the action
+	// Run the action command.
 	cmd := strings.Fields(action.Command)
 	switch {
 	case action.Parser == "xunit":
 		runAndParseXUnit(n, cmd)
-
 	case action.Parser == "check":
 		runAndParseCheckXML(n, cmd)
-
 	case action.Parser != "":
 		n.ReportCard.LogAndFailf("unknown parser %q for problem type %s action %s",
 			action.Parser, action.ProblemType, action.Action)
-		return
-
 	default:
 		_, _, _, status, err := n.Exec(cmd)
 		if err != nil {
@@ -366,37 +221,35 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		}
 	}
 
-	commit.ReportCard = n.ReportCard
+	bundle.Commit.ReportCard = n.ReportCard
 
-	// download any files?
-	for _, option := range problem.Options {
+	// Handle file downloads.
+	for _, option := range bundle.Problem.Options {
 		parts := strings.SplitN(option, "=", 2)
 		if len(parts) != 2 || parts[0] != "download" {
 			continue
 		}
-		files, err := n.GetFiles(strings.Split(parts[1], ","))
+		dlFiles, err := n.GetFiles(strings.Split(parts[1], ","))
 		if err != nil {
 			log.Printf("error trying to download files from container: %v", err)
-		} else if len(files) > 0 {
-			n.Events <- &EventMessage{Event: "files", Files: files}
+		} else if len(dlFiles) > 0 {
+			n.Events <- &EventMessage{Event: "files", Files: dlFiles}
 		}
 	}
 
-	// wait for listener to finish
+	// Wait for the event streamer to finish.
 	close(n.Events)
-	<-eventListenerClosed
+	<-eventListenerDone
 
-	// send the final commit back to the client
-	if commit.Action == "grade" {
-		// compute the score for this step on a scale of 0.0 to 1.0
+	// Send the final commit back to the client if grading.
+	if bundle.Commit.Action == "grade" {
+		commit := bundle.Commit
+		// Compute score.
 		if commit.ReportCard.Passed {
-			// award full credit for this step
 			commit.Score = 1.0
 		} else if len(commit.ReportCard.Results) == 0 {
-			// no results? fail...
 			commit.Score = 0.0
 		} else {
-			// compute partial credit for this step
 			passed := 0
 			for _, elt := range commit.ReportCard.Results {
 				if elt.Outcome == "passed" {
@@ -406,15 +259,158 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 			commit.Score = float64(passed) / float64(len(commit.ReportCard.Results))
 		}
 		commit.UpdatedAt = now
-		req.CommitBundle.CommitSignature = commit.ComputeSignature(Config.DaycareSecret, req.CommitBundle.ProblemTypeSignature, req.CommitBundle.ProblemSignature, req.CommitBundle.Hostname, req.CommitBundle.UserID)
+		bundle.CommitSignature = commit.ComputeSignature(Config.DaycareSecret, bundle.ProblemTypeSignature, bundle.ProblemSignature, bundle.Hostname, bundle.UserID)
 
-		res := &DaycareResponse{CommitBundle: req.CommitBundle}
-		if err := socket.WriteJSON(res); err != nil {
-			logAndTransmitErrorf("error writing final commit JSON: %v", err)
-			return
-		}
+		eventChan <- &DaycareResponse{CommitBundle: bundle}
 	}
 	log.Printf("handler for %s finished", nannyName)
+}
+
+// validateAndExtractAction performs sanity checks and signature validation on the commit bundle.
+func validateAndExtractAction(bundle *CommitBundle, actionParam string) (*ProblemTypeAction, error) {
+	if bundle.ProblemType == nil {
+		return nil, fmt.Errorf("commit bundle must include the problem type")
+	}
+	if len(bundle.ProblemTypeSignature) == 0 {
+		return nil, fmt.Errorf("commit bundle must include the problem type signature")
+	}
+	if bundle.Problem == nil {
+		return nil, fmt.Errorf("commit bundle must include the problem")
+	}
+	if bundle.ProblemType.Name != bundle.Problem.ProblemType {
+		return nil, fmt.Errorf("problem type in bundle's problemtype (%s) must match problem type in bundle's problem (%s)", bundle.ProblemType.Name, bundle.Problem.ProblemType)
+	}
+	if actionParam == "" {
+		return nil, fmt.Errorf("action must be included in request URL")
+	}
+	if bundle.ProblemType.Actions == nil || bundle.ProblemType.Actions[actionParam] == nil {
+		return nil, fmt.Errorf("action %q not defined for problem type %s", actionParam, bundle.ProblemType.Name)
+	}
+	if len(bundle.ProblemSteps) == 0 {
+		return nil, fmt.Errorf("commit bundle must include the problem steps")
+	}
+	if len(bundle.ProblemSignature) == 0 {
+		return nil, fmt.Errorf("commit bundle must include the problem signature")
+	}
+	if bundle.Commit == nil {
+		return nil, fmt.Errorf("commit bundle must include the commit")
+	}
+	if len(bundle.CommitSignature) == 0 {
+		return nil, fmt.Errorf("commit bundle must include the commit signature")
+	}
+	if len(bundle.Hostname) == 0 {
+		return nil, fmt.Errorf("commit bundle must include the daycare host name")
+	}
+	if bundle.UserID < 1 {
+		return nil, fmt.Errorf("commit bundle must include the user's ID")
+	}
+
+	// Check signatures
+	typeSig := bundle.ProblemType.ComputeSignature(Config.DaycareSecret)
+	if bundle.ProblemTypeSignature != typeSig {
+		return nil, fmt.Errorf("problem type signature mismatch")
+	}
+	problemSig := bundle.Problem.ComputeSignature(Config.DaycareSecret, bundle.ProblemSteps)
+	if bundle.ProblemSignature != problemSig {
+		return nil, fmt.Errorf("problem signature mismatch")
+	}
+	commitSig := bundle.Commit.ComputeSignature(Config.DaycareSecret, typeSig, problemSig, bundle.Hostname, bundle.UserID)
+	if bundle.CommitSignature != commitSig {
+		return nil, fmt.Errorf("commit signature mismatch")
+	}
+
+	if bundle.Hostname != Config.Hostname {
+		return nil, fmt.Errorf("commit is signed for host %s, this is %s", bundle.Hostname, Config.Hostname)
+	}
+
+	age := time.Since(bundle.Commit.UpdatedAt)
+	if age < 0 {
+		age = -age // Forgiving of clock skew.
+	}
+	if age > MaxDaycareRequestAge {
+		return nil, fmt.Errorf("commit signature is %v old, cannot be more than %v", age, MaxDaycareRequestAge)
+	}
+	if bundle.Commit.Action != actionParam {
+		return nil, fmt.Errorf("commit says action is %s, but request says %s", bundle.Commit.Action, actionParam)
+	}
+
+	return bundle.ProblemType.Actions[actionParam], nil
+}
+
+// gatherFilesAndStep finds the correct problem step and aggregates files from the bundle.
+func gatherFilesAndStep(bundle *CommitBundle) (*ProblemStep, map[string][]byte, error) {
+	commit := bundle.Commit
+	steps := bundle.ProblemSteps
+	problemType := bundle.ProblemType
+
+	if commit.Step < 1 || commit.Step > int64(len(steps)) {
+		return nil, nil, fmt.Errorf("commit refers to step number %d, but there are %d steps", commit.Step, len(steps))
+	}
+	step := steps[commit.Step-1]
+	if step == nil {
+		return nil, nil, fmt.Errorf("required step %d is nil", commit.Step)
+	}
+	if step.Step != commit.Step {
+		return nil, nil, fmt.Errorf("step number mismatch: commit is for step %d, but step object thinks it is %d", commit.Step, step.Step)
+	}
+	if step.ProblemType != problemType.Name {
+		return nil, nil, fmt.Errorf("problem type mismatch in step %d: expected %q, got %q", step.Step, problemType.Name, step.ProblemType)
+	}
+
+	// Collect files from the problem type, problem step, and commit.
+	files := make(map[string][]byte)
+	for name, contents := range problemType.Files {
+		files[name] = contents
+	}
+	for name, contents := range step.Files {
+		files[name] = contents
+	}
+	for name, contents := range commit.Files {
+		files[name] = contents
+	}
+
+	return step, files, nil
+}
+
+// streamNannyEvents relays events from the nanny to the event channel.
+func streamNannyEvents(n *Nanny, commit *Commit, eventChan chan<- *DaycareResponse, done chan<- struct{}) {
+	defer func() { done <- struct{}{} }()
+
+	count, overflow, discarded := 0, 0, 0
+	for event := range n.Events {
+		// Handle transcript data limits.
+		if count > TranscriptDataLimit {
+			overflow += len(event.StreamData)
+		} else {
+			count += len(event.StreamData)
+			// Merge stream data if possible.
+			if len(commit.Transcript) > 0 && commit.Transcript[len(commit.Transcript)-1].Event == event.Event &&
+				(event.Event == "stdin" || event.Event == "stdout" || event.Event == "stderr") {
+				prev := commit.Transcript[len(commit.Transcript)-1]
+				prev.StreamData = append(prev.StreamData, event.StreamData...)
+				prev.Time = event.Time
+			} else if len(commit.Transcript) < TranscriptEventCountLimit {
+				commit.Transcript = append(commit.Transcript, event)
+			} else {
+				discarded++
+			}
+		}
+
+		// Transmit the event to the client.
+		switch event.Event {
+		case "exec", "exit", "stdin", "stdout", "stderr", "stdinclosed", "error", "files":
+			if event.Event == "files" {
+				log.Printf("%s", event)
+			}
+			eventChan <- &DaycareResponse{Event: event}
+		default:
+			// Ignore other event types.
+		}
+	}
+
+	if overflow > 0 || discarded > 0 {
+		log.Printf("transcript truncated by %d events and %d bytes of stream data", discarded, overflow)
+	}
 }
 
 type Nanny struct {
@@ -492,13 +488,14 @@ func NewNanny(problemType *ProblemType, problem *Problem, action string, args []
 	containerID := strings.TrimSpace(string(output))
 
 	return &Nanny{
-		Name:       name,
-		Start:      time.Now(),
-		ID:         containerID,
-		ReportCard: NewReportCard(),
-		Input:      make(chan string),
-		Events:     make(chan *EventMessage),
-	}, nil
+			Name:       name,
+			Start:      time.Now(),
+			ID:         containerID,
+			ReportCard: NewReportCard(),
+			Input:      make(chan string),
+			Events:     make(chan *EventMessage),
+		},
+		nil
 }
 
 func (n *Nanny) Shutdown(msg string) error {
