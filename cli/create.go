@@ -16,6 +16,43 @@ import (
 	"gopkg.in/gcfg.v1"
 )
 
+func parseGitignore(content string) []string {
+	lines := strings.Split(content, "\n")
+	var patterns []string
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		patterns = append(patterns, line)
+	}
+	return patterns
+}
+
+func isIgnored(path string, patterns []string) bool {
+	for _, pattern := range patterns {
+		if matchPattern(pattern, path) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchPattern(pattern, path string) bool {
+	if strings.HasSuffix(pattern, "/") {
+		// directory pattern
+		dirPattern := strings.TrimSuffix(pattern, "/")
+		return strings.HasPrefix(path, dirPattern+"/") || path == dirPattern
+	} else if strings.HasPrefix(pattern, "*") {
+		// suffix match
+		suffix := strings.TrimPrefix(pattern, "*")
+		return strings.HasSuffix(path, suffix)
+	} else {
+		// exact match
+		return path == pattern
+	}
+}
+
 const ProblemConfigName string = "problem.cfg"
 
 type ConfigFile struct {
@@ -349,8 +386,6 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 
 	// generate steps
 	whitelist := make(map[string]bool)
-	blacklist := []string{"~", ".swp", ".o", ".pyc", ".out", ".DS_Store", ".js", ".js.map", "package-lock.json"}
-	blacklistDir := []string{"__pycache__", "node_modules", "dist"}
 	for index, step := range steps {
 		i := int64(index + 1)
 		fmt.Printf("gathering step %d\n", i)
@@ -373,6 +408,7 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 		if !single {
 			stepdir = filepath.Join(directory, strconv.FormatInt(i, 10))
 		}
+		patterns := parseGitignore(string(problemTypes[step.ProblemType].Files[".gitignore"]))
 		err := filepath.Walk(stepdir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				log.Fatalf("walk error for %s: %v", path, err)
@@ -383,12 +419,9 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 			}
 			relpath = filepath.ToSlash(relpath)
 			if info.IsDir() {
-				dirname := filepath.Base(path)
-				for _, name := range blacklistDir {
-					if dirname == name {
-						fmt.Printf("  skipping directory %s\n", relpath)
-						return filepath.SkipDir
-					}
+				if isIgnored(relpath, patterns) {
+					fmt.Printf("  skipping directory %s\n", relpath)
+					return filepath.SkipDir
 				}
 				return nil
 			}
@@ -401,12 +434,10 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 				fmt.Printf("    because it is provided by the problem type\n")
 				return nil
 			}
-			for _, suffix := range blacklist {
-				if strings.HasSuffix(relpath, suffix) {
-					fmt.Printf("  skipping file %s\n", relpath)
-					fmt.Printf("    because it has the following suffix: %s\n", suffix)
-					return nil
-				}
+			if isIgnored(relpath, patterns) {
+				fmt.Printf("  skipping file %s\n", relpath)
+				fmt.Printf("    because it matches .gitignore pattern\n")
+				return nil
 			}
 
 			// load the file and add it to the appropriate place
