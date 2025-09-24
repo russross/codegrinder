@@ -1,6 +1,6 @@
 '''Thonny plugin to integrate with CodeGrinder for coding practice'''
 
-__version__ = '2.7.0'
+__version__ = '2.7.1'
 
 import base64
 import certifi
@@ -24,6 +24,7 @@ import tkinter.simpledialog
 import tkinter.ttk
 from typing import List, Dict, Tuple, Optional, Any
 import websocket
+import shutil
 
 #
 # inject the CodeGrinder menu items into Thonny
@@ -983,14 +984,41 @@ def course_directory(label: str) -> str:
     else:
         return label
 
+def resolve_assignment_conflict(rootDir: str, server_assignment_id: int) -> str:
+    grind_path = os.path.join(rootDir, perProblemSetDotFile)
+    if os.path.exists(grind_path):
+        try:
+            with open(grind_path) as fp:
+                as_dict = json.loads(fp.read())
+                dotfile = DotFile.from_dict(as_dict)
+            if dotfile.assignmentID == server_assignment_id:
+                return 'skip'
+        except:
+            pass  # treat as mismatch
+    # If no .grind or mismatch
+    answer = tkinter.messagebox.askyesno(
+        'Assignment Directory Conflict',
+        'An existing assignment directory was found that may be from a previous semester or course instance. ' +
+        'To download the new assignment, the old directory must be deleted. Do you want to delete it and download fresh?',
+        master=thonny.get_workbench()
+    )
+    if answer:
+        shutil.rmtree(rootDir)
+        return 'download'
+    else:
+        return 'skip'
+
 def get_assignment(assignment: Assignment, course: Course, rootDir: str) -> Optional[str]:
     # get the problem set
     problemSet: ProblemSet = must_get_object(f'/problem_sets/{assignment.problemSetID}', None, ProblemSet)
 
-    # if the target directory exists, skip this assignment
+    # if the target directory exists, check for conflicts
     rootDir = os.path.join(rootDir, course_directory(course.label), problemSet.unique)
     if os.path.exists(rootDir):
-        return None
+        action = resolve_assignment_conflict(rootDir, assignment.id)
+        if action == 'skip':
+            return None
+        # If 'download', continue (directory was deleted)
 
     # get the list of problems in the problem set
     problemSetProblems: List[ProblemSetProblem] = must_get_object_list(f'/problem_sets/{assignment.problemSetID}/problems', None, ProblemSetProblem)
