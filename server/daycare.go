@@ -126,14 +126,20 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	}
 
 	// Create a channel for HandleProblemAction to send responses.
-	eventChan := make(chan *DaycareResponse)
+	eventChan := make(chan *DaycareResponse, 100)
 
 	// Launch the core logic in a goroutine.
 	go HandleProblemAction(req.CommitBundle, params["problem_type"], params["action"], args, eventChan)
 
 	// Bridge the event channel to the websocket.
+	broken := false
 	for res := range eventChan {
+		if broken {
+			// Continue to drain the channel after a websocket failure
+			continue
+		}
 		if err := socket.WriteJSON(res); err != nil {
+			broken = true
 			if strings.Contains(err.Error(), "use of closed network connection") {
 				// Client disconnected, just break and let cleanup happen.
 				break
@@ -173,7 +179,11 @@ func HandleProblemAction(bundle *CommitBundle, problemTypeParam, actionParam str
 
 	// Limit the number of concurrent containers.
 	containerLimiter <- struct{}{}
-	defer func() { <-containerLimiter }()
+	log.Printf("container locked for user %d", bundle.UserID)
+	defer func() {
+		<-containerLimiter
+		log.Printf("container unlocked for user %d", bundle.UserID)
+	}()
 
 	nannyName := fmt.Sprintf("nanny-%d", bundle.UserID)
 	limits := newLimits(action)
@@ -418,7 +428,6 @@ type Nanny struct {
 	Start      time.Time
 	ID         string
 	ReportCard *ReportCard
-	Input      chan string
 	Events     chan *EventMessage
 	Transcript []*EventMessage
 	Closed     bool
@@ -492,8 +501,7 @@ func NewNanny(problemType *ProblemType, problem *Problem, action string, args []
 			Start:      time.Now(),
 			ID:         containerID,
 			ReportCard: NewReportCard(),
-			Input:      make(chan string),
-			Events:     make(chan *EventMessage),
+			Events:     make(chan *EventMessage, 100),
 		},
 		nil
 }

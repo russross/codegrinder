@@ -26,4 +26,4 @@ target/debug/student:	src/*.rs Cargo.toml
 
 clean:
 	cargo clean
-	rm -f *.lock *.xml
+	rm -f *.xml
