@@ -108,6 +108,15 @@ func getSessionFromGRPC(ctx context.Context) (*CookieSession, error) {
 	return DecodeSession(cookieValue)
 }
 
+// getCurrentUserFromSession loads the current user from the database using meddler
+func getCurrentUserFromSession(tx *sql.Tx, session *CookieSession) (*User, error) {
+	currentUser := new(User)
+	if err := meddler.Load(tx, "users", currentUser, session.UserID); err != nil {
+		return nil, status.Errorf(codes.Internal, "db error loading user: %v", err)
+	}
+	return currentUser, nil
+}
+
 // ListProblems retrieves all problems and related data for the authenticated user
 func (s *taServiceServer) ListProblems(ctx context.Context, req *pb.ListProblemsRequest) (*pb.ListProblemsResponse, error) {
 	// Validate session
@@ -124,9 +133,9 @@ func (s *taServiceServer) ListProblems(ctx context.Context, req *pb.ListProblems
 
 	err = withTXForGRPC(ctx, func(tx *sql.Tx) error {
 		// Get current user
-		currentUser := new(User)
-		if err := meddler.Load(tx, "users", currentUser, session.UserID); err != nil {
-			return status.Errorf(codes.Internal, "db error loading user: %v", err)
+		currentUser, err := getCurrentUserFromSession(tx, session)
+		if err != nil {
+			return err
 		}
 
 		// Get user

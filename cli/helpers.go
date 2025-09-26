@@ -317,3 +317,133 @@ func mustConfirmCommitBundle(bundle *CommitBundle, args []string) *CommitBundle 
 	log.Fatalf("no commit returned from server")
 	return nil
 }
+
+func getAssignment(assignment *Assignment, rootDir, prettyRoot string) string {
+	// get the course
+	course := new(Course)
+	mustGetObject(fmt.Sprintf("/courses/%d", assignment.CourseID), nil, course)
+
+	// get the problem set
+	problemSet := new(ProblemSet)
+	mustGetObject(fmt.Sprintf("/problem_sets/%d", assignment.ProblemSetID), nil, problemSet)
+
+	// get the list of problems in the problem set
+	problemSetProblems := []*ProblemSetProblem{}
+	mustGetObject(fmt.Sprintf("/problem_sets/%d/problems", assignment.ProblemSetID), nil, &problemSetProblems)
+
+	// for each problem get the problem, the most recent commit (or create one), and the corresponding step
+	commits := make(map[string]*Commit)
+	problems := make(map[string]*Problem)
+	steps := make(map[string]*ProblemStep)
+	types := make(map[string]*ProblemType)
+	problemSteps := make(map[string]int64) // temporary to store step numbers
+	for _, elt := range problemSetProblems {
+		problem, commit, step := new(Problem), new(Commit), new(ProblemStep)
+		mustGetObject(fmt.Sprintf("/problems/%d", elt.ProblemID), nil, problem)
+		problems[problem.Unique] = problem
+
+		if getObject(fmt.Sprintf("/assignments/%d/problems/%d/commits/last", assignment.ID, problem.ID), nil, commit) {
+			problemSteps[problem.Unique] = commit.Step
+		} else {
+			// if there is no commit for this problem, we're starting from step one
+			commit = nil
+			problemSteps[problem.Unique] = 1
+		}
+
+		mustGetObject(fmt.Sprintf("/problems/%d/steps/%d", problem.ID, problemSteps[problem.Unique]), nil, step)
+		commits[problem.Unique] = commit
+		steps[problem.Unique] = step
+
+		// get the problem type if we do not already have it
+		if _, exists := types[step.ProblemType]; !exists {
+			problemType := new(ProblemType)
+			mustGetObject(fmt.Sprintf("/problem_types/%s", step.ProblemType), nil, problemType)
+			types[step.ProblemType] = problemType
+		}
+	}
+
+	// build the infos map after all API calls
+	infos := make(map[string]*ProblemInfo)
+	for unique, problem := range problems {
+		info := &ProblemInfo{
+			ID:   problem.ID,
+			Step: problemSteps[unique],
+		}
+		infos[unique] = info
+	}
+
+	// check if the target directory exists
+	rootDir = filepath.Join(rootDir, courseDirectory(course.Label), problemSet.Unique)
+	prettyRoot = filepath.Join(prettyRoot, courseDirectory(course.Label), problemSet.Unique)
+	if _, err := os.Stat(rootDir); err == nil {
+		log.Printf("directory %s already exists", prettyRoot)
+		log.Fatalf("delete it first if you want to re-download the assignment")
+	} else if !os.IsNotExist(err) {
+		log.Fatalf("error checking if directory %s exists: %v", prettyRoot, err)
+	}
+
+	fmt.Printf("unpacking problem set in %s\n", prettyRoot)
+
+	mostRecentTime := time.Time{}
+	changeTo := rootDir
+	for unique := range steps {
+		commit, problem, step := commits[unique], problems[unique], steps[unique]
+
+		// if there is only one problem in the set, use the main directory
+		target := rootDir
+		if len(steps) > 1 {
+			target = filepath.Join(rootDir, unique)
+
+			if step.Step > 1 {
+				fmt.Printf("unpacking problem %s step %d\n", unique, step.Step)
+			} else {
+				fmt.Printf("unpacking problem %s\n", unique)
+			}
+		} else if step.Step > 1 {
+			fmt.Printf("unpacking step %d\n", step.Step)
+		}
+
+		// save the step files
+		files := make(map[string][]byte)
+		for name, contents := range step.Files {
+			files[filepath.FromSlash(name)] = contents
+		}
+		files[filepath.Join("doc", "index.html")] = []byte(step.Instructions)
+
+		// step files may be overwritten by commit files
+		if commit != nil {
+			if commit.UpdatedAt.After(mostRecentTime) {
+				// when an instructor is downloading a student assignment,
+				// change to the directory for the problem with the most recent commit
+				mostRecentTime = commit.UpdatedAt
+				changeTo = target
+			}
+			for name, contents := range commit.Files {
+				files[filepath.FromSlash(name)] = contents
+			}
+		}
+
+		// save problem type files
+		for name, contents := range types[step.ProblemType].Files {
+			if _, exists := files[filepath.FromSlash(name)]; exists {
+				fmt.Printf("warning: problem type file is overwriting problem file: %s\n", filepath.Join(target, filepath.FromSlash(name)))
+			}
+			files[filepath.FromSlash(name)] = contents
+		}
+
+		updateFiles(target, files, nil, false)
+
+		// does this commit indicate the step was finished and needs to advance?
+		if commit != nil && commit.ReportCard != nil && commit.ReportCard.Passed && commit.Score == 1.0 {
+			nextStep(target, infos[unique], problem, commit, types)
+		}
+
+	}
+	dotfile := &DotFileInfo{
+		AssignmentID: assignment.ID,
+		Problems:     infos,
+		Path:         filepath.Join(rootDir, perProblemSetDotFile),
+	}
+	saveDotFile(dotfile)
+	return changeTo
+}
