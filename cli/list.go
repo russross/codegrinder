@@ -37,7 +37,7 @@ func CommandList(cmd *cobra.Command, args []string) {
 
 	// Create context with session cookie
 	ctx := context.Background()
-	ctx = metadata.AppendToOutgoingContext(ctx, "cookie", fmt.Sprintf("codegrinder=%s", Config.Cookie))
+	ctx = metadata.AppendToOutgoingContext(ctx, "cookie", Config.Cookie)
 
 	// Call ListProblems
 	resp, err := client.ListProblems(ctx, &pb.ListProblemsRequest{})
