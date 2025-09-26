@@ -510,8 +510,8 @@ func main() {
 		}
 
 		mux := cmux.New(l)
-		grpcL := mux.Match(cmux.HTTP2HeaderField("content-type", "application/grpc"))
-		httpL := mux.Match(cmux.Any())
+		grpcL := mux.Match(cmux.HTTP2())
+		httpL := mux.Match(cmux.HTTP1())
 
 		tlsConfig := &tls.Config{
 			PreferServerCipherSuites: true,
