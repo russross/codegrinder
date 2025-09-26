@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,8 +17,11 @@ import (
 	"strings"
 
 	"github.com/blang/semver"
+	pb "github.com/russross/codegrinder/rpc"
 	. "github.com/russross/codegrinder/types"
 	"github.com/spf13/cobra"
+	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 const (
@@ -415,8 +419,26 @@ func plural(n int) string {
 }
 
 func checkVersion() {
-	server := new(Version)
-	mustGetObject("/version", nil, server)
+	conn, err := grpc.Dial(Config.Host+":443", grpc.WithInsecure())
+	if err != nil {
+		log.Fatalf("failed to connect to gRPC server: %v", err)
+	}
+	defer conn.Close()
+
+	client := pb.NewVersionServiceClient(conn)
+	resp, err := client.GetVersion(context.Background(), &emptypb.Empty{})
+	if err != nil {
+		log.Fatalf("failed to get version from gRPC: %v", err)
+	}
+
+	server := &Version{
+		Version:                  resp.Version,
+		GrindVersionRequired:     resp.GrindVersionRequired,
+		GrindVersionRecommended:  resp.GrindVersionRecommended,
+		ThonnyVersionRequired:    resp.ThonnyVersionRequired,
+		ThonnyVersionRecommended: resp.ThonnyVersionRecommended,
+	}
+
 	grindCurrent := semver.MustParse(CurrentVersion.Version)
 	grindRequired := semver.MustParse(server.GrindVersionRequired)
 	if grindRequired.GT(grindCurrent) {

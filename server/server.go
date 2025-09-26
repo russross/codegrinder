@@ -16,6 +16,7 @@ import (
 	"io/ioutil"
 	"log"
 	"math/rand"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -32,10 +33,14 @@ import (
 	mgzip "github.com/martini-contrib/gzip"
 	"github.com/martini-contrib/render"
 	_ "github.com/mattn/go-sqlite3"
+	pb "github.com/russross/codegrinder/rpc"
 	. "github.com/russross/codegrinder/types"
 	"github.com/russross/meddler"
+	"github.com/soheilhy/cmux"
 	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/reflection"
 )
 
 // Config holds site-specific configuration data.
@@ -64,7 +69,9 @@ var Config struct {
 	SQLite3Path     string      `json:"sqlite3Path"`     // path to the sqlite database file: default "$CODEGRINDERROOT/db/codegrinder.db"
 	SessionsExpire  []time.Time `json:"sessionsExpire"`  // times/dates when sessions should expire (year is ignored)
 }
+
 var root string
+var grpcServer *grpc.Server
 
 const daycareRegistrationInterval = 10 * time.Second
 const nonTLSAddress = ":8080"
@@ -473,6 +480,11 @@ func main() {
 		// commit bundles
 		r.Post("/commit_bundles/unsigned", withTx, withCurrentUser, gunzip, binding.Json(CommitBundle{}), restPostCommitBundlesUnsigned)
 		r.Post("/commit_bundles/signed", withTx, withCurrentUser, gunzip, binding.Json(CommitBundle{}), restPostCommitBundlesSigned)
+
+		// set up gRPC server
+		grpcServer = grpc.NewServer()
+		pb.RegisterVersionServiceServer(grpcServer, &versionServiceServer{})
+		reflection.Register(grpcServer)
 	}
 
 	if use_tls {
@@ -489,22 +501,50 @@ func main() {
 			Client:     acmeClient,
 		}
 
-		// set up the https server
-		log.Printf("accepting https connections")
-		server := &http.Server{
-			Addr:    ":https",
-			Handler: m,
-			TLSConfig: &tls.Config{
-				PreferServerCipherSuites: true,
-				MinVersion:               tls.VersionTLS12,
-				GetCertificate:           lem.GetCertificate,
-			},
-			ErrorLog: log.New(&filterWriter{
-				dst: log.Default().Writer(),
-			}, "", log.Lshortfile),
+		// set up the https server with gRPC multiplexing
+		log.Printf("accepting https connections (HTTP and gRPC)")
+
+		l, err := net.Listen("tcp", ":https")
+		if err != nil {
+			log.Fatalf("failed to listen on :https: %v", err)
 		}
-		if err := server.ListenAndServeTLS("", ""); err != nil {
-			log.Fatalf("ListenAndServeTLS: %v", err)
+
+		mux := cmux.New(l)
+		grpcL := mux.Match(cmux.HTTP2HeaderField("content-type", "application/grpc"))
+		httpL := mux.Match(cmux.Any())
+
+		tlsConfig := &tls.Config{
+			PreferServerCipherSuites: true,
+			MinVersion:               tls.VersionTLS12,
+			GetCertificate:           lem.GetCertificate,
+		}
+
+		// Start gRPC server
+		go func() {
+			tlsGrpcL := tls.NewListener(grpcL, tlsConfig)
+			if err := grpcServer.Serve(tlsGrpcL); err != nil {
+				log.Fatalf("failed to serve gRPC: %v", err)
+			}
+		}()
+
+		// Start HTTP server
+		go func() {
+			server := &http.Server{
+				Handler:   m,
+				TLSConfig: tlsConfig,
+				ErrorLog: log.New(&filterWriter{
+					dst: log.Default().Writer(),
+				}, "", log.Lshortfile),
+			}
+			tlsHttpL := tls.NewListener(httpL, tlsConfig)
+			if err := server.Serve(tlsHttpL); err != nil {
+				log.Fatalf("ListenAndServeTLS: %v", err)
+			}
+		}()
+
+		// Start the multiplexer
+		if err := mux.Serve(); err != nil {
+			log.Fatalf("cmux serve: %v", err)
 		}
 	} else {
 		// run without TLS

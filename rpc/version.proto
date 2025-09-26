@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package codegrinder;
+
+option go_package = "github.com/russross/codegrinder/rpc";
+
+import "google/protobuf/empty.proto";
+
+// Version represents the version information of the CodeGrinder system
+message Version {
+  string version = 1;
+  string grind_version_required = 2;
+  string grind_version_recommended = 3;
+  string thonny_version_required = 4;
+  string thonny_version_recommended = 5;
+}
+
+// VersionService provides version-related operations
+service VersionService {
+  // GetVersion retrieves the current version information
+  rpc GetVersion(google.protobuf.Empty) returns (Version);
+}
