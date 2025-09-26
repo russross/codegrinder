@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,6 +22,7 @@ import (
 	. "github.com/russross/codegrinder/types"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -419,7 +421,8 @@ func plural(n int) string {
 }
 
 func checkVersion() {
-	conn, err := grpc.Dial(Config.Host+":443", grpc.WithInsecure())
+	creds := credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})
+	conn, err := grpc.Dial(Config.Host+":443", grpc.WithTransportCredentials(creds))
 	if err != nil {
 		log.Fatalf("failed to connect to gRPC server: %v", err)
 	}
