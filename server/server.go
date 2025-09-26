@@ -516,7 +516,7 @@ func main() {
 		tlsConfig := &tls.Config{
 			PreferServerCipherSuites: true,
 			MinVersion:               tls.VersionTLS12,
-			NextProtos:               []string{"h2"},
+			NextProtos:               []string{"h2", "http/1.1"},
 			GetCertificate:           lem.GetCertificate,
 		}
 
