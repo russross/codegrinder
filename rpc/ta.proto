@@ -1,0 +1,95 @@
+syntax = "proto3";
+
+package codegrinder;
+
+option go_package = "github.com/russross/codegrinder/rpc";
+
+import "google/protobuf/timestamp.proto";
+
+// User represents a single user as defined by LTI.
+message User {
+  int64 id = 1;
+  string name = 2;
+  string email = 3;
+  string lti_id = 4;
+  string image_url = 5;
+  string canvas_login = 6;
+  int64 canvas_id = 7;
+  bool author = 8;
+  bool admin = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+  google.protobuf.Timestamp last_signed_in_at = 12;
+}
+
+// Course represents a single instance of a course as defined by LTI.
+message Course {
+  int64 id = 1;
+  string name = 2;
+  string label = 3;
+  string lti_id = 4;
+  int64 canvas_id = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
+
+// ScoreList represents a list of scores for a major category
+message ScoreList {
+  repeated double scores = 1;
+}
+
+// Assignment represents a single instance of a problem set for a student in a course.
+message Assignment {
+  int64 id = 1;
+  int64 course_id = 2;
+  int64 problem_set_id = 3;
+  int64 user_id = 4;
+  string roles = 5;
+  bool instructor = 6;
+  map<string, ScoreList> raw_scores = 7;
+  double score = 8;
+  string grade_id = 9;
+  string lti_id = 10;
+  string canvas_title = 11;
+  int64 canvas_id = 12;
+  string canvas_api_domain = 13;
+  string outcome_url = 14;
+  string outcome_ext_url = 15;
+  string outcome_ext_accepted = 16;
+  string finished_url = 17;
+  string consumer_key = 18;
+  google.protobuf.Timestamp unlock_at = 19;
+  google.protobuf.Timestamp due_at = 20;
+  google.protobuf.Timestamp lock_at = 21;
+  google.protobuf.Timestamp created_at = 22;
+  google.protobuf.Timestamp updated_at = 23;
+}
+
+// ProblemSet represents a set of problems.
+message ProblemSet {
+  int64 id = 1;
+  string unique = 2;
+  string note = 3;
+  repeated string tags = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+// TaService provides TA-related operations
+service TaService {
+  // ListProblems retrieves all problems and related data for the authenticated user
+  rpc ListProblems(ListProblemsRequest) returns (ListProblemsResponse);
+}
+
+// Request for ListProblems
+message ListProblemsRequest {
+  string session_cookie = 1;
+}
+
+// Response for ListProblems
+message ListProblemsResponse {
+  User user = 1;
+  repeated Assignment assignments = 2;
+  repeated Course courses = 3;
+  repeated ProblemSet problem_sets = 4;
+}

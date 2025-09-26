@@ -1,13 +1,18 @@
 package main
 
 import (
+	"context"
+	"crypto/tls"
 	"fmt"
 	"log"
 	"os"
 	"strconv"
 
-	. "github.com/russross/codegrinder/types"
+	pb "github.com/russross/codegrinder/rpc"
 	"github.com/spf13/cobra"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
 )
 
 func CommandList(cmd *cobra.Command, args []string) {
@@ -18,21 +23,54 @@ func CommandList(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	user := new(User)
-	mustGetObject("/users/me", nil, user)
-	assignments := []*Assignment{}
-	mustGetObject(fmt.Sprintf("/users/%d/assignments", user.ID), nil, &assignments)
+	// Set up gRPC connection
+	creds := credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})
+	conn, err := grpc.Dial(Config.Host+":443", grpc.WithTransportCredentials(creds),
+		grpc.WithCompressor(grpc.NewGZIPCompressor()),
+		grpc.WithDecompressor(grpc.NewGZIPDecompressor()))
+	if err != nil {
+		log.Fatalf("failed to connect to gRPC server: %v", err)
+	}
+	defer conn.Close()
+
+	client := pb.NewTaServiceClient(conn)
+
+	// Create context with session cookie
+	ctx := context.Background()
+	ctx = metadata.AppendToOutgoingContext(ctx, "cookie", fmt.Sprintf("codegrinder=%s", Config.Cookie))
+
+	// Call ListProblems
+	resp, err := client.ListProblems(ctx, &pb.ListProblemsRequest{})
+	if err != nil {
+		log.Fatalf("failed to get list from gRPC: %v", err)
+	}
+
+	// Reconstruct the data
+	assignments := resp.Assignments
+	courses := resp.Courses
+	problemSets := resp.ProblemSets
+
 	if len(assignments) == 0 {
 		log.Printf("no assignments found")
 		log.Fatalf("you must start each assignment through Canvas before you can access it here")
 	}
 
-	var course *Course
+	// Create maps for quick lookup
+	courseMap := make(map[int64]*pb.Course)
+	for _, c := range courses {
+		courseMap[c.Id] = c
+	}
+	problemSetMap := make(map[int64]*pb.ProblemSet)
+	for _, ps := range problemSets {
+		problemSetMap[ps.Id] = ps
+	}
+
+	var course *pb.Course
 
 	// find the longest assignment ID, name
 	longestID, longestName := 1, 1
 	for _, asst := range assignments {
-		if n := len(strconv.FormatInt(asst.ID, 10)); n > longestID {
+		if n := len(strconv.FormatInt(asst.Id, 10)); n > longestID {
 			longestID = n
 		}
 		if n := len(asst.CanvasTitle); n > longestName {
@@ -40,22 +78,20 @@ func CommandList(cmd *cobra.Command, args []string) {
 		}
 	}
 	for _, asst := range assignments {
-		if course == nil || asst.CourseID != course.ID {
+		if course == nil || asst.CourseId != course.Id {
 			if course != nil {
 				fmt.Println()
 			}
 
-			// fetch the course
-			course = new(Course)
-			mustGetObject(fmt.Sprintf("/courses/%d", asst.CourseID), nil, course)
+			// get the course
+			course = courseMap[asst.CourseId]
 			fmt.Println(course.Name)
 			fmt.Println(dashes(len(course.Name)))
 		}
 
-		// fetch the problem
-		problemSet := new(ProblemSet)
-		mustGetObject(fmt.Sprintf("/problem_sets/%d", asst.ProblemSetID), nil, problemSet)
-		fmt.Printf("id:%-*d %-*s %3.0f%% (%s/%s)\n", longestID, asst.ID, longestName, asst.CanvasTitle, asst.Score*100.0, courseDirectory(course.Label), problemSet.Unique)
+		// get the problem set
+		problemSet := problemSetMap[asst.ProblemSetId]
+		fmt.Printf("id:%-*d %-*s %3.0f%% (%s/%s)\n", longestID, asst.Id, longestName, asst.CanvasTitle, asst.Score*100.0, courseDirectory(course.Label), problemSet.Unique)
 	}
 }
 

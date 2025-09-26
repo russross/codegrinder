@@ -70,6 +70,8 @@ var Config struct {
 
 var root string
 var grpcServer *grpc.Server
+var db *sql.DB
+var dbMutex sync.Mutex
 
 const daycareRegistrationInterval = 10 * time.Second
 const nonTLSAddress = ":8080"
@@ -269,8 +271,7 @@ func main() {
 		m.Use(render.Renderer(render.Options{IndentJSON: false}))
 
 		// set up the database
-		db := setupDB(Config.SQLite3Path)
-		var dbMutex sync.Mutex
+		db = setupDB(Config.SQLite3Path)
 
 		// martini service: wrap handler in a transaction
 		withTx := func(c martini.Context, r *http.Request, w http.ResponseWriter) {
@@ -480,8 +481,12 @@ func main() {
 		r.Post("/commit_bundles/signed", withTx, withCurrentUser, gunzip, binding.Json(CommitBundle{}), restPostCommitBundlesSigned)
 
 		// set up gRPC server
-		grpcServer = grpc.NewServer()
+		grpcServer = grpc.NewServer(
+			grpc.RPCCompressor(grpc.NewGZIPCompressor()),
+			grpc.RPCDecompressor(grpc.NewGZIPDecompressor()),
+		)
 		pb.RegisterVersionServiceServer(grpcServer, &versionServiceServer{})
+		pb.RegisterTaServiceServer(grpcServer, &taServiceServer{})
 		reflection.Register(grpcServer)
 	}
 

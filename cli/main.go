@@ -422,7 +422,9 @@ func plural(n int) string {
 
 func checkVersion() {
 	creds := credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})
-	conn, err := grpc.Dial(Config.Host+":443", grpc.WithTransportCredentials(creds))
+	conn, err := grpc.Dial(Config.Host+":443", grpc.WithTransportCredentials(creds),
+		grpc.WithCompressor(grpc.NewGZIPCompressor()),
+		grpc.WithDecompressor(grpc.NewGZIPDecompressor()))
 	if err != nil {
 		log.Fatalf("failed to connect to gRPC server: %v", err)
 	}
