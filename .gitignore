@@ -3,4 +3,5 @@ db
 acme
 github.com
 config.json
+rpc/*.go
 *.swp

@@ -16,7 +16,6 @@ import (
 	"io/ioutil"
 	"log"
 	"math/rand"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -36,7 +35,6 @@ import (
 	pb "github.com/russross/codegrinder/rpc"
 	. "github.com/russross/codegrinder/types"
 	"github.com/russross/meddler"
-	"github.com/soheilhy/cmux"
 	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
 	"google.golang.org/grpc"
@@ -501,58 +499,54 @@ func main() {
 			Client:     acmeClient,
 		}
 
-		// set up the https server with gRPC multiplexing
-		log.Printf("accepting https connections (HTTP and gRPC)")
+		// Create unified handler that routes between gRPC and HTTP
+		unifiedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Check if this is a gRPC request
+			if r.ProtoMajor == 2 && strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
+				grpcServer.ServeHTTP(w, r)
+			} else {
+				// Handle as regular HTTP (Martini) request
+				m.ServeHTTP(w, r)
+			}
+		})
 
-		l, err := net.Listen("tcp", ":https")
-		if err != nil {
-			log.Fatalf("failed to listen on :https: %v", err)
-		}
-
-		mux := cmux.New(l)
-		grpcL := mux.Match(cmux.HTTP2())
-		httpL := mux.Match(cmux.HTTP1())
-
+		// Configure TLS with HTTP/2 support
 		tlsConfig := &tls.Config{
 			PreferServerCipherSuites: true,
 			MinVersion:               tls.VersionTLS12,
-			NextProtos:               []string{"h2", "http/1.1"},
+			NextProtos:               []string{"h2", "http/1.1"}, // Enable HTTP/2
 			GetCertificate:           lem.GetCertificate,
 		}
 
-		// Start gRPC server
-		go func() {
-			tlsGrpcL := tls.NewListener(grpcL, tlsConfig)
-			if err := grpcServer.Serve(tlsGrpcL); err != nil {
-				log.Fatalf("failed to serve gRPC: %v", err)
-			}
-		}()
+		// Create single HTTPS server that handles both protocols
+		server := &http.Server{
+			Addr:      ":https",
+			Handler:   unifiedHandler,
+			TLSConfig: tlsConfig,
+			ErrorLog: log.New(&filterWriter{
+				dst: log.Default().Writer(),
+			}, "", log.Lshortfile),
+		}
 
-		// Start HTTP server
-		go func() {
-			server := &http.Server{
-				Handler:   m,
-				TLSConfig: tlsConfig,
-				ErrorLog: log.New(&filterWriter{
-					dst: log.Default().Writer(),
-				}, "", log.Lshortfile),
-			}
-			tlsHttpL := tls.NewListener(httpL, tlsConfig)
-			if err := server.Serve(tlsHttpL); err != nil {
-				log.Fatalf("ListenAndServeTLS: %v", err)
-			}
-		}()
-
-		// Start the multiplexer
-		if err := mux.Serve(); err != nil {
-			log.Fatalf("cmux serve: %v", err)
+		log.Printf("accepting https connections (HTTP and gRPC) on :443")
+		if err := server.ListenAndServeTLS("", ""); err != nil {
+			log.Fatalf("ListenAndServeTLS: %v", err)
 		}
 	} else {
 		// run without TLS
 		// note: this will work behind a TLS proxy or for debugging with some calls
 		// but LTI will refuse to connect to an insecure host
-		log.Printf("accepting http connections on %s", nonTLSAddress)
-		if err := http.ListenAndServe(nonTLSAddress, m); err != nil {
+		unifiedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// For non-TLS, gRPC detection is simpler (still check content-type)
+			if strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
+				grpcServer.ServeHTTP(w, r)
+			} else {
+				m.ServeHTTP(w, r)
+			}
+		})
+
+		log.Printf("accepting http connections (HTTP and gRPC) on %s", nonTLSAddress)
+		if err := http.ListenAndServe(nonTLSAddress, unifiedHandler); err != nil {
 			log.Fatalf("ListenAndServe: %v", err)
 		}
 	}
