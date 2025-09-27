@@ -574,6 +574,53 @@ func convertCommitBundleFromProto(cb *pb.CommitBundle) *CommitBundle {
 	}
 }
 
+// convertDaycareRequestFromProto converts pb.DaycareRequest to legacy types recursively
+func convertDaycareRequestFromProto(req *pb.DaycareRequest) (*CommitBundle, string, string, []string, error) {
+	commitBundle := convertCommitBundleFromProto(req.CommitBundle)
+	problemType := req.ProblemType
+	action := req.Action
+	args := req.Args
+	return commitBundle, problemType, action, args, nil
+}
+
+// convertDaycareResponseToProto converts legacy DaycareResponse to pb.DaycareResponse
+func convertDaycareResponseToProto(resp *DaycareResponse) *pb.DaycareResponse {
+	pbResp := &pb.DaycareResponse{}
+	if resp.Event != nil {
+		pbResp.Response = &pb.DaycareResponse_Event{Event: convertEventMessageToProto(resp.Event)}
+	} else if resp.Error != "" {
+		pbResp.Response = &pb.DaycareResponse_Error{Error: resp.Error}
+	} else if resp.CommitBundle != nil {
+		pbResp.Response = &pb.DaycareResponse_CommitBundle{CommitBundle: convertCommitBundleToProto(resp.CommitBundle)}
+	}
+	return pbResp
+}
+
+// convertProblemStepsToProto converts legacy ProblemSteps to pb.ProblemSteps
+func convertProblemStepsToProto(pss []*ProblemStep) []*pb.ProblemStep {
+	steps := make([]*pb.ProblemStep, len(pss))
+	for i, ps := range pss {
+		steps[i] = convertProblemStepToProto(ps)
+	}
+	return steps
+}
+
+// convertCommitBundleToProto converts legacy CommitBundle to pb.CommitBundle recursively
+func convertCommitBundleToProto(cb *CommitBundle) *pb.CommitBundle {
+	return &pb.CommitBundle{
+		ProblemType:          convertProblemTypeToProto(cb.ProblemType),
+		ProblemTypeSignature: cb.ProblemTypeSignature,
+		Problem:              convertProblemToProto(cb.Problem),
+		ProblemSteps:         convertProblemStepsToProto(cb.ProblemSteps),
+		ProblemSignature:     cb.ProblemSignature,
+		Action:               cb.Action,
+		Hostname:             cb.Hostname,
+		UserId:               cb.UserID,
+		Commit:               convertCommitToProto(cb.Commit),
+		CommitSignature:      cb.CommitSignature,
+	}
+}
+
 // GetVersion retrieves version information
 func (s *codeGrinderServiceServer) GetVersion(ctx context.Context, req *pb.GetVersionRequest) (*pb.GetVersionResponse, error) {
 	return &pb.GetVersionResponse{
@@ -1477,4 +1524,44 @@ func (s *codeGrinderServiceServer) PostCommitBundlesSigned(ctx context.Context, 
 	}
 
 	return &pb.PostCommitBundlesSignedResponse{Result: result}, nil
+}
+
+// Daycare handles streaming daycare requests
+func (s *codeGrinderServiceServer) Daycare(req *pb.DaycareRequest, stream pb.CodeGrinderService_DaycareServer) error {
+	// Get context from the stream
+	ctx := stream.Context()
+
+	// Convert protobuf request to legacy types
+	commitBundle, problemType, action, args, err := convertDaycareRequestFromProto(req)
+	if err != nil {
+		return err
+	}
+
+	// Create a channel for responses (do NOT close it here)
+	eventChan := make(chan *DaycareResponse, 100)
+
+	// Launch HandleProblemAction in a goroutine (it will close the channel)
+	go HandleProblemAction(commitBundle, problemType, action, args, eventChan)
+
+	// Main loop: read from channel and stream via gRPC
+	// NEVER break early; always drain until channel is closed
+	broken := false
+	for response := range eventChan {
+		if broken {
+			// Continue draining to prevent deadlock
+			continue
+		}
+		if err := stream.Send(convertDaycareResponseToProto(response)); err != nil {
+			log.Printf("gRPC stream send error: %v", err)
+			broken = true
+			// On context error, set broken but continue draining
+			if ctx.Err() != nil {
+				broken = true
+				// Do NOT break; keep draining
+			}
+			continue
+		}
+	}
+
+	return nil
 }

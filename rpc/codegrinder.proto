@@ -201,16 +201,33 @@ message ProblemSetBundle {
 
 // CommitBundle represents a bundle of commit data.
 message CommitBundle {
-   ProblemType problem_type = 1;
-   string problem_type_signature = 2;
-   Problem problem = 3;
-   repeated ProblemStep problem_steps = 4;
-   string problem_signature = 5;
-   string action = 6;
-   string hostname = 7;
-   int64 user_id = 8;
-   Commit commit = 9;
-   string commit_signature = 10;
+    ProblemType problem_type = 1;
+    string problem_type_signature = 2;
+    Problem problem = 3;
+    repeated ProblemStep problem_steps = 4;
+    string problem_signature = 5;
+    string action = 6;
+    string hostname = 7;
+    int64 user_id = 8;
+    Commit commit = 9;
+    string commit_signature = 10;
+}
+
+// DaycareRequest represents a request for the daycare service.
+message DaycareRequest {
+    CommitBundle commit_bundle = 1;
+    string problem_type = 2;
+    string action = 3;
+    repeated string args = 4;
+}
+
+// DaycareResponse represents a response from the daycare service.
+message DaycareResponse {
+    oneof response {
+        EventMessage event = 1;
+        string error = 2;
+        CommitBundle commit_bundle = 3;
+    }
 }
 
 // Version represents version information.
@@ -282,8 +299,10 @@ service CodeGrinderService {
    rpc PutProblemSetBundle(PutProblemSetBundleRequest) returns (PutProblemSetBundleResponse);
    // PostCommitBundlesUnsigned handles unsigned commit bundle
    rpc PostCommitBundlesUnsigned(PostCommitBundlesUnsignedRequest) returns (PostCommitBundlesUnsignedResponse);
-   // PostCommitBundlesSigned handles signed commit bundle
-   rpc PostCommitBundlesSigned(PostCommitBundlesSignedRequest) returns (PostCommitBundlesSignedResponse);
+    // PostCommitBundlesSigned handles signed commit bundle
+    rpc PostCommitBundlesSigned(PostCommitBundlesSignedRequest) returns (PostCommitBundlesSignedResponse);
+    // Daycare handles streaming daycare requests
+    rpc Daycare(DaycareRequest) returns (stream DaycareResponse);
 }
 
 // Request for ListProblems
