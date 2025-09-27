@@ -485,8 +485,7 @@ func main() {
 			grpc.RPCCompressor(grpc.NewGZIPCompressor()),
 			grpc.RPCDecompressor(grpc.NewGZIPDecompressor()),
 		)
-		pb.RegisterVersionServiceServer(grpcServer, &versionServiceServer{})
-		pb.RegisterTaServiceServer(grpcServer, &taServiceServer{})
+		pb.RegisterCodeGrinderServiceServer(grpcServer, &codeGrinderServiceServer{})
 		reflection.Register(grpcServer)
 	}
 

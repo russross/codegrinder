@@ -33,7 +33,7 @@ func CommandList(cmd *cobra.Command, args []string) {
 	}
 	defer conn.Close()
 
-	client := pb.NewTaServiceClient(conn)
+	client := pb.NewCodeGrinderServiceClient(conn)
 
 	// Create context with session cookie
 	ctx := context.Background()

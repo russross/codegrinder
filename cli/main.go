@@ -23,7 +23,6 @@ import (
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 const (
@@ -430,18 +429,18 @@ func checkVersion() {
 	}
 	defer conn.Close()
 
-	client := pb.NewVersionServiceClient(conn)
-	resp, err := client.GetVersion(context.Background(), &emptypb.Empty{})
+	client := pb.NewCodeGrinderServiceClient(conn)
+	resp, err := client.GetVersion(context.Background(), &pb.GetVersionRequest{})
 	if err != nil {
 		log.Fatalf("failed to get version from gRPC: %v", err)
 	}
 
 	server := &Version{
-		Version:                  resp.Version,
-		GrindVersionRequired:     resp.GrindVersionRequired,
-		GrindVersionRecommended:  resp.GrindVersionRecommended,
-		ThonnyVersionRequired:    resp.ThonnyVersionRequired,
-		ThonnyVersionRecommended: resp.ThonnyVersionRecommended,
+		Version:                  resp.Version.Version,
+		GrindVersionRequired:     resp.Version.GrindVersionRequired,
+		GrindVersionRecommended:  resp.Version.GrindVersionRecommended,
+		ThonnyVersionRequired:    resp.Version.ThonnyVersionRequired,
+		ThonnyVersionRecommended: resp.Version.ThonnyVersionRecommended,
 	}
 
 	grindCurrent := semver.MustParse(CurrentVersion.Version)

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -10,7 +11,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	pb "github.com/russross/codegrinder/rpc"
@@ -18,25 +19,9 @@ import (
 	"github.com/russross/meddler"
 )
 
-// versionServiceServer implements the VersionServiceServer interface
-type versionServiceServer struct {
-	pb.UnimplementedVersionServiceServer
-}
-
-// GetVersion returns the current version information
-func (s *versionServiceServer) GetVersion(ctx context.Context, req *emptypb.Empty) (*pb.Version, error) {
-	return &pb.Version{
-		Version:                  CurrentVersion.Version,
-		GrindVersionRequired:     CurrentVersion.GrindVersionRequired,
-		GrindVersionRecommended:  CurrentVersion.GrindVersionRecommended,
-		ThonnyVersionRequired:    CurrentVersion.ThonnyVersionRequired,
-		ThonnyVersionRecommended: CurrentVersion.ThonnyVersionRecommended,
-	}, nil
-}
-
-// taServiceServer implements the TaServiceServer interface
-type taServiceServer struct {
-	pb.UnimplementedTaServiceServer
+// codeGrinderServiceServer implements the CodeGrinderServiceServer interface
+type codeGrinderServiceServer struct {
+	pb.UnimplementedCodeGrinderServiceServer
 }
 
 // withTXForGRPC is a wrapper for gRPC handlers to run in a database transaction
@@ -118,7 +103,7 @@ func getCurrentUserFromSession(tx *sql.Tx, session *CookieSession) (*User, error
 }
 
 // ListProblems retrieves all problems and related data for the authenticated user
-func (s *taServiceServer) ListProblems(ctx context.Context, req *pb.ListProblemsRequest) (*pb.ListProblemsResponse, error) {
+func (s *codeGrinderServiceServer) ListProblems(ctx context.Context, req *pb.ListProblemsRequest) (*pb.ListProblemsResponse, error) {
 	// Validate session
 	session, err := getSessionFromGRPC(ctx)
 	if err != nil {
@@ -286,4 +271,1210 @@ func convertTimeToProtoPtr(t *time.Time) *timestamppb.Timestamp {
 		return nil
 	}
 	return timestamppb.New(*t)
+}
+
+// Conversion functions for new types
+func convertProblemTypeToProto(pt *ProblemType) *pb.ProblemType {
+	actions := make(map[string]*pb.ProblemTypeAction)
+	for k, v := range pt.Actions {
+		actions[k] = &pb.ProblemTypeAction{
+			ProblemType: v.ProblemType,
+			Action:      v.Action,
+			Command:     v.Command,
+			Parser:      v.Parser,
+			Message:     v.Message,
+			Interactive: v.Interactive,
+			MaxCpu:      v.MaxCPU,
+			MaxSession:  v.MaxSession,
+			MaxTimeout:  v.MaxTimeout,
+			MaxFd:       v.MaxFD,
+			MaxFileSize: v.MaxFileSize,
+			MaxMemory:   v.MaxMemory,
+			MaxThreads:  v.MaxThreads,
+		}
+	}
+	return &pb.ProblemType{
+		Name:    pt.Name,
+		Image:   pt.Image,
+		Files:   pt.Files,
+		Actions: actions,
+	}
+}
+
+func convertProblemToProto(p *Problem) *pb.Problem {
+	return &pb.Problem{
+		Id:        p.ID,
+		Unique:    p.Unique,
+		Note:      p.Note,
+		Tags:      p.Tags,
+		Options:   p.Options,
+		CreatedAt: convertTimeToProto(p.CreatedAt),
+		UpdatedAt: convertTimeToProto(p.UpdatedAt),
+	}
+}
+
+func convertProblemStepToProto(ps *ProblemStep) *pb.ProblemStep {
+	return &pb.ProblemStep{
+		ProblemId:    ps.ProblemID,
+		Step:         ps.Step,
+		ProblemType:  ps.ProblemType,
+		Note:         ps.Note,
+		Instructions: ps.Instructions,
+		Weight:       ps.Weight,
+		Files:        ps.Files,
+		Whitelist:    ps.Whitelist,
+		Solution:     ps.Solution,
+	}
+}
+
+func convertProblemSetProblemToProto(psp *ProblemSetProblem) *pb.ProblemSetProblem {
+	return &pb.ProblemSetProblem{
+		ProblemSetId: psp.ProblemSetID,
+		ProblemId:    psp.ProblemID,
+		Weight:       psp.Weight,
+	}
+}
+
+func convertReportCardToProto(rc *ReportCard) *pb.ReportCard {
+	results := make([]*pb.ReportCardResult, len(rc.Results))
+	for i, r := range rc.Results {
+		results[i] = &pb.ReportCardResult{
+			Name:    r.Name,
+			Outcome: r.Outcome,
+			Details: r.Details,
+			Context: r.Context,
+		}
+	}
+	return &pb.ReportCard{
+		Passed:   rc.Passed,
+		Note:     rc.Note,
+		Duration: durationpb.New(rc.Duration),
+		Results:  results,
+	}
+}
+
+func convertEventMessageToProto(em *EventMessage) *pb.EventMessage {
+	return &pb.EventMessage{
+		Time:        convertTimeToProto(em.Time),
+		Event:       em.Event,
+		ExecCommand: em.ExecCommand,
+		ExitStatus:  int32(em.ExitStatus),
+		StreamData:  em.StreamData,
+		Error:       em.Error,
+		ReportCard:  convertReportCardToProto(em.ReportCard),
+		Files:       em.Files,
+	}
+}
+
+func convertCommitToProto(c *Commit) *pb.Commit {
+	transcript := make([]*pb.EventMessage, len(c.Transcript))
+	for i, t := range c.Transcript {
+		transcript[i] = convertEventMessageToProto(t)
+	}
+	return &pb.Commit{
+		Id:           c.ID,
+		AssignmentId: c.AssignmentID,
+		ProblemId:    c.ProblemID,
+		Step:         c.Step,
+		Action:       c.Action,
+		Note:         c.Note,
+		Files:        c.Files,
+		Transcript:   transcript,
+		ReportCard:   convertReportCardToProto(c.ReportCard),
+		Score:        c.Score,
+		CreatedAt:    convertTimeToProto(c.CreatedAt),
+		UpdatedAt:    convertTimeToProto(c.UpdatedAt),
+	}
+}
+
+func convertProblemBundleFromProto(pb *pb.ProblemBundle) *ProblemBundle {
+	problemTypes := make(map[string]*ProblemType)
+	for k, v := range pb.ProblemTypes {
+		problemTypes[k] = convertProblemTypeFromProto(v)
+	}
+	commits := make([]*Commit, len(pb.Commits))
+	for i, c := range pb.Commits {
+		commits[i] = convertCommitFromProto(c)
+	}
+	return &ProblemBundle{
+		ProblemTypes:          problemTypes,
+		ProblemTypeSignatures: pb.ProblemTypeSignatures,
+		Problem:               convertProblemFromProto(pb.Problem),
+		ProblemSteps:          convertProblemStepsFromProto(pb.ProblemSteps),
+		ProblemSignature:      pb.ProblemSignature,
+		Hostname:              pb.Hostname,
+		UserID:                pb.UserId,
+		Commits:               commits,
+		CommitSignatures:      pb.CommitSignatures,
+	}
+}
+
+func convertProblemTypeFromProto(pt *pb.ProblemType) *ProblemType {
+	actions := make(map[string]*ProblemTypeAction)
+	for k, v := range pt.Actions {
+		actions[k] = &ProblemTypeAction{
+			ProblemType: v.ProblemType,
+			Action:      v.Action,
+			Command:     v.Command,
+			Parser:      v.Parser,
+			Message:     v.Message,
+			Interactive: v.Interactive,
+			MaxCPU:      v.MaxCpu,
+			MaxSession:  v.MaxSession,
+			MaxTimeout:  v.MaxTimeout,
+			MaxFD:       v.MaxFd,
+			MaxFileSize: v.MaxFileSize,
+			MaxMemory:   v.MaxMemory,
+			MaxThreads:  v.MaxThreads,
+		}
+	}
+	return &ProblemType{
+		Name:    pt.Name,
+		Image:   pt.Image,
+		Files:   pt.Files,
+		Actions: actions,
+	}
+}
+
+func convertProblemFromProto(p *pb.Problem) *Problem {
+	return &Problem{
+		ID:        p.Id,
+		Unique:    p.Unique,
+		Note:      p.Note,
+		Tags:      p.Tags,
+		Options:   p.Options,
+		CreatedAt: p.CreatedAt.AsTime(),
+		UpdatedAt: p.UpdatedAt.AsTime(),
+	}
+}
+
+func convertProblemStepsFromProto(pss []*pb.ProblemStep) []*ProblemStep {
+	steps := make([]*ProblemStep, len(pss))
+	for i, ps := range pss {
+		steps[i] = convertProblemStepFromProto(ps)
+	}
+	return steps
+}
+
+func convertProblemStepFromProto(ps *pb.ProblemStep) *ProblemStep {
+	return &ProblemStep{
+		ProblemID:    ps.ProblemId,
+		Step:         ps.Step,
+		ProblemType:  ps.ProblemType,
+		Note:         ps.Note,
+		Instructions: ps.Instructions,
+		Weight:       ps.Weight,
+		Files:        ps.Files,
+		Whitelist:    ps.Whitelist,
+		Solution:     ps.Solution,
+	}
+}
+
+func convertCommitFromProto(c *pb.Commit) *Commit {
+	transcript := make([]*EventMessage, len(c.Transcript))
+	for i, t := range c.Transcript {
+		transcript[i] = convertEventMessageFromProto(t)
+	}
+	return &Commit{
+		ID:           c.Id,
+		AssignmentID: c.AssignmentId,
+		ProblemID:    c.ProblemId,
+		Step:         c.Step,
+		Action:       c.Action,
+		Note:         c.Note,
+		Files:        c.Files,
+		Transcript:   transcript,
+		ReportCard:   convertReportCardFromProto(c.ReportCard),
+		Score:        c.Score,
+		CreatedAt:    c.CreatedAt.AsTime(),
+		UpdatedAt:    c.UpdatedAt.AsTime(),
+	}
+}
+
+func convertEventMessageFromProto(em *pb.EventMessage) *EventMessage {
+	return &EventMessage{
+		Time:        em.Time.AsTime(),
+		Event:       em.Event,
+		ExecCommand: em.ExecCommand,
+		ExitStatus:  int(em.ExitStatus),
+		StreamData:  em.StreamData,
+		Error:       em.Error,
+		ReportCard:  convertReportCardFromProto(em.ReportCard),
+		Files:       em.Files,
+	}
+}
+
+func convertReportCardFromProto(rc *pb.ReportCard) *ReportCard {
+	if rc == nil {
+		return nil
+	}
+	results := make([]*ReportCardResult, len(rc.Results))
+	for i, r := range rc.Results {
+		results[i] = &ReportCardResult{
+			Name:    r.Name,
+			Outcome: r.Outcome,
+			Details: r.Details,
+			Context: r.Context,
+		}
+	}
+	duration := time.Duration(0)
+	if rc.Duration != nil {
+		duration = rc.Duration.AsDuration()
+	}
+	return &ReportCard{
+		Passed:   rc.Passed,
+		Note:     rc.Note,
+		Duration: duration,
+		Results:  results,
+	}
+}
+
+func convertProblemSetBundleFromProto(psb *pb.ProblemSetBundle) *ProblemSetBundle {
+	return &ProblemSetBundle{
+		ProblemSet:         convertProblemSetFromProto(psb.ProblemSet),
+		ProblemSetProblems: convertProblemSetProblemsFromProto(psb.ProblemSetProblems),
+	}
+}
+
+func convertProblemSetFromProto(ps *pb.ProblemSet) *ProblemSet {
+	return &ProblemSet{
+		ID:        ps.Id,
+		Unique:    ps.Unique,
+		Note:      ps.Note,
+		Tags:      ps.Tags,
+		CreatedAt: ps.CreatedAt.AsTime(),
+		UpdatedAt: ps.UpdatedAt.AsTime(),
+	}
+}
+
+func convertProblemSetProblemsFromProto(psps []*pb.ProblemSetProblem) []*ProblemSetProblem {
+	problems := make([]*ProblemSetProblem, len(psps))
+	for i, psp := range psps {
+		problems[i] = &ProblemSetProblem{
+			ProblemSetID: psp.ProblemSetId,
+			ProblemID:    psp.ProblemId,
+			Weight:       psp.Weight,
+		}
+	}
+	return problems
+}
+
+func convertCommitBundleFromProto(cb *pb.CommitBundle) *CommitBundle {
+	return &CommitBundle{
+		ProblemType:          convertProblemTypeFromProto(cb.ProblemType),
+		ProblemTypeSignature: cb.ProblemTypeSignature,
+		Problem:              convertProblemFromProto(cb.Problem),
+		ProblemSteps:         convertProblemStepsFromProto(cb.ProblemSteps),
+		ProblemSignature:     cb.ProblemSignature,
+		Action:               cb.Action,
+		Hostname:             cb.Hostname,
+		UserID:               cb.UserId,
+		Commit:               convertCommitFromProto(cb.Commit),
+		CommitSignature:      cb.CommitSignature,
+	}
+}
+
+// GetVersion retrieves version information
+func (s *codeGrinderServiceServer) GetVersion(ctx context.Context, req *pb.GetVersionRequest) (*pb.GetVersionResponse, error) {
+	return &pb.GetVersionResponse{
+		Version: &pb.Version{
+			Version:                  CurrentVersion.Version,
+			GrindVersionRequired:     CurrentVersion.GrindVersionRequired,
+			GrindVersionRecommended:  CurrentVersion.GrindVersionRecommended,
+			ThonnyVersionRequired:    CurrentVersion.ThonnyVersionRequired,
+			ThonnyVersionRecommended: CurrentVersion.ThonnyVersionRecommended,
+		},
+	}, nil
+}
+
+// GetProblemTypes retrieves all problem types
+func (s *codeGrinderServiceServer) GetProblemTypes(ctx context.Context, req *pb.GetProblemTypesRequest) (*pb.GetProblemTypesResponse, error) {
+	var problemTypes []*pb.ProblemType
+
+	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
+		// Get problem types
+		typesProblemTypes, err := getProblemTypes(tx)
+		if err != nil {
+			return status.Errorf(codes.Internal, "db error getting problem types: %v", err)
+		}
+
+		// Convert to proto
+		for _, pt := range typesProblemTypes {
+			problemTypes = append(problemTypes, convertProblemTypeToProto(pt))
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.GetProblemTypesResponse{ProblemTypes: problemTypes}, nil
+}
+
+// GetProblemType retrieves a specific problem type
+func (s *codeGrinderServiceServer) GetProblemType(ctx context.Context, req *pb.GetProblemTypeRequest) (*pb.GetProblemTypeResponse, error) {
+	var problemType *pb.ProblemType
+
+	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
+		// Get problem type
+		typesProblemType, err := getProblemType(tx, req.Name)
+		if err != nil {
+			return status.Errorf(codes.Internal, "db error getting problem type: %v", err)
+		}
+		problemType = convertProblemTypeToProto(typesProblemType)
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.GetProblemTypeResponse{ProblemType: problemType}, nil
+}
+
+// GetProblems retrieves problems with optional filters
+func (s *codeGrinderServiceServer) GetProblems(ctx context.Context, req *pb.GetProblemsRequest) (*pb.GetProblemsResponse, error) {
+	var problems []*pb.Problem
+
+	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
+		// Get current user
+		session, err := getSessionFromGRPC(ctx)
+		if err != nil {
+			return err
+		}
+		currentUser, err := getCurrentUserFromSession(tx, session)
+		if err != nil {
+			return err
+		}
+
+		// Get problems
+		typesProblems, err := getProblems(tx, currentUser, req.Unique, req.ProblemType, req.Note)
+		if err != nil {
+			return status.Errorf(codes.Internal, "db error getting problems: %v", err)
+		}
+		for _, p := range typesProblems {
+			problems = append(problems, convertProblemToProto(p))
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.GetProblemsResponse{Problems: problems}, nil
+}
+
+// GetProblem retrieves a specific problem
+func (s *codeGrinderServiceServer) GetProblem(ctx context.Context, req *pb.GetProblemRequest) (*pb.GetProblemResponse, error) {
+	var problem *pb.Problem
+
+	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
+		// Get current user
+		session, err := getSessionFromGRPC(ctx)
+		if err != nil {
+			return err
+		}
+		currentUser, err := getCurrentUserFromSession(tx, session)
+		if err != nil {
+			return err
+		}
+
+		// Get problem
+		typesProblem, err := getProblem(tx, req.ProblemId, currentUser)
+		if err != nil {
+			return status.Errorf(codes.Internal, "db error getting problem: %v", err)
+		}
+		problem = convertProblemToProto(typesProblem)
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.GetProblemResponse{Problem: problem}, nil
+}
+
+// GetProblemSteps retrieves steps for a problem
+func (s *codeGrinderServiceServer) GetProblemSteps(ctx context.Context, req *pb.GetProblemStepsRequest) (*pb.GetProblemStepsResponse, error) {
+	var problemSteps []*pb.ProblemStep
+
+	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
+		// Get current user
+		session, err := getSessionFromGRPC(ctx)
+		if err != nil {
+			return err
+		}
+		currentUser, err := getCurrentUserFromSession(tx, session)
+		if err != nil {
+			return err
+		}
+
+		// Get problem steps
+		typesProblemSteps, err := getProblemSteps(tx, req.ProblemId, currentUser)
+		if err != nil {
+			return status.Errorf(codes.Internal, "db error getting problem steps: %v", err)
+		}
+		for _, ps := range typesProblemSteps {
+			problemSteps = append(problemSteps, convertProblemStepToProto(ps))
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.GetProblemStepsResponse{ProblemSteps: problemSteps}, nil
+}
+
+// GetProblemStep retrieves a specific step
+func (s *codeGrinderServiceServer) GetProblemStep(ctx context.Context, req *pb.GetProblemStepRequest) (*pb.GetProblemStepResponse, error) {
+	var problemStep *pb.ProblemStep
+
+	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
+		// Get current user
+		session, err := getSessionFromGRPC(ctx)
+		if err != nil {
+			return err
+		}
+		currentUser, err := getCurrentUserFromSession(tx, session)
+		if err != nil {
+			return err
+		}
+
+		// Get problem step
+		typesProblemStep, err := getProblemStep(tx, req.ProblemId, req.Step, currentUser)
+		if err != nil {
+			return status.Errorf(codes.Internal, "db error getting problem step: %v", err)
+		}
+		problemStep = convertProblemStepToProto(typesProblemStep)
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.GetProblemStepResponse{ProblemStep: problemStep}, nil
+}
+
+// GetProblemSets retrieves problem sets with optional filters
+func (s *codeGrinderServiceServer) GetProblemSets(ctx context.Context, req *pb.GetProblemSetsRequest) (*pb.GetProblemSetsResponse, error) {
+	var problemSets []*pb.ProblemSet
+
+	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
+		// Get current user
+		session, err := getSessionFromGRPC(ctx)
+		if err != nil {
+			return err
+		}
+		currentUser, err := getCurrentUserFromSession(tx, session)
+		if err != nil {
+			return err
+		}
+
+		// Get problem sets
+		typesProblemSets, err := getProblemSets(tx, currentUser, req.Unique, req.Note, req.Search)
+		if err != nil {
+			return status.Errorf(codes.Internal, "db error getting problem sets: %v", err)
+		}
+		for _, ps := range typesProblemSets {
+			problemSets = append(problemSets, convertProblemSetToProto(ps))
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.GetProblemSetsResponse{ProblemSets: problemSets}, nil
+}
+
+// GetProblemSet retrieves a specific problem set
+func (s *codeGrinderServiceServer) GetProblemSet(ctx context.Context, req *pb.GetProblemSetRequest) (*pb.GetProblemSetResponse, error) {
+	var problemSet *pb.ProblemSet
+
+	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
+		// Get current user
+		session, err := getSessionFromGRPC(ctx)
+		if err != nil {
+			return err
+		}
+		currentUser, err := getCurrentUserFromSession(tx, session)
+		if err != nil {
+			return err
+		}
+
+		// Get problem set
+		typesProblemSet, err := getProblemSet(tx, req.ProblemSetId, currentUser)
+		if err != nil {
+			return status.Errorf(codes.Internal, "db error getting problem set: %v", err)
+		}
+		problemSet = convertProblemSetToProto(typesProblemSet)
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.GetProblemSetResponse{ProblemSet: problemSet}, nil
+}
+
+// GetProblemSetProblems retrieves problems in a problem set
+func (s *codeGrinderServiceServer) GetProblemSetProblems(ctx context.Context, req *pb.GetProblemSetProblemsRequest) (*pb.GetProblemSetProblemsResponse, error) {
+	var problemSetProblems []*pb.ProblemSetProblem
+
+	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
+		// Get current user
+		session, err := getSessionFromGRPC(ctx)
+		if err != nil {
+			return err
+		}
+		currentUser, err := getCurrentUserFromSession(tx, session)
+		if err != nil {
+			return err
+		}
+
+		// Get problem set problems
+		typesProblemSetProblems, err := getProblemSetProblems(tx, req.ProblemSetId, currentUser)
+		if err != nil {
+			return status.Errorf(codes.Internal, "db error getting problem set problems: %v", err)
+		}
+		for _, psp := range typesProblemSetProblems {
+			problemSetProblems = append(problemSetProblems, convertProblemSetProblemToProto(psp))
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.GetProblemSetProblemsResponse{ProblemSetProblems: problemSetProblems}, nil
+}
+
+// GetCourses retrieves courses with optional filters
+func (s *codeGrinderServiceServer) GetCourses(ctx context.Context, req *pb.GetCoursesRequest) (*pb.GetCoursesResponse, error) {
+	var courses []*pb.Course
+
+	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
+		// Get current user
+		session, err := getSessionFromGRPC(ctx)
+		if err != nil {
+			return err
+		}
+		currentUser, err := getCurrentUserFromSession(tx, session)
+		if err != nil {
+			return err
+		}
+
+		// Get courses
+		typesCourses, err := getCourses(tx, currentUser, req.LtiLabel, req.Name)
+		if err != nil {
+			return status.Errorf(codes.Internal, "db error getting courses: %v", err)
+		}
+		for _, c := range typesCourses {
+			courses = append(courses, convertCourseToProto(c))
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.GetCoursesResponse{Courses: courses}, nil
+}
+
+// GetCourse retrieves a specific course
+func (s *codeGrinderServiceServer) GetCourse(ctx context.Context, req *pb.GetCourseRequest) (*pb.GetCourseResponse, error) {
+	var course *pb.Course
+
+	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
+		// Get current user
+		session, err := getSessionFromGRPC(ctx)
+		if err != nil {
+			return err
+		}
+		currentUser, err := getCurrentUserFromSession(tx, session)
+		if err != nil {
+			return err
+		}
+
+		// Get course
+		typesCourse, err := getCourse(tx, req.CourseId, currentUser)
+		if err != nil {
+			return status.Errorf(codes.Internal, "db error getting course: %v", err)
+		}
+		course = convertCourseToProto(typesCourse)
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.GetCourseResponse{Course: course}, nil
+}
+
+// GetUsers retrieves users with optional filters
+func (s *codeGrinderServiceServer) GetUsers(ctx context.Context, req *pb.GetUsersRequest) (*pb.GetUsersResponse, error) {
+	var users []*pb.User
+
+	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
+		// Get current user
+		session, err := getSessionFromGRPC(ctx)
+		if err != nil {
+			return err
+		}
+		currentUser, err := getCurrentUserFromSession(tx, session)
+		if err != nil {
+			return err
+		}
+
+		// Get users
+		typesUsers, err := getUsers(tx, currentUser, req.Name, req.Email, req.Instructor, req.Admin)
+		if err != nil {
+			return status.Errorf(codes.Internal, "db error getting users: %v", err)
+		}
+		for _, u := range typesUsers {
+			users = append(users, convertUserToProto(u))
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.GetUsersResponse{Users: users}, nil
+}
+
+// GetUserMe retrieves the current user
+func (s *codeGrinderServiceServer) GetUserMe(ctx context.Context, req *pb.GetUserMeRequest) (*pb.GetUserMeResponse, error) {
+	var user *pb.User
+
+	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
+		// Get current user
+		session, err := getSessionFromGRPC(ctx)
+		if err != nil {
+			return err
+		}
+		currentUser, err := getCurrentUserFromSession(tx, session)
+		if err != nil {
+			return err
+		}
+
+		// Get user me
+		typesUser, err := getUserMe(tx, currentUser)
+		if err != nil {
+			return status.Errorf(codes.Internal, "db error getting user me: %v", err)
+		}
+		user = convertUserToProto(typesUser)
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.GetUserMeResponse{User: user}, nil
+}
+
+// GetUser retrieves a specific user
+func (s *codeGrinderServiceServer) GetUser(ctx context.Context, req *pb.GetUserRequest) (*pb.GetUserResponse, error) {
+	var user *pb.User
+
+	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
+		// Get current user
+		session, err := getSessionFromGRPC(ctx)
+		if err != nil {
+			return err
+		}
+		currentUser, err := getCurrentUserFromSession(tx, session)
+		if err != nil {
+			return err
+		}
+
+		// Get user
+		typesUser, err := getUser(tx, req.UserId, currentUser)
+		if err != nil {
+			return status.Errorf(codes.Internal, "db error getting user: %v", err)
+		}
+		user = convertUserToProto(typesUser)
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.GetUserResponse{User: user}, nil
+}
+
+// GetCourseUsers retrieves users in a course
+func (s *codeGrinderServiceServer) GetCourseUsers(ctx context.Context, req *pb.GetCourseUsersRequest) (*pb.GetCourseUsersResponse, error) {
+	var users []*pb.User
+
+	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
+		// Get current user
+		session, err := getSessionFromGRPC(ctx)
+		if err != nil {
+			return err
+		}
+		currentUser, err := getCurrentUserFromSession(tx, session)
+		if err != nil {
+			return err
+		}
+
+		// Get course users
+		typesUsers, err := getCourseUsers(tx, req.CourseId, currentUser)
+		if err != nil {
+			return status.Errorf(codes.Internal, "db error getting course users: %v", err)
+		}
+		for _, u := range typesUsers {
+			users = append(users, convertUserToProto(u))
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.GetCourseUsersResponse{Users: users}, nil
+}
+
+// GetUserAssignments retrieves assignments for a user
+func (s *codeGrinderServiceServer) GetUserAssignments(ctx context.Context, req *pb.GetUserAssignmentsRequest) (*pb.GetUserAssignmentsResponse, error) {
+	var assignments []*pb.Assignment
+
+	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
+		// Get current user
+		session, err := getSessionFromGRPC(ctx)
+		if err != nil {
+			return err
+		}
+		currentUser, err := getCurrentUserFromSession(tx, session)
+		if err != nil {
+			return err
+		}
+
+		// Get user assignments
+		typesAssignments, err := getUserAssignments(tx, req.UserId, currentUser)
+		if err != nil {
+			return status.Errorf(codes.Internal, "db error getting user assignments: %v", err)
+		}
+		for _, a := range typesAssignments {
+			assignments = append(assignments, convertAssignmentToProto(a))
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.GetUserAssignmentsResponse{Assignments: assignments}, nil
+}
+
+// GetCourseUserAssignments retrieves assignments for a user in a course
+func (s *codeGrinderServiceServer) GetCourseUserAssignments(ctx context.Context, req *pb.GetCourseUserAssignmentsRequest) (*pb.GetCourseUserAssignmentsResponse, error) {
+	var assignments []*pb.Assignment
+
+	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
+		// Get current user
+		session, err := getSessionFromGRPC(ctx)
+		if err != nil {
+			return err
+		}
+		currentUser, err := getCurrentUserFromSession(tx, session)
+		if err != nil {
+			return err
+		}
+
+		// Get course user assignments
+		typesAssignments, err := getCourseUserAssignments(tx, req.CourseId, req.UserId, currentUser)
+		if err != nil {
+			return status.Errorf(codes.Internal, "db error getting course user assignments: %v", err)
+		}
+		for _, a := range typesAssignments {
+			assignments = append(assignments, convertAssignmentToProto(a))
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.GetCourseUserAssignmentsResponse{Assignments: assignments}, nil
+}
+
+// GetAssignments retrieves assignments with optional filters
+func (s *codeGrinderServiceServer) GetAssignments(ctx context.Context, req *pb.GetAssignmentsRequest) (*pb.GetAssignmentsResponse, error) {
+	var assignments []*pb.Assignment
+
+	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
+		// Get current user
+		session, err := getSessionFromGRPC(ctx)
+		if err != nil {
+			return err
+		}
+		currentUser, err := getCurrentUserFromSession(tx, session)
+		if err != nil {
+			return err
+		}
+
+		// Get assignments
+		typesAssignments, err := getAssignments(tx, currentUser, req.Search)
+		if err != nil {
+			return status.Errorf(codes.Internal, "db error getting assignments: %v", err)
+		}
+		for _, a := range typesAssignments {
+			assignments = append(assignments, convertAssignmentToProto(a))
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.GetAssignmentsResponse{Assignments: assignments}, nil
+}
+
+// GetAssignment retrieves a specific assignment
+func (s *codeGrinderServiceServer) GetAssignment(ctx context.Context, req *pb.GetAssignmentRequest) (*pb.GetAssignmentResponse, error) {
+	var assignment *pb.Assignment
+
+	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
+		// Get current user
+		session, err := getSessionFromGRPC(ctx)
+		if err != nil {
+			return err
+		}
+		currentUser, err := getCurrentUserFromSession(tx, session)
+		if err != nil {
+			return err
+		}
+
+		// Get assignment
+		typesAssignment, err := getAssignment(tx, req.AssignmentId, currentUser)
+		if err != nil {
+			return status.Errorf(codes.Internal, "db error getting assignment: %v", err)
+		}
+		assignment = convertAssignmentToProto(typesAssignment)
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.GetAssignmentResponse{Assignment: assignment}, nil
+}
+
+// GetAssignmentProblemCommitLast retrieves the last commit for a problem in an assignment
+func (s *codeGrinderServiceServer) GetAssignmentProblemCommitLast(ctx context.Context, req *pb.GetAssignmentProblemCommitLastRequest) (*pb.GetAssignmentProblemCommitLastResponse, error) {
+	var commit *pb.Commit
+
+	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
+		// Get current user
+		session, err := getSessionFromGRPC(ctx)
+		if err != nil {
+			return err
+		}
+		currentUser, err := getCurrentUserFromSession(tx, session)
+		if err != nil {
+			return err
+		}
+
+		// Get assignment problem commit last
+		typesCommit, err := getAssignmentProblemCommitLast(tx, req.AssignmentId, req.ProblemId, currentUser)
+		if err != nil {
+			return status.Errorf(codes.Internal, "db error getting assignment problem commit last: %v", err)
+		}
+		if typesCommit != nil {
+			commit = convertCommitToProto(typesCommit)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.GetAssignmentProblemCommitLastResponse{Commit: commit}, nil
+}
+
+// GetAssignmentProblemStepCommitLast retrieves the last commit for a step in an assignment
+func (s *codeGrinderServiceServer) GetAssignmentProblemStepCommitLast(ctx context.Context, req *pb.GetAssignmentProblemStepCommitLastRequest) (*pb.GetAssignmentProblemStepCommitLastResponse, error) {
+	var commit *pb.Commit
+
+	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
+		// Get current user
+		session, err := getSessionFromGRPC(ctx)
+		if err != nil {
+			return err
+		}
+		currentUser, err := getCurrentUserFromSession(tx, session)
+		if err != nil {
+			return err
+		}
+
+		// Get assignment problem step commit last
+		typesCommit, err := getAssignmentProblemStepCommitLast(tx, req.AssignmentId, req.ProblemId, req.Step, currentUser)
+		if err != nil {
+			return status.Errorf(codes.Internal, "db error getting assignment problem step commit last: %v", err)
+		}
+		if typesCommit != nil {
+			commit = convertCommitToProto(typesCommit)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.GetAssignmentProblemStepCommitLastResponse{Commit: commit}, nil
+}
+
+// PostProblemBundleUnconfirmed handles unconfirmed problem bundle
+func (s *codeGrinderServiceServer) PostProblemBundleUnconfirmed(ctx context.Context, req *pb.PostProblemBundleUnconfirmedRequest) (*pb.PostProblemBundleUnconfirmedResponse, error) {
+	var result map[string]string
+
+	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
+		// Get current user
+		session, err := getSessionFromGRPC(ctx)
+		if err != nil {
+			return err
+		}
+		currentUser, err := getCurrentUserFromSession(tx, session)
+		if err != nil {
+			return err
+		}
+
+		// Convert proto to types
+		bundle := convertProblemBundleFromProto(req.Bundle)
+
+		// Post problem bundle unconfirmed
+		typesResult, err := signProblemBundleUnconfirmed(tx, currentUser, bundle)
+		if err != nil {
+			return status.Errorf(codes.Internal, "db error posting problem bundle unconfirmed: %v", err)
+		}
+		// Convert the result to map[string]string
+		result = map[string]string{
+			"problem_id": fmt.Sprintf("%d", typesResult.Problem.ID),
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.PostProblemBundleUnconfirmedResponse{Result: result}, nil
+}
+
+// PostProblemBundleConfirmed handles confirmed problem bundle
+func (s *codeGrinderServiceServer) PostProblemBundleConfirmed(ctx context.Context, req *pb.PostProblemBundleConfirmedRequest) (*pb.PostProblemBundleConfirmedResponse, error) {
+	var result map[string]string
+
+	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
+		// Get current user
+		session, err := getSessionFromGRPC(ctx)
+		if err != nil {
+			return err
+		}
+		currentUser, err := getCurrentUserFromSession(tx, session)
+		if err != nil {
+			return err
+		}
+
+		// Convert proto to types
+		bundle := convertProblemBundleFromProto(req.Bundle)
+
+		// Post problem bundle confirmed
+		typesResult, err := saveProblemBundleCommon(tx, currentUser, bundle)
+		if err != nil {
+			return status.Errorf(codes.Internal, "db error posting problem bundle confirmed: %v", err)
+		}
+		result = map[string]string{
+			"problem_id": fmt.Sprintf("%d", typesResult.Problem.ID),
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.PostProblemBundleConfirmedResponse{Result: result}, nil
+}
+
+// PutProblemBundle handles updating problem bundle
+func (s *codeGrinderServiceServer) PutProblemBundle(ctx context.Context, req *pb.PutProblemBundleRequest) (*pb.PutProblemBundleResponse, error) {
+	var result map[string]string
+
+	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
+		// Get current user
+		session, err := getSessionFromGRPC(ctx)
+		if err != nil {
+			return err
+		}
+		currentUser, err := getCurrentUserFromSession(tx, session)
+		if err != nil {
+			return err
+		}
+
+		// Convert proto to types
+		bundle := convertProblemBundleFromProto(req.Bundle)
+
+		// Put problem bundle
+		typesResult, err := updateProblemBundle(tx, currentUser, req.ProblemId, bundle)
+		if err != nil {
+			return status.Errorf(codes.Internal, "db error putting problem bundle: %v", err)
+		}
+		result = map[string]string{
+			"problem_id": fmt.Sprintf("%d", typesResult.Problem.ID),
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.PutProblemBundleResponse{Result: result}, nil
+}
+
+// PostProblemSetBundle handles problem set bundle
+func (s *codeGrinderServiceServer) PostProblemSetBundle(ctx context.Context, req *pb.PostProblemSetBundleRequest) (*pb.PostProblemSetBundleResponse, error) {
+	var result map[string]string
+
+	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
+		// Convert proto to types
+		bundle := convertProblemSetBundleFromProto(req.Bundle)
+
+		// Post problem set bundle
+		typesResult, err := createProblemSetBundle(tx, bundle)
+		if err != nil {
+			return status.Errorf(codes.Internal, "db error posting problem set bundle: %v", err)
+		}
+		result = map[string]string{
+			"problem_set_id": fmt.Sprintf("%d", typesResult.ProblemSet.ID),
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.PostProblemSetBundleResponse{Result: result}, nil
+}
+
+// PutProblemSetBundle handles updating problem set bundle
+func (s *codeGrinderServiceServer) PutProblemSetBundle(ctx context.Context, req *pb.PutProblemSetBundleRequest) (*pb.PutProblemSetBundleResponse, error) {
+	var result map[string]string
+
+	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
+		// Convert proto to types
+		bundle := convertProblemSetBundleFromProto(req.Bundle)
+
+		// Put problem set bundle
+		typesResult, err := updateProblemSetBundle(tx, bundle)
+		if err != nil {
+			return status.Errorf(codes.Internal, "db error putting problem set bundle: %v", err)
+		}
+		result = map[string]string{
+			"problem_set_id": fmt.Sprintf("%d", typesResult.ProblemSet.ID),
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.PutProblemSetBundleResponse{Result: result}, nil
+}
+
+// PostCommitBundlesUnsigned handles unsigned commit bundle
+func (s *codeGrinderServiceServer) PostCommitBundlesUnsigned(ctx context.Context, req *pb.PostCommitBundlesUnsignedRequest) (*pb.PostCommitBundlesUnsignedResponse, error) {
+	var result map[string]string
+
+	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
+		// Get current user
+		session, err := getSessionFromGRPC(ctx)
+		if err != nil {
+			return err
+		}
+		currentUser, err := getCurrentUserFromSession(tx, session)
+		if err != nil {
+			return err
+		}
+
+		// Convert proto to types
+		bundle := convertCommitBundleFromProto(req.Bundle)
+
+		// Post commit bundles unsigned
+		typesResult, err := saveCommitBundleCommon(time.Now(), tx, currentUser, bundle)
+		if err != nil {
+			return status.Errorf(codes.Internal, "db error posting commit bundles unsigned: %v", err)
+		}
+		result = map[string]string{
+			"commit_id": fmt.Sprintf("%d", typesResult.Commit.ID),
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.PostCommitBundlesUnsignedResponse{Result: result}, nil
+}
+
+// PostCommitBundlesSigned handles signed commit bundle
+func (s *codeGrinderServiceServer) PostCommitBundlesSigned(ctx context.Context, req *pb.PostCommitBundlesSignedRequest) (*pb.PostCommitBundlesSignedResponse, error) {
+	var result map[string]string
+
+	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
+		// Get current user
+		session, err := getSessionFromGRPC(ctx)
+		if err != nil {
+			return err
+		}
+		currentUser, err := getCurrentUserFromSession(tx, session)
+		if err != nil {
+			return err
+		}
+
+		// Convert proto to types
+		bundle := convertCommitBundleFromProto(req.Bundle)
+
+		// Post commit bundles signed
+		typesResult, err := saveCommitBundleCommon(time.Now(), tx, currentUser, bundle)
+		if err != nil {
+			return status.Errorf(codes.Internal, "db error posting commit bundles signed: %v", err)
+		}
+		result = map[string]string{
+			"commit_id": fmt.Sprintf("%d", typesResult.Commit.ID),
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.PostCommitBundlesSignedResponse{Result: result}, nil
 }

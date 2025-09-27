@@ -10,13 +10,10 @@ server: $(GOPATH)/bin/server
 
 grind: grind-linux-amd64
 
-rpc: rpc/version.pb.go rpc/version_grpc.pb.go rpc/ta.pb.go rpc/ta_grpc.pb.go
+rpc: rpc/codegrinder.pb.go rpc/codegrinder_grpc.pb.go
 
-rpc/version.pb.go rpc/version_grpc.pb.go: rpc/version.proto
-	protoc --proto_path=. --proto_path=/usr/include --go_out=. --go_opt=module=github.com/russross/codegrinder --go-grpc_out=. --go-grpc_opt=module=github.com/russross/codegrinder rpc/version.proto
-
-rpc/ta.pb.go rpc/ta_grpc.pb.go: rpc/ta.proto
-	protoc --proto_path=. --proto_path=/usr/include --go_out=. --go_opt=module=github.com/russross/codegrinder --go-grpc_out=. --go-grpc_opt=module=github.com/russross/codegrinder rpc/ta.proto
+rpc/codegrinder.pb.go rpc/codegrinder_grpc.pb.go: rpc/codegrinder.proto
+	protoc --proto_path=. --proto_path=/usr/include --go_out=. --go_opt=module=github.com/russross/codegrinder --go-grpc_out=. --go-grpc_opt=module=github.com/russross/codegrinder rpc/codegrinder.proto
 
 $(GOPATH)/bin/server: $(SERVER_SOURCES)
 	@echo building codegrinder server

@@ -143,9 +143,7 @@ func gatherStudent(now time.Time, startDir string) (*ProblemType, *Problem, *Pro
 	} else {
 		// use the subdirectory name to identify the problem
 		if problemDir == "" {
-			log.Printf("you must identify the problem within this problem set")
-			log.Printf("  either run this from with the problem directory, or")
-			log.Fatalf("  identify it as a parameter in the command")
+			log.Fatalf("you must run this from within a specific problem directory")
 		}
 		_, unique = filepath.Split(problemDir)
 	}
