@@ -633,7 +633,7 @@ message PostCommitBundlesUnsignedRequest {
 
 // Response for PostCommitBundlesUnsigned
 message PostCommitBundlesUnsignedResponse {
-   map<string, string> result = 1;
+   CommitBundle bundle = 1;
 }
 
 // Request for PostCommitBundlesSigned
@@ -644,5 +644,5 @@ message PostCommitBundlesSignedRequest {
 
 // Response for PostCommitBundlesSigned
 message PostCommitBundlesSignedResponse {
-   map<string, string> result = 1;
+   CommitBundle bundle = 1;
 }

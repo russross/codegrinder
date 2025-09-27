@@ -1456,7 +1456,7 @@ func (s *codeGrinderServiceServer) PutProblemSetBundle(ctx context.Context, req 
 
 // PostCommitBundlesUnsigned handles unsigned commit bundle
 func (s *codeGrinderServiceServer) PostCommitBundlesUnsigned(ctx context.Context, req *pb.PostCommitBundlesUnsignedRequest) (*pb.PostCommitBundlesUnsignedResponse, error) {
-	var result map[string]string
+	var resultBundle *pb.CommitBundle
 
 	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
 		// Get current user
@@ -1473,13 +1473,12 @@ func (s *codeGrinderServiceServer) PostCommitBundlesUnsigned(ctx context.Context
 		bundle := convertCommitBundleFromProto(req.Bundle)
 
 		// Post commit bundles unsigned
-		typesResult, err := saveCommitBundleCommon(time.Now(), tx, currentUser, bundle)
+		result, err := saveCommitBundleCommon(time.Now(), tx, currentUser, bundle)
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error posting commit bundles unsigned: %v", err)
 		}
-		result = map[string]string{
-			"commit_id": fmt.Sprintf("%d", typesResult.Commit.ID),
-		}
+
+		resultBundle = convertCommitBundleToProto(result)
 
 		return nil
 	})
@@ -1487,12 +1486,12 @@ func (s *codeGrinderServiceServer) PostCommitBundlesUnsigned(ctx context.Context
 		return nil, err
 	}
 
-	return &pb.PostCommitBundlesUnsignedResponse{Result: result}, nil
+	return &pb.PostCommitBundlesUnsignedResponse{Bundle: resultBundle}, nil
 }
 
 // PostCommitBundlesSigned handles signed commit bundle
 func (s *codeGrinderServiceServer) PostCommitBundlesSigned(ctx context.Context, req *pb.PostCommitBundlesSignedRequest) (*pb.PostCommitBundlesSignedResponse, error) {
-	var result map[string]string
+	var resultBundle *pb.CommitBundle
 
 	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
 		// Get current user
@@ -1509,13 +1508,12 @@ func (s *codeGrinderServiceServer) PostCommitBundlesSigned(ctx context.Context, 
 		bundle := convertCommitBundleFromProto(req.Bundle)
 
 		// Post commit bundles signed
-		typesResult, err := saveCommitBundleCommon(time.Now(), tx, currentUser, bundle)
+		result, err := saveCommitBundleCommon(time.Now(), tx, currentUser, bundle)
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error posting commit bundles signed: %v", err)
 		}
-		result = map[string]string{
-			"commit_id": fmt.Sprintf("%d", typesResult.Commit.ID),
-		}
+
+		resultBundle = convertCommitBundleToProto(result)
 
 		return nil
 	})
@@ -1523,7 +1521,7 @@ func (s *codeGrinderServiceServer) PostCommitBundlesSigned(ctx context.Context, 
 		return nil, err
 	}
 
-	return &pb.PostCommitBundlesSignedResponse{Result: result}, nil
+	return &pb.PostCommitBundlesSignedResponse{Bundle: resultBundle}, nil
 }
 
 // Daycare handles streaming daycare requests
