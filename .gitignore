@@ -3,5 +3,6 @@ db
 acme
 github.com
 config.json
-rpc/*.go
+codegrinder_grpc.pb.go
+codegrinder.pb.go
 *.swp

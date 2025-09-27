@@ -10,8 +10,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/durationpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	pb "github.com/russross/codegrinder/rpc"
 	. "github.com/russross/codegrinder/types"
@@ -123,7 +121,8 @@ func (s *codeGrinderServiceServer) ListProblems(ctx context.Context, req *pb.Lis
 		}
 
 		// Get user
-		user = convertUserToProto(currentUser)
+		user = &pb.User{}
+		user.FromREST(currentUser)
 
 		// Get assignments
 		typeAssignments, err = getUserAssignments(tx, session.UserID, currentUser)
@@ -141,7 +140,9 @@ func (s *codeGrinderServiceServer) ListProblems(ctx context.Context, req *pb.Lis
 				if err != nil {
 					return status.Errorf(codes.Internal, "db error getting course: %v", err)
 				}
-				courseMap[asst.CourseID] = convertCourseToProto(course)
+				pbCourse := &pb.Course{}
+				pbCourse.FromREST(course)
+				courseMap[asst.CourseID] = pbCourse
 			}
 
 			// Get problem set if not already fetched
@@ -150,7 +151,9 @@ func (s *codeGrinderServiceServer) ListProblems(ctx context.Context, req *pb.Lis
 				if err != nil {
 					return status.Errorf(codes.Internal, "db error getting problem set: %v", err)
 				}
-				problemSetMap[asst.ProblemSetID] = convertProblemSetToProto(problemSet)
+				pbProblemSet := &pb.ProblemSet{}
+				pbProblemSet.FromREST(problemSet)
+				problemSetMap[asst.ProblemSetID] = pbProblemSet
 			}
 		}
 
@@ -171,7 +174,9 @@ func (s *codeGrinderServiceServer) ListProblems(ctx context.Context, req *pb.Lis
 	// Convert assignments to proto
 	var protoAssignments []*pb.Assignment
 	for _, asst := range typeAssignments {
-		protoAssignments = append(protoAssignments, convertAssignmentToProto(asst))
+		pbAssignment := &pb.Assignment{}
+		pbAssignment.FromREST(asst)
+		protoAssignments = append(protoAssignments, pbAssignment)
 	}
 
 	return &pb.ListProblemsResponse{
@@ -180,488 +185,6 @@ func (s *codeGrinderServiceServer) ListProblems(ctx context.Context, req *pb.Lis
 		Courses:     courses,
 		ProblemSets: problemSets,
 	}, nil
-}
-
-// Helper functions to convert types to proto
-func convertUserToProto(u *User) *pb.User {
-	return &pb.User{
-		Id:             u.ID,
-		Name:           u.Name,
-		Email:          u.Email,
-		LtiId:          u.LtiID,
-		ImageUrl:       u.ImageURL,
-		CanvasLogin:    u.CanvasLogin,
-		CanvasId:       u.CanvasID,
-		Author:         u.Author,
-		Admin:          u.Admin,
-		CreatedAt:      convertTimeToProto(u.CreatedAt),
-		UpdatedAt:      convertTimeToProto(u.UpdatedAt),
-		LastSignedInAt: convertTimeToProto(u.LastSignedInAt),
-	}
-}
-
-func convertCourseToProto(c *Course) *pb.Course {
-	return &pb.Course{
-		Id:        c.ID,
-		Name:      c.Name,
-		Label:     c.Label,
-		LtiId:     c.LtiID,
-		CanvasId:  c.CanvasID,
-		CreatedAt: convertTimeToProto(c.CreatedAt),
-		UpdatedAt: convertTimeToProto(c.UpdatedAt),
-	}
-}
-
-func convertAssignmentToProto(a *Assignment) *pb.Assignment {
-	rawScores := make(map[string]*pb.ScoreList)
-	for k, v := range a.RawScores {
-		rawScores[k] = &pb.ScoreList{Scores: v}
-	}
-
-	var unlockAt, dueAt, lockAt *time.Time
-	unlockAt = a.UnlockAt
-	dueAt = a.DueAt
-	lockAt = a.LockAt
-
-	return &pb.Assignment{
-		Id:                 a.ID,
-		CourseId:           a.CourseID,
-		ProblemSetId:       a.ProblemSetID,
-		UserId:             a.UserID,
-		Roles:              a.Roles,
-		Instructor:         a.Instructor,
-		RawScores:          rawScores,
-		Score:              a.Score,
-		GradeId:            a.GradeID,
-		LtiId:              a.LtiID,
-		CanvasTitle:        a.CanvasTitle,
-		CanvasId:           a.CanvasID,
-		CanvasApiDomain:    a.CanvasAPIDomain,
-		OutcomeUrl:         a.OutcomeURL,
-		OutcomeExtUrl:      a.OutcomeExtURL,
-		OutcomeExtAccepted: a.OutcomeExtAccepted,
-		FinishedUrl:        a.FinishedURL,
-		ConsumerKey:        a.ConsumerKey,
-		UnlockAt:           convertTimeToProtoPtr(unlockAt),
-		DueAt:              convertTimeToProtoPtr(dueAt),
-		LockAt:             convertTimeToProtoPtr(lockAt),
-		CreatedAt:          convertTimeToProto(a.CreatedAt),
-		UpdatedAt:          convertTimeToProto(a.UpdatedAt),
-	}
-}
-
-func convertProblemSetToProto(ps *ProblemSet) *pb.ProblemSet {
-	return &pb.ProblemSet{
-		Id:        ps.ID,
-		Unique:    ps.Unique,
-		Note:      ps.Note,
-		Tags:      ps.Tags,
-		CreatedAt: convertTimeToProto(ps.CreatedAt),
-		UpdatedAt: convertTimeToProto(ps.UpdatedAt),
-	}
-}
-
-func convertTimeToProto(t time.Time) *timestamppb.Timestamp {
-	return timestamppb.New(t)
-}
-
-func convertTimeToProtoPtr(t *time.Time) *timestamppb.Timestamp {
-	if t == nil {
-		return nil
-	}
-	return timestamppb.New(*t)
-}
-
-// Conversion functions for new types
-func convertProblemTypeToProto(pt *ProblemType) *pb.ProblemType {
-	actions := make(map[string]*pb.ProblemTypeAction)
-	for k, v := range pt.Actions {
-		actions[k] = &pb.ProblemTypeAction{
-			ProblemType: v.ProblemType,
-			Action:      v.Action,
-			Command:     v.Command,
-			Parser:      v.Parser,
-			Message:     v.Message,
-			Interactive: v.Interactive,
-			MaxCpu:      v.MaxCPU,
-			MaxSession:  v.MaxSession,
-			MaxTimeout:  v.MaxTimeout,
-			MaxFd:       v.MaxFD,
-			MaxFileSize: v.MaxFileSize,
-			MaxMemory:   v.MaxMemory,
-			MaxThreads:  v.MaxThreads,
-		}
-	}
-	return &pb.ProblemType{
-		Name:    pt.Name,
-		Image:   pt.Image,
-		Files:   pt.Files,
-		Actions: actions,
-	}
-}
-
-func convertProblemToProto(p *Problem) *pb.Problem {
-	return &pb.Problem{
-		Id:        p.ID,
-		Unique:    p.Unique,
-		Note:      p.Note,
-		Tags:      p.Tags,
-		Options:   p.Options,
-		CreatedAt: convertTimeToProto(p.CreatedAt),
-		UpdatedAt: convertTimeToProto(p.UpdatedAt),
-	}
-}
-
-func convertProblemStepToProto(ps *ProblemStep) *pb.ProblemStep {
-	return &pb.ProblemStep{
-		ProblemId:    ps.ProblemID,
-		Step:         ps.Step,
-		ProblemType:  ps.ProblemType,
-		Note:         ps.Note,
-		Instructions: ps.Instructions,
-		Weight:       ps.Weight,
-		Files:        ps.Files,
-		Whitelist:    ps.Whitelist,
-		Solution:     ps.Solution,
-	}
-}
-
-func convertProblemSetProblemToProto(psp *ProblemSetProblem) *pb.ProblemSetProblem {
-	return &pb.ProblemSetProblem{
-		ProblemSetId: psp.ProblemSetID,
-		ProblemId:    psp.ProblemID,
-		Weight:       psp.Weight,
-	}
-}
-
-func convertReportCardToProto(rc *ReportCard) *pb.ReportCard {
-	results := make([]*pb.ReportCardResult, len(rc.Results))
-	for i, r := range rc.Results {
-		results[i] = &pb.ReportCardResult{
-			Name:    r.Name,
-			Outcome: r.Outcome,
-			Details: r.Details,
-			Context: r.Context,
-		}
-	}
-	return &pb.ReportCard{
-		Passed:   rc.Passed,
-		Note:     rc.Note,
-		Duration: durationpb.New(rc.Duration),
-		Results:  results,
-	}
-}
-
-func convertEventMessageToProto(em *EventMessage) *pb.EventMessage {
-	return &pb.EventMessage{
-		Time:        convertTimeToProto(em.Time),
-		Event:       em.Event,
-		ExecCommand: em.ExecCommand,
-		ExitStatus:  int32(em.ExitStatus),
-		StreamData:  em.StreamData,
-		Error:       em.Error,
-		ReportCard:  convertReportCardToProto(em.ReportCard),
-		Files:       em.Files,
-	}
-}
-
-func convertCommitToProto(c *Commit) *pb.Commit {
-	transcript := make([]*pb.EventMessage, len(c.Transcript))
-	for i, t := range c.Transcript {
-		transcript[i] = convertEventMessageToProto(t)
-	}
-	return &pb.Commit{
-		Id:           c.ID,
-		AssignmentId: c.AssignmentID,
-		ProblemId:    c.ProblemID,
-		Step:         c.Step,
-		Action:       c.Action,
-		Note:         c.Note,
-		Files:        c.Files,
-		Transcript:   transcript,
-		ReportCard:   convertReportCardToProto(c.ReportCard),
-		Score:        c.Score,
-		CreatedAt:    convertTimeToProto(c.CreatedAt),
-		UpdatedAt:    convertTimeToProto(c.UpdatedAt),
-	}
-}
-
-func convertProblemBundleFromProto(pb *pb.ProblemBundle) *ProblemBundle {
-	problemTypes := make(map[string]*ProblemType)
-	for k, v := range pb.ProblemTypes {
-		problemTypes[k] = convertProblemTypeFromProto(v)
-	}
-	commits := make([]*Commit, len(pb.Commits))
-	for i, c := range pb.Commits {
-		commits[i] = convertCommitFromProto(c)
-	}
-	return &ProblemBundle{
-		ProblemTypes:          problemTypes,
-		ProblemTypeSignatures: pb.ProblemTypeSignatures,
-		Problem:               convertProblemFromProto(pb.Problem),
-		ProblemSteps:          convertProblemStepsFromProto(pb.ProblemSteps),
-		ProblemSignature:      pb.ProblemSignature,
-		Hostname:              pb.Hostname,
-		UserID:                pb.UserId,
-		Commits:               commits,
-		CommitSignatures:      pb.CommitSignatures,
-	}
-}
-
-func convertProblemTypeFromProto(pt *pb.ProblemType) *ProblemType {
-	actions := make(map[string]*ProblemTypeAction)
-	for k, v := range pt.Actions {
-		actions[k] = &ProblemTypeAction{
-			ProblemType: v.ProblemType,
-			Action:      v.Action,
-			Command:     v.Command,
-			Parser:      v.Parser,
-			Message:     v.Message,
-			Interactive: v.Interactive,
-			MaxCPU:      v.MaxCpu,
-			MaxSession:  v.MaxSession,
-			MaxTimeout:  v.MaxTimeout,
-			MaxFD:       v.MaxFd,
-			MaxFileSize: v.MaxFileSize,
-			MaxMemory:   v.MaxMemory,
-			MaxThreads:  v.MaxThreads,
-		}
-	}
-	return &ProblemType{
-		Name:    pt.Name,
-		Image:   pt.Image,
-		Files:   pt.Files,
-		Actions: actions,
-	}
-}
-
-func convertProblemFromProto(p *pb.Problem) *Problem {
-	return &Problem{
-		ID:        p.Id,
-		Unique:    p.Unique,
-		Note:      p.Note,
-		Tags:      p.Tags,
-		Options:   p.Options,
-		CreatedAt: p.CreatedAt.AsTime(),
-		UpdatedAt: p.UpdatedAt.AsTime(),
-	}
-}
-
-func convertProblemStepsFromProto(pss []*pb.ProblemStep) []*ProblemStep {
-	steps := make([]*ProblemStep, len(pss))
-	for i, ps := range pss {
-		steps[i] = convertProblemStepFromProto(ps)
-	}
-	return steps
-}
-
-func convertProblemStepFromProto(ps *pb.ProblemStep) *ProblemStep {
-	return &ProblemStep{
-		ProblemID:    ps.ProblemId,
-		Step:         ps.Step,
-		ProblemType:  ps.ProblemType,
-		Note:         ps.Note,
-		Instructions: ps.Instructions,
-		Weight:       ps.Weight,
-		Files:        ps.Files,
-		Whitelist:    ps.Whitelist,
-		Solution:     ps.Solution,
-	}
-}
-
-func convertCommitFromProto(c *pb.Commit) *Commit {
-	transcript := make([]*EventMessage, len(c.Transcript))
-	for i, t := range c.Transcript {
-		transcript[i] = convertEventMessageFromProto(t)
-	}
-	return &Commit{
-		ID:           c.Id,
-		AssignmentID: c.AssignmentId,
-		ProblemID:    c.ProblemId,
-		Step:         c.Step,
-		Action:       c.Action,
-		Note:         c.Note,
-		Files:        c.Files,
-		Transcript:   transcript,
-		ReportCard:   convertReportCardFromProto(c.ReportCard),
-		Score:        c.Score,
-		CreatedAt:    c.CreatedAt.AsTime(),
-		UpdatedAt:    c.UpdatedAt.AsTime(),
-	}
-}
-
-func convertEventMessageFromProto(em *pb.EventMessage) *EventMessage {
-	return &EventMessage{
-		Time:        em.Time.AsTime(),
-		Event:       em.Event,
-		ExecCommand: em.ExecCommand,
-		ExitStatus:  int(em.ExitStatus),
-		StreamData:  em.StreamData,
-		Error:       em.Error,
-		ReportCard:  convertReportCardFromProto(em.ReportCard),
-		Files:       em.Files,
-	}
-}
-
-func convertReportCardFromProto(rc *pb.ReportCard) *ReportCard {
-	if rc == nil {
-		return nil
-	}
-	results := make([]*ReportCardResult, len(rc.Results))
-	for i, r := range rc.Results {
-		results[i] = &ReportCardResult{
-			Name:    r.Name,
-			Outcome: r.Outcome,
-			Details: r.Details,
-			Context: r.Context,
-		}
-	}
-	duration := time.Duration(0)
-	if rc.Duration != nil {
-		duration = rc.Duration.AsDuration()
-	}
-	return &ReportCard{
-		Passed:   rc.Passed,
-		Note:     rc.Note,
-		Duration: duration,
-		Results:  results,
-	}
-}
-
-func convertProblemSetBundleFromProto(psb *pb.ProblemSetBundle) *ProblemSetBundle {
-	return &ProblemSetBundle{
-		ProblemSet:         convertProblemSetFromProto(psb.ProblemSet),
-		ProblemSetProblems: convertProblemSetProblemsFromProto(psb.ProblemSetProblems),
-	}
-}
-
-func convertProblemSetFromProto(ps *pb.ProblemSet) *ProblemSet {
-	return &ProblemSet{
-		ID:        ps.Id,
-		Unique:    ps.Unique,
-		Note:      ps.Note,
-		Tags:      ps.Tags,
-		CreatedAt: ps.CreatedAt.AsTime(),
-		UpdatedAt: ps.UpdatedAt.AsTime(),
-	}
-}
-
-func convertProblemSetProblemsFromProto(psps []*pb.ProblemSetProblem) []*ProblemSetProblem {
-	problems := make([]*ProblemSetProblem, len(psps))
-	for i, psp := range psps {
-		problems[i] = &ProblemSetProblem{
-			ProblemSetID: psp.ProblemSetId,
-			ProblemID:    psp.ProblemId,
-			Weight:       psp.Weight,
-		}
-	}
-	return problems
-}
-
-func convertCommitBundleFromProto(cb *pb.CommitBundle) *CommitBundle {
-	return &CommitBundle{
-		ProblemType:          convertProblemTypeFromProto(cb.ProblemType),
-		ProblemTypeSignature: cb.ProblemTypeSignature,
-		Problem:              convertProblemFromProto(cb.Problem),
-		ProblemSteps:         convertProblemStepsFromProto(cb.ProblemSteps),
-		ProblemSignature:     cb.ProblemSignature,
-		Action:               cb.Action,
-		Hostname:             cb.Hostname,
-		UserID:               cb.UserId,
-		Commit:               convertCommitFromProto(cb.Commit),
-		CommitSignature:      cb.CommitSignature,
-	}
-}
-
-// convertDaycareRequestFromProto converts pb.DaycareRequest to legacy types recursively
-func convertDaycareRequestFromProto(req *pb.DaycareRequest) (*CommitBundle, string, string, []string, error) {
-	commitBundle := convertCommitBundleFromProto(req.CommitBundle)
-	problemType := req.ProblemType
-	action := req.Action
-	args := req.Args
-	return commitBundle, problemType, action, args, nil
-}
-
-// convertDaycareResponseToProto converts legacy DaycareResponse to pb.DaycareResponse
-func convertDaycareResponseToProto(resp *DaycareResponse) *pb.DaycareResponse {
-	pbResp := &pb.DaycareResponse{}
-	if resp.Event != nil {
-		pbResp.Response = &pb.DaycareResponse_Event{Event: convertEventMessageToProto(resp.Event)}
-	} else if resp.Error != "" {
-		pbResp.Response = &pb.DaycareResponse_Error{Error: resp.Error}
-	} else if resp.CommitBundle != nil {
-		pbResp.Response = &pb.DaycareResponse_CommitBundle{CommitBundle: convertCommitBundleToProto(resp.CommitBundle)}
-	}
-	return pbResp
-}
-
-// convertProblemStepsToProto converts legacy ProblemSteps to pb.ProblemSteps
-func convertProblemStepsToProto(pss []*ProblemStep) []*pb.ProblemStep {
-	steps := make([]*pb.ProblemStep, len(pss))
-	for i, ps := range pss {
-		steps[i] = convertProblemStepToProto(ps)
-	}
-	return steps
-}
-
-// convertCommitBundleToProto converts legacy CommitBundle to pb.CommitBundle recursively
-func convertCommitBundleToProto(cb *CommitBundle) *pb.CommitBundle {
-	return &pb.CommitBundle{
-		ProblemType:          convertProblemTypeToProto(cb.ProblemType),
-		ProblemTypeSignature: cb.ProblemTypeSignature,
-		Problem:              convertProblemToProto(cb.Problem),
-		ProblemSteps:         convertProblemStepsToProto(cb.ProblemSteps),
-		ProblemSignature:     cb.ProblemSignature,
-		Action:               cb.Action,
-		Hostname:             cb.Hostname,
-		UserId:               cb.UserID,
-		Commit:               convertCommitToProto(cb.Commit),
-		CommitSignature:      cb.CommitSignature,
-	}
-}
-
-// convertProblemBundleToProto converts legacy ProblemBundle to pb.ProblemBundle recursively
-func convertProblemBundleToProto(bundle *ProblemBundle) *pb.ProblemBundle {
-	problemTypes := make(map[string]*pb.ProblemType)
-	for k, v := range bundle.ProblemTypes {
-		problemTypes[k] = convertProblemTypeToProto(v)
-	}
-	commits := make([]*pb.Commit, len(bundle.Commits))
-	for i, c := range bundle.Commits {
-		commits[i] = convertCommitToProto(c)
-	}
-	return &pb.ProblemBundle{
-		ProblemTypes:          problemTypes,
-		ProblemTypeSignatures: bundle.ProblemTypeSignatures,
-		Problem:               convertProblemToProto(bundle.Problem),
-		ProblemSteps:          convertProblemStepsToProto(bundle.ProblemSteps),
-		ProblemSignature:      bundle.ProblemSignature,
-		Hostname:              bundle.Hostname,
-		UserId:                bundle.UserID,
-		Commits:               commits,
-		CommitSignatures:      bundle.CommitSignatures,
-	}
-}
-
-// convertProblemSetProblemsToProto converts legacy ProblemSetProblems to pb.ProblemSetProblems
-func convertProblemSetProblemsToProto(psps []*ProblemSetProblem) []*pb.ProblemSetProblem {
-	problems := make([]*pb.ProblemSetProblem, len(psps))
-	for i, psp := range psps {
-		problems[i] = &pb.ProblemSetProblem{
-			ProblemSetId: psp.ProblemSetID,
-			ProblemId:    psp.ProblemID,
-			Weight:       psp.Weight,
-		}
-	}
-	return problems
-}
-
-// convertProblemSetBundleToProto converts legacy ProblemSetBundle to pb.ProblemSetBundle recursively
-func convertProblemSetBundleToProto(psb *ProblemSetBundle) *pb.ProblemSetBundle {
-	return &pb.ProblemSetBundle{
-		ProblemSet:         convertProblemSetToProto(psb.ProblemSet),
-		ProblemSetProblems: convertProblemSetProblemsToProto(psb.ProblemSetProblems),
-	}
 }
 
 // GetVersion retrieves version information
@@ -690,7 +213,9 @@ func (s *codeGrinderServiceServer) GetProblemTypes(ctx context.Context, req *pb.
 
 		// Convert to proto
 		for _, pt := range typesProblemTypes {
-			problemTypes = append(problemTypes, convertProblemTypeToProto(pt))
+			pbProblemType := &pb.ProblemType{}
+			pbProblemType.FromREST(pt)
+			problemTypes = append(problemTypes, pbProblemType)
 		}
 
 		return nil
@@ -712,7 +237,8 @@ func (s *codeGrinderServiceServer) GetProblemType(ctx context.Context, req *pb.G
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting problem type: %v", err)
 		}
-		problemType = convertProblemTypeToProto(typesProblemType)
+		problemType = &pb.ProblemType{}
+		problemType.FromREST(typesProblemType)
 
 		return nil
 	})
@@ -744,7 +270,9 @@ func (s *codeGrinderServiceServer) GetProblems(ctx context.Context, req *pb.GetP
 			return status.Errorf(codes.Internal, "db error getting problems: %v", err)
 		}
 		for _, p := range typesProblems {
-			problems = append(problems, convertProblemToProto(p))
+			pbProblem := &pb.Problem{}
+			pbProblem.FromREST(p)
+			problems = append(problems, pbProblem)
 		}
 
 		return nil
@@ -776,7 +304,8 @@ func (s *codeGrinderServiceServer) GetProblem(ctx context.Context, req *pb.GetPr
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting problem: %v", err)
 		}
-		problem = convertProblemToProto(typesProblem)
+		problem = &pb.Problem{}
+		problem.FromREST(typesProblem)
 
 		return nil
 	})
@@ -808,7 +337,9 @@ func (s *codeGrinderServiceServer) GetProblemSteps(ctx context.Context, req *pb.
 			return status.Errorf(codes.Internal, "db error getting problem steps: %v", err)
 		}
 		for _, ps := range typesProblemSteps {
-			problemSteps = append(problemSteps, convertProblemStepToProto(ps))
+			pbProblemStep := &pb.ProblemStep{}
+			pbProblemStep.FromREST(ps)
+			problemSteps = append(problemSteps, pbProblemStep)
 		}
 
 		return nil
@@ -840,7 +371,8 @@ func (s *codeGrinderServiceServer) GetProblemStep(ctx context.Context, req *pb.G
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting problem step: %v", err)
 		}
-		problemStep = convertProblemStepToProto(typesProblemStep)
+		problemStep = &pb.ProblemStep{}
+		problemStep.FromREST(typesProblemStep)
 
 		return nil
 	})
@@ -872,7 +404,9 @@ func (s *codeGrinderServiceServer) GetProblemSets(ctx context.Context, req *pb.G
 			return status.Errorf(codes.Internal, "db error getting problem sets: %v", err)
 		}
 		for _, ps := range typesProblemSets {
-			problemSets = append(problemSets, convertProblemSetToProto(ps))
+			pbProblemSet := &pb.ProblemSet{}
+			pbProblemSet.FromREST(ps)
+			problemSets = append(problemSets, pbProblemSet)
 		}
 
 		return nil
@@ -904,7 +438,8 @@ func (s *codeGrinderServiceServer) GetProblemSet(ctx context.Context, req *pb.Ge
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting problem set: %v", err)
 		}
-		problemSet = convertProblemSetToProto(typesProblemSet)
+		problemSet = &pb.ProblemSet{}
+		problemSet.FromREST(typesProblemSet)
 
 		return nil
 	})
@@ -936,7 +471,9 @@ func (s *codeGrinderServiceServer) GetProblemSetProblems(ctx context.Context, re
 			return status.Errorf(codes.Internal, "db error getting problem set problems: %v", err)
 		}
 		for _, psp := range typesProblemSetProblems {
-			problemSetProblems = append(problemSetProblems, convertProblemSetProblemToProto(psp))
+			pbProblemSetProblem := &pb.ProblemSetProblem{}
+			pbProblemSetProblem.FromREST(psp)
+			problemSetProblems = append(problemSetProblems, pbProblemSetProblem)
 		}
 
 		return nil
@@ -969,7 +506,9 @@ func (s *codeGrinderServiceServer) GetCourses(ctx context.Context, req *pb.GetCo
 			return status.Errorf(codes.Internal, "db error getting courses: %v", err)
 		}
 		for _, c := range typesCourses {
-			courses = append(courses, convertCourseToProto(c))
+			pbCourse := &pb.Course{}
+			pbCourse.FromREST(c)
+			courses = append(courses, pbCourse)
 		}
 
 		return nil
@@ -1001,7 +540,8 @@ func (s *codeGrinderServiceServer) GetCourse(ctx context.Context, req *pb.GetCou
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting course: %v", err)
 		}
-		course = convertCourseToProto(typesCourse)
+		course = &pb.Course{}
+		course.FromREST(typesCourse)
 
 		return nil
 	})
@@ -1033,7 +573,9 @@ func (s *codeGrinderServiceServer) GetUsers(ctx context.Context, req *pb.GetUser
 			return status.Errorf(codes.Internal, "db error getting users: %v", err)
 		}
 		for _, u := range typesUsers {
-			users = append(users, convertUserToProto(u))
+			pbUser := &pb.User{}
+			pbUser.FromREST(u)
+			users = append(users, pbUser)
 		}
 
 		return nil
@@ -1065,7 +607,8 @@ func (s *codeGrinderServiceServer) GetUserMe(ctx context.Context, req *pb.GetUse
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting user me: %v", err)
 		}
-		user = convertUserToProto(typesUser)
+		user = &pb.User{}
+		user.FromREST(typesUser)
 
 		return nil
 	})
@@ -1096,7 +639,8 @@ func (s *codeGrinderServiceServer) GetUser(ctx context.Context, req *pb.GetUserR
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting user: %v", err)
 		}
-		user = convertUserToProto(typesUser)
+		user = &pb.User{}
+		user.FromREST(typesUser)
 
 		return nil
 	})
@@ -1128,7 +672,9 @@ func (s *codeGrinderServiceServer) GetCourseUsers(ctx context.Context, req *pb.G
 			return status.Errorf(codes.Internal, "db error getting course users: %v", err)
 		}
 		for _, u := range typesUsers {
-			users = append(users, convertUserToProto(u))
+			pbUser := &pb.User{}
+			pbUser.FromREST(u)
+			users = append(users, pbUser)
 		}
 
 		return nil
@@ -1161,7 +707,9 @@ func (s *codeGrinderServiceServer) GetUserAssignments(ctx context.Context, req *
 			return status.Errorf(codes.Internal, "db error getting user assignments: %v", err)
 		}
 		for _, a := range typesAssignments {
-			assignments = append(assignments, convertAssignmentToProto(a))
+			pbAssignment := &pb.Assignment{}
+			pbAssignment.FromREST(a)
+			assignments = append(assignments, pbAssignment)
 		}
 
 		return nil
@@ -1194,7 +742,9 @@ func (s *codeGrinderServiceServer) GetCourseUserAssignments(ctx context.Context,
 			return status.Errorf(codes.Internal, "db error getting course user assignments: %v", err)
 		}
 		for _, a := range typesAssignments {
-			assignments = append(assignments, convertAssignmentToProto(a))
+			pbAssignment := &pb.Assignment{}
+			pbAssignment.FromREST(a)
+			assignments = append(assignments, pbAssignment)
 		}
 
 		return nil
@@ -1227,7 +777,9 @@ func (s *codeGrinderServiceServer) GetAssignments(ctx context.Context, req *pb.G
 			return status.Errorf(codes.Internal, "db error getting assignments: %v", err)
 		}
 		for _, a := range typesAssignments {
-			assignments = append(assignments, convertAssignmentToProto(a))
+			pbAssignment := &pb.Assignment{}
+			pbAssignment.FromREST(a)
+			assignments = append(assignments, pbAssignment)
 		}
 
 		return nil
@@ -1259,7 +811,8 @@ func (s *codeGrinderServiceServer) GetAssignment(ctx context.Context, req *pb.Ge
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting assignment: %v", err)
 		}
-		assignment = convertAssignmentToProto(typesAssignment)
+		assignment = &pb.Assignment{}
+		assignment.FromREST(typesAssignment)
 
 		return nil
 	})
@@ -1291,7 +844,8 @@ func (s *codeGrinderServiceServer) GetAssignmentProblemCommitLast(ctx context.Co
 			return status.Errorf(codes.Internal, "db error getting assignment problem commit last: %v", err)
 		}
 		if typesCommit != nil {
-			commit = convertCommitToProto(typesCommit)
+			commit = &pb.Commit{}
+			commit.FromREST(typesCommit)
 		}
 
 		return nil
@@ -1324,7 +878,8 @@ func (s *codeGrinderServiceServer) GetAssignmentProblemStepCommitLast(ctx contex
 			return status.Errorf(codes.Internal, "db error getting assignment problem step commit last: %v", err)
 		}
 		if typesCommit != nil {
-			commit = convertCommitToProto(typesCommit)
+			commit = &pb.Commit{}
+			commit.FromREST(typesCommit)
 		}
 
 		return nil
@@ -1352,7 +907,8 @@ func (s *codeGrinderServiceServer) PostProblemBundleUnconfirmed(ctx context.Cont
 		}
 
 		// Convert proto to types
-		bundle := convertProblemBundleFromProto(req.Bundle)
+		bundle := &ProblemBundle{}
+		req.Bundle.FromREST(bundle)
 
 		// Post problem bundle unconfirmed
 		resultBundle, err = signProblemBundleUnconfirmed(tx, currentUser, bundle)
@@ -1367,7 +923,8 @@ func (s *codeGrinderServiceServer) PostProblemBundleUnconfirmed(ctx context.Cont
 	}
 
 	// Convert the result bundle to proto
-	protoBundle := convertProblemBundleToProto(resultBundle)
+	protoBundle := &pb.ProblemBundle{}
+	protoBundle.FromREST(resultBundle)
 
 	return &pb.PostProblemBundleUnconfirmedResponse{Bundle: protoBundle}, nil
 }
@@ -1388,7 +945,8 @@ func (s *codeGrinderServiceServer) PostProblemBundleConfirmed(ctx context.Contex
 		}
 
 		// Convert proto to types
-		bundle := convertProblemBundleFromProto(req.Bundle)
+		bundle := &ProblemBundle{}
+		req.Bundle.FromREST(bundle)
 
 		// Post problem bundle confirmed
 		resultBundle, err = saveProblemBundleCommon(tx, currentUser, bundle)
@@ -1403,7 +961,8 @@ func (s *codeGrinderServiceServer) PostProblemBundleConfirmed(ctx context.Contex
 	}
 
 	// Convert the result bundle to proto
-	protoBundle := convertProblemBundleToProto(resultBundle)
+	protoBundle := &pb.ProblemBundle{}
+	protoBundle.FromREST(resultBundle)
 
 	return &pb.PostProblemBundleConfirmedResponse{Bundle: protoBundle}, nil
 }
@@ -1424,7 +983,8 @@ func (s *codeGrinderServiceServer) PutProblemBundle(ctx context.Context, req *pb
 		}
 
 		// Convert proto to types
-		bundle := convertProblemBundleFromProto(req.Bundle)
+		bundle := &ProblemBundle{}
+		req.Bundle.FromREST(bundle)
 
 		// Put problem bundle
 		resultBundle, err = updateProblemBundle(tx, currentUser, req.ProblemId, bundle)
@@ -1439,7 +999,8 @@ func (s *codeGrinderServiceServer) PutProblemBundle(ctx context.Context, req *pb
 	}
 
 	// Convert the result bundle to proto
-	protoBundle := convertProblemBundleToProto(resultBundle)
+	protoBundle := &pb.ProblemBundle{}
+	protoBundle.FromREST(resultBundle)
 
 	return &pb.PutProblemBundleResponse{Bundle: protoBundle}, nil
 }
@@ -1450,7 +1011,8 @@ func (s *codeGrinderServiceServer) PostProblemSetBundle(ctx context.Context, req
 
 	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
 		// Convert proto to types
-		bundle := convertProblemSetBundleFromProto(req.Bundle)
+		bundle := &ProblemSetBundle{}
+		req.Bundle.FromREST(bundle)
 
 		// Post problem set bundle
 		var err error
@@ -1466,7 +1028,8 @@ func (s *codeGrinderServiceServer) PostProblemSetBundle(ctx context.Context, req
 	}
 
 	// Convert the result bundle to proto
-	protoBundle := convertProblemSetBundleToProto(resultBundle)
+	protoBundle := &pb.ProblemSetBundle{}
+	protoBundle.FromREST(resultBundle)
 
 	return &pb.PostProblemSetBundleResponse{Bundle: protoBundle}, nil
 }
@@ -1477,7 +1040,8 @@ func (s *codeGrinderServiceServer) PutProblemSetBundle(ctx context.Context, req 
 
 	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
 		// Convert proto to types
-		bundle := convertProblemSetBundleFromProto(req.Bundle)
+		bundle := &ProblemSetBundle{}
+		req.Bundle.FromREST(bundle)
 
 		// Put problem set bundle
 		var err error
@@ -1493,7 +1057,8 @@ func (s *codeGrinderServiceServer) PutProblemSetBundle(ctx context.Context, req 
 	}
 
 	// Convert the result bundle to proto
-	protoBundle := convertProblemSetBundleToProto(resultBundle)
+	protoBundle := &pb.ProblemSetBundle{}
+	protoBundle.FromREST(resultBundle)
 
 	return &pb.PutProblemSetBundleResponse{Bundle: protoBundle}, nil
 }
@@ -1514,7 +1079,8 @@ func (s *codeGrinderServiceServer) PostCommitBundlesUnsigned(ctx context.Context
 		}
 
 		// Convert proto to types
-		bundle := convertCommitBundleFromProto(req.Bundle)
+		bundle := &CommitBundle{}
+		req.Bundle.FromREST(bundle)
 
 		// Post commit bundles unsigned
 		result, err := saveCommitBundleCommon(time.Now(), tx, currentUser, bundle)
@@ -1522,7 +1088,8 @@ func (s *codeGrinderServiceServer) PostCommitBundlesUnsigned(ctx context.Context
 			return status.Errorf(codes.Internal, "db error posting commit bundles unsigned: %v", err)
 		}
 
-		resultBundle = convertCommitBundleToProto(result)
+		resultBundle = &pb.CommitBundle{}
+		resultBundle.FromREST(result)
 
 		return nil
 	})
@@ -1549,7 +1116,8 @@ func (s *codeGrinderServiceServer) PostCommitBundlesSigned(ctx context.Context, 
 		}
 
 		// Convert proto to types
-		bundle := convertCommitBundleFromProto(req.Bundle)
+		bundle := &CommitBundle{}
+		req.Bundle.FromREST(bundle)
 
 		// Post commit bundles signed
 		result, err := saveCommitBundleCommon(time.Now(), tx, currentUser, bundle)
@@ -1557,7 +1125,8 @@ func (s *codeGrinderServiceServer) PostCommitBundlesSigned(ctx context.Context, 
 			return status.Errorf(codes.Internal, "db error posting commit bundles signed: %v", err)
 		}
 
-		resultBundle = convertCommitBundleToProto(result)
+		resultBundle = &pb.CommitBundle{}
+		resultBundle.FromREST(result)
 
 		return nil
 	})
@@ -1574,10 +1143,11 @@ func (s *codeGrinderServiceServer) Daycare(req *pb.DaycareRequest, stream pb.Cod
 	ctx := stream.Context()
 
 	// Convert protobuf request to legacy types
-	commitBundle, problemType, action, args, err := convertDaycareRequestFromProto(req)
-	if err != nil {
-		return err
-	}
+	commitBundle := &CommitBundle{}
+	req.CommitBundle.FromREST(commitBundle)
+	problemType := req.ProblemType
+	action := req.Action
+	args := req.Args
 
 	// Create a channel for responses (do NOT close it here)
 	eventChan := make(chan *DaycareResponse, 100)
@@ -1593,7 +1163,23 @@ func (s *codeGrinderServiceServer) Daycare(req *pb.DaycareRequest, stream pb.Cod
 			// Continue draining to prevent deadlock
 			continue
 		}
-		if err := stream.Send(convertDaycareResponseToProto(response)); err != nil {
+		var pbResponse *pb.DaycareResponse
+		if response.Event != nil {
+			pbResponse = &pb.DaycareResponse{
+				Response: &pb.DaycareResponse_Event{Event: &pb.EventMessage{}},
+			}
+			pbResponse.GetEvent().FromREST(response.Event)
+		} else if response.Error != "" {
+			pbResponse = &pb.DaycareResponse{
+				Response: &pb.DaycareResponse_Error{Error: response.Error},
+			}
+		} else if response.CommitBundle != nil {
+			pbResponse = &pb.DaycareResponse{
+				Response: &pb.DaycareResponse_CommitBundle{CommitBundle: &pb.CommitBundle{}},
+			}
+			pbResponse.GetCommitBundle().FromREST(response.CommitBundle)
+		}
+		if err := stream.Send(pbResponse); err != nil {
 			log.Printf("gRPC stream send error: %v", err)
 			broken = true
 			// On context error, set broken but continue draining
