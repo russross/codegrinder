@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -618,6 +617,50 @@ func convertCommitBundleToProto(cb *CommitBundle) *pb.CommitBundle {
 		UserId:               cb.UserID,
 		Commit:               convertCommitToProto(cb.Commit),
 		CommitSignature:      cb.CommitSignature,
+	}
+}
+
+// convertProblemBundleToProto converts legacy ProblemBundle to pb.ProblemBundle recursively
+func convertProblemBundleToProto(bundle *ProblemBundle) *pb.ProblemBundle {
+	problemTypes := make(map[string]*pb.ProblemType)
+	for k, v := range bundle.ProblemTypes {
+		problemTypes[k] = convertProblemTypeToProto(v)
+	}
+	commits := make([]*pb.Commit, len(bundle.Commits))
+	for i, c := range bundle.Commits {
+		commits[i] = convertCommitToProto(c)
+	}
+	return &pb.ProblemBundle{
+		ProblemTypes:          problemTypes,
+		ProblemTypeSignatures: bundle.ProblemTypeSignatures,
+		Problem:               convertProblemToProto(bundle.Problem),
+		ProblemSteps:          convertProblemStepsToProto(bundle.ProblemSteps),
+		ProblemSignature:      bundle.ProblemSignature,
+		Hostname:              bundle.Hostname,
+		UserId:                bundle.UserID,
+		Commits:               commits,
+		CommitSignatures:      bundle.CommitSignatures,
+	}
+}
+
+// convertProblemSetProblemsToProto converts legacy ProblemSetProblems to pb.ProblemSetProblems
+func convertProblemSetProblemsToProto(psps []*ProblemSetProblem) []*pb.ProblemSetProblem {
+	problems := make([]*pb.ProblemSetProblem, len(psps))
+	for i, psp := range psps {
+		problems[i] = &pb.ProblemSetProblem{
+			ProblemSetId: psp.ProblemSetID,
+			ProblemId:    psp.ProblemID,
+			Weight:       psp.Weight,
+		}
+	}
+	return problems
+}
+
+// convertProblemSetBundleToProto converts legacy ProblemSetBundle to pb.ProblemSetBundle recursively
+func convertProblemSetBundleToProto(psb *ProblemSetBundle) *pb.ProblemSetBundle {
+	return &pb.ProblemSetBundle{
+		ProblemSet:         convertProblemSetToProto(psb.ProblemSet),
+		ProblemSetProblems: convertProblemSetProblemsToProto(psb.ProblemSetProblems),
 	}
 }
 
@@ -1295,7 +1338,7 @@ func (s *codeGrinderServiceServer) GetAssignmentProblemStepCommitLast(ctx contex
 
 // PostProblemBundleUnconfirmed handles unconfirmed problem bundle
 func (s *codeGrinderServiceServer) PostProblemBundleUnconfirmed(ctx context.Context, req *pb.PostProblemBundleUnconfirmedRequest) (*pb.PostProblemBundleUnconfirmedResponse, error) {
-	var result map[string]string
+	var resultBundle *ProblemBundle
 
 	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
 		// Get current user
@@ -1312,13 +1355,9 @@ func (s *codeGrinderServiceServer) PostProblemBundleUnconfirmed(ctx context.Cont
 		bundle := convertProblemBundleFromProto(req.Bundle)
 
 		// Post problem bundle unconfirmed
-		typesResult, err := signProblemBundleUnconfirmed(tx, currentUser, bundle)
+		resultBundle, err = signProblemBundleUnconfirmed(tx, currentUser, bundle)
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error posting problem bundle unconfirmed: %v", err)
-		}
-		// Convert the result to map[string]string
-		result = map[string]string{
-			"problem_id": fmt.Sprintf("%d", typesResult.Problem.ID),
 		}
 
 		return nil
@@ -1327,12 +1366,15 @@ func (s *codeGrinderServiceServer) PostProblemBundleUnconfirmed(ctx context.Cont
 		return nil, err
 	}
 
-	return &pb.PostProblemBundleUnconfirmedResponse{Result: result}, nil
+	// Convert the result bundle to proto
+	protoBundle := convertProblemBundleToProto(resultBundle)
+
+	return &pb.PostProblemBundleUnconfirmedResponse{Bundle: protoBundle}, nil
 }
 
 // PostProblemBundleConfirmed handles confirmed problem bundle
 func (s *codeGrinderServiceServer) PostProblemBundleConfirmed(ctx context.Context, req *pb.PostProblemBundleConfirmedRequest) (*pb.PostProblemBundleConfirmedResponse, error) {
-	var result map[string]string
+	var resultBundle *ProblemBundle
 
 	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
 		// Get current user
@@ -1349,12 +1391,9 @@ func (s *codeGrinderServiceServer) PostProblemBundleConfirmed(ctx context.Contex
 		bundle := convertProblemBundleFromProto(req.Bundle)
 
 		// Post problem bundle confirmed
-		typesResult, err := saveProblemBundleCommon(tx, currentUser, bundle)
+		resultBundle, err = saveProblemBundleCommon(tx, currentUser, bundle)
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error posting problem bundle confirmed: %v", err)
-		}
-		result = map[string]string{
-			"problem_id": fmt.Sprintf("%d", typesResult.Problem.ID),
 		}
 
 		return nil
@@ -1363,12 +1402,15 @@ func (s *codeGrinderServiceServer) PostProblemBundleConfirmed(ctx context.Contex
 		return nil, err
 	}
 
-	return &pb.PostProblemBundleConfirmedResponse{Result: result}, nil
+	// Convert the result bundle to proto
+	protoBundle := convertProblemBundleToProto(resultBundle)
+
+	return &pb.PostProblemBundleConfirmedResponse{Bundle: protoBundle}, nil
 }
 
 // PutProblemBundle handles updating problem bundle
 func (s *codeGrinderServiceServer) PutProblemBundle(ctx context.Context, req *pb.PutProblemBundleRequest) (*pb.PutProblemBundleResponse, error) {
-	var result map[string]string
+	var resultBundle *ProblemBundle
 
 	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
 		// Get current user
@@ -1385,12 +1427,9 @@ func (s *codeGrinderServiceServer) PutProblemBundle(ctx context.Context, req *pb
 		bundle := convertProblemBundleFromProto(req.Bundle)
 
 		// Put problem bundle
-		typesResult, err := updateProblemBundle(tx, currentUser, req.ProblemId, bundle)
+		resultBundle, err = updateProblemBundle(tx, currentUser, req.ProblemId, bundle)
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error putting problem bundle: %v", err)
-		}
-		result = map[string]string{
-			"problem_id": fmt.Sprintf("%d", typesResult.Problem.ID),
 		}
 
 		return nil
@@ -1399,24 +1438,25 @@ func (s *codeGrinderServiceServer) PutProblemBundle(ctx context.Context, req *pb
 		return nil, err
 	}
 
-	return &pb.PutProblemBundleResponse{Result: result}, nil
+	// Convert the result bundle to proto
+	protoBundle := convertProblemBundleToProto(resultBundle)
+
+	return &pb.PutProblemBundleResponse{Bundle: protoBundle}, nil
 }
 
 // PostProblemSetBundle handles problem set bundle
 func (s *codeGrinderServiceServer) PostProblemSetBundle(ctx context.Context, req *pb.PostProblemSetBundleRequest) (*pb.PostProblemSetBundleResponse, error) {
-	var result map[string]string
+	var resultBundle *ProblemSetBundle
 
 	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
 		// Convert proto to types
 		bundle := convertProblemSetBundleFromProto(req.Bundle)
 
 		// Post problem set bundle
-		typesResult, err := createProblemSetBundle(tx, bundle)
+		var err error
+		resultBundle, err = createProblemSetBundle(tx, bundle)
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error posting problem set bundle: %v", err)
-		}
-		result = map[string]string{
-			"problem_set_id": fmt.Sprintf("%d", typesResult.ProblemSet.ID),
 		}
 
 		return nil
@@ -1425,24 +1465,25 @@ func (s *codeGrinderServiceServer) PostProblemSetBundle(ctx context.Context, req
 		return nil, err
 	}
 
-	return &pb.PostProblemSetBundleResponse{Result: result}, nil
+	// Convert the result bundle to proto
+	protoBundle := convertProblemSetBundleToProto(resultBundle)
+
+	return &pb.PostProblemSetBundleResponse{Bundle: protoBundle}, nil
 }
 
 // PutProblemSetBundle handles updating problem set bundle
 func (s *codeGrinderServiceServer) PutProblemSetBundle(ctx context.Context, req *pb.PutProblemSetBundleRequest) (*pb.PutProblemSetBundleResponse, error) {
-	var result map[string]string
+	var resultBundle *ProblemSetBundle
 
 	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
 		// Convert proto to types
 		bundle := convertProblemSetBundleFromProto(req.Bundle)
 
 		// Put problem set bundle
-		typesResult, err := updateProblemSetBundle(tx, bundle)
+		var err error
+		resultBundle, err = updateProblemSetBundle(tx, bundle)
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error putting problem set bundle: %v", err)
-		}
-		result = map[string]string{
-			"problem_set_id": fmt.Sprintf("%d", typesResult.ProblemSet.ID),
 		}
 
 		return nil
@@ -1451,7 +1492,10 @@ func (s *codeGrinderServiceServer) PutProblemSetBundle(ctx context.Context, req 
 		return nil, err
 	}
 
-	return &pb.PutProblemSetBundleResponse{Result: result}, nil
+	// Convert the result bundle to proto
+	protoBundle := convertProblemSetBundleToProto(resultBundle)
+
+	return &pb.PutProblemSetBundleResponse{Bundle: protoBundle}, nil
 }
 
 // PostCommitBundlesUnsigned handles unsigned commit bundle
