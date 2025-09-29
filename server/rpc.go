@@ -121,8 +121,7 @@ func (s *codeGrinderServiceServer) ListProblems(ctx context.Context, req *pb.Lis
 		}
 
 		// Get user
-		user = &pb.User{}
-		user.FromREST(currentUser)
+		user = pb.ToRPCUser(currentUser)
 
 		// Get assignments
 		typeAssignments, err = getUserAssignments(tx, session.UserID, currentUser)
@@ -140,8 +139,7 @@ func (s *codeGrinderServiceServer) ListProblems(ctx context.Context, req *pb.Lis
 				if err != nil {
 					return status.Errorf(codes.Internal, "db error getting course: %v", err)
 				}
-				pbCourse := &pb.Course{}
-				pbCourse.FromREST(course)
+				pbCourse := pb.ToRPCCourse(course)
 				courseMap[asst.CourseID] = pbCourse
 			}
 
@@ -151,8 +149,7 @@ func (s *codeGrinderServiceServer) ListProblems(ctx context.Context, req *pb.Lis
 				if err != nil {
 					return status.Errorf(codes.Internal, "db error getting problem set: %v", err)
 				}
-				pbProblemSet := &pb.ProblemSet{}
-				pbProblemSet.FromREST(problemSet)
+				pbProblemSet := pb.ToRPCProblemSet(problemSet)
 				problemSetMap[asst.ProblemSetID] = pbProblemSet
 			}
 		}
@@ -174,8 +171,7 @@ func (s *codeGrinderServiceServer) ListProblems(ctx context.Context, req *pb.Lis
 	// Convert assignments to proto
 	var protoAssignments []*pb.Assignment
 	for _, asst := range typeAssignments {
-		pbAssignment := &pb.Assignment{}
-		pbAssignment.FromREST(asst)
+		pbAssignment := pb.ToRPCAssignment(asst)
 		protoAssignments = append(protoAssignments, pbAssignment)
 	}
 
@@ -206,15 +202,14 @@ func (s *codeGrinderServiceServer) GetProblemTypes(ctx context.Context, req *pb.
 
 	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
 		// Get problem types
-		typesProblemTypes, err := getProblemTypes(tx)
+		restProblemTypes, err := getProblemTypes(tx)
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting problem types: %v", err)
 		}
 
 		// Convert to proto
-		for _, pt := range typesProblemTypes {
-			pbProblemType := &pb.ProblemType{}
-			pbProblemType.FromREST(pt)
+		for _, pt := range restProblemTypes {
+			pbProblemType := pb.ToRPCProblemType(pt)
 			problemTypes = append(problemTypes, pbProblemType)
 		}
 
@@ -233,12 +228,11 @@ func (s *codeGrinderServiceServer) GetProblemType(ctx context.Context, req *pb.G
 
 	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
 		// Get problem type
-		typesProblemType, err := getProblemType(tx, req.Name)
+		restProblemType, err := getProblemType(tx, req.Name)
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting problem type: %v", err)
 		}
-		problemType = &pb.ProblemType{}
-		problemType.FromREST(typesProblemType)
+		problemType = pb.ToRPCProblemType(restProblemType)
 
 		return nil
 	})
@@ -265,13 +259,12 @@ func (s *codeGrinderServiceServer) GetProblems(ctx context.Context, req *pb.GetP
 		}
 
 		// Get problems
-		typesProblems, err := getProblems(tx, currentUser, req.Unique, req.ProblemType, req.Note)
+		restProblems, err := getProblems(tx, currentUser, req.Unique, req.ProblemType, req.Note)
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting problems: %v", err)
 		}
-		for _, p := range typesProblems {
-			pbProblem := &pb.Problem{}
-			pbProblem.FromREST(p)
+		for _, p := range restProblems {
+			pbProblem := pb.ToRPCProblem(p)
 			problems = append(problems, pbProblem)
 		}
 
@@ -300,12 +293,11 @@ func (s *codeGrinderServiceServer) GetProblem(ctx context.Context, req *pb.GetPr
 		}
 
 		// Get problem
-		typesProblem, err := getProblem(tx, req.ProblemId, currentUser)
+		restProblem, err := getProblem(tx, req.ProblemId, currentUser)
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting problem: %v", err)
 		}
-		problem = &pb.Problem{}
-		problem.FromREST(typesProblem)
+		problem = pb.ToRPCProblem(restProblem)
 
 		return nil
 	})
@@ -332,13 +324,12 @@ func (s *codeGrinderServiceServer) GetProblemSteps(ctx context.Context, req *pb.
 		}
 
 		// Get problem steps
-		typesProblemSteps, err := getProblemSteps(tx, req.ProblemId, currentUser)
+		restProblemSteps, err := getProblemSteps(tx, req.ProblemId, currentUser)
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting problem steps: %v", err)
 		}
-		for _, ps := range typesProblemSteps {
-			pbProblemStep := &pb.ProblemStep{}
-			pbProblemStep.FromREST(ps)
+		for _, ps := range restProblemSteps {
+			pbProblemStep := pb.ToRPCProblemStep(ps)
 			problemSteps = append(problemSteps, pbProblemStep)
 		}
 
@@ -367,12 +358,11 @@ func (s *codeGrinderServiceServer) GetProblemStep(ctx context.Context, req *pb.G
 		}
 
 		// Get problem step
-		typesProblemStep, err := getProblemStep(tx, req.ProblemId, req.Step, currentUser)
+		restProblemStep, err := getProblemStep(tx, req.ProblemId, req.Step, currentUser)
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting problem step: %v", err)
 		}
-		problemStep = &pb.ProblemStep{}
-		problemStep.FromREST(typesProblemStep)
+		problemStep = pb.ToRPCProblemStep(restProblemStep)
 
 		return nil
 	})
@@ -399,13 +389,12 @@ func (s *codeGrinderServiceServer) GetProblemSets(ctx context.Context, req *pb.G
 		}
 
 		// Get problem sets
-		typesProblemSets, err := getProblemSets(tx, currentUser, req.Unique, req.Note, req.Search)
+		restProblemSets, err := getProblemSets(tx, currentUser, req.Unique, req.Note, req.Search)
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting problem sets: %v", err)
 		}
-		for _, ps := range typesProblemSets {
-			pbProblemSet := &pb.ProblemSet{}
-			pbProblemSet.FromREST(ps)
+		for _, ps := range restProblemSets {
+			pbProblemSet := pb.ToRPCProblemSet(ps)
 			problemSets = append(problemSets, pbProblemSet)
 		}
 
@@ -434,12 +423,11 @@ func (s *codeGrinderServiceServer) GetProblemSet(ctx context.Context, req *pb.Ge
 		}
 
 		// Get problem set
-		typesProblemSet, err := getProblemSet(tx, req.ProblemSetId, currentUser)
+		restProblemSet, err := getProblemSet(tx, req.ProblemSetId, currentUser)
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting problem set: %v", err)
 		}
-		problemSet = &pb.ProblemSet{}
-		problemSet.FromREST(typesProblemSet)
+		problemSet = pb.ToRPCProblemSet(restProblemSet)
 
 		return nil
 	})
@@ -466,13 +454,12 @@ func (s *codeGrinderServiceServer) GetProblemSetProblems(ctx context.Context, re
 		}
 
 		// Get problem set problems
-		typesProblemSetProblems, err := getProblemSetProblems(tx, req.ProblemSetId, currentUser)
+		restProblemSetProblems, err := getProblemSetProblems(tx, req.ProblemSetId, currentUser)
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting problem set problems: %v", err)
 		}
-		for _, psp := range typesProblemSetProblems {
-			pbProblemSetProblem := &pb.ProblemSetProblem{}
-			pbProblemSetProblem.FromREST(psp)
+		for _, psp := range restProblemSetProblems {
+			pbProblemSetProblem := pb.ToRPCProblemSetProblem(psp)
 			problemSetProblems = append(problemSetProblems, pbProblemSetProblem)
 		}
 
@@ -501,13 +488,12 @@ func (s *codeGrinderServiceServer) GetCourses(ctx context.Context, req *pb.GetCo
 		}
 
 		// Get courses
-		typesCourses, err := getCourses(tx, currentUser, req.LtiLabel, req.Name)
+		restCourses, err := getCourses(tx, currentUser, req.LtiLabel, req.Name)
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting courses: %v", err)
 		}
-		for _, c := range typesCourses {
-			pbCourse := &pb.Course{}
-			pbCourse.FromREST(c)
+		for _, c := range restCourses {
+			pbCourse := pb.ToRPCCourse(c)
 			courses = append(courses, pbCourse)
 		}
 
@@ -536,12 +522,11 @@ func (s *codeGrinderServiceServer) GetCourse(ctx context.Context, req *pb.GetCou
 		}
 
 		// Get course
-		typesCourse, err := getCourse(tx, req.CourseId, currentUser)
+		restCourse, err := getCourse(tx, req.CourseId, currentUser)
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting course: %v", err)
 		}
-		course = &pb.Course{}
-		course.FromREST(typesCourse)
+		course = pb.ToRPCCourse(restCourse)
 
 		return nil
 	})
@@ -568,13 +553,12 @@ func (s *codeGrinderServiceServer) GetUsers(ctx context.Context, req *pb.GetUser
 		}
 
 		// Get users
-		typesUsers, err := getUsers(tx, currentUser, req.Name, req.Email, req.Instructor, req.Admin)
+		restUsers, err := getUsers(tx, currentUser, req.Name, req.Email, req.Instructor, req.Admin)
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting users: %v", err)
 		}
-		for _, u := range typesUsers {
-			pbUser := &pb.User{}
-			pbUser.FromREST(u)
+		for _, u := range restUsers {
+			pbUser := pb.ToRPCUser(u)
 			users = append(users, pbUser)
 		}
 
@@ -603,12 +587,11 @@ func (s *codeGrinderServiceServer) GetUserMe(ctx context.Context, req *pb.GetUse
 		}
 
 		// Get user me
-		typesUser, err := getUserMe(tx, currentUser)
+		restUser, err := getUserMe(tx, currentUser)
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting user me: %v", err)
 		}
-		user = &pb.User{}
-		user.FromREST(typesUser)
+		user = pb.ToRPCUser(restUser)
 
 		return nil
 	})
@@ -635,12 +618,11 @@ func (s *codeGrinderServiceServer) GetUser(ctx context.Context, req *pb.GetUserR
 		}
 
 		// Get user
-		typesUser, err := getUser(tx, req.UserId, currentUser)
+		restUser, err := getUser(tx, req.UserId, currentUser)
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting user: %v", err)
 		}
-		user = &pb.User{}
-		user.FromREST(typesUser)
+		user = pb.ToRPCUser(restUser)
 
 		return nil
 	})
@@ -667,13 +649,12 @@ func (s *codeGrinderServiceServer) GetCourseUsers(ctx context.Context, req *pb.G
 		}
 
 		// Get course users
-		typesUsers, err := getCourseUsers(tx, req.CourseId, currentUser)
+		restUsers, err := getCourseUsers(tx, req.CourseId, currentUser)
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting course users: %v", err)
 		}
-		for _, u := range typesUsers {
-			pbUser := &pb.User{}
-			pbUser.FromREST(u)
+		for _, u := range restUsers {
+			pbUser := pb.ToRPCUser(u)
 			users = append(users, pbUser)
 		}
 
@@ -702,13 +683,12 @@ func (s *codeGrinderServiceServer) GetUserAssignments(ctx context.Context, req *
 		}
 
 		// Get user assignments
-		typesAssignments, err := getUserAssignments(tx, req.UserId, currentUser)
+		restAssignments, err := getUserAssignments(tx, req.UserId, currentUser)
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting user assignments: %v", err)
 		}
-		for _, a := range typesAssignments {
-			pbAssignment := &pb.Assignment{}
-			pbAssignment.FromREST(a)
+		for _, a := range restAssignments {
+			pbAssignment := pb.ToRPCAssignment(a)
 			assignments = append(assignments, pbAssignment)
 		}
 
@@ -737,13 +717,12 @@ func (s *codeGrinderServiceServer) GetCourseUserAssignments(ctx context.Context,
 		}
 
 		// Get course user assignments
-		typesAssignments, err := getCourseUserAssignments(tx, req.CourseId, req.UserId, currentUser)
+		restAssignments, err := getCourseUserAssignments(tx, req.CourseId, req.UserId, currentUser)
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting course user assignments: %v", err)
 		}
-		for _, a := range typesAssignments {
-			pbAssignment := &pb.Assignment{}
-			pbAssignment.FromREST(a)
+		for _, a := range restAssignments {
+			pbAssignment := pb.ToRPCAssignment(a)
 			assignments = append(assignments, pbAssignment)
 		}
 
@@ -772,13 +751,12 @@ func (s *codeGrinderServiceServer) GetAssignments(ctx context.Context, req *pb.G
 		}
 
 		// Get assignments
-		typesAssignments, err := getAssignments(tx, currentUser, req.Search)
+		restAssignments, err := getAssignments(tx, currentUser, req.Search)
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting assignments: %v", err)
 		}
-		for _, a := range typesAssignments {
-			pbAssignment := &pb.Assignment{}
-			pbAssignment.FromREST(a)
+		for _, a := range restAssignments {
+			pbAssignment := pb.ToRPCAssignment(a)
 			assignments = append(assignments, pbAssignment)
 		}
 
@@ -807,12 +785,11 @@ func (s *codeGrinderServiceServer) GetAssignment(ctx context.Context, req *pb.Ge
 		}
 
 		// Get assignment
-		typesAssignment, err := getAssignment(tx, req.AssignmentId, currentUser)
+		restAssignment, err := getAssignment(tx, req.AssignmentId, currentUser)
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting assignment: %v", err)
 		}
-		assignment = &pb.Assignment{}
-		assignment.FromREST(typesAssignment)
+		assignment = pb.ToRPCAssignment(restAssignment)
 
 		return nil
 	})
@@ -839,13 +816,12 @@ func (s *codeGrinderServiceServer) GetAssignmentProblemCommitLast(ctx context.Co
 		}
 
 		// Get assignment problem commit last
-		typesCommit, err := getAssignmentProblemCommitLast(tx, req.AssignmentId, req.ProblemId, currentUser)
+		restCommit, err := getAssignmentProblemCommitLast(tx, req.AssignmentId, req.ProblemId, currentUser)
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting assignment problem commit last: %v", err)
 		}
-		if typesCommit != nil {
-			commit = &pb.Commit{}
-			commit.FromREST(typesCommit)
+		if restCommit != nil {
+			commit = pb.ToRPCCommit(restCommit)
 		}
 
 		return nil
@@ -873,13 +849,12 @@ func (s *codeGrinderServiceServer) GetAssignmentProblemStepCommitLast(ctx contex
 		}
 
 		// Get assignment problem step commit last
-		typesCommit, err := getAssignmentProblemStepCommitLast(tx, req.AssignmentId, req.ProblemId, req.Step, currentUser)
+		restCommit, err := getAssignmentProblemStepCommitLast(tx, req.AssignmentId, req.ProblemId, req.Step, currentUser)
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting assignment problem step commit last: %v", err)
 		}
-		if typesCommit != nil {
-			commit = &pb.Commit{}
-			commit.FromREST(typesCommit)
+		if restCommit != nil {
+			commit = pb.ToRPCCommit(restCommit)
 		}
 
 		return nil
@@ -906,9 +881,8 @@ func (s *codeGrinderServiceServer) PostProblemBundleUnconfirmed(ctx context.Cont
 			return err
 		}
 
-		// Convert proto to types
-		bundle := &ProblemBundle{}
-		req.Bundle.FromREST(bundle)
+		// Convert proto to REST
+		bundle := req.Bundle.ToREST()
 
 		// Post problem bundle unconfirmed
 		resultBundle, err = signProblemBundleUnconfirmed(tx, currentUser, bundle)
@@ -924,7 +898,7 @@ func (s *codeGrinderServiceServer) PostProblemBundleUnconfirmed(ctx context.Cont
 
 	// Convert the result bundle to proto
 	protoBundle := &pb.ProblemBundle{}
-	protoBundle.FromREST(resultBundle)
+	protoBundle = pb.ToRPCProblemBundle(resultBundle)
 
 	return &pb.PostProblemBundleUnconfirmedResponse{Bundle: protoBundle}, nil
 }
@@ -945,8 +919,7 @@ func (s *codeGrinderServiceServer) PostProblemBundleConfirmed(ctx context.Contex
 		}
 
 		// Convert proto to types
-		bundle := &ProblemBundle{}
-		req.Bundle.FromREST(bundle)
+		bundle := req.Bundle.ToREST()
 
 		// Post problem bundle confirmed
 		resultBundle, err = saveProblemBundleCommon(tx, currentUser, bundle)
@@ -961,8 +934,7 @@ func (s *codeGrinderServiceServer) PostProblemBundleConfirmed(ctx context.Contex
 	}
 
 	// Convert the result bundle to proto
-	protoBundle := &pb.ProblemBundle{}
-	protoBundle.FromREST(resultBundle)
+	protoBundle := pb.ToRPCProblemBundle(resultBundle)
 
 	return &pb.PostProblemBundleConfirmedResponse{Bundle: protoBundle}, nil
 }
@@ -983,8 +955,7 @@ func (s *codeGrinderServiceServer) PutProblemBundle(ctx context.Context, req *pb
 		}
 
 		// Convert proto to types
-		bundle := &ProblemBundle{}
-		req.Bundle.FromREST(bundle)
+		bundle := req.Bundle.ToREST()
 
 		// Put problem bundle
 		resultBundle, err = updateProblemBundle(tx, currentUser, req.ProblemId, bundle)
@@ -999,8 +970,7 @@ func (s *codeGrinderServiceServer) PutProblemBundle(ctx context.Context, req *pb
 	}
 
 	// Convert the result bundle to proto
-	protoBundle := &pb.ProblemBundle{}
-	protoBundle.FromREST(resultBundle)
+	protoBundle := pb.ToRPCProblemBundle(resultBundle)
 
 	return &pb.PutProblemBundleResponse{Bundle: protoBundle}, nil
 }
@@ -1011,8 +981,7 @@ func (s *codeGrinderServiceServer) PostProblemSetBundle(ctx context.Context, req
 
 	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
 		// Convert proto to types
-		bundle := &ProblemSetBundle{}
-		req.Bundle.FromREST(bundle)
+		bundle := req.Bundle.ToREST()
 
 		// Post problem set bundle
 		var err error
@@ -1028,8 +997,7 @@ func (s *codeGrinderServiceServer) PostProblemSetBundle(ctx context.Context, req
 	}
 
 	// Convert the result bundle to proto
-	protoBundle := &pb.ProblemSetBundle{}
-	protoBundle.FromREST(resultBundle)
+	protoBundle := pb.ToRPCProblemSetBundle(resultBundle)
 
 	return &pb.PostProblemSetBundleResponse{Bundle: protoBundle}, nil
 }
@@ -1040,8 +1008,7 @@ func (s *codeGrinderServiceServer) PutProblemSetBundle(ctx context.Context, req 
 
 	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
 		// Convert proto to types
-		bundle := &ProblemSetBundle{}
-		req.Bundle.FromREST(bundle)
+		bundle := req.Bundle.ToREST()
 
 		// Put problem set bundle
 		var err error
@@ -1057,8 +1024,7 @@ func (s *codeGrinderServiceServer) PutProblemSetBundle(ctx context.Context, req 
 	}
 
 	// Convert the result bundle to proto
-	protoBundle := &pb.ProblemSetBundle{}
-	protoBundle.FromREST(resultBundle)
+	protoBundle := pb.ToRPCProblemSetBundle(resultBundle)
 
 	return &pb.PutProblemSetBundleResponse{Bundle: protoBundle}, nil
 }
@@ -1078,9 +1044,8 @@ func (s *codeGrinderServiceServer) PostCommitBundlesUnsigned(ctx context.Context
 			return err
 		}
 
-		// Convert proto to types
-		bundle := &CommitBundle{}
-		req.Bundle.FromREST(bundle)
+		// Convert proto to REST
+		bundle := req.Bundle.ToREST()
 
 		// Post commit bundles unsigned
 		result, err := saveCommitBundleCommon(time.Now(), tx, currentUser, bundle)
@@ -1088,8 +1053,7 @@ func (s *codeGrinderServiceServer) PostCommitBundlesUnsigned(ctx context.Context
 			return status.Errorf(codes.Internal, "db error posting commit bundles unsigned: %v", err)
 		}
 
-		resultBundle = &pb.CommitBundle{}
-		resultBundle.FromREST(result)
+		resultBundle = pb.ToRPCCommitBundle(result)
 
 		return nil
 	})
@@ -1115,9 +1079,8 @@ func (s *codeGrinderServiceServer) PostCommitBundlesSigned(ctx context.Context, 
 			return err
 		}
 
-		// Convert proto to types
-		bundle := &CommitBundle{}
-		req.Bundle.FromREST(bundle)
+		// Convert proto to REST
+		bundle := req.Bundle.ToREST()
 
 		// Post commit bundles signed
 		result, err := saveCommitBundleCommon(time.Now(), tx, currentUser, bundle)
@@ -1125,8 +1088,7 @@ func (s *codeGrinderServiceServer) PostCommitBundlesSigned(ctx context.Context, 
 			return status.Errorf(codes.Internal, "db error posting commit bundles signed: %v", err)
 		}
 
-		resultBundle = &pb.CommitBundle{}
-		resultBundle.FromREST(result)
+		resultBundle = pb.ToRPCCommitBundle(result)
 
 		return nil
 	})
@@ -1143,8 +1105,7 @@ func (s *codeGrinderServiceServer) Daycare(req *pb.DaycareRequest, stream pb.Cod
 	ctx := stream.Context()
 
 	// Convert protobuf request to legacy types
-	commitBundle := &CommitBundle{}
-	req.CommitBundle.FromREST(commitBundle)
+	commitBundle := req.CommitBundle.ToREST()
 	problemType := req.ProblemType
 	action := req.Action
 	args := req.Args
@@ -1166,18 +1127,16 @@ func (s *codeGrinderServiceServer) Daycare(req *pb.DaycareRequest, stream pb.Cod
 		var pbResponse *pb.DaycareResponse
 		if response.Event != nil {
 			pbResponse = &pb.DaycareResponse{
-				Response: &pb.DaycareResponse_Event{Event: &pb.EventMessage{}},
+				Response: &pb.DaycareResponse_Event{Event: pb.ToRPCEventMessage(response.Event)},
 			}
-			pbResponse.GetEvent().FromREST(response.Event)
 		} else if response.Error != "" {
 			pbResponse = &pb.DaycareResponse{
 				Response: &pb.DaycareResponse_Error{Error: response.Error},
 			}
 		} else if response.CommitBundle != nil {
 			pbResponse = &pb.DaycareResponse{
-				Response: &pb.DaycareResponse_CommitBundle{CommitBundle: &pb.CommitBundle{}},
+				Response: &pb.DaycareResponse_CommitBundle{CommitBundle: pb.ToRPCCommitBundle(response.CommitBundle)},
 			}
-			pbResponse.GetCommitBundle().FromREST(response.CommitBundle)
 		}
 		if err := stream.Send(pbResponse); err != nil {
 			log.Printf("gRPC stream send error: %v", err)
