@@ -176,7 +176,7 @@ func (problemType *ProblemType) ComputeSignature(secret string) string {
 	v.Add("image", problemType.Image)
 	for name, contents := range problemType.Files {
 		if contents == nil {
-			v.Add(fmt.Sprintf("file-%s", name), string([]bytes{}))
+			v.Add(fmt.Sprintf("file-%s", name), string([]byte{}))
 		} else {
 			v.Add(fmt.Sprintf("file-%s", name), string(contents))
 		}
@@ -233,7 +233,7 @@ func (problem *Problem) ComputeSignature(secret string, steps []*ProblemStep) st
 		if step.Files != nil {
 			for name, contents := range step.Files {
 				if contents == nil {
-					v.Add(fmt.Sprintf("step-%d-file-%s", step.Step, name), string([]bytes{}))
+					v.Add(fmt.Sprintf("step-%d-file-%s", step.Step, name), string([]byte{}))
 				} else {
 					v.Add(fmt.Sprintf("step-%d-file-%s", step.Step, name), string(contents))
 				}

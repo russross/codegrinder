@@ -157,7 +157,7 @@ func (commit *Commit) ComputeSignature(secret, problemTypeSignature, problemSign
 	}
 	for name, contents := range commit.Files {
 		if contents == nil {
-			v.Add(fmt.Sprintf("file-%s", name), string([]bytes{}))
+			v.Add(fmt.Sprintf("file-%s", name), string([]byte{}))
 		} else {
 			v.Add(fmt.Sprintf("file-%s", name), string(contents))
 		}
