@@ -18,7 +18,7 @@ func signProblemBundleUnconfirmed(tx *sql.Tx, currentUser *User, bundle *Problem
 	now := time.Now()
 
 	// basic sanity checks
-	if bundle.ProblemTypes != nil || bundle.ProblemTypeSignatures != nil {
+	if bundle.ProblemTypes != nil && len(bundle.ProblemTypes) > 0 || bundle.ProblemTypeSignatures != nil && len(bundle.ProblemTypeSignatures) > 0 {
 		return nil, fmt.Errorf("bundle must not include problem type")
 	}
 	if bundle.Problem == nil {
