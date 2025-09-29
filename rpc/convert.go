@@ -11,6 +11,9 @@ import (
 
 // ToRPCUser converts a REST User to a gRPC User
 func ToRPCUser(u *types.User) *User {
+	if u == nil {
+		return nil
+	}
 	return &User{
 		Id:             u.ID,
 		Name:           u.Name,
@@ -29,6 +32,9 @@ func ToRPCUser(u *types.User) *User {
 
 // ToRPCCourse converts a REST Course to a gRPC Course
 func ToRPCCourse(c *types.Course) *Course {
+	if c == nil {
+		return nil
+	}
 	return &Course{
 		Id:        c.ID,
 		Name:      c.Name,
@@ -42,6 +48,9 @@ func ToRPCCourse(c *types.Course) *Course {
 
 // ToRPCAssignment converts a REST Assignment to a gRPC Assignment
 func ToRPCAssignment(a *types.Assignment) *Assignment {
+	if a == nil {
+		return nil
+	}
 	rawScores := make(map[string]*ScoreList)
 	if a.RawScores != nil {
 		for k, v := range a.RawScores {
@@ -89,6 +98,9 @@ func ToRPCAssignment(a *types.Assignment) *Assignment {
 
 // ToRPCProblemSet converts a REST ProblemSet to a gRPC ProblemSet
 func ToRPCProblemSet(ps *types.ProblemSet) *ProblemSet {
+	if ps == nil {
+		return nil
+	}
 	return &ProblemSet{
 		Id:        ps.ID,
 		Unique:    ps.Unique,
@@ -101,6 +113,9 @@ func ToRPCProblemSet(ps *types.ProblemSet) *ProblemSet {
 
 // ToRPCProblemType converts a REST ProblemType to a gRPC ProblemType
 func ToRPCProblemType(pt *types.ProblemType) *ProblemType {
+	if pt == nil {
+		return nil
+	}
 	actions := make(map[string]*ProblemTypeAction)
 	if pt.Actions != nil {
 		for k, v := range pt.Actions {
@@ -131,6 +146,9 @@ func ToRPCProblemType(pt *types.ProblemType) *ProblemType {
 
 // ToRPCProblem converts a REST Problem to a gRPC Problem
 func ToRPCProblem(p *types.Problem) *Problem {
+	if p == nil {
+		return nil
+	}
 	return &Problem{
 		Id:        p.ID,
 		Unique:    p.Unique,
@@ -144,6 +162,9 @@ func ToRPCProblem(p *types.Problem) *Problem {
 
 // ToRPCProblemStep converts a REST ProblemStep to a gRPC ProblemStep
 func ToRPCProblemStep(ps *types.ProblemStep) *ProblemStep {
+	if ps == nil {
+		return nil
+	}
 	return &ProblemStep{
 		ProblemId:    ps.ProblemID,
 		Step:         ps.Step,
@@ -159,6 +180,9 @@ func ToRPCProblemStep(ps *types.ProblemStep) *ProblemStep {
 
 // ToRPCProblemSetProblem converts a REST ProblemSetProblem to a gRPC ProblemSetProblem
 func ToRPCProblemSetProblem(psp *types.ProblemSetProblem) *ProblemSetProblem {
+	if psp == nil {
+		return nil
+	}
 	return &ProblemSetProblem{
 		ProblemSetId: psp.ProblemSetID,
 		ProblemId:    psp.ProblemID,
@@ -168,6 +192,9 @@ func ToRPCProblemSetProblem(psp *types.ProblemSetProblem) *ProblemSetProblem {
 
 // ToRPCReportCard converts a REST ReportCard to a gRPC ReportCard
 func ToRPCReportCard(rc *types.ReportCard) *ReportCard {
+	if rc == nil {
+		return nil
+	}
 	results := make([]*ReportCardResult, len(rc.Results))
 	for i, r := range rc.Results {
 		results[i] = &ReportCardResult{
@@ -187,6 +214,9 @@ func ToRPCReportCard(rc *types.ReportCard) *ReportCard {
 
 // ToRPCEventMessage converts a REST EventMessage to a gRPC EventMessage
 func ToRPCEventMessage(em *types.EventMessage) *EventMessage {
+	if em == nil {
+		return nil
+	}
 	var reportCard *ReportCard
 	if em.ReportCard != nil {
 		reportCard = ToRPCReportCard(em.ReportCard)
@@ -205,6 +235,9 @@ func ToRPCEventMessage(em *types.EventMessage) *EventMessage {
 
 // ToRPCCommit converts a REST Commit to a gRPC Commit
 func ToRPCCommit(c *types.Commit) *Commit {
+	if c == nil {
+		return nil
+	}
 	transcript := make([]*EventMessage, len(c.Transcript))
 	for i, t := range c.Transcript {
 		transcript[i] = ToRPCEventMessage(t)
@@ -231,6 +264,9 @@ func ToRPCCommit(c *types.Commit) *Commit {
 
 // ToRPCProblemBundle converts a REST ProblemBundle to a gRPC ProblemBundle
 func ToRPCProblemBundle(pb *types.ProblemBundle) *ProblemBundle {
+	if pb == nil {
+		return nil
+	}
 	problemTypes := make(map[string]*ProblemType)
 	if pb.ProblemTypes != nil {
 		for k, v := range pb.ProblemTypes {
@@ -260,6 +296,9 @@ func ToRPCProblemBundle(pb *types.ProblemBundle) *ProblemBundle {
 
 // ToRPCProblemSetBundle converts a REST ProblemSetBundle to a gRPC ProblemSetBundle
 func ToRPCProblemSetBundle(psb *types.ProblemSetBundle) *ProblemSetBundle {
+	if psb == nil {
+		return nil
+	}
 	var problemSet *ProblemSet
 	if psb.ProblemSet != nil {
 		problemSet = ToRPCProblemSet(psb.ProblemSet)
@@ -272,6 +311,9 @@ func ToRPCProblemSetBundle(psb *types.ProblemSetBundle) *ProblemSetBundle {
 
 // ToRPCCommitBundle converts a REST CommitBundle to a gRPC CommitBundle
 func ToRPCCommitBundle(cb *types.CommitBundle) *CommitBundle {
+	if cb == nil {
+		return nil
+	}
 	var problemType *ProblemType
 	if cb.ProblemType != nil {
 		problemType = ToRPCProblemType(cb.ProblemType)
@@ -317,6 +359,9 @@ func convertProblemSetProblemsToRPC(psps []*types.ProblemSetProblem) []*ProblemS
 
 // ToREST converts a gRPC User to a REST User
 func (u *User) ToREST() *types.User {
+	if u == nil {
+		return nil
+	}
 	return &types.User{
 		ID:             u.Id,
 		Name:           u.Name,
@@ -335,6 +380,9 @@ func (u *User) ToREST() *types.User {
 
 // ToREST converts a gRPC Course to a REST Course
 func (c *Course) ToREST() *types.Course {
+	if c == nil {
+		return nil
+	}
 	return &types.Course{
 		ID:        c.Id,
 		Name:      c.Name,
@@ -348,6 +396,9 @@ func (c *Course) ToREST() *types.Course {
 
 // ToREST converts a gRPC Assignment to a REST Assignment
 func (a *Assignment) ToREST() *types.Assignment {
+	if a == nil {
+		return nil
+	}
 	rawScores := make(map[string][]float64)
 	if a.RawScores != nil {
 		for k, v := range a.RawScores {
@@ -395,6 +446,9 @@ func (a *Assignment) ToREST() *types.Assignment {
 
 // ToREST converts a gRPC ProblemSet to a REST ProblemSet
 func (ps *ProblemSet) ToREST() *types.ProblemSet {
+	if ps == nil {
+		return nil
+	}
 	return &types.ProblemSet{
 		ID:        ps.Id,
 		Unique:    ps.Unique,
@@ -407,6 +461,9 @@ func (ps *ProblemSet) ToREST() *types.ProblemSet {
 
 // ToREST converts a gRPC ProblemType to a REST ProblemType
 func (pt *ProblemType) ToREST() *types.ProblemType {
+	if pt == nil {
+		return nil
+	}
 	actions := make(map[string]*types.ProblemTypeAction)
 	if pt.Actions != nil {
 		for k, v := range pt.Actions {
@@ -437,6 +494,9 @@ func (pt *ProblemType) ToREST() *types.ProblemType {
 
 // ToREST converts a gRPC Problem to a REST Problem
 func (p *Problem) ToREST() *types.Problem {
+	if p == nil {
+		return nil
+	}
 	return &types.Problem{
 		ID:        p.Id,
 		Unique:    p.Unique,
@@ -450,6 +510,9 @@ func (p *Problem) ToREST() *types.Problem {
 
 // ToREST converts a gRPC ProblemStep to a REST ProblemStep
 func (ps *ProblemStep) ToREST() *types.ProblemStep {
+	if ps == nil {
+		return nil
+	}
 	return &types.ProblemStep{
 		ProblemID:    ps.ProblemId,
 		Step:         ps.Step,
@@ -465,6 +528,9 @@ func (ps *ProblemStep) ToREST() *types.ProblemStep {
 
 // ToREST converts a gRPC ProblemSetProblem to a REST ProblemSetProblem
 func (psp *ProblemSetProblem) ToREST() *types.ProblemSetProblem {
+	if psp == nil {
+		return nil
+	}
 	return &types.ProblemSetProblem{
 		ProblemSetID: psp.ProblemSetId,
 		ProblemID:    psp.ProblemId,
@@ -474,6 +540,9 @@ func (psp *ProblemSetProblem) ToREST() *types.ProblemSetProblem {
 
 // ToREST converts a gRPC ReportCard to a REST ReportCard
 func (rc *ReportCard) ToREST() *types.ReportCard {
+	if rc == nil {
+		return nil
+	}
 	results := make([]*types.ReportCardResult, len(rc.Results))
 	for i, r := range rc.Results {
 		results[i] = &types.ReportCardResult{
@@ -493,6 +562,9 @@ func (rc *ReportCard) ToREST() *types.ReportCard {
 
 // ToREST converts a gRPC EventMessage to a REST EventMessage
 func (em *EventMessage) ToREST() *types.EventMessage {
+	if em == nil {
+		return nil
+	}
 	var reportCard *types.ReportCard
 	if em.ReportCard != nil {
 		reportCard = em.ReportCard.ToREST()
@@ -511,6 +583,9 @@ func (em *EventMessage) ToREST() *types.EventMessage {
 
 // ToREST converts a gRPC Commit to a REST Commit
 func (c *Commit) ToREST() *types.Commit {
+	if c == nil {
+		return nil
+	}
 	transcript := make([]*types.EventMessage, len(c.Transcript))
 	for i, t := range c.Transcript {
 		transcript[i] = t.ToREST()
@@ -537,6 +612,9 @@ func (c *Commit) ToREST() *types.Commit {
 
 // ToREST converts a gRPC ProblemBundle to a REST ProblemBundle
 func (pb *ProblemBundle) ToREST() *types.ProblemBundle {
+	if pb == nil {
+		return nil
+	}
 	problemTypes := make(map[string]*types.ProblemType)
 	if pb.ProblemTypes != nil {
 		for k, v := range pb.ProblemTypes {
@@ -562,6 +640,9 @@ func (pb *ProblemBundle) ToREST() *types.ProblemBundle {
 
 // ToREST converts a gRPC ProblemSetBundle to a REST ProblemSetBundle
 func (psb *ProblemSetBundle) ToREST() *types.ProblemSetBundle {
+	if psb == nil {
+		return nil
+	}
 	return &types.ProblemSetBundle{
 		ProblemSet:         psb.ProblemSet.ToREST(),
 		ProblemSetProblems: convertProblemSetProblemsToREST(psb.ProblemSetProblems),
@@ -570,6 +651,9 @@ func (psb *ProblemSetBundle) ToREST() *types.ProblemSetBundle {
 
 // ToREST converts a gRPC CommitBundle to a REST CommitBundle
 func (cb *CommitBundle) ToREST() *types.CommitBundle {
+	if cb == nil {
+		return nil
+	}
 	return &types.CommitBundle{
 		ProblemType:          cb.ProblemType.ToREST(),
 		ProblemTypeSignature: cb.ProblemTypeSignature,
