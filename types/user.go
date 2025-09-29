@@ -156,7 +156,11 @@ func (commit *Commit) ComputeSignature(secret, problemTypeSignature, problemSign
 		commit.Files = make(map[string][]byte)
 	}
 	for name, contents := range commit.Files {
-		v.Add(fmt.Sprintf("file-%s", name), string(contents))
+		if contents == nil {
+			v.Add(fmt.Sprintf("file-%s", name), string([]bytes{}))
+		} else {
+			v.Add(fmt.Sprintf("file-%s", name), string(contents))
+		}
 	}
 	if commit.Transcript == nil {
 		commit.Transcript = []*EventMessage{}
@@ -227,6 +231,9 @@ func (commit *Commit) FilterIncoming(whitelist map[string]bool) {
 		for name, contents := range commit.Files {
 			// normalize line endings
 			// only keep files on the whitelist
+			if contents == nil {
+				contents = []byte{}
+			}
 			if whitelist[name] {
 				clean[name] = fixLineEndings(contents)
 			} else {

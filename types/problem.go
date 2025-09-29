@@ -175,7 +175,11 @@ func (problemType *ProblemType) ComputeSignature(secret string) string {
 	v.Add("name", problemType.Name)
 	v.Add("image", problemType.Image)
 	for name, contents := range problemType.Files {
-		v.Add(fmt.Sprintf("file-%s", name), string(contents))
+		if contents == nil {
+			v.Add(fmt.Sprintf("file-%s", name), string([]bytes{}))
+		} else {
+			v.Add(fmt.Sprintf("file-%s", name), string(contents))
+		}
 	}
 	for name, action := range problemType.Actions {
 		v.Add(fmt.Sprintf("action-%s-command", name), action.Command)
@@ -228,7 +232,11 @@ func (problem *Problem) ComputeSignature(secret string, steps []*ProblemStep) st
 		v.Add(fmt.Sprintf("step-%d-weight", step.Step), strconv.FormatFloat(step.Weight, 'g', -1, 64))
 		if step.Files != nil {
 			for name, contents := range step.Files {
-				v.Add(fmt.Sprintf("step-%d-file-%s", step.Step, name), string(contents))
+				if contents == nil {
+					v.Add(fmt.Sprintf("step-%d-file-%s", step.Step, name), string([]bytes{}))
+				} else {
+					v.Add(fmt.Sprintf("step-%d-file-%s", step.Step, name), string(contents))
+				}
 			}
 		}
 		if step.Whitelist != nil {
@@ -275,6 +283,9 @@ func (step *ProblemStep) Normalize(n int64) error {
 		for name, contents := range step.Files {
 			dir := filepath.Dir(filepath.FromSlash(name))
 			fixed := contents
+			if fixed == nil {
+				fixed = []byte{}
+			}
 			if (dir == "." || !ProblemStepDirectoryWhitelist[dir]) && utf8.Valid(contents) {
 				fixed = fixLineEndings(contents)
 				if !bytes.Equal(fixed, contents) {
