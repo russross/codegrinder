@@ -215,7 +215,7 @@ func (problem *Problem) ComputeSignature(secret string, steps []*ProblemStep) st
 	} else {
 		v["tags"] = problem.Tags
 	}
-	if len(problem.Tags) == 0 {
+	if len(problem.Options) == 0 {
 		v["options"] = []string{}
 	} else {
 		v["options"] = problem.Options
