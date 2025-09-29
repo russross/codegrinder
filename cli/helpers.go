@@ -586,16 +586,53 @@ func getAssignment(assignment *Assignment, rootDir, prettyRoot string, client Co
 	return changeTo
 }
 
+func filterOutFiles(data interface{}) {
+	switch v := data.(type) {
+	case map[string]interface{}:
+		for key, value := range v {
+			if key == "files" || key == "solution" {
+				if fileMap, ok := value.(map[string]interface{}); ok {
+					for k := range fileMap {
+						fileMap[k] = "…"
+					}
+				}
+			} else if key == "instructions" {
+				v[key] = "…"
+			}
+			filterOutFiles(value)
+		}
+	case []interface{}:
+		for _, item := range v {
+			filterOutFiles(item)
+		}
+	}
+	// Primitives (string, number, bool, null) are ignored.
+}
+
 func dumpMessage(call string, isOutgoing bool, msg interface{}) {
 	if Config.apiDump {
-		raw, err := json.MarshalIndent(msg, "", "    ")
+		raw, err := json.Marshal(msg)
 		if err != nil {
-			log.Fatalf("json error encoding request: %v", err)
+			log.Fatalf("json error encoding for processing: %v", err)
 		}
+
+		var data interface{}
+		err = json.Unmarshal(raw, &data)
+		if err != nil {
+			log.Fatalf("json error unmarshaling for processing: %v", err)
+		}
+
+		filterOutFiles(data)
+
+		indented, err := json.MarshalIndent(data, "", "    ")
+		if err != nil {
+			log.Fatalf("json error encoding modified data: %v", err)
+		}
+
 		if isOutgoing {
-			log.Printf("--> %s %s\n", call, raw)
+			log.Printf("--> %s %s\n", call, indented)
 		} else {
-			log.Printf("<-- %s %s\n", call, raw)
+			log.Printf("<-- %s %s\n", call, indented)
 		}
 	} else if Config.apiReport {
 		if isOutgoing {

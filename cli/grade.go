@@ -61,6 +61,9 @@ func CommandGrade(cmd *cobra.Command, args []string) {
 	if err != nil {
 		log.Fatalf("failed to confirm commit bundle: %v", err)
 	}
+	if graded == nil {
+		log.Fatalf("the server ended the connection without sending a report card")
+	}
 
 	// save the commit with report card
 	toSave := &CommitBundle{

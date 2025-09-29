@@ -152,7 +152,7 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 			CommitSignature:      signed.CommitSignatures[step-1],
 		}
 
-		// call handleDaycareStream: have it download files and print out events
+		// call handleDaycareStream in interactive mode
 		if _, err := handleDaycareStream(client, conn, unvalidated, nil, stepDir, true); err != nil {
 			log.Fatalf("interactive session failed: %v", err)
 		}
@@ -173,10 +173,13 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 			Commit:               signed.Commits[n],
 			CommitSignature:      signed.CommitSignatures[n],
 		}
-		// handleDaycareStream parameters: client, conn, bundle=unvalidated, args=nil, directory="", processEvents=false (non-interactive, no output events, no file downloads)
+		// call handleDaycareStream in non-interactive mode
 		validated, err := handleDaycareStream(client, conn, unvalidated, nil, "", false)
 		if err != nil {
 			log.Fatalf("failed to validate the step: %v", err)
+		}
+		if validated == nil {
+			log.Fatalf("the server ended the connection without sending a report card")
 		}
 		fmt.Println("  finished validating solution")
 		if validated.Commit.ReportCard == nil || validated.Commit.Score != 1.0 || !validated.Commit.ReportCard.Passed {

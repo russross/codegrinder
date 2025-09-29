@@ -50,7 +50,7 @@ func CommandAction(cmd *cobra.Command, args []string) {
 			bundle.Problem.Unique, bundle.Commit.Step, daycareHost)
 
 		// Connect to the specified daycare server directly
-		// call handleDaycareStream: have it download files and print out events
+		// call handleDaycareStream in interactive mode
 		if _, err := handleDaycareStream(nil, nil, bundle, nil, ".", true); err != nil {
 			log.Fatalf("interactive session failed: %v", err)
 		}
@@ -106,7 +106,8 @@ func CommandAction(cmd *cobra.Command, args []string) {
 		log.Fatalf("server was unable to find a suitable daycare, unable to run action")
 	}
 	fmt.Printf("starting interactive session for %s step %d\n", problem.Unique, commit.Step)
-	// call handleDaycareStream: have it download files and print out events
+
+	// call handleDaycareStream in interactive mode
 	if _, err := handleDaycareStream(client, conn, signed, nil, ".", true); err != nil {
 		log.Fatalf("interactive session failed: %v", err)
 	}
