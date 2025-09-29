@@ -6,12 +6,17 @@ import (
 	"path/filepath"
 	"time"
 
-	. "github.com/russross/codegrinder/types"
+	. "github.com/russross/codegrinder/rpc"
 	"github.com/spf13/cobra"
 )
 
 func CommandSolve(cmd *cobra.Command, args []string) {
-	mustLoadConfig(cmd)
+	client, conn, ctx, err := setup(cmd)
+	if err != nil {
+		log.Fatalf("failed to connect to gRPC server: %v", err)
+	}
+	defer conn.Close()
+
 	now := time.Now()
 
 	if len(args) != 0 {
@@ -20,13 +25,18 @@ func CommandSolve(cmd *cobra.Command, args []string) {
 	}
 
 	// get the user ID
-	user := new(User)
-	mustGetObject("/users/me", nil, user)
+	dumpMessage("GetUserMe", true, &GetUserMeRequest{})
+	userResp, err := client.GetUserMe(ctx, &GetUserMeRequest{})
+	if err != nil {
+		log.Fatalf("failed to get user: %v", err)
+	}
+	dumpMessage("GetUserMe", false, userResp)
+	user := userResp.User
 	if !user.Author {
 		log.Fatalf("you must be an author to use this command")
 	}
 
-	_, _, step, _, _, _, problemDir := gatherStudent(now, ".")
+	_, _, step, _, _, _, problemDir := gatherStudent(now, ".", client, ctx)
 
 	if step.Solution == nil || len(step.Solution) == 0 {
 		log.Fatalf("no solution files found")

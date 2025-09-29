@@ -1,23 +1,23 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net/url"
 	"os"
-	"path/filepath"
 	"time"
 
-	"github.com/gorilla/websocket"
-	. "github.com/russross/codegrinder/types"
+	. "github.com/russross/codegrinder/rpc"
 	"github.com/spf13/cobra"
 )
 
 func CommandAction(cmd *cobra.Command, args []string) {
-	mustLoadConfig(cmd)
+	client, conn, ctx, err := setup(cmd)
+	if err != nil {
+		log.Fatalf("failed to connect to gRPC server: %v", err)
+	}
+	defer conn.Close()
+
 	now := time.Now()
 
 	action := ""
@@ -41,7 +41,7 @@ func CommandAction(cmd *cobra.Command, args []string) {
 		}
 
 		// Prepare the signed bundle
-		bundle, err := prepareSignedBundle(now, action, parsedURL.Host)
+		bundle, err := prepareSignedBundle(now, action, parsedURL.Host, client, ctx)
 		if err != nil {
 			log.Fatalf("error preparing signed bundle: %v", err)
 		}
@@ -50,7 +50,10 @@ func CommandAction(cmd *cobra.Command, args []string) {
 			bundle.Problem.Unique, bundle.Commit.Step, daycareHost)
 
 		// Connect to the specified daycare server directly
-		runInteractiveSession(bundle, nil, ".")
+		// call handleDaycareStream: have it download files and print out events
+		if _, err := handleDaycareStream(nil, nil, bundle, nil, ".", true); err != nil {
+			log.Fatalf("interactive session failed: %v", err)
+		}
 		return
 	}
 
@@ -61,14 +64,19 @@ func CommandAction(cmd *cobra.Command, args []string) {
 	}
 
 	// get the user ID
-	user := new(User)
-	mustGetObject("/users/me", nil, user)
+	dumpMessage("GetUserMe", true, &GetUserMeRequest{})
+	userResp, err := client.GetUserMe(ctx, &GetUserMeRequest{})
+	if err != nil {
+		log.Fatalf("failed to get user: %v", err)
+	}
+	dumpMessage("GetUserMe", false, userResp)
+	user := userResp.User
 
-	problemType, problem, _, _, commit, _, _ := gatherStudent(now, ".")
+	problemType, problem, _, _, commit, _, _ := gatherStudent(now, ".", client, ctx)
 	commit.Action = action
 	commit.Note = "grind action " + action
 	unsigned := &CommitBundle{
-		UserID: user.ID,
+		UserId: user.Id,
 		Commit: commit,
 	}
 
@@ -85,112 +93,21 @@ func CommandAction(cmd *cobra.Command, args []string) {
 	}
 
 	// send the commit bundle to the server
-	signed := new(CommitBundle)
-	mustPostObject("/commit_bundles/unsigned", nil, unsigned, signed)
+	dumpMessage("PostCommitBundlesUnsigned", true, &PostCommitBundlesUnsignedRequest{Bundle: unsigned})
+	signedResp, err := client.PostCommitBundlesUnsigned(ctx, &PostCommitBundlesUnsignedRequest{Bundle: unsigned})
+	if err != nil {
+		log.Fatalf("failed to post commit bundle: %v", err)
+	}
+	dumpMessage("PostCommitBundlesUnsigned", false, signedResp)
+	signed := signedResp.Bundle
 
 	// send it to the daycare for grading
 	if signed.Hostname == "" {
 		log.Fatalf("server was unable to find a suitable daycare, unable to run action")
 	}
 	fmt.Printf("starting interactive session for %s step %d\n", problem.Unique, commit.Step)
-	runInteractiveSession(signed, nil, ".")
-}
-
-func runInteractiveSession(bundle *CommitBundle, args []string, directory string) {
-	endpoint := &url.URL{
-		Scheme: "wss",
-		Host:   bundle.Hostname,
-		Path:   "/sockets/" + bundle.ProblemType.Name + "/" + bundle.Commit.Action,
-	}
-
-	socket, resp, err := websocket.DefaultDialer.Dial(endpoint.String(), nil)
-	if err != nil {
-		log.Printf("error dialing: %v", err)
-		if resp != nil && resp.Body != nil {
-			dumpBody(resp)
-			resp.Body.Close()
-		}
-		log.Printf("giving up")
-		return
-	}
-	defer socket.Close()
-
-	// form the initial request
-	req := &DaycareRequest{CommitBundle: bundle}
-	dumpOutgoing(req)
-	if err := socket.WriteJSON(req); err != nil {
-		log.Printf("error writing request message: %v", err)
-		return
-	}
-
-	// start listening for events
-	for {
-		reply := new(DaycareResponse)
-		if err := socket.ReadJSON(reply); err != nil {
-			//log.Printf("socket error reading event: %v", err)
-			log.Printf("session closed by server\r")
-			return
-		}
-		dumpIncoming(reply)
-
-		switch {
-		case reply.Error != "":
-			log.Printf("server returned an error:\r")
-			log.Printf("  %s\r", reply.Error)
-			return
-
-		case reply.CommitBundle != nil:
-			log.Printf("commit bundle returned, quitting\r")
-			return
-
-		case reply.Event != nil:
-			switch reply.Event.Event {
-			case "exec", "stdin", "stdout", "exit", "error":
-				fmt.Printf("%s", reply.Event.Dump())
-			case "stderr":
-				fmt.Printf("%s", reply.Event.Dump())
-			case "files":
-				if reply.Event.Files != nil {
-					for name, contents := range reply.Event.Files {
-						log.Printf("downloading file %s\r", name)
-						if err := ioutil.WriteFile(filepath.Join(directory, filepath.FromSlash(name)), contents, 0644); err != nil {
-							log.Printf("error saving file: %v\r", err)
-						}
-					}
-				}
-			}
-
-		default:
-			log.Printf("unexpected reply from server\r")
-			return
-		}
-	}
-}
-
-var rawMode = false
-
-func dumpOutgoing(msg interface{}) {
-	if Config.apiDump {
-		raw, err := json.MarshalIndent(msg, "", "    ")
-		if err != nil {
-			log.Fatalf("json error encoding request: %v", err)
-		}
-		if rawMode {
-			raw = bytes.Replace(raw, []byte("\n"), []byte("\r\n"), -1)
-		}
-		log.Printf("--> %s\n", raw)
-	}
-}
-
-func dumpIncoming(msg interface{}) {
-	if Config.apiDump {
-		raw, err := json.MarshalIndent(msg, "", "    ")
-		if err != nil {
-			log.Fatalf("json error encoding request: %v", err)
-		}
-		if rawMode {
-			raw = bytes.Replace(raw, []byte("\n"), []byte("\r\n"), -1)
-		}
-		log.Printf("<-- %s\n", raw)
+	// call handleDaycareStream: have it download files and print out events
+	if _, err := handleDaycareStream(client, conn, signed, nil, ".", true); err != nil {
+		log.Fatalf("interactive session failed: %v", err)
 	}
 }

@@ -9,19 +9,28 @@ import (
 	"path/filepath"
 	"time"
 
-	. "github.com/russross/codegrinder/types"
+	. "github.com/russross/codegrinder/rpc"
 	"github.com/spf13/cobra"
 )
 
 func CommandReset(cmd *cobra.Command, args []string) {
-	mustLoadConfig(cmd)
+	client, conn, ctx, err := setup(cmd)
+	if err != nil {
+		log.Fatalf("failed to connect to gRPC server: %v", err)
+	}
+	defer conn.Close()
+
 	now := time.Now()
 
 	// get the user ID
-	user := new(User)
-	mustGetObject("/users/me", nil, user)
+	dumpMessage("GetUserMe", true, &GetUserMeRequest{})
+	_, err = client.GetUserMe(ctx, &GetUserMeRequest{})
+	if err != nil {
+		log.Fatalf("failed to get user: %v", err)
+	}
+	dumpMessage("GetUserMe", false, nil)
 
-	problemType, problem, step, assignment, _, dotfile, problemDir := gatherStudent(now, ".")
+	problemType, problem, step, assignment, _, dotfile, problemDir := gatherStudent(now, ".", client, ctx)
 	info := dotfile.Problems[problem.Unique]
 
 	listed := make(map[string]struct{})
@@ -50,8 +59,13 @@ func CommandReset(cmd *cobra.Command, args []string) {
 
 	// get the commit from the previous step if applicable
 	if info.Step > 1 {
-		commit := new(Commit)
-		mustGetObject(fmt.Sprintf("/assignments/%d/problems/%d/steps/%d/commits/last", assignment.ID, problem.ID, info.Step-1), nil, commit)
+		dumpMessage("GetAssignmentProblemStepCommitLast", true, &GetAssignmentProblemStepCommitLastRequest{AssignmentId: assignment.Id, ProblemId: problem.Id, Step: info.Step - 1})
+		commitResp, err := client.GetAssignmentProblemStepCommitLast(ctx, &GetAssignmentProblemStepCommitLastRequest{AssignmentId: assignment.Id, ProblemId: problem.Id, Step: info.Step - 1})
+		if err != nil {
+			log.Fatalf("failed to get commit: %v", err)
+		}
+		dumpMessage("GetAssignmentProblemStepCommitLast", false, commitResp)
+		commit := commitResp.Commit
 		for name, contents := range commit.Files {
 			files[filepath.FromSlash(name)] = contents
 		}

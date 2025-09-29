@@ -6,12 +6,17 @@ import (
 	"os"
 	"time"
 
-	. "github.com/russross/codegrinder/types"
+	. "github.com/russross/codegrinder/rpc"
 	"github.com/spf13/cobra"
 )
 
 func CommandGrade(cmd *cobra.Command, args []string) {
-	mustLoadConfig(cmd)
+	client, conn, ctx, err := setup(cmd)
+	if err != nil {
+		log.Fatalf("failed to connect to gRPC server: %v", err)
+	}
+	defer conn.Close()
+
 	now := time.Now()
 
 	if len(args) != 0 {
@@ -20,41 +25,61 @@ func CommandGrade(cmd *cobra.Command, args []string) {
 	}
 
 	// get the user ID
-	user := new(User)
-	mustGetObject("/users/me", nil, user)
+	dumpMessage("GetUserMe", true, &GetUserMeRequest{})
+	userResp, err := client.GetUserMe(ctx, &GetUserMeRequest{})
+	if err != nil {
+		log.Fatalf("failed to get user: %v", err)
+	}
+	dumpMessage("GetUserMe", false, userResp)
+	user := userResp.User
 
-	_, problem, _, _, commit, dotfile, _ := gatherStudent(now, ".")
+	_, problem, _, _, commit, dotfile, _ := gatherStudent(now, ".", client, ctx)
 	commit.Action = "grade"
 	commit.Note = "grind grade"
 	unsigned := &CommitBundle{
-		UserID: user.ID,
+		UserId: user.Id,
 		Commit: commit,
 	}
 
 	// send the commit bundle to the server
-	signed := new(CommitBundle)
-	mustPostObject("/commit_bundles/unsigned", nil, unsigned, signed)
+	dumpMessage("PostCommitBundlesUnsigned", true, &PostCommitBundlesUnsignedRequest{Bundle: unsigned})
+	signedResp, err := client.PostCommitBundlesUnsigned(ctx, &PostCommitBundlesUnsignedRequest{Bundle: unsigned})
+	if err != nil {
+		log.Fatalf("failed to post commit bundle: %v", err)
+	}
+	dumpMessage("PostCommitBundlesUnsigned", false, signedResp)
+	signed := signedResp.Bundle
 
 	// send it to the daycare for grading
 	if signed.Hostname == "" {
 		log.Fatalf("server was unable to find a suitable daycare, unable to grade")
 	}
 	fmt.Printf("submitting %s step %d for grading\n", problem.Unique, commit.Step)
-	graded := mustConfirmCommitBundle(signed, nil)
+
+	// call handleDaycareStream in non-interactive mode
+	graded, err := handleDaycareStream(client, conn, signed, nil, "", false)
+	if err != nil {
+		log.Fatalf("failed to confirm commit bundle: %v", err)
+	}
 
 	// save the commit with report card
 	toSave := &CommitBundle{
 		Hostname:        graded.Hostname,
-		UserID:          graded.UserID,
+		UserId:          graded.UserId,
 		Commit:          graded.Commit,
 		CommitSignature: graded.CommitSignature,
 	}
-	saved := new(CommitBundle)
-	mustPostObject("/commit_bundles/signed", nil, toSave, saved)
+	dumpMessage("PostCommitBundlesSigned", true, &PostCommitBundlesSignedRequest{Bundle: toSave})
+	savedResp, err := client.PostCommitBundlesSigned(ctx, &PostCommitBundlesSignedRequest{Bundle: toSave})
+	if err != nil {
+		log.Fatalf("failed to post signed commit bundle: %v", err)
+	}
+	dumpMessage("PostCommitBundlesSigned", false, savedResp)
+	saved := savedResp.Bundle
 	commit = saved.Commit
 
 	if commit.ReportCard != nil && commit.ReportCard.Passed && commit.Score == 1.0 {
-		if nextStep(".", dotfile.Problems[problem.Unique], problem, commit, make(map[string]*ProblemType)) {
+		if nextStep(".", dotfile.Problems[problem.Unique], problem, commit, make(map[string]*ProblemType), client, ctx) {
 			// save the updated dotfile with new step number
 			saveDotFile(dotfile)
 		}

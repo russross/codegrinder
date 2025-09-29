@@ -1,28 +1,20 @@
 package main
 
 import (
-	"bytes"
-	"compress/gzip"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"log"
-	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 
 	"github.com/blang/semver"
-	pb "github.com/russross/codegrinder/rpc"
-	. "github.com/russross/codegrinder/types"
+	. "github.com/russross/codegrinder/rpc"
+	"github.com/russross/codegrinder/types"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 )
 
 const (
@@ -68,7 +60,7 @@ func main() {
 		Use:   "version",
 		Short: "print the version number of grind",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("grind " + CurrentVersion.Version)
+			fmt.Println("grind " + types.CurrentVersion.Version)
 		},
 	}
 	cmdGrind.AddCommand(cmdVersion)
@@ -214,140 +206,31 @@ func CommandLogin(cmd *cobra.Command, args []string) {
 	hostname, key := args[0], args[1]
 	Config.Host = hostname
 
-	params := make(url.Values)
-	params.Add("key", key)
-	session := new(LoginSession)
-	mustGetObject("/users/session", params, session)
+	// Set up gRPC connection
+	client, conn, ctx, err := newGRPCClient()
+	if err != nil {
+		log.Fatalf("failed to connect to server: %v", err)
+	}
+	defer conn.Close()
 
-	// set up config
-	Config.Cookie = session.Cookie
+	dumpMessage("GetUserMe", true, &GetUserMeRequest{SessionCookie: key})
+	userResp, err := client.GetUserMe(ctx, &GetUserMeRequest{SessionCookie: key})
+	if err != nil {
+		log.Fatalf("failed to login: %v", err)
+	}
+	dumpMessage("GetUserMe", false, userResp)
+	Config.Cookie = key
 
 	// see if they need an upgrade
-	checkVersion()
+	checkVersion(client, ctx)
 
 	// try it out by fetching a user record
-	user := new(User)
-	mustGetObject("/users/me", nil, user)
+	user := userResp.User
 
 	// save config for later use
 	mustWriteConfig()
 
 	fmt.Printf("login successful; welcome %s\n", user.Name)
-}
-
-func mustGetObject(path string, params url.Values, download interface{}) {
-	doRequest(path, params, "GET", nil, download, false)
-}
-
-func getObject(path string, params url.Values, download interface{}) bool {
-	return doRequest(path, params, "GET", nil, download, true)
-}
-
-func mustPostObject(path string, params url.Values, upload interface{}, download interface{}) {
-	doRequest(path, params, "POST", upload, download, false)
-}
-
-func mustPutObject(path string, params url.Values, upload interface{}, download interface{}) {
-	doRequest(path, params, "PUT", upload, download, false)
-}
-
-func doRequest(path string, params url.Values, method string, upload interface{}, download interface{}, notfoundokay bool) bool {
-	if !strings.HasPrefix(path, "/") {
-		log.Panicf("doRequest path must start with /")
-	}
-	if method != "GET" && method != "POST" && method != "PUT" && method != "DELETE" {
-		log.Panicf("doRequest only recognizes GET, POST, PUT, and DELETE methods")
-	}
-	url := fmt.Sprintf("https://%s%s", Config.Host, path)
-	req, err := http.NewRequest(method, url, nil)
-	if err != nil {
-		log.Fatalf("error creating http request: %v\n", err)
-	}
-
-	// add any parameters
-	if params != nil && len(params) > 0 {
-		req.URL.RawQuery = params.Encode()
-	}
-
-	if Config.apiReport {
-		fmt.Printf("%s %s\n", method, req.URL)
-	}
-
-	// set the headers
-	req.Header.Add("Cookie", Config.Cookie)
-	if download != nil {
-		req.Header.Add("Accept", "application/json")
-		req.Header.Add("Accept-Encoding", "gzip")
-	}
-
-	// upload the payload if any
-	if upload != nil && (method == "POST" || method == "PUT") {
-		req.Header.Add("Content-Type", "application/json")
-		req.Header.Add("Content-Encoding", "gzip")
-		payload := new(bytes.Buffer)
-		gw := gzip.NewWriter(payload)
-		uncompressed := new(bytes.Buffer)
-		var jsontarget io.Writer
-		if Config.apiDump {
-			jsontarget = io.MultiWriter(gw, uncompressed)
-		} else {
-			jsontarget = gw
-		}
-		jw := json.NewEncoder(jsontarget)
-		if err := jw.Encode(upload); err != nil {
-			log.Fatalf("doRequest: JSON error encoding object to upload: %v", err)
-		}
-		if err := gw.Close(); err != nil {
-			log.Fatalf("doRequest: gzip error encoding object to upload: %v", err)
-		}
-		req.Body = ioutil.NopCloser(payload)
-
-		if Config.apiDump {
-			fmt.Printf("Request data: %s\n", uncompressed)
-		}
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		log.Fatalf("error connecting to %s: %v", Config.Host, err)
-	}
-	defer resp.Body.Close()
-	if notfoundokay && resp.StatusCode == http.StatusNotFound {
-		return false
-	}
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("unexpected status from %s: %s", url, resp.Status)
-		dumpBody(resp)
-		log.Fatalf("giving up")
-	}
-
-	// parse the result if any
-	if download != nil {
-		body := resp.Body
-		if resp.Header.Get("Content-Encoding") == "gzip" {
-			gz, err := gzip.NewReader(body)
-			if err != nil {
-				log.Fatalf("failed to decompress gzip result: %v", err)
-			}
-			body = gz
-			defer gz.Close()
-		}
-		decoder := json.NewDecoder(body)
-		if err := decoder.Decode(download); err != nil {
-			log.Fatalf("failed to parse result object from server: %v", err)
-		}
-
-		if Config.apiDump {
-			raw, err := json.MarshalIndent(download, "", "    ")
-			if err != nil {
-				log.Fatalf("doRequest: JSON error encoding downloaded object: %v", err)
-			}
-			fmt.Printf("Response data: %s\n", raw)
-		}
-
-		return true
-	}
-	return false
 }
 
 func courseDirectory(label string) string {
@@ -368,13 +251,14 @@ func hasInstructorFile() bool {
 	return err == nil
 }
 
-func mustLoadConfig(cmd *cobra.Command) {
+func setup(cmd *cobra.Command) (CodeGrinderServiceClient, *grpc.ClientConn, context.Context, error) {
+	// Load config
 	home, err := os.UserHomeDir()
 	if err != nil {
 		log.Fatalf("unable to find home directory: %v", err)
 	}
 	if home == "" {
-		log.Fatalf("home directory is not setn")
+		log.Fatalf("home directory is not set")
 	}
 	configFile := filepath.Join(home, perUserDotFile)
 
@@ -388,7 +272,16 @@ func mustLoadConfig(cmd *cobra.Command) {
 		Config.apiReport = true
 	}
 
-	checkVersion()
+	// Now create connection
+	client, conn, ctx, err := newGRPCClient()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	// Check version
+	checkVersion(client, ctx)
+
+	return client, conn, ctx, nil
 }
 
 func mustWriteConfig() {
@@ -419,21 +312,13 @@ func plural(n int) string {
 	return "s"
 }
 
-func checkVersion() {
-	creds := credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})
-	conn, err := grpc.Dial(Config.Host+":443", grpc.WithTransportCredentials(creds),
-		grpc.WithCompressor(grpc.NewGZIPCompressor()),
-		grpc.WithDecompressor(grpc.NewGZIPDecompressor()))
+func checkVersion(client CodeGrinderServiceClient, ctx context.Context) {
+	dumpMessage("GetVersion", true, &GetVersionRequest{})
+	resp, err := client.GetVersion(ctx, &GetVersionRequest{})
 	if err != nil {
-		log.Fatalf("failed to connect to gRPC server: %v", err)
+		log.Fatalf("failed to get version from server: %v", err)
 	}
-	defer conn.Close()
-
-	client := pb.NewCodeGrinderServiceClient(conn)
-	resp, err := client.GetVersion(context.Background(), &pb.GetVersionRequest{})
-	if err != nil {
-		log.Fatalf("failed to get version from gRPC: %v", err)
-	}
+	dumpMessage("GetVersion", false, resp)
 
 	server := &Version{
 		Version:                  resp.Version.Version,
@@ -443,32 +328,15 @@ func checkVersion() {
 		ThonnyVersionRecommended: resp.Version.ThonnyVersionRecommended,
 	}
 
-	grindCurrent := semver.MustParse(CurrentVersion.Version)
+	grindCurrent := semver.MustParse(types.CurrentVersion.Version)
 	grindRequired := semver.MustParse(server.GrindVersionRequired)
 	if grindRequired.GT(grindCurrent) {
-		log.Printf("this is grind version %s, but the server requires %s or higher", CurrentVersion.Version, server.GrindVersionRequired)
+		log.Printf("this is grind version %s, but the server requires %s or higher", types.CurrentVersion.Version, server.GrindVersionRequired)
 		log.Fatalf("  you must upgrade to continue")
 	}
 	grindRecommended := semver.MustParse(server.GrindVersionRecommended)
 	if grindRecommended.GT(grindCurrent) {
-		log.Printf("this is grind version %s, but the server recommends %s or higher", CurrentVersion.Version, server.GrindVersionRecommended)
+		log.Printf("this is grind version %s, but the server recommends %s or higher", types.CurrentVersion.Version, server.GrindVersionRecommended)
 		log.Printf("  please upgrade as soon as possible")
-	}
-}
-
-func dumpBody(resp *http.Response) {
-	if resp.Body == nil {
-		return
-	}
-
-	if resp.Header.Get("Content-Encoding") == "gzip" {
-		gz, err := gzip.NewReader(resp.Body)
-		if err != nil {
-			log.Fatalf("failed to decompress gzip result: %v", err)
-		}
-		defer gz.Close()
-		io.Copy(os.Stderr, gz)
-	} else {
-		io.Copy(os.Stderr, resp.Body)
 	}
 }

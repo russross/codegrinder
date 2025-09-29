@@ -2,40 +2,77 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
-	"net/http"
 	"os"
 	"path/filepath"
 	"time"
 
-	"github.com/gorilla/websocket"
-	. "github.com/russross/codegrinder/types"
+	. "github.com/russross/codegrinder/rpc"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func nextStep(directory string, info *ProblemInfo, problem *Problem, commit *Commit, types map[string]*ProblemType) bool {
+// newGRPCClient creates a gRPC client and context for reuse across commands
+func newGRPCClient() (CodeGrinderServiceClient, *grpc.ClientConn, context.Context, error) {
+	creds := credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})
+	conn, err := grpc.Dial(Config.Host+":443", grpc.WithTransportCredentials(creds),
+		grpc.WithCompressor(grpc.NewGZIPCompressor()),
+		grpc.WithDecompressor(grpc.NewGZIPDecompressor()))
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	client := NewCodeGrinderServiceClient(conn)
+	ctx := context.Background()
+	ctx = metadata.AppendToOutgoingContext(ctx, "cookie", Config.Cookie)
+	return client, conn, ctx, nil
+}
+
+func nextStep(directory string, info *ProblemInfo, problem *Problem, commit *Commit, types map[string]*ProblemType, client CodeGrinderServiceClient, ctx context.Context) bool {
 	fmt.Printf("step %d passed\n", commit.Step)
 
 	// advance to the next step
 	oldStep, newStep := new(ProblemStep), new(ProblemStep)
-	if !getObject(fmt.Sprintf("/problems/%d/steps/%d", problem.ID, commit.Step+1), nil, newStep) {
+	dumpMessage("GetProblemStep", true, &GetProblemStepRequest{ProblemId: problem.Id, Step: commit.Step + 1})
+	newStepResp, err := client.GetProblemStep(ctx, &GetProblemStepRequest{ProblemId: problem.Id, Step: commit.Step + 1})
+	if err != nil {
 		fmt.Println("you have completed all steps for this problem")
 		return false
 	}
-	mustGetObject(fmt.Sprintf("/problems/%d/steps/%d", problem.ID, commit.Step), nil, oldStep)
+	dumpMessage("GetProblemStep", false, newStepResp)
+	newStep = newStepResp.ProblemStep
+	dumpMessage("GetProblemStep", true, &GetProblemStepRequest{ProblemId: problem.Id, Step: commit.Step})
+	oldStepResp, err := client.GetProblemStep(ctx, &GetProblemStepRequest{ProblemId: problem.Id, Step: commit.Step})
+	if err != nil {
+		log.Fatalf("failed to get old step: %v", err)
+	}
+	oldStep = oldStepResp.ProblemStep
 	fmt.Printf("moving to step %d\n", newStep.Step)
 
 	if _, exists := types[oldStep.ProblemType]; !exists {
-		problemType := new(ProblemType)
-		mustGetObject(fmt.Sprintf("/problem_types/%s", oldStep.ProblemType), nil, problemType)
-		types[oldStep.ProblemType] = problemType
+		dumpMessage("GetProblemType", true, &GetProblemTypeRequest{Name: oldStep.ProblemType})
+		problemTypeResp, err := client.GetProblemType(ctx, &GetProblemTypeRequest{Name: oldStep.ProblemType})
+		if err != nil {
+			log.Fatalf("failed to get problem type: %v", err)
+		}
+		dumpMessage("GetProblemType", false, problemTypeResp)
+		types[oldStep.ProblemType] = problemTypeResp.ProblemType
 	}
 	if _, exists := types[newStep.ProblemType]; !exists {
-		problemType := new(ProblemType)
-		mustGetObject(fmt.Sprintf("/problem_types/%s", newStep.ProblemType), nil, problemType)
-		types[newStep.ProblemType] = problemType
+		dumpMessage("GetProblemType", true, &GetProblemTypeRequest{Name: newStep.ProblemType})
+		problemTypeResp, err := client.GetProblemType(ctx, &GetProblemTypeRequest{Name: newStep.ProblemType})
+		if err != nil {
+			log.Fatalf("failed to get problem type: %v", err)
+		}
+		dumpMessage("GetProblemType", false, problemTypeResp)
+		types[newStep.ProblemType] = problemTypeResp.ProblemType
 	}
 
 	// gather all the files for the new step
@@ -124,13 +161,19 @@ func updateFiles(directory string, files map[string][]byte, oldFiles map[string]
 	}
 }
 
-func gatherStudent(now time.Time, startDir string) (*ProblemType, *Problem, *ProblemStep, *Assignment, *Commit, *DotFileInfo, string) {
+func gatherStudent(now time.Time, startDir string, client CodeGrinderServiceClient, ctx context.Context) (*ProblemType, *Problem, *ProblemStep, *Assignment, *Commit, *DotFileInfo, string) {
+
 	// find the .grind file containing the problem set info
 	dotfile, problemSetDir, problemDir := findDotFile(startDir)
 
 	// get the assignment
-	assignment := new(Assignment)
-	mustGetObject(fmt.Sprintf("/assignments/%d", dotfile.AssignmentID), nil, assignment)
+	dumpMessage("GetAssignment", true, &GetAssignmentRequest{AssignmentId: dotfile.AssignmentID})
+	assignmentResp, err := client.GetAssignment(ctx, &GetAssignmentRequest{AssignmentId: dotfile.AssignmentID})
+	if err != nil {
+		log.Fatalf("failed to get assignment: %v", err)
+	}
+	dumpMessage("GetAssignment", false, assignmentResp)
+	assignment := assignmentResp.Assignment
 
 	// get the problem
 	unique := ""
@@ -151,14 +194,29 @@ func gatherStudent(now time.Time, startDir string) (*ProblemType, *Problem, *Pro
 	if info == nil {
 		log.Fatalf("unable to recognize the problem based on the directory name of %q", unique)
 	}
-	problem := new(Problem)
-	mustGetObject(fmt.Sprintf("/problems/%d", info.ID), nil, problem)
+	dumpMessage("GetProblem", true, &GetProblemRequest{ProblemId: info.ID})
+	problemResp, err := client.GetProblem(ctx, &GetProblemRequest{ProblemId: info.ID})
+	if err != nil {
+		log.Fatalf("failed to get problem: %v", err)
+	}
+	dumpMessage("GetProblem", false, problemResp)
+	problem := problemResp.Problem
 
-	step := new(ProblemStep)
-	mustGetObject(fmt.Sprintf("/problems/%d/steps/%d", problem.ID, info.Step), nil, step)
+	dumpMessage("GetProblemStep", true, &GetProblemStepRequest{ProblemId: problem.Id, Step: info.Step})
+	stepResp, err := client.GetProblemStep(ctx, &GetProblemStepRequest{ProblemId: problem.Id, Step: info.Step})
+	if err != nil {
+		log.Fatalf("failed to get problem step: %v", err)
+	}
+	dumpMessage("GetProblemStep", false, stepResp)
+	step := stepResp.ProblemStep
 
-	problemType := new(ProblemType)
-	mustGetObject(fmt.Sprintf("/problem_types/%s", step.ProblemType), nil, problemType)
+	dumpMessage("GetProblemType", true, &GetProblemTypeRequest{Name: step.ProblemType})
+	problemTypeResp, err := client.GetProblemType(ctx, &GetProblemTypeRequest{Name: step.ProblemType})
+	if err != nil {
+		log.Fatalf("failed to get problem type: %v", err)
+	}
+	dumpMessage("GetProblemType", false, problemTypeResp)
+	problemType := problemTypeResp.ProblemType
 
 	// make sure all step and problem type files are up to date
 	stepFiles := make(map[string][]byte)
@@ -197,13 +255,13 @@ func gatherStudent(now time.Time, startDir string) (*ProblemType, *Problem, *Pro
 
 	// form a commit object
 	commit := &Commit{
-		ID:           0,
-		AssignmentID: dotfile.AssignmentID,
-		ProblemID:    info.ID,
+		Id:           0,
+		AssignmentId: dotfile.AssignmentID,
+		ProblemId:    info.ID,
 		Step:         info.Step,
 		Files:        files,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		CreatedAt:    timestamppb.New(now),
+		UpdatedAt:    timestamppb.New(now),
 	}
 
 	return problemType, problem, step, assignment, commit, dotfile, problemDir
@@ -267,67 +325,129 @@ func saveDotFile(dotfile *DotFileInfo) {
 	}
 }
 
-func mustConfirmCommitBundle(bundle *CommitBundle, args []string) *CommitBundle {
-	// create a websocket connection to the server
-	headers := make(http.Header)
-	url := "wss://" + bundle.Hostname + "/sockets/" + bundle.ProblemType.Name + "/" + bundle.Commit.Action
-	socket, resp, err := websocket.DefaultDialer.Dial(url, headers)
-	if err != nil {
-		log.Printf("error dialing %s: %v", url, err)
-		if resp != nil && resp.Body != nil {
-			dumpBody(resp)
-			resp.Body.Close()
+func handleDaycareStream(client CodeGrinderServiceClient, conn *grpc.ClientConn, bundle *CommitBundle, args []string, directory string, processEvents bool) (*CommitBundle, error) {
+	// Determine the connection to use
+	var useClient CodeGrinderServiceClient
+	var useConn *grpc.ClientConn
+	var ctx context.Context
+
+	if client != nil && conn != nil && bundle.Hostname == Config.Host {
+		// Use the passed-in connection
+		useClient = client
+		useConn = conn
+	} else {
+		// Create a new connection to the daycare server
+		creds := credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})
+		var err error
+		useConn, err = grpc.Dial(bundle.Hostname+":443", grpc.WithTransportCredentials(creds),
+			grpc.WithCompressor(grpc.NewGZIPCompressor()),
+			grpc.WithDecompressor(grpc.NewGZIPDecompressor()))
+		if err != nil {
+			return nil, fmt.Errorf("error connecting to daycare server: %v", err)
 		}
-		log.Fatalf("giving up")
-	}
-	defer socket.Close()
-
-	// form the initial request
-	req := &DaycareRequest{CommitBundle: bundle}
-	if err := socket.WriteJSON(req); err != nil {
-		log.Fatalf("error writing request message: %v", err)
+		defer useConn.Close()
+		useClient = NewCodeGrinderServiceClient(useConn)
 	}
 
-	// start listening for events
+	ctx = context.Background()
+	ctx = metadata.AppendToOutgoingContext(ctx, "cookie", Config.Cookie)
+
+	// Form the Daycare request
+	req := &DaycareRequest{
+		CommitBundle: bundle,
+		ProblemType:  bundle.ProblemType.Name,
+		Action:       bundle.Commit.Action,
+		Args:         []string{},
+	}
+	dumpMessage("Daycare", true, req)
+
+	// Make the streaming Daycare call
+	stream, err := useClient.Daycare(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("error starting Daycare session: %v", err)
+	}
+	dumpMessage("Daycare", false, nil)
+
+	// Listen for streaming responses
 	for {
-		reply := new(DaycareResponse)
-		if err := socket.ReadJSON(reply); err != nil {
-			log.Fatalf("socket error reading event: %v", err)
-			break
+		reply, err := stream.Recv()
+		if err == io.EOF {
+			log.Print("session closed by server")
+			return nil, nil
+		} else if err != nil {
+			return nil, fmt.Errorf("socket error reading event: %v", err)
 		}
 
 		switch {
-		case reply.Error != "":
-			log.Printf("server returned an error:")
-			log.Fatalf("   %s", reply.Error)
+		case reply.GetError() != "":
+			replyError := reply.GetError()
+			dumpMessage("Daycare Error", false, replyError)
+			return nil, fmt.Errorf("server returned an error: %s", replyError)
 
-		case reply.CommitBundle != nil:
-			return reply.CommitBundle
+		case reply.GetCommitBundle() != nil:
+			replyBundle := reply.GetCommitBundle()
+			dumpMessage("Daycare CommitBundle", false, replyBundle)
+			return replyBundle, nil
 
-		case reply.Event != nil:
-			// ignore the streamed data
+		case reply.GetEvent() != nil:
+			replyEvent := reply.GetEvent()
+			dumpMessage("Daycare Event", false, replyEvent)
+			switch replyEvent.Event {
+			case "exec", "stdin", "stdout", "exit", "error":
+				if processEvents {
+					fmt.Printf("%s", reply.GetEvent().Dump())
+				}
+			case "stderr":
+				if processEvents {
+					fmt.Printf("%s", reply.GetEvent().Dump())
+				}
+			case "files":
+				if processEvents && directory != "" && replyEvent.Files != nil {
+					for name, contents := range replyEvent.Files {
+						log.Printf("downloading file %s\r", name)
+						if err := ioutil.WriteFile(filepath.Join(directory, filepath.FromSlash(name)), contents, 0644); err != nil {
+							return nil, fmt.Errorf("error saving file: %v", err)
+						}
+					}
+				}
+			}
 
 		default:
-			log.Fatalf("unexpected reply from server")
+			return nil, fmt.Errorf("unexpected reply from server")
 		}
 	}
 
-	log.Fatalf("no commit returned from server")
-	return nil
+	return nil, fmt.Errorf("no commit returned from server")
 }
 
-func getAssignment(assignment *Assignment, rootDir, prettyRoot string) string {
+func getAssignment(assignment *Assignment, rootDir, prettyRoot string, client CodeGrinderServiceClient, ctx context.Context) string {
+
 	// get the course
-	course := new(Course)
-	mustGetObject(fmt.Sprintf("/courses/%d", assignment.CourseID), nil, course)
+	dumpMessage("GetCourse", true, &GetCourseRequest{CourseId: assignment.CourseId})
+	courseResp, err := client.GetCourse(ctx, &GetCourseRequest{CourseId: assignment.CourseId})
+	if err != nil {
+		log.Fatalf("failed to get course: %v", err)
+	}
+	dumpMessage("GetCourse", false, courseResp)
+	course := courseResp.Course
 
 	// get the problem set
-	problemSet := new(ProblemSet)
-	mustGetObject(fmt.Sprintf("/problem_sets/%d", assignment.ProblemSetID), nil, problemSet)
+	dumpMessage("GetProblemSet", true, &GetProblemSetRequest{ProblemSetId: assignment.ProblemSetId})
+	problemSetResp, err := client.GetProblemSet(ctx, &GetProblemSetRequest{ProblemSetId: assignment.ProblemSetId})
+	if err != nil {
+		log.Fatalf("failed to get problem set: %v", err)
+	}
+	dumpMessage("GetProblemSet", false, problemSetResp)
+	problemSet := problemSetResp.ProblemSet
 
 	// get the list of problems in the problem set
-	problemSetProblems := []*ProblemSetProblem{}
-	mustGetObject(fmt.Sprintf("/problem_sets/%d/problems", assignment.ProblemSetID), nil, &problemSetProblems)
+	dumpMessage("GetProblemSetProblems", true, &GetProblemSetProblemsRequest{ProblemSetId: assignment.ProblemSetId})
+	problemSetProblemsResp, err := client.GetProblemSetProblems(ctx, &GetProblemSetProblemsRequest{ProblemSetId: assignment.ProblemSetId})
+	if err != nil {
+		log.Fatalf("failed to get problem set problems: %v", err)
+	}
+	dumpMessage("GetProblemSetProblems", false, problemSetProblemsResp)
+	problemSetProblems := problemSetProblemsResp.ProblemSetProblems
 
 	// for each problem get the problem, the most recent commit (or create one), and the corresponding step
 	commits := make(map[string]*Commit)
@@ -337,10 +457,20 @@ func getAssignment(assignment *Assignment, rootDir, prettyRoot string) string {
 	problemSteps := make(map[string]int64) // temporary to store step numbers
 	for _, elt := range problemSetProblems {
 		problem, commit, step := new(Problem), new(Commit), new(ProblemStep)
-		mustGetObject(fmt.Sprintf("/problems/%d", elt.ProblemID), nil, problem)
+		dumpMessage("GetProblem", true, &GetProblemRequest{ProblemId: elt.ProblemId})
+		problemResp, err := client.GetProblem(ctx, &GetProblemRequest{ProblemId: elt.ProblemId})
+		if err != nil {
+			log.Fatalf("failed to get problem: %v", err)
+		}
+		dumpMessage("GetProblem", false, problemResp)
+		problem = problemResp.Problem
 		problems[problem.Unique] = problem
 
-		if getObject(fmt.Sprintf("/assignments/%d/problems/%d/commits/last", assignment.ID, problem.ID), nil, commit) {
+		dumpMessage("GetAssignmentProblemCommitLast", true, &GetAssignmentProblemCommitLastRequest{AssignmentId: assignment.Id, ProblemId: problem.Id})
+		commitResp, err := client.GetAssignmentProblemCommitLast(ctx, &GetAssignmentProblemCommitLastRequest{AssignmentId: assignment.Id, ProblemId: problem.Id})
+		if err == nil {
+			dumpMessage("GetAssignmentProblemCommitLast", false, commitResp)
+			commit = commitResp.Commit
 			problemSteps[problem.Unique] = commit.Step
 		} else {
 			// if there is no commit for this problem, we're starting from step one
@@ -348,15 +478,25 @@ func getAssignment(assignment *Assignment, rootDir, prettyRoot string) string {
 			problemSteps[problem.Unique] = 1
 		}
 
-		mustGetObject(fmt.Sprintf("/problems/%d/steps/%d", problem.ID, problemSteps[problem.Unique]), nil, step)
+		dumpMessage("GetProblemStep", true, &GetProblemStepRequest{ProblemId: problem.Id, Step: problemSteps[problem.Unique]})
+		stepResp, err := client.GetProblemStep(ctx, &GetProblemStepRequest{ProblemId: problem.Id, Step: problemSteps[problem.Unique]})
+		if err != nil {
+			log.Fatalf("failed to get problem step: %v", err)
+		}
+		dumpMessage("GetProblemStep", false, stepResp)
+		step = stepResp.ProblemStep
 		commits[problem.Unique] = commit
 		steps[problem.Unique] = step
 
 		// get the problem type if we do not already have it
 		if _, exists := types[step.ProblemType]; !exists {
-			problemType := new(ProblemType)
-			mustGetObject(fmt.Sprintf("/problem_types/%s", step.ProblemType), nil, problemType)
-			types[step.ProblemType] = problemType
+			dumpMessage("GetProblemType", true, &GetProblemTypeRequest{Name: step.ProblemType})
+			problemTypeResp, err := client.GetProblemType(ctx, &GetProblemTypeRequest{Name: step.ProblemType})
+			if err != nil {
+				log.Fatalf("failed to get problem type: %v", err)
+			}
+			dumpMessage("GetProblemType", false, problemTypeResp)
+			types[step.ProblemType] = problemTypeResp.ProblemType
 		}
 	}
 
@@ -364,7 +504,7 @@ func getAssignment(assignment *Assignment, rootDir, prettyRoot string) string {
 	infos := make(map[string]*ProblemInfo)
 	for unique, problem := range problems {
 		info := &ProblemInfo{
-			ID:   problem.ID,
+			ID:   problem.Id,
 			Step: problemSteps[unique],
 		}
 		infos[unique] = info
@@ -410,10 +550,10 @@ func getAssignment(assignment *Assignment, rootDir, prettyRoot string) string {
 
 		// step files may be overwritten by commit files
 		if commit != nil {
-			if commit.UpdatedAt.After(mostRecentTime) {
+			if commit.UpdatedAt.AsTime().After(mostRecentTime) {
 				// when an instructor is downloading a student assignment,
 				// change to the directory for the problem with the most recent commit
-				mostRecentTime = commit.UpdatedAt
+				mostRecentTime = commit.UpdatedAt.AsTime()
 				changeTo = target
 			}
 			for name, contents := range commit.Files {
@@ -433,15 +573,35 @@ func getAssignment(assignment *Assignment, rootDir, prettyRoot string) string {
 
 		// does this commit indicate the step was finished and needs to advance?
 		if commit != nil && commit.ReportCard != nil && commit.ReportCard.Passed && commit.Score == 1.0 {
-			nextStep(target, infos[unique], problem, commit, types)
+			nextStep(target, infos[unique], problem, commit, types, client, ctx)
 		}
 
 	}
 	dotfile := &DotFileInfo{
-		AssignmentID: assignment.ID,
+		AssignmentID: assignment.Id,
 		Problems:     infos,
 		Path:         filepath.Join(rootDir, perProblemSetDotFile),
 	}
 	saveDotFile(dotfile)
 	return changeTo
+}
+
+func dumpMessage(call string, isOutgoing bool, msg interface{}) {
+	if Config.apiDump {
+		raw, err := json.MarshalIndent(msg, "", "    ")
+		if err != nil {
+			log.Fatalf("json error encoding request: %v", err)
+		}
+		if isOutgoing {
+			log.Printf("--> %s %s\n", call, raw)
+		} else {
+			log.Printf("<-- %s %s\n", call, raw)
+		}
+	} else if Config.apiReport {
+		if isOutgoing {
+			log.Printf("--> %s\n", call)
+		} else {
+			log.Printf("<-- %s\n", call)
+		}
+	}
 }

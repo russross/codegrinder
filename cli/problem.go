@@ -3,17 +3,20 @@ package main
 import (
 	"fmt"
 	"log"
-	"net/url"
 	"os"
 	"sort"
 	"strings"
 
-	. "github.com/russross/codegrinder/types"
+	. "github.com/russross/codegrinder/rpc"
 	"github.com/spf13/cobra"
 )
 
 func CommandProblem(cmd *cobra.Command, args []string) {
-	mustLoadConfig(cmd)
+	client, conn, ctx, err := setup(cmd)
+	if err != nil {
+		log.Fatalf("failed to connect to gRPC server: %v", err)
+	}
+	defer conn.Close()
 
 	// make sure at least one search term was given
 	if len(args) == 0 {
@@ -25,12 +28,14 @@ func CommandProblem(cmd *cobra.Command, args []string) {
 	}
 
 	// search for matching problem sets
-	problemSets := []*ProblemSet{}
-	params := make(url.Values)
-	for _, term := range args {
-		params.Add("search", term)
+	searchTerms := args
+	dumpMessage("GetProblemSets", true, &GetProblemSetsRequest{Search: searchTerms})
+	problemSetsResp, err := client.GetProblemSets(ctx, &GetProblemSetsRequest{Search: searchTerms})
+	if err != nil {
+		log.Fatalf("failed to get problem sets: %v", err)
 	}
-	mustGetObject("/problem_sets", params, &problemSets)
+	dumpMessage("GetProblemSets", false, problemSetsResp)
+	problemSets := problemSetsResp.ProblemSets
 	if len(problemSets) == 0 {
 		log.Fatalf("no problem sets found matching the terms you gave")
 	}
@@ -49,23 +54,38 @@ func CommandProblem(cmd *cobra.Command, args []string) {
 		fmt.Println(ps.Note)
 
 		// get the problems in this problem set
-		psps := []*ProblemSetProblem{}
-		mustGetObject(fmt.Sprintf("/problem_sets/%d/problems", ps.ID), nil, &psps)
+		dumpMessage("GetProblemSetProblems", true, &GetProblemSetProblemsRequest{ProblemSetId: ps.Id})
+		pspsResp, err := client.GetProblemSetProblems(ctx, &GetProblemSetProblemsRequest{ProblemSetId: ps.Id})
+		if err != nil {
+			log.Fatalf("failed to get problem set problems: %v", err)
+		}
+		dumpMessage("GetProblemSetProblems", false, pspsResp)
+		psps := pspsResp.ProblemSetProblems
 		for _, psp := range psps {
 			// get the problem
-			problem, present := problems[psp.ProblemID]
+			problem, present := problems[psp.ProblemId]
 			if !present {
-				problem = new(Problem)
-				mustGetObject(fmt.Sprintf("/problems/%d", psp.ProblemID), nil, problem)
-				problems[psp.ProblemID] = problem
+				dumpMessage("GetProblem", true, &GetProblemRequest{ProblemId: psp.ProblemId})
+				problemResp, err := client.GetProblem(ctx, &GetProblemRequest{ProblemId: psp.ProblemId})
+				if err != nil {
+					log.Fatalf("failed to get problem: %v", err)
+				}
+				dumpMessage("GetProblem", false, problemResp)
+				problem = problemResp.Problem
+				problems[psp.ProblemId] = problem
 			}
 
 			// get the steps
-			steps, present := problemSteps[psp.ProblemID]
+			steps, present := problemSteps[psp.ProblemId]
 			if !present {
-				steps = []*ProblemStep{}
-				mustGetObject(fmt.Sprintf("/problems/%d/steps", psp.ProblemID), nil, &steps)
-				problemSteps[psp.ProblemID] = steps
+				dumpMessage("GetProblemSteps", true, &GetProblemStepsRequest{ProblemId: psp.ProblemId})
+				stepsResp, err := client.GetProblemSteps(ctx, &GetProblemStepsRequest{ProblemId: psp.ProblemId})
+				if err != nil {
+					log.Fatalf("failed to get problem steps: %v", err)
+				}
+				dumpMessage("GetProblemSteps", false, stepsResp)
+				steps = stepsResp.ProblemSteps
+				problemSteps[psp.ProblemId] = steps
 			}
 
 			// report on the problem

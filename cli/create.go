@@ -1,18 +1,19 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io/ioutil"
 	"log"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
-	. "github.com/russross/codegrinder/types"
+	. "github.com/russross/codegrinder/rpc"
 	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"gopkg.in/gcfg.v1"
 )
 
@@ -71,7 +72,12 @@ type ConfigFile struct {
 }
 
 func CommandCreate(cmd *cobra.Command, args []string) {
-	mustLoadConfig(cmd)
+	client, conn, ctx, err := setup(cmd)
+	if err != nil {
+		log.Fatalf("failed to connect to gRPC server: %v", err)
+	}
+	defer conn.Close()
+
 	pset := ""
 
 	if len(args) == 1 {
@@ -91,7 +97,7 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 		if action != "" {
 			log.Fatalf("you cannot specify an action when creating a problem set")
 		}
-		createProblemSet(pset, isUpdate)
+		createProblemSet(pset, isUpdate, client, ctx)
 		return
 	}
 
@@ -100,16 +106,26 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 		log.Fatalf("you specified --update, which is not valid when running an action")
 	}
 
-	unsigned, stepDir, step := gatherAuthor(now, isUpdate, action, ".")
+	unsigned, stepDir, step := gatherAuthor(now, isUpdate, action, ".", client, ctx)
 
 	// get user ID
-	user := new(User)
-	mustGetObject("/users/me", nil, user)
-	unsigned.UserID = user.ID
+	dumpMessage("GetUserMe", true, &GetUserMeRequest{})
+	userResp, err := client.GetUserMe(ctx, &GetUserMeRequest{})
+	if err != nil {
+		log.Fatalf("failed to get user: %v", err)
+	}
+	dumpMessage("GetUserMe", false, userResp)
+	user := userResp.User
+	unsigned.UserId = user.Id
 
 	// get the request validated and signed
-	signed := new(ProblemBundle)
-	mustPostObject("/problem_bundles/unconfirmed", nil, unsigned, signed)
+	dumpMessage("PostProblemBundleUnconfirmed", true, &PostProblemBundleUnconfirmedRequest{Bundle: unsigned})
+	signedResp, err := client.PostProblemBundleUnconfirmed(ctx, &PostProblemBundleUnconfirmedRequest{Bundle: unsigned})
+	if err != nil {
+		log.Fatalf("failed to post problem bundle unconfirmed: %v", err)
+	}
+	dumpMessage("PostProblemBundleUnconfirmed", false, signedResp)
+	signed := signedResp.Bundle
 
 	if signed.Hostname == "" {
 		log.Fatalf("server was unable to find a suitable daycare, unable to validate")
@@ -131,12 +147,15 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 			ProblemSteps:         signed.ProblemSteps,
 			ProblemSignature:     signed.ProblemSignature,
 			Hostname:             signed.Hostname,
-			UserID:               signed.UserID,
+			UserId:               signed.UserId,
 			Commit:               signed.Commits[step-1],
 			CommitSignature:      signed.CommitSignatures[step-1],
 		}
 
-		runInteractiveSession(unvalidated, nil, stepDir)
+		// call handleDaycareStream: have it download files and print out events
+		if _, err := handleDaycareStream(client, conn, unvalidated, nil, stepDir, true); err != nil {
+			log.Fatalf("interactive session failed: %v", err)
+		}
 		return
 	}
 
@@ -150,11 +169,15 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 			ProblemSteps:         signed.ProblemSteps,
 			ProblemSignature:     signed.ProblemSignature,
 			Hostname:             signed.Hostname,
-			UserID:               signed.UserID,
+			UserId:               signed.UserId,
 			Commit:               signed.Commits[n],
 			CommitSignature:      signed.CommitSignatures[n],
 		}
-		validated := mustConfirmCommitBundle(unvalidated, nil)
+		// handleDaycareStream parameters: client, conn, bundle=unvalidated, args=nil, directory="", processEvents=false (non-interactive, no output events, no file downloads)
+		validated, err := handleDaycareStream(client, conn, unvalidated, nil, "", false)
+		if err != nil {
+			log.Fatalf("failed to validate the step: %v", err)
+		}
 		fmt.Println("  finished validating solution")
 		if validated.Commit.ReportCard == nil || validated.Commit.Score != 1.0 || !validated.Commit.ReportCard.Passed {
 			fmt.Printf("  solution for step %d failed: %s\n", n+1, validated.Commit.ReportCard.Note)
@@ -178,15 +201,27 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 
 	// save the problem
 	final := new(ProblemBundle)
-	if signed.Problem.ID == 0 {
-		mustPostObject("/problem_bundles/confirmed", nil, signed, final)
+	if signed.Problem.Id == 0 {
+		dumpMessage("PostProblemBundleConfirmed", true, &PostProblemBundleConfirmedRequest{Bundle: signed})
+		finalResp, err := client.PostProblemBundleConfirmed(ctx, &PostProblemBundleConfirmedRequest{Bundle: signed})
+		if err != nil {
+			log.Fatalf("failed to post problem bundle confirmed: %v", err)
+		}
+		dumpMessage("PostProblemBundleConfirmed", false, finalResp)
+		final = finalResp.Bundle
 		fmt.Printf("problem %q created and ready to use\n", final.Problem.Unique)
 	} else {
-		mustPutObject(fmt.Sprintf("/problem_bundles/%d", signed.Problem.ID), nil, signed, final)
+		dumpMessage("PutProblemBundle", true, &PutProblemBundleRequest{ProblemId: signed.Problem.Id, Bundle: signed})
+		finalResp, err := client.PutProblemBundle(ctx, &PutProblemBundleRequest{ProblemId: signed.Problem.Id, Bundle: signed})
+		if err != nil {
+			log.Fatalf("failed to put problem bundle: %v", err)
+		}
+		dumpMessage("PutProblemBundle", false, finalResp)
+		final = finalResp.Bundle
 		fmt.Printf("problem %q saved and ready to use\n", final.Problem.Unique)
 	}
 
-	if signed.Problem.ID == 0 {
+	if signed.Problem.Id == 0 {
 		// create a matching problem set
 		// pause for a bit since the database seems to need to catch up
 		time.Sleep(time.Second)
@@ -197,18 +232,23 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 				Unique:    final.Problem.Unique,
 				Note:      "Problem set for: " + final.Problem.Note,
 				Tags:      final.Problem.Tags,
-				CreatedAt: now,
-				UpdatedAt: now,
+				CreatedAt: timestamppb.New(now),
+				UpdatedAt: timestamppb.New(now),
 			},
 			ProblemSetProblems: []*ProblemSetProblem{
 				{
-					ProblemID: final.Problem.ID,
+					ProblemId: final.Problem.Id,
 					Weight:    1.0,
 				},
 			},
 		}
-		finalPSBundle := new(ProblemSetBundle)
-		mustPostObject("/problem_set_bundles", nil, psBundle, finalPSBundle)
+		dumpMessage("PostProblemSetBundle", true, &PostProblemSetBundleRequest{Bundle: psBundle})
+		finalPSBundleResp, err := client.PostProblemSetBundle(ctx, &PostProblemSetBundleRequest{Bundle: psBundle})
+		if err != nil {
+			log.Fatalf("failed to post problem set bundle: %v", err)
+		}
+		dumpMessage("PostProblemSetBundle", false, finalPSBundleResp)
+		finalPSBundle := finalPSBundleResp.Bundle
 		fmt.Printf("problem set %q created and ready to use\n", finalPSBundle.ProblemSet.Unique)
 	}
 }
@@ -252,8 +292,8 @@ func findProblemCfg(now time.Time, startDir string) (string, string, int, *Probl
 		Note:      cfg.Problem.Note,
 		Tags:      cfg.Problem.Tag,
 		Options:   cfg.Problem.Option,
-		CreatedAt: now,
-		UpdatedAt: now,
+		CreatedAt: timestamppb.New(now),
+		UpdatedAt: timestamppb.New(now),
 	}
 
 	// create skeleton steps
@@ -304,7 +344,8 @@ func findProblemCfg(now time.Time, startDir string) (string, string, int, *Probl
 	return directory, stepDir, stepN, problem, steps, single
 }
 
-func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) (*ProblemBundle, string, int) {
+func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string, client CodeGrinderServiceClient, ctx context.Context) (*ProblemBundle, string, int) {
+
 	directory, stepDir, stepN, problem, steps, single := findProblemCfg(now, startDir)
 	if problem == nil {
 		log.Printf("unable to find %s in current directory or one of its ancestors", ProblemConfigName)
@@ -331,9 +372,13 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 	problemTypes := make(map[string]*ProblemType)
 	for _, step := range steps {
 		if _, exists := problemTypes[step.ProblemType]; !exists {
-			problemType := new(ProblemType)
-			mustGetObject(fmt.Sprintf("/problem_types/%s", step.ProblemType), nil, problemType)
-			problemTypes[step.ProblemType] = problemType
+			dumpMessage("GetProblemType", true, &GetProblemTypeRequest{Name: step.ProblemType})
+			problemTypeResp, err := client.GetProblemType(ctx, &GetProblemTypeRequest{Name: step.ProblemType})
+			if err != nil {
+				log.Fatalf("failed to get problem type: %v", err)
+			}
+			dumpMessage("GetProblemType", false, problemTypeResp)
+			problemTypes[step.ProblemType] = problemTypeResp.ProblemType
 		}
 	}
 
@@ -343,10 +388,13 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 	}
 
 	// check if this is an existing problem
-	existing := []*Problem{}
-	params := make(url.Values)
-	params.Add("unique", problem.Unique)
-	mustGetObject("/problems", params, &existing)
+	dumpMessage("GetProblems", true, &GetProblemsRequest{Unique: problem.Unique})
+	existingResp, err := client.GetProblems(ctx, &GetProblemsRequest{Unique: problem.Unique})
+	if err != nil {
+		log.Fatalf("failed to get problems: %v", err)
+	}
+	dumpMessage("GetProblems", false, existingResp)
+	existing := existingResp.Problems
 	switch len(existing) {
 	case 0:
 		// new problem
@@ -355,15 +403,18 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 		}
 
 		// make sure the problem set with this unique name is free as well
-		existingSets := []*ProblemSet{}
-		params = make(url.Values)
-		params.Add("unique", problem.Unique)
-		mustGetObject("/problem_sets", params, &existingSets)
+		dumpMessage("GetProblemSets", true, &GetProblemSetsRequest{Unique: problem.Unique})
+		existingSetsResp, err := client.GetProblemSets(ctx, &GetProblemSetsRequest{Unique: problem.Unique})
+		if err != nil {
+			log.Fatalf("failed to get problem sets: %v", err)
+		}
+		dumpMessage("GetProblemSets", false, existingSetsResp)
+		existingSets := existingSetsResp.ProblemSets
 		if len(existingSets) > 1 {
 			log.Fatalf("error: server found multiple problem sets with matching unique ID %q", problem.Unique)
 		}
 		if len(existingSets) != 0 {
-			log.Printf("problem set %d already exists with unique ID %q", existingSets[0].ID, existingSets[0].Unique)
+			log.Printf("problem set %d already exists with unique ID %q", existingSets[0].Id, existingSets[0].Unique)
 			log.Fatalf("  this would prevent creating a problem set containing just this problem with matching id")
 		}
 
@@ -375,9 +426,9 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 			log.Fatalf("you did not specify --update, but a problem already exists with unique ID %q", problem.Unique)
 		}
 		fmt.Printf("unique ID is %q\n", problem.Unique)
-		fmt.Printf("  this is an update of problem %d\n", existing[0].ID)
+		fmt.Printf("  this is an update of problem %d\n", existing[0].Id)
 		fmt.Printf("  (%q)\n", existing[0].Note)
-		problem.ID = existing[0].ID
+		problem.Id = existing[0].Id
 		problem.CreatedAt = existing[0].CreatedAt
 	default:
 		// server does not know what "unique" means
@@ -394,8 +445,8 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 			Action:    "grade",
 			Note:      "author solution submitted via grind",
 			Files:     make(map[string][]byte),
-			CreatedAt: now,
-			UpdatedAt: now,
+			CreatedAt: timestamppb.New(now),
+			UpdatedAt: timestamppb.New(now),
 		}
 		if action != "" {
 			commit.Action = action
@@ -591,7 +642,8 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string) 
 	return unsigned, stepDir, stepN
 }
 
-func createProblemSet(path string, isUpdate bool) {
+func createProblemSet(path string, isUpdate bool, client CodeGrinderServiceClient, ctx context.Context) {
+
 	now := time.Now()
 
 	// parse the cfg file to create the problem set object
@@ -614,8 +666,8 @@ func createProblemSet(path string, isUpdate bool) {
 		Unique:    cfg.ProblemSet.Unique,
 		Note:      cfg.ProblemSet.Note,
 		Tags:      cfg.ProblemSet.Tag,
-		CreatedAt: now,
-		UpdatedAt: now,
+		CreatedAt: timestamppb.New(now),
+		UpdatedAt: timestamppb.New(now),
 	}
 
 	// require the file name to match the unique ID
@@ -629,10 +681,13 @@ func createProblemSet(path string, isUpdate bool) {
 	}
 
 	// check if this is an existing problem set
-	existing := []*ProblemSet{}
-	params := make(url.Values)
-	params.Add("unique", problemSet.Unique)
-	mustGetObject("/problem_sets", params, &existing)
+	dumpMessage("GetProblemSets", true, &GetProblemSetsRequest{Unique: problemSet.Unique})
+	existingResp, err := client.GetProblemSets(ctx, &GetProblemSetsRequest{Unique: problemSet.Unique})
+	if err != nil {
+		log.Fatalf("failed to get problem sets: %v", err)
+	}
+	dumpMessage("GetProblemSets", false, existingResp)
+	existing := existingResp.ProblemSets
 	switch len(existing) {
 	case 0:
 		// new problem
@@ -649,9 +704,9 @@ func createProblemSet(path string, isUpdate bool) {
 		}
 
 		fmt.Printf("unique ID is %q\n", problemSet.Unique)
-		fmt.Printf("  this is an update of problem set %d\n", existing[0].ID)
+		fmt.Printf("  this is an update of problem set %d\n", existing[0].Id)
 		fmt.Printf("  (%q)\n", existing[0].Note)
-		problemSet.ID = existing[0].ID
+		problemSet.Id = existing[0].Id
 		problemSet.CreatedAt = existing[0].CreatedAt
 	default:
 		// server does not know what "unique" means
@@ -663,10 +718,13 @@ func createProblemSet(path string, isUpdate bool) {
 		log.Fatalf("a problem set must contain at least one problem")
 	}
 	for unique, elt := range cfg.Problem {
-		problems := []*Problem{}
-		params := make(url.Values)
-		params.Add("unique", unique)
-		mustGetObject("/problems", params, &problems)
+		dumpMessage("GetProblems", true, &GetProblemsRequest{Unique: unique})
+		problemsResp, err := client.GetProblems(ctx, &GetProblemsRequest{Unique: unique})
+		if err != nil {
+			log.Fatalf("failed to get problems: %v", err)
+		}
+		dumpMessage("GetProblems", false, problemsResp)
+		problems := problemsResp.Problems
 		if len(problems) == 0 {
 			log.Fatalf("problem with unique ID %q not found", unique)
 		}
@@ -675,7 +733,7 @@ func createProblemSet(path string, isUpdate bool) {
 			log.Fatalf("error: server found multiple problems with matching unique ID %q", unique)
 		}
 		psp := &ProblemSetProblem{
-			ProblemID: problems[0].ID,
+			ProblemId: problems[0].Id,
 			Weight:    elt.Weight,
 		}
 		if psp.Weight <= 0.0 {
@@ -686,11 +744,23 @@ func createProblemSet(path string, isUpdate bool) {
 
 	// save the problem set
 	final := new(ProblemSetBundle)
-	if bundle.ProblemSet.ID == 0 {
-		mustPostObject("/problem_set_bundles", nil, bundle, final)
+	if bundle.ProblemSet.Id == 0 {
+		dumpMessage("PostProblemSetBundle", true, &PostProblemSetBundleRequest{Bundle: bundle})
+		finalResp, err := client.PostProblemSetBundle(ctx, &PostProblemSetBundleRequest{Bundle: bundle})
+		if err != nil {
+			log.Fatalf("failed to post problem set bundle: %v", err)
+		}
+		dumpMessage("PostProblemSetBundle", false, finalResp)
+		final = finalResp.Bundle
 		fmt.Printf("problem set %q created and ready to use\n", final.ProblemSet.Unique)
 	} else {
-		mustPutObject(fmt.Sprintf("/problem_set_bundles/%d", bundle.ProblemSet.ID), nil, bundle, final)
+		dumpMessage("PutProblemSetBundle", true, &PutProblemSetBundleRequest{Bundle: bundle})
+		finalResp, err := client.PutProblemSetBundle(ctx, &PutProblemSetBundleRequest{Bundle: bundle})
+		if err != nil {
+			log.Fatalf("failed to put problem set bundle: %v", err)
+		}
+		dumpMessage("PutProblemSetBundle", false, finalResp)
+		final = finalResp.Bundle
 		fmt.Printf("problem set %q saved and ready to use\n", final.ProblemSet.Unique)
 	}
 }

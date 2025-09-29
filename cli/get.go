@@ -1,19 +1,21 @@
 package main
 
 import (
-	"fmt"
 	"log"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
 
-	. "github.com/russross/codegrinder/types"
+	. "github.com/russross/codegrinder/rpc"
 	"github.com/spf13/cobra"
 )
 
 func CommandGet(cmd *cobra.Command, args []string) {
-	mustLoadConfig(cmd)
+	client, conn, ctx, err := setup(cmd)
+	if err != nil {
+		log.Fatalf("failed to connect to gRPC server: %v", err)
+	}
+	defer conn.Close()
 
 	rootDir, err := os.UserHomeDir()
 	if err != nil {
@@ -36,14 +38,24 @@ func CommandGet(cmd *cobra.Command, args []string) {
 		prettyRoot = rootDir
 	}
 
-	user := new(User)
-	mustGetObject("/users/me", nil, user)
+	dumpMessage("GetUserMe", true, &GetUserMeRequest{})
+	userResp, err := client.GetUserMe(ctx, &GetUserMeRequest{})
+	if err != nil {
+		log.Fatalf("failed to get user: %v", err)
+	}
+	dumpMessage("GetUserMe", false, userResp)
+	user := userResp.User
 
 	var assignment *Assignment
 	if id, err := strconv.Atoi(name); err == nil && id > 0 {
 		// look it up by ID
-		assignment = new(Assignment)
-		mustGetObject(fmt.Sprintf("/assignments/%d", id), nil, assignment)
+		dumpMessage("GetAssignment", true, &GetAssignmentRequest{AssignmentId: int64(id)})
+		assignmentResp, err := client.GetAssignment(ctx, &GetAssignmentRequest{AssignmentId: int64(id)})
+		if err != nil {
+			log.Fatalf("failed to get assignment: %v", err)
+		}
+		dumpMessage("GetAssignment", false, assignmentResp)
+		assignment = assignmentResp.Assignment
 	} else {
 		// parse the course label and the problem unique id
 		parts := strings.Split(name, "/")
@@ -56,11 +68,14 @@ func CommandGet(cmd *cobra.Command, args []string) {
 		label, unique := parts[0], parts[1]
 
 		// find the assignment
-		assignmentList := []*Assignment{}
-		params := make(url.Values)
-		params.Add("course_lti_label", label)
-		params.Add("problem_unique", unique)
-		mustGetObject(fmt.Sprintf("/users/%d/assignments", user.ID), params, &assignmentList)
+		searchTerms := []string{label, unique}
+		dumpMessage("GetAssignments", true, &GetAssignmentsRequest{Search: searchTerms})
+		assignmentsResp, err := client.GetAssignments(ctx, &GetAssignmentsRequest{Search: searchTerms})
+		if err != nil {
+			log.Fatalf("failed to get assignments: %v", err)
+		}
+		dumpMessage("GetAssignments", false, assignmentsResp)
+		assignmentList := assignmentsResp.Assignments
 		if len(assignmentList) == 0 {
 			log.Printf("no matching assignment found")
 			log.Printf("   run '%s get [id]'", os.Args[0])
@@ -73,8 +88,8 @@ func CommandGet(cmd *cobra.Command, args []string) {
 		}
 		assignment = assignmentList[0]
 	}
-	if assignment.UserID != user.ID {
-		log.Fatalf("you do not have an assignment with number %d", assignment.ID)
+	if assignment.UserId != user.Id {
+		log.Fatalf("you do not have an assignment with number %d", assignment.Id)
 	}
-	getAssignment(assignment, rootDir, prettyRoot)
+	getAssignment(assignment, rootDir, prettyRoot, client, ctx)
 }

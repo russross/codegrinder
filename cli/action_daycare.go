@@ -1,23 +1,30 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"time"
 
-	. "github.com/russross/codegrinder/types"
+	. "github.com/russross/codegrinder/rpc"
 )
 
 // prepareSignedBundle gathers and signs a commit bundle for direct submission to a daycare server
-func prepareSignedBundle(now time.Time, action string, daycareHost string) (*CommitBundle, error) {
+func prepareSignedBundle(now time.Time, action string, daycareHost string, client CodeGrinderServiceClient, ctx context.Context) (*CommitBundle, error) {
 	// Get the user ID
-	user := new(User)
-	mustGetObject("/users/me", nil, user)
+	dumpMessage("GetUserMe", true, &GetUserMeRequest{})
+	userResp, err := client.GetUserMe(ctx, &GetUserMeRequest{})
+	if err != nil {
+		log.Fatalf("failed to get user: %v", err)
+	}
+	dumpMessage("GetUserMe", false, userResp)
+	user := userResp.User
 
 	// Gather student data
-	problemType, problem, step, _, commit, _, _ := gatherStudent(now, ".")
+	problemType, problem, step, _, commit, _, _ := gatherStudent(now, ".", client, ctx)
 	commit.Action = action
 	commit.Note = "grind action " + action
 
@@ -53,7 +60,7 @@ func prepareSignedBundle(now time.Time, action string, daycareHost string) (*Com
 	problemSig := problem.ComputeSignature(secret, steps)
 
 	// calculate the commit signature
-	commitSig := commit.ComputeSignature(secret, typeSig, problemSig, daycareHost, user.ID)
+	commitSig := commit.ComputeSignature(secret, typeSig, problemSig, daycareHost, user.Id)
 
 	// assemble the final commit bundle
 	signed := &CommitBundle{
@@ -63,7 +70,7 @@ func prepareSignedBundle(now time.Time, action string, daycareHost string) (*Com
 		ProblemSteps:         steps,
 		ProblemSignature:     problemSig,
 		Hostname:             daycareHost,
-		UserID:               user.ID,
+		UserId:               user.Id,
 		Commit:               commit,
 		CommitSignature:      commitSig,
 	}

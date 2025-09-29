@@ -1,49 +1,34 @@
 package main
 
 import (
-	"context"
-	"crypto/tls"
 	"fmt"
 	"log"
 	"os"
 	"strconv"
 
-	pb "github.com/russross/codegrinder/rpc"
+	. "github.com/russross/codegrinder/rpc"
 	"github.com/spf13/cobra"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/metadata"
 )
 
 func CommandList(cmd *cobra.Command, args []string) {
-	mustLoadConfig(cmd)
+	client, conn, ctx, err := setup(cmd)
+	if err != nil {
+		log.Fatalf("failed to connect to gRPC server: %v", err)
+	}
+	defer conn.Close()
 
 	if len(args) != 0 {
 		cmd.Help()
 		os.Exit(1)
 	}
 
-	// Set up gRPC connection
-	creds := credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})
-	conn, err := grpc.Dial(Config.Host+":443", grpc.WithTransportCredentials(creds),
-		grpc.WithCompressor(grpc.NewGZIPCompressor()),
-		grpc.WithDecompressor(grpc.NewGZIPDecompressor()))
-	if err != nil {
-		log.Fatalf("failed to connect to gRPC server: %v", err)
-	}
-	defer conn.Close()
-
-	client := pb.NewCodeGrinderServiceClient(conn)
-
-	// Create context with session cookie
-	ctx := context.Background()
-	ctx = metadata.AppendToOutgoingContext(ctx, "cookie", Config.Cookie)
-
 	// Call ListProblems
-	resp, err := client.ListProblems(ctx, &pb.ListProblemsRequest{})
+	dumpMessage("ListProblems", true, &ListProblemsRequest{})
+	resp, err := client.ListProblems(ctx, &ListProblemsRequest{})
 	if err != nil {
 		log.Fatalf("failed to get list from gRPC: %v", err)
 	}
+	dumpMessage("ListProblems", false, resp)
 
 	// Reconstruct the data
 	assignments := resp.Assignments
@@ -56,16 +41,16 @@ func CommandList(cmd *cobra.Command, args []string) {
 	}
 
 	// Create maps for quick lookup
-	courseMap := make(map[int64]*pb.Course)
+	courseMap := make(map[int64]*Course)
 	for _, c := range courses {
 		courseMap[c.Id] = c
 	}
-	problemSetMap := make(map[int64]*pb.ProblemSet)
+	problemSetMap := make(map[int64]*ProblemSet)
 	for _, ps := range problemSets {
 		problemSetMap[ps.Id] = ps
 	}
 
-	var course *pb.Course
+	var course *Course
 
 	// find the longest assignment ID, name
 	longestID, longestName := 1, 1

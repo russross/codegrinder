@@ -8,12 +8,16 @@ import (
 	"strings"
 	"time"
 
-	. "github.com/russross/codegrinder/types"
+	. "github.com/russross/codegrinder/rpc"
 	"github.com/spf13/cobra"
 )
 
 func CommandType(cmd *cobra.Command, args []string) {
-	mustLoadConfig(cmd)
+	client, conn, ctx, err := setup(cmd)
+	if err != nil {
+		log.Fatalf("failed to connect to gRPC server: %v", err)
+	}
+	defer conn.Close()
 
 	remove := cmd.Flag("remove").Value.String() == "true"
 	list := cmd.Flag("list").Value.String() == "true"
@@ -25,8 +29,13 @@ func CommandType(cmd *cobra.Command, args []string) {
 
 		// display a list of problem types
 		fmt.Println("Problem types:")
-		problemTypes := []*ProblemType{}
-		mustGetObject("/problem_types", nil, &problemTypes)
+		dumpMessage("GetProblemTypes", true, &GetProblemTypesRequest{})
+		problemTypesResp, err := client.GetProblemTypes(ctx, &GetProblemTypesRequest{})
+		if err != nil {
+			log.Fatalf("failed to get problem types: %v", err)
+		}
+		dumpMessage("GetProblemTypes", false, problemTypesResp)
+		problemTypes := problemTypesResp.ProblemTypes
 		if len(problemTypes) == 0 {
 			log.Fatalf("no problem types found")
 		}
@@ -72,8 +81,13 @@ func CommandType(cmd *cobra.Command, args []string) {
 	}
 
 	// download files for the given problem type
-	problemType := new(ProblemType)
-	mustGetObject(fmt.Sprintf("/problem_types/%s", problemTypeName), nil, problemType)
+	dumpMessage("GetProblemType", true, &GetProblemTypeRequest{Name: problemTypeName})
+	problemTypeResp, err := client.GetProblemType(ctx, &GetProblemTypeRequest{Name: problemTypeName})
+	if err != nil {
+		log.Fatalf("failed to get problem type: %v", err)
+	}
+	dumpMessage("GetProblemType", false, problemTypeResp)
+	problemType := problemTypeResp.ProblemType
 
 	files := make(map[string][]byte)
 	if remove {
