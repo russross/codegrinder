@@ -43,8 +43,10 @@ func ToRPCCourse(c *types.Course) *Course {
 // ToRPCAssignment converts a REST Assignment to a gRPC Assignment
 func ToRPCAssignment(a *types.Assignment) *Assignment {
 	rawScores := make(map[string]*ScoreList)
-	for k, v := range a.RawScores {
-		rawScores[k] = &ScoreList{Scores: v}
+	if a.RawScores != nil {
+		for k, v := range a.RawScores {
+			rawScores[k] = &ScoreList{Scores: v}
+		}
 	}
 
 	var unlockAt, dueAt, lockAt *timestamppb.Timestamp
@@ -100,21 +102,23 @@ func ToRPCProblemSet(ps *types.ProblemSet) *ProblemSet {
 // ToRPCProblemType converts a REST ProblemType to a gRPC ProblemType
 func ToRPCProblemType(pt *types.ProblemType) *ProblemType {
 	actions := make(map[string]*ProblemTypeAction)
-	for k, v := range pt.Actions {
-		actions[k] = &ProblemTypeAction{
-			ProblemType: v.ProblemType,
-			Action:      v.Action,
-			Command:     v.Command,
-			Parser:      v.Parser,
-			Message:     v.Message,
-			Interactive: v.Interactive,
-			MaxCpu:      v.MaxCPU,
-			MaxSession:  v.MaxSession,
-			MaxTimeout:  v.MaxTimeout,
-			MaxFd:       v.MaxFD,
-			MaxFileSize: v.MaxFileSize,
-			MaxMemory:   v.MaxMemory,
-			MaxThreads:  v.MaxThreads,
+	if pt.Actions != nil {
+		for k, v := range pt.Actions {
+			actions[k] = &ProblemTypeAction{
+				ProblemType: v.ProblemType,
+				Action:      v.Action,
+				Command:     v.Command,
+				Parser:      v.Parser,
+				Message:     v.Message,
+				Interactive: v.Interactive,
+				MaxCpu:      v.MaxCPU,
+				MaxSession:  v.MaxSession,
+				MaxTimeout:  v.MaxTimeout,
+				MaxFd:       v.MaxFD,
+				MaxFileSize: v.MaxFileSize,
+				MaxMemory:   v.MaxMemory,
+				MaxThreads:  v.MaxThreads,
+			}
 		}
 	}
 	return &ProblemType{
@@ -228,8 +232,10 @@ func ToRPCCommit(c *types.Commit) *Commit {
 // ToRPCProblemBundle converts a REST ProblemBundle to a gRPC ProblemBundle
 func ToRPCProblemBundle(pb *types.ProblemBundle) *ProblemBundle {
 	problemTypes := make(map[string]*ProblemType)
-	for k, v := range pb.ProblemTypes {
-		problemTypes[k] = ToRPCProblemType(v)
+	if pb.ProblemTypes != nil {
+		for k, v := range pb.ProblemTypes {
+			problemTypes[k] = ToRPCProblemType(v)
+		}
 	}
 	commits := make([]*Commit, len(pb.Commits))
 	for i, c := range pb.Commits {
@@ -343,8 +349,10 @@ func (c *Course) ToREST() *types.Course {
 // ToREST converts a gRPC Assignment to a REST Assignment
 func (a *Assignment) ToREST() *types.Assignment {
 	rawScores := make(map[string][]float64)
-	for k, v := range a.RawScores {
-		rawScores[k] = v.Scores
+	if a.RawScores != nil {
+		for k, v := range a.RawScores {
+			rawScores[k] = v.Scores
+		}
 	}
 
 	var unlockAt, dueAt, lockAt *time.Time
@@ -400,21 +408,23 @@ func (ps *ProblemSet) ToREST() *types.ProblemSet {
 // ToREST converts a gRPC ProblemType to a REST ProblemType
 func (pt *ProblemType) ToREST() *types.ProblemType {
 	actions := make(map[string]*types.ProblemTypeAction)
-	for k, v := range pt.Actions {
-		actions[k] = &types.ProblemTypeAction{
-			ProblemType: v.ProblemType,
-			Action:      v.Action,
-			Command:     v.Command,
-			Parser:      v.Parser,
-			Message:     v.Message,
-			Interactive: v.Interactive,
-			MaxCPU:      v.MaxCpu,
-			MaxSession:  v.MaxSession,
-			MaxTimeout:  v.MaxTimeout,
-			MaxFD:       v.MaxFd,
-			MaxFileSize: v.MaxFileSize,
-			MaxMemory:   v.MaxMemory,
-			MaxThreads:  v.MaxThreads,
+	if pt.Actions != nil {
+		for k, v := range pt.Actions {
+			actions[k] = &types.ProblemTypeAction{
+				ProblemType: v.ProblemType,
+				Action:      v.Action,
+				Command:     v.Command,
+				Parser:      v.Parser,
+				Message:     v.Message,
+				Interactive: v.Interactive,
+				MaxCPU:      v.MaxCpu,
+				MaxSession:  v.MaxSession,
+				MaxTimeout:  v.MaxTimeout,
+				MaxFD:       v.MaxFd,
+				MaxFileSize: v.MaxFileSize,
+				MaxMemory:   v.MaxMemory,
+				MaxThreads:  v.MaxThreads,
+			}
 		}
 	}
 	return &types.ProblemType{
@@ -528,8 +538,10 @@ func (c *Commit) ToREST() *types.Commit {
 // ToREST converts a gRPC ProblemBundle to a REST ProblemBundle
 func (pb *ProblemBundle) ToREST() *types.ProblemBundle {
 	problemTypes := make(map[string]*types.ProblemType)
-	for k, v := range pb.ProblemTypes {
-		problemTypes[k] = v.ToREST()
+	if pb.ProblemTypes != nil {
+		for k, v := range pb.ProblemTypes {
+			problemTypes[k] = v.ToREST()
+		}
 	}
 	commits := make([]*types.Commit, len(pb.Commits))
 	for i, c := range pb.Commits {
