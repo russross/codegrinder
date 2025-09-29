@@ -206,8 +206,16 @@ func (problem *Problem) ComputeSignature(secret string, steps []*ProblemStep) st
 	v.Add("id", strconv.FormatInt(problem.ID, 10))
 	v.Add("unique", problem.Unique)
 	v.Add("note", problem.Note)
-	v["tags"] = problem.Tags
-	v["options"] = problem.Options
+	if len(problem.Tags) == 0 {
+		v["tags"] = []string{}
+	} else {
+		v["tags"] = problem.Tags
+	}
+	if len(problem.Tags) == 0 {
+		v["options"] = []string{}
+	} else {
+		v["options"] = problem.Options
+	}
 	v.Add("createdAt", problem.CreatedAt.Round(time.Second).UTC().Format(time.RFC3339))
 	v.Add("updatedAt", problem.UpdatedAt.Round(time.Second).UTC().Format(time.RFC3339))
 	for n, step := range steps {
@@ -218,11 +226,15 @@ func (problem *Problem) ComputeSignature(secret string, steps []*ProblemStep) st
 		v.Add(fmt.Sprintf("step-%d-problem-type", step.Step), step.ProblemType)
 		v.Add(fmt.Sprintf("step-%d-note", step.Step), step.Note)
 		v.Add(fmt.Sprintf("step-%d-weight", step.Step), strconv.FormatFloat(step.Weight, 'g', -1, 64))
-		for name, contents := range step.Files {
-			v.Add(fmt.Sprintf("step-%d-file-%s", step.Step, name), string(contents))
+		if step.Files != nil {
+			for name, contents := range step.Files {
+				v.Add(fmt.Sprintf("step-%d-file-%s", step.Step, name), string(contents))
+			}
 		}
-		for name := range step.Whitelist {
-			v.Add(fmt.Sprintf("step-%d-whitelist-%s", step.Step, name), "true")
+		if step.Whitelist != nil {
+			for name := range step.Whitelist {
+				v.Add(fmt.Sprintf("step-%d-whitelist-%s", step.Step, name), "true")
+			}
 		}
 	}
 
@@ -259,21 +271,23 @@ func (step *ProblemStep) Normalize(n int64) error {
 		step.Weight = 1.0
 	}
 	clean := make(map[string][]byte)
-	for name, contents := range step.Files {
-		dir := filepath.Dir(filepath.FromSlash(name))
-		fixed := contents
-		if (dir == "." || !ProblemStepDirectoryWhitelist[dir]) && utf8.Valid(contents) {
-			fixed = fixLineEndings(contents)
-			if !bytes.Equal(fixed, contents) {
-				log.Printf("fixed line endings for %s", name)
+	if step.Files != nil {
+		for name, contents := range step.Files {
+			dir := filepath.Dir(filepath.FromSlash(name))
+			fixed := contents
+			if (dir == "." || !ProblemStepDirectoryWhitelist[dir]) && utf8.Valid(contents) {
+				fixed = fixLineEndings(contents)
+				if !bytes.Equal(fixed, contents) {
+					log.Printf("fixed line endings for %s", name)
+				}
+			} else if utf8.Valid(contents) {
+				fixed = fixNewLines(contents)
+				if !bytes.Equal(fixed, contents) {
+					log.Printf("fixed newlines for %s", name)
+				}
 			}
-		} else if utf8.Valid(contents) {
-			fixed = fixNewLines(contents)
-			if !bytes.Equal(fixed, contents) {
-				log.Printf("fixed newlines for %s", name)
-			}
+			clean[name] = fixed
 		}
-		clean[name] = fixed
 	}
 	step.Files = clean
 	return nil
@@ -414,6 +428,9 @@ func (set *ProblemSet) Normalize(now time.Time) error {
 	}
 
 	// check tags
+	if set.Tags == nil {
+		set.Tags = []string{}
+	}
 	for i, tag := range set.Tags {
 		set.Tags[i] = strings.TrimSpace(tag)
 	}

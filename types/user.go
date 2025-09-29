@@ -152,8 +152,14 @@ func (commit *Commit) ComputeSignature(secret, problemTypeSignature, problemSign
 	v.Add("step", strconv.FormatInt(commit.Step, 10))
 	v.Add("action", commit.Action)
 	v.Add("note", commit.Note)
+	if commit.Files == nil {
+		commit.Files = make(map[string][]byte)
+	}
 	for name, contents := range commit.Files {
 		v.Add(fmt.Sprintf("file-%s", name), string(contents))
+	}
+	if commit.Transcript == nil {
+		commit.Transcript = []*EventMessage{}
 	}
 	for n, event := range commit.Transcript {
 		v.Add(fmt.Sprintf("transcript-%d", n), event.String())
@@ -162,6 +168,9 @@ func (commit *Commit) ComputeSignature(secret, problemTypeSignature, problemSign
 		v.Add("reportcard-passed", strconv.FormatBool(commit.ReportCard.Passed))
 		v.Add("reportcard-note", commit.ReportCard.Note)
 		v.Add("reportcard-duration", commit.ReportCard.Duration.String())
+		if commit.ReportCard.Results == nil {
+			commit.ReportCard.Results = []*ReportCardResult{}
+		}
 		for n, result := range commit.ReportCard.Results {
 			v.Add(fmt.Sprintf("reportcard-%d-name", n), result.Name)
 			v.Add(fmt.Sprintf("reportcard-%d-outcome", n), result.Outcome)
@@ -195,7 +204,7 @@ func (commit *Commit) Normalize(now time.Time, whitelist map[string]bool) error 
 	commit.Action = strings.TrimSpace(commit.Action)
 	commit.Note = strings.TrimSpace(commit.Note)
 	commit.FilterIncoming(whitelist)
-	if len(commit.Files) == 0 {
+	if commit.Files == nil || len(commit.Files) == 0 {
 		return fmt.Errorf("commit must have at least one file")
 	}
 	if commit.Score < 0.0 || commit.Score > 1.0 {
@@ -214,13 +223,15 @@ func (commit *Commit) Normalize(now time.Time, whitelist map[string]bool) error 
 // filter out files in subdirectories/not on whitelist, and clean up line endings
 func (commit *Commit) FilterIncoming(whitelist map[string]bool) {
 	clean := make(map[string][]byte)
-	for name, contents := range commit.Files {
-		// normalize line endings
-		// only keep files on the whitelist
-		if whitelist[name] {
-			clean[name] = fixLineEndings(contents)
-		} else {
-			log.Printf("filtered out %s, which is not on the problem step whitelist", name)
+	if commit.Files != nil {
+		for name, contents := range commit.Files {
+			// normalize line endings
+			// only keep files on the whitelist
+			if whitelist[name] {
+				clean[name] = fixLineEndings(contents)
+			} else {
+				log.Printf("filtered out %s, which is not on the problem step whitelist", name)
+			}
 		}
 	}
 	commit.Files = clean
