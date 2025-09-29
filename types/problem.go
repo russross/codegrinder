@@ -223,7 +223,8 @@ func (problem *Problem) ComputeSignature(secret string, steps []*ProblemStep) st
 	v.Add("createdAt", problem.CreatedAt.Round(time.Second).UTC().Format(time.RFC3339))
 	v.Add("updatedAt", problem.UpdatedAt.Round(time.Second).UTC().Format(time.RFC3339))
 	for n, step := range steps {
-		if step == nil {
+		// note: grpc creates a zero-value step and not a nil
+		if step == nil || step.ProblemType == "" {
 			v.Add(fmt.Sprintf("step-%d-nil", n+1), "")
 			continue
 		}
