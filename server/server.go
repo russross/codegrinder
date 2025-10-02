@@ -518,9 +518,15 @@ func main() {
 		// Configure TLS with HTTP/2 support
 		tlsConfig := &tls.Config{
 			PreferServerCipherSuites: true,
-			MinVersion:               tls.VersionTLS12,
-			NextProtos:               []string{"h2", "http/1.1"}, // Enable HTTP/2
-			GetCertificate:           lem.GetCertificate,
+			MinVersion:               tls.VersionTLS13,
+			NextProtos:               []string{"h2", "http/1.1", acme.ALPNProto},
+			GetCertificate: func(chi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+				cert, err := lem.GetCertificate(chi)
+				if err != nil {
+					log.Printf("GetCertificate error for SNI %q: %v", chi.ServerName, err)
+				}
+				return cert, err
+			},
 		}
 
 		// Create single HTTPS server that handles both protocols
