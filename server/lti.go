@@ -344,8 +344,8 @@ func encode(v url.Values) []byte {
 // and redirects the user to the main UI URL.
 func LtiProblemSet(w http.ResponseWriter, r *http.Request, tx *sql.Tx, form LTIRequest, params martini.Params) {
 	ui := params["ui"]
-	if ui != "cli" && ui != "web" {
-		loggedHTTPErrorf(w, http.StatusBadRequest, "UI type must be cli or web, not %q", ui)
+	if ui != "cli" && ui != "web" && ui != "exam" {
+		loggedHTTPErrorf(w, http.StatusBadRequest, "UI type must be cli, web, or exam, not %q", ui)
 		return
 	}
 	unique := params["unique"]

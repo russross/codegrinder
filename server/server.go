@@ -16,6 +16,7 @@ import (
 	"io/ioutil"
 	"log"
 	"math/rand"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -267,7 +268,7 @@ func main() {
 			}
 		}
 		m.Use(skipMiddleware("/sockets/", mgzip.All()))
-		m.Use(martini.Static(filepath.Join(root, "www"), martini.StaticOptions{SkipLogging: true}))
+		m.Use(martini.Static(filepath.Join(root, "www"), martini.StaticOptions{SkipLogging: false}))
 		m.Use(render.Renderer(render.Options{IndentJSON: false}))
 
 		// set up the database
@@ -524,7 +525,7 @@ func main() {
 
 		// Create single HTTPS server that handles both protocols
 		server := &http.Server{
-			Addr:      ":https",
+			Addr:      "0.0.0.0:https",
 			Handler:   unifiedHandler,
 			TLSConfig: tlsConfig,
 			ErrorLog: log.New(&filterWriter{
@@ -532,10 +533,26 @@ func main() {
 			}, "", log.Lshortfile),
 		}
 
-		log.Printf("accepting https connections (HTTP and gRPC) on :443")
-		if err := server.ListenAndServeTLS("", ""); err != nil {
-			log.Fatalf("ListenAndServeTLS: %v", err)
+		// 1. Explicitly create an IPv4-only listener on port 443
+		listener, err := net.Listen("tcp4", "0.0.0.0:443")
+		if err != nil {
+			log.Fatalf("net.Listen(\"tcp4\"): %v", err)
 		}
+		log.Printf("accepting https connections (HTTP and gRPC) on 0.0.0.0:443")
+
+		// 2. Wrap the listener in a TLS listener
+		tlsListener := tls.NewListener(listener, server.TLSConfig)
+
+		// 3. Serve the traffic using the custom TLS listener
+		if err := server.Serve(tlsListener); err != nil {
+			log.Fatalf("server.Serve: %v", err)
+		}
+		/*
+			log.Printf("accepting https connections (HTTP and gRPC) on :443")
+			if err := server.ListenAndServeTLS("", ""); err != nil {
+				log.Fatalf("ListenAndServeTLS: %v", err)
+			}
+		*/
 	} else {
 		// run without TLS
 		// note: this will work behind a TLS proxy or for debugging with some calls
