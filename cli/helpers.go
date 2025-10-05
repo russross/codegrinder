@@ -350,7 +350,6 @@ func handleDaycareStream(client CodeGrinderServiceClient, conn *grpc.ClientConn,
 	}
 
 	ctx = context.Background()
-	ctx = metadata.AppendToOutgoingContext(ctx, "cookie", Config.Cookie)
 
 	// Form the Daycare request
 	req := &DaycareRequest{

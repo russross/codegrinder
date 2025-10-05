@@ -1,0 +1,90 @@
+# TA Service API Calls
+
+## Version
+- GET /version -> Version
+
+## Daycare Registrations
+- GET /daycare_registrations -> []DaycareRegistration
+- POST /daycare_registrations -> DaycareRegistration (request), no response
+
+## Problem Bundles
+- POST /problem_bundles/unconfirmed -> ProblemBundle (request), ProblemBundle (response)
+- POST /problem_bundles/confirmed -> ProblemBundle (request), ProblemBundle (response)
+- PUT /problem_bundles/:problem_id -> ProblemBundle (request), ProblemBundle (response)
+
+## Problem Set Bundles
+- POST /problem_set_bundles -> ProblemSetBundle (request), ProblemSetBundle (response)
+- PUT /problem_set_bundles/:problem_set_id -> ProblemSetBundle (request), ProblemSetBundle (response)
+
+## Problem Types
+- GET /problem_types -> []ProblemType
+- GET /problem_types/:name -> ProblemType
+
+## Problems
+- GET /problems -> []Problem (query: unique, problemType, note)
+- GET /problems/:problem_id -> Problem
+- GET /problems/:problem_id/steps -> []ProblemStep
+- GET /problems/:problem_id/steps/:step -> ProblemStep
+
+## Problem Sets
+- GET /problem_sets -> []ProblemSet (query: unique, note, search)
+- GET /problem_sets/:problem_set_id -> ProblemSet
+- GET /problem_sets/:problem_set_id/problems -> []ProblemSetProblem
+
+## Courses
+- GET /courses -> []Course (query: lti_label, name)
+- GET /courses/:course_id -> Course
+
+## Users
+- GET /users -> []User (query: name, email, instructor, admin)
+- GET /users/me -> User
+- GET /users/session -> map[string]string (cookie)
+- GET /users/:user_id -> User
+- GET /courses/:course_id/users -> []User
+
+## Assignments
+- GET /users/:user_id/assignments -> []Assignment
+- GET /courses/:course_id/users/:user_id/assignments -> []Assignment
+- GET /assignments -> []Assignment (query: search)
+- GET /assignments/:assignment_id -> Assignment
+
+## Commits
+- GET /assignments/:assignment_id/problems/:problem_id/commits/last -> Commit
+- GET /assignments/:assignment_id/problems/:problem_id/steps/:step/commits/last -> Commit
+- POST /commit_bundles/unsigned -> CommitBundle (request), CommitBundle (response)
+- POST /commit_bundles/signed -> CommitBundle (request), CommitBundle (response)
+
+# Daycare Service API Calls
+
+## Problem Execution
+- WebSocket /sockets/:problem_type/:action -> DaycareRequest (stream), DaycareResponse (stream)
+
+# Data Types
+
+## Bundle Types
+- ProblemBundle: ProblemTypes map[string]*ProblemType, ProblemTypeSignatures map[string]string, Problem *Problem, ProblemSteps []*ProblemStep, ProblemSignature string, Hostname string, UserID int64, Commits []*Commit, CommitSignatures []string
+- ProblemSetBundle: ProblemSet *ProblemSet, ProblemSetProblems []*ProblemSetProblem
+- CommitBundle: ProblemType *ProblemType, ProblemTypeSignature string, Problem *Problem, ProblemSteps []*ProblemStep, ProblemSignature string, Action string, Hostname string, UserID int64, Commit *Commit, CommitSignature string
+
+## Core Types
+- Version: (not defined in types/, but used)
+- DaycareRegistration: Hostname string, ProblemTypes []string, Capacity int, Time time.Time, Version string, Signature string
+- ProblemType: Name string, Image string, Files map[string][]byte, Actions map[string]*ProblemTypeAction
+- ProblemTypeAction: ProblemType string, Action string, Command string, Parser string, Message string, Interactive bool, MaxCPU int64, MaxSession int64, MaxTimeout int64, MaxFD int64, MaxFileSize int64, MaxMemory int64, MaxThreads int64
+- Problem: ID int64, Unique string, Note string, Tags []string, Options []string, CreatedAt time.Time, UpdatedAt time.Time
+- ProblemStep: ProblemID int64, Step int64, ProblemType string, Note string, Instructions string, Weight float64, Files map[string][]byte, Whitelist map[string]bool, Solution map[string][]byte
+- ProblemSet: ID int64, Unique string, Note string, Tags []string, CreatedAt time.Time, UpdatedAt time.Time
+- ProblemSetProblem: ProblemSetID int64, ProblemID int64, Weight float64
+- Course: ID int64, Name string, Label string, LtiID string, CanvasID int64, CreatedAt time.Time, UpdatedAt time.Time
+- User: ID int64, Name string, Email string, LtiID string, ImageURL string, CanvasLogin string, CanvasID int64, Author bool, Admin bool, CreatedAt time.Time, UpdatedAt time.Time, LastSignedInAt time.Time
+- Assignment: ID int64, CourseID int64, ProblemSetID int64, UserID int64, Roles string, Instructor bool, RawScores map[string][]float64, Score float64, GradeID string, LtiID string, CanvasTitle string, CanvasID int64, CanvasAPIDomain string, OutcomeURL string, OutcomeExtURL string, OutcomeExtAccepted string, FinishedURL string, ConsumerKey string, UnlockAt *time.Time, DueAt *time.Time, LockAt *time.Time, CreatedAt time.Time, UpdatedAt time.Time
+- Commit: ID int64, AssignmentID int64, ProblemID int64, Step int64, Action string, Note string, Files map[string][]byte, Transcript []*EventMessage, ReportCard *ReportCard, Score float64, CreatedAt time.Time, UpdatedAt time.Time
+
+## Event Types
+- EventMessage: Time time.Time, Event string, ExecCommand []string, ExitStatus int, StreamData []byte, Error string, ReportCard *ReportCard, Files map[string][]byte
+- ReportCard: Passed bool, Note string, Duration time.Duration, Results []*ReportCardResult
+- ReportCardResult: Name string, Outcome string, Details string, Context string
+
+## Daycare Types
+- DaycareRequest: CommitBundle *CommitBundle, Stdin []byte, CloseStdin bool
+- DaycareResponse: CommitBundle *CommitBundle, Event *EventMessage, Error string

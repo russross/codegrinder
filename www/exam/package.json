@@ -1,0 +1,30 @@
+{
+  "name": "exam",
+  "version": "1.0.0",
+  "description": "",
+  "main": "codegrinder_grpc_web_pb.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@codemirror/lang-cpp": "^6.0.3",
+    "@codemirror/lang-javascript": "^6.2.4",
+    "@codemirror/lang-markdown": "^6.4.0",
+    "@codemirror/lang-python": "^6.2.1",
+    "@codemirror/legacy-modes": "^6.5.2",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
+    "browserify": "^17.0.1",
+    "codemirror": "^6.0.1",
+    "css-loader": "^7.1.2",
+    "google-protobuf": "^4.0.0",
+    "grpc-web": "^2.0.2",
+    "protoc-gen-grpc-web": "^1.5.0",
+    "style-loader": "^4.0.0",
+    "webpack": "^5.102.0",
+    "webpack-cli": "^6.0.1"
+  }
+}
