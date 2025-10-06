@@ -43,10 +43,10 @@ let editor = null; // To hold the CodeMirror instance
 let fitAddon = null; // To hold the FitAddon instance
 let term = null; // To hold the xterm.js instance
 window.problemSet = []; // Initialize as empty, will be populated by gRPC
-let user = null;
 let assignment = null;
 let language = new Compartment();
 let editableCompartment = new Compartment();
+let currentlyOpenFilePath = null; // To hold the path of the currently open file
 
 function getLanguageExtension(filename) {
     const ext = filename.split('.').pop();
@@ -309,7 +309,6 @@ async function nextStep(client, assignment, problem, oldStep, mergedFiles, probl
 
         // Print the string "moving to step {step}" to the terminal
         term.writeln(`moving to step ${newStep.getStep()}`);
-        selectTerminalTab();
 
         // Update the problem in window.problemSet with the new step information
         const problemIndex = window.problemSet.findIndex(p => p.id === problem.getId());
@@ -337,7 +336,6 @@ async function nextStep(client, assignment, problem, oldStep, mergedFiles, probl
             window.problemSet[problemIndex].is_complete = true;
         }
         term.writeln('you have completed all steps for this problem');
-        selectTerminalTab();
     }
 }
 
@@ -512,7 +510,6 @@ async function doAction(action) {
         const problemStepAction = problemTypeActionsList.find(act => act.getAction() === action);
         if (problemStepAction && problemStepAction.getMessage()) {
             term.writeln(problemStepAction.getMessage());
-            selectTerminalTab();
         }
 
         // 7. Run the handleDaycare sequence
@@ -541,7 +538,6 @@ async function doAction(action) {
 
         // 9. If the commit has a report_card field with a passed field that is true and the commit has a score field that is equal to 1.0:
         if (gradedCommit.hasReportCard() && gradedCommit.getReportCard().getPassed() && gradedCommit.getScore() === 1.0) {
-            term.writeln(`step ${currentProblem.current_step_number} passed`);
             await nextStep(client, assignment, signedBundle.getProblem(), reloadedProblemStep, currentProblem.merged_files, new Map());
 
             // Re-render UI after nextStep might have updated currentProblem
@@ -565,13 +561,11 @@ async function doAction(action) {
                     term.writeln(`Error: ${event.getError()}`);
                 }
             });
-            selectTerminalTab();
         }
 
     } catch (err) {
         console.error('doAction: Error performing action:', err);
         term.writeln(`Error performing action: ${err.message}`);
-        selectTerminalTab();
     }
 }
 
@@ -608,9 +602,14 @@ function initializeProblemSelection() {
 
 
 
-async function performSaveAction() {
-    console.log("Performing save action...");
-    await doAction('');
+async function saveIfNeeded() {
+    const saveButton = document.getElementById('save-button');
+    // The save action is a no-op if there are no unsaved changes.
+    // We use the save button's disabled state as the source of truth for unsaved changes.
+    if (saveButton && !saveButton.disabled) {
+        console.log("Unsaved changes detected, performing save action...");
+        await doAction('');
+    }
 }
 
 function renderMenuBar() {
@@ -627,10 +626,7 @@ function renderMenuBar() {
             problemButton.classList.add('active-problem');
         } else {
             problemButton.addEventListener('click', async () => {
-                // Perform save action if there are unsaved changes
-                if (!document.getElementById('save-button').disabled) {
-                    await performSaveAction();
-                }
+                await saveIfNeeded();
                 currentProblem = window.problemSet.find(p => p.unique === problem.unique);
                 console.log("Problem selected:", currentProblem.note);
                 // Re-render UI based on new problem
@@ -658,7 +654,7 @@ function renderMenuBar() {
     saveButton.id = 'save-button';
     saveButton.textContent = 'Save';
     saveButton.disabled = true; // Initially disabled
-    saveButton.addEventListener('click', performSaveAction);
+    saveButton.addEventListener('click', saveIfNeeded);
     menuBar.appendChild(saveButton);
 
     // 4. Actions Buttons
@@ -676,6 +672,7 @@ function renderMenuBar() {
         actionButton.textContent = action.text;
         actionButton.addEventListener('click', async () => {
             console.log(`Action button clicked: ${action.name}`);
+            await saveIfNeeded(); // Ensure changes are saved before performing action
             await doAction(action.name);
         });
         menuBar.appendChild(actionButton);
@@ -698,7 +695,7 @@ function renderFileTree() {
     const tree = buildFileTree(fileList);
     const ul = document.createElement('ul');
     ul.classList.add('file-tree');
-    renderTree(tree, ul, currentProblem.merged_files, whitelist, ''); // Pass whitelist and empty path for root
+    renderTree(tree, ul, currentProblem.merged_files, whitelist, '', currentlyOpenFilePath); // Pass whitelist and empty path for root
     fileTreePane.appendChild(ul);
 }
 
@@ -728,7 +725,7 @@ function buildFileTree(filePaths) {
     return tree;
 }
 
-function renderTree(node, parentElement, mergedFiles, whitelist, currentPath) {
+function renderTree(node, parentElement, mergedFiles, whitelist, currentPath, fileToSelectPath) {
 
     // Helper to check if a path (file or directory) is whitelisted or contains a whitelisted file
     const isWhitelistedRecursive = (itemNode, itemRelativePath) => {
@@ -797,11 +794,14 @@ function renderTree(node, parentElement, mergedFiles, whitelist, currentPath) {
 
         if (item._is_file) {
             li.dataset.path = item._path;
+            if (item._path === fileToSelectPath) {
+                li.classList.add('selected');
+            }
             li.addEventListener('click', async (event) => {
                 event.stopPropagation();
                 // Perform save action if there are unsaved changes
                 if (!document.getElementById('save-button').disabled) {
-                    await performSaveAction();
+                    await saveIfNeeded();
                 }
 
                 const previouslySelected = document.querySelector('.file-tree li.selected');
@@ -810,6 +810,7 @@ function renderTree(node, parentElement, mergedFiles, whitelist, currentPath) {
                 }
                 li.classList.add('selected');
                 console.log("File selected:", item._path);
+                currentlyOpenFilePath = item._path; // Update global variable
                 const fileContentUint8 = mergedFiles.get(item._path);
                 let fileContentString;
                 let isBinary = false;
@@ -845,7 +846,6 @@ function renderTree(node, parentElement, mergedFiles, whitelist, currentPath) {
                     changes: {from: 0, to: editor.state.doc.length, insert: fileContentString},
                     effects: effects
                 });
-                document.getElementById('save-button').disabled = true;
             });
         } else {
             // Folders are no longer interactive for expanding/collapsing.
@@ -857,7 +857,7 @@ function renderTree(node, parentElement, mergedFiles, whitelist, currentPath) {
             const ul = document.createElement('ul');
             li.appendChild(ul);
             const nextPath = currentPath === '' ? key : `${currentPath}/${key}`;
-            renderTree(item.children, ul, mergedFiles, whitelist, nextPath); // Pass nextPath
+            renderTree(item.children, ul, mergedFiles, whitelist, nextPath, fileToSelectPath); // Pass fileToSelectPath
         }
     });
 }
@@ -916,5 +916,4 @@ function initializeTerminal() {
     term.open(document.getElementById('terminal'));
     fitAddon.fit();
     window.addEventListener('resize', () => fitAddon.fit());
-    //selectTerminalTab();
 }
