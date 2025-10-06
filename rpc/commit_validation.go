@@ -38,12 +38,22 @@ func (asst *Assignment) IsInstructorRole() bool {
 // SetMinorScore sets a score for a specific minor category
 func (assignment *Assignment) SetMinorScore(major string, minor int, score float64) {
 	// save the raw score
-	scores := assignment.RawScores[major]
-	for minor >= len(scores.Scores) {
-		scores.Scores = append(scores.Scores, 0.0)
+	var foundEntry *ScoreEntry
+	for _, entry := range assignment.RawScores {
+		if entry.Key == major {
+			foundEntry = entry
+			break
+		}
 	}
-	scores.Scores[minor] = score
-	assignment.RawScores[major] = scores
+	if foundEntry == nil {
+		foundEntry = &ScoreEntry{Key: major, Scores: nil}
+		assignment.RawScores = append(assignment.RawScores, foundEntry)
+	}
+
+	for minor >= len(foundEntry.Scores) {
+		foundEntry.Scores = append(foundEntry.Scores, strconv.FormatFloat(0.0, 'g', -1, 64))
+	}
+	foundEntry.Scores[minor] = strconv.FormatFloat(score, 'g', -1, 64)
 }
 
 // ComputeScore computes an overall score
@@ -51,12 +61,32 @@ func (assignment *Assignment) ComputeScore(majorWeights map[string]float64, mino
 	// compute an overall score
 	majorWeightSum, majorScoreSum := 0.0, 0.0
 	for unique, majorWeight := range majorWeights {
-		scores := assignment.RawScores[unique]
+		var stringScores []string
+		for _, entry := range assignment.RawScores {
+			if entry.Key == unique {
+				stringScores = entry.Scores
+				break
+			}
+		}
+		if stringScores == nil {
+			// No scores for this major, skip
+			continue
+		}
+
+		var scores []float64
+		for _, s := range stringScores {
+			f, err := strconv.ParseFloat(s, 64)
+			if err != nil {
+				return 0.0, fmt.Errorf("failed to parse score %s: %w", s, err)
+			}
+			scores = append(scores, f)
+		}
+
 		minorWeightSum, minorScoreSum := 0.0, 0.0
 		for i, minorWeight := range minorWeights[unique] {
 			minorWeightSum += minorWeight
-			if i < len(scores.Scores) {
-				minorScoreSum += scores.Scores[i] * minorWeight
+			if i < len(scores) {
+				minorScoreSum += scores[i] * minorWeight
 			}
 		}
 		if minorWeightSum == 0.0 {
@@ -85,8 +115,8 @@ func (commit *Commit) ComputeSignature(secret, problemTypeSignature, problemSign
 	v.Add("step", strconv.FormatInt(commit.Step, 10))
 	v.Add("action", commit.Action)
 	v.Add("note", commit.Note)
-	for name, contents := range commit.Files {
-		v.Add(fmt.Sprintf("file-%s", name), string(contents))
+	for _, file := range commit.Files {
+		v.Add(fmt.Sprintf("file-%s", file.Path), string(file.Contents))
 	}
 	for n, event := range commit.Transcript {
 		v.Add(fmt.Sprintf("transcript-%d", n), event.String())
@@ -146,14 +176,14 @@ func (commit *Commit) Normalize(now time.Time, whitelist map[string]bool) error 
 
 // FilterIncoming filters out files not on whitelist and cleans line endings
 func (commit *Commit) FilterIncoming(whitelist map[string]bool) {
-	clean := make(map[string][]byte)
-	for name, contents := range commit.Files {
+	clean := []*File{}
+	for _, file := range commit.Files {
 		// normalize line endings
 		// only keep files on the whitelist
-		if whitelist[name] {
-			clean[name] = fixLineEndings(contents)
+		if whitelist[file.Path] {
+			clean = append(clean, &File{Path: file.Path, Contents: fixLineEndings(file.Contents)})
 		} else {
-			log.Printf("filtered out %s, which is not on the problem step whitelist", name)
+			log.Printf("filtered out %s, which is not on the problem step whitelist", file.Path)
 		}
 	}
 	commit.Files = clean

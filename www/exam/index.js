@@ -16,12 +16,15 @@ const {
     ReportCard,
     ProblemType,
     Problem,
-    ProblemStep
+    ProblemStep,
+    File,
+    ScoreEntry,
+    Signature
 } = require('./codegrinder_pb');
 const { Timestamp } = require('google-protobuf/google/protobuf/timestamp_pb.js');
 const google_protobuf_duration_pb = require('google-protobuf/google/protobuf/duration_pb.js');
 const {EditorView, keymap} = require("@codemirror/view");
-const {defaultKeymap} = require("@codemirror/commands");
+const {defaultKeymap, indentWithTab} = require("@codemirror/commands");
 const {basicSetup} = require("codemirror");
 const {EditorState, Compartment} = require("@codemirror/state");
 const {javascript} = require("@codemirror/lang-javascript");
@@ -36,7 +39,6 @@ require('@xterm/xterm/css/xterm.css');
 const { FitAddon } = require('@xterm/addon-fit');
 
 let currentProblem = null;
-let currentFileContent = ''; // To store the content of the currently selected file
 let editor = null; // To hold the CodeMirror instance
 let fitAddon = null; // To hold the FitAddon instance
 let term = null; // To hold the xterm.js instance
@@ -87,7 +89,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const state = EditorState.create({
         extensions: [
             basicSetup,
-            keymap.of(defaultKeymap),
+            keymap.of([indentWithTab, ...defaultKeymap]),
             language.of([]),
             editableCompartment.of(EditorView.editable.of(true)),
             EditorView.updateListener.of((update) => {
@@ -96,10 +98,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         const selectedFile = document.querySelector('.file-tree li.selected');
                         if (selectedFile) {
                             const filePath = selectedFile.dataset.path;
-                            const newContent = editor.state.doc.toString();
-                            const newContentUint8 = new TextEncoder().encode(newContent);
+                            const newContentString = editor.state.doc.toString();
+                            const newContentUint8 = new TextEncoder().encode(newContentString);
                             currentProblem.merged_files.set(filePath, newContentUint8);
-                            currentFileContent = newContent;
                             // Enable the save button
                             document.getElementById('save-button').disabled = false;
                         }
@@ -231,10 +232,18 @@ async function loadProblem(client, assignment, problemSetProblem, problemTypes) 
     // 5. Build a merged set of files
     const mergedFiles = new Map();
     // Start with the files field of the ProblemStep
-    currentStep.getFilesMap().forEach((content, name) => mergedFiles.set(name, content));
+    currentStep.getFilesList().forEach(file => {
+        const content = file.getContents_asU8();
+        console.assert(content instanceof Uint8Array, `File content for ${file.getPath()} is not Uint8Array in ProblemStep`);
+        mergedFiles.set(file.getPath(), content);
+    });
     // If there was a Commit object, merge its files field
     if (commit) {
-        commit.getFilesMap().forEach((content, name) => mergedFiles.set(name, content));
+        commit.getFilesList().forEach(file => {
+            const content = file.getContents_asU8();
+            console.assert(content instanceof Uint8Array, `File content for ${file.getPath()} is not Uint8Array in Commit`);
+            mergedFiles.set(file.getPath(), content);
+        });
     }
     console.log('loadProblem: Merged files:', [...mergedFiles.keys()]);
 
@@ -279,12 +288,16 @@ async function nextStep(client, assignment, problem, oldStep, mergedFiles, probl
 
         // 3. If newStep was found and fetched, merge its files
         //    * Each file path in newStep either replaces one in the main file set for the problem (if it is a duplicate) or adds to the set.
-        newStep.getFilesMap().forEach((content, name) => mergedFiles.set(name, content));
+        newStep.getFilesList().forEach(file => {
+            const content = file.getContents_asU8();
+            console.assert(content instanceof Uint8Array, `File content for ${file.getPath()} is not Uint8Array in newStep`);
+            mergedFiles.set(file.getPath(), content);
+        });
 
         //    * The file sets from oldStep and newStep are compared (note: NOT the merged file set).
         //      Any file path that appears in oldStep but is missing from newStep is REMOVED from the merged file set.
-        const oldStepFiles = new Set(oldStep.getFilesMap().keys());
-        const newStepFiles = new Set(newStep.getFilesMap().keys());
+        const oldStepFiles = new Set(oldStep.getFilesList().map(file => file.getPath()));
+        const newStepFiles = new Set(newStep.getFilesList().map(file => file.getPath()));
 
         for (const oldFilePath of oldStepFiles) {
             if (!newStepFiles.has(oldFilePath)) {
@@ -332,8 +345,11 @@ async function nextStep(client, assignment, problem, oldStep, mergedFiles, probl
 async function handleDaycare(bundle) {
     console.log('handleDaycare: Initiating Daycare interaction...');
     selectTerminalTab(); // Automatically select terminal tab
+    if (fitAddon) {
+        fitAddon.fit();
+    }
 
-    const daycareClient = new CodeGrinderServicePromiseClient(bundle.getHostname() || window.location.origin);
+    const daycareClient = new CodeGrinderServicePromiseClient(`${window.location.protocol}//${bundle.getHostname()}`);
     const daycareRequest = new DaycareRequest()
         .setCommitBundle(bundle)
         .setProblemType(currentProblem.problem_type.getName())
@@ -351,8 +367,11 @@ async function handleDaycare(bundle) {
                     // Ignore event for grade action
                     return;
                 } else if (event.getEvent() === 'files') {
-                    event.getFilesMap().forEach((content, path) => {
-                        const whitelist = new Set(currentProblem.problem_step.getWhitelistMap().getEntryList().map(item => item[0]));
+                    event.getFilesList().forEach(file => {
+                        const path = file.getPath();
+                        const content = file.getContents_asU8();
+                        console.assert(content instanceof Uint8Array, `File content for ${path} is not Uint8Array in Daycare event`);
+                        const whitelist = new Set(currentProblem.problem_step.getWhitelistList());
                         if (whitelist.has(path)) {
                             currentProblem.merged_files.set(path, content);
                             term.writeln(`downloading file ${path}`);
@@ -368,7 +387,7 @@ async function handleDaycare(bundle) {
                             term.writeln(`exit status ${event.getExitStatus()}`);
                         }
                     } else if (event.getEvent() === 'stdin' || event.getEvent() === 'stdout' || event.getEvent() === 'stderr') {
-                        term.write(new TextDecoder().decode(event.getStreamData()));
+                        term.write(event.getStreamData());
                     } else if (event.getEvent() === 'error') {
                         term.writeln(`Error: ${event.getError()}`);
                     }
@@ -387,7 +406,7 @@ async function handleDaycare(bundle) {
             if (finalBundle) {
                 resolve(finalBundle);
             } else {
-                reject(new Error('Daycare stream ended without a final CommitBundle.'));
+                resolve();
             }
         });
 
@@ -402,6 +421,10 @@ async function handleDaycare(bundle) {
 // Function to perform an action as per RPC.md
 async function doAction(action) {
     console.log(`doAction: Performing action: ${action}`);
+
+    if (action !== 'save') {
+        term.clear();
+    }
     const client = new CodeGrinderServicePromiseClient(window.location.origin);
 
     try {
@@ -418,7 +441,7 @@ async function doAction(action) {
 
         // 2. Identify whitelisted files and collect "student files"
         const studentFiles = new Map();
-        const whitelist = new Set(currentProblem.problem_step.getWhitelistMap().getEntryList().map(item => item[0]));
+        const whitelist = new Set(currentProblem.problem_step.getWhitelistList());
 
         currentProblem.merged_files.forEach((content, path) => {
             if (whitelist.has(path)) {
@@ -427,7 +450,10 @@ async function doAction(action) {
         });
 
         // For files that are NOT in the whitelist, replace the version in the active file set with the version from the newly-loaded ProblemStep.
-        reloadedProblemStep.getFilesMap().forEach((content, path) => {
+        reloadedProblemStep.getFilesList().forEach(file => {
+            const path = file.getPath();
+            const content = file.getContents_asU8();
+            console.assert(content instanceof Uint8Array, `File content for ${path} is not Uint8Array in reloadedProblemStep`);
             if (!whitelist.has(path)) {
                 currentProblem.merged_files.set(path, content);
             }
@@ -440,8 +466,13 @@ async function doAction(action) {
         commit.setAssignmentId(assignment.getId());
         commit.setProblemId(currentProblem.id);
         commit.setStep(reloadedProblemStep.getStep());
-        const filesMap = commit.getFilesMap();
-        studentFiles.forEach((content, path) => filesMap.set(path, content));
+        studentFiles.forEach((content, path) => {
+            const file = new File();
+            file.setPath(path);
+            console.assert(content instanceof Uint8Array, `File content for ${path} in studentFiles is not Uint8Array`);
+            file.setContents(content);
+            commit.addFiles(file);
+        });
         const now = new Date();
         const timestamp = new Timestamp();
         timestamp.fromDate(now);
@@ -477,8 +508,8 @@ async function doAction(action) {
         }
 
         // 6. Print the message field from the ProblemStepAction
-        const problemTypeActionsMap = currentProblem.problem_type.getActionsMap();
-        const problemStepAction = problemTypeActionsMap.get(action);
+        const problemTypeActionsList = currentProblem.problem_type.getActionsList();
+        const problemStepAction = problemTypeActionsList.find(act => act.getAction() === action);
         if (problemStepAction && problemStepAction.getMessage()) {
             term.writeln(problemStepAction.getMessage());
             selectTerminalTab();
@@ -529,7 +560,7 @@ async function doAction(action) {
                         term.writeln(`exit status ${event.getExitStatus()}`);
                     }
                 } else if (event.getEvent() === 'stdin' || event.getEvent() === 'stdout' || event.getEvent() === 'stderr') {
-                    term.write(new TextDecoder().decode(event.getStreamData()));
+                    term.write(event.getStreamData());
                 } else if (event.getEvent() === 'error') {
                     term.writeln(`Error: ${event.getError()}`);
                 }
@@ -549,7 +580,7 @@ function loadFirstWhitelistedFileIntoEditor() {
         return;
     }
 
-    const whitelist = currentProblem.problem_step.getWhitelistMap();
+    const whitelist = new Set(currentProblem.problem_step.getWhitelistList());
 
     for (const filePath of currentProblem.merged_file_list) {
         // Check if the file is in the whitelist
@@ -632,11 +663,10 @@ function renderMenuBar() {
 
     // 4. Actions Buttons
     // Ensure problem_type and actionsMap exist before accessing
-    const actionsMap = currentProblem.problem_type.getActionsMap();
-    const actionsList = actionsMap.getEntryList(); // Array of [key, value]
+    const actionsList = currentProblem.problem_type.getActionsList();
     let availableActions = actionsList
-        .map(([name, actionObj]) => {
-            return { name, text: name.charAt(0).toUpperCase() + name.slice(1) };
+        .map(actionObj => {
+            return { name: actionObj.getAction(), text: actionObj.getAction().charAt(0).toUpperCase() + actionObj.getAction().slice(1) };
         })
         .sort((a, b) => a.name.localeCompare(b.name)); // Sort actions alphabetically
 
@@ -661,7 +691,7 @@ function renderFileTree() {
         return;
     }
 
-    const whitelist = new Set(currentProblem.problem_step.getWhitelistMap().getEntryList().map(item => item[0]));
+    const whitelist = new Set(currentProblem.problem_step.getWhitelistList());
     console.log('Whitelist files:', [...whitelist]);
 
     const fileList = currentProblem.merged_file_list;
@@ -780,19 +810,30 @@ function renderTree(node, parentElement, mergedFiles, whitelist, currentPath) {
                 }
                 li.classList.add('selected');
                 console.log("File selected:", item._path);
-                const fileContent = new TextDecoder().decode(mergedFiles.get(item._path));
-                currentFileContent = fileContent;
+                const fileContentUint8 = mergedFiles.get(item._path);
+                let fileContentString;
+                let isBinary = false;
 
-                // Check if the file is in the problem step's whitelist
-                const isEditable = currentProblem.problem_step.getWhitelistMap().has(item._path);
-                console.log('File:', item._path, 'Is Editable:', isEditable);
+                // Check for null bytes to identify potential binary files
+                for (let i = 0; i < fileContentUint8.length; i++) {
+                    if (fileContentUint8[i] === 0) {
+                        isBinary = true;
+                        break;
+                    }
+                }
 
-                const lang = getLanguageExtension(item._path);
+                const isEditable = currentProblem.problem_step.getWhitelistList().includes(item._path);
                 const effects = [];
 
-                // Reconfigure editable state
-                effects.push(editableCompartment.reconfigure(EditorView.editable.of(isEditable)));
+                if (isBinary) {
+                    fileContentString = "This file appears to be a binary file and cannot be displayed in the editor.";
+                    effects.push(editableCompartment.reconfigure(EditorView.editable.of(false))); // Binary files are never editable
+                } else {
+                    fileContentString = new TextDecoder().decode(fileContentUint8);
+                    effects.push(editableCompartment.reconfigure(EditorView.editable.of(isEditable))); // Text files' editability depends on whitelist
+                }
 
+                const lang = getLanguageExtension(item._path);
                 // Reconfigure language
                 if (lang) {
                     effects.push(language.reconfigure(lang));
@@ -801,7 +842,7 @@ function renderTree(node, parentElement, mergedFiles, whitelist, currentPath) {
                 }
 
                 editor.dispatch({
-                    changes: {from: 0, to: editor.state.doc.length, insert: fileContent},
+                    changes: {from: 0, to: editor.state.doc.length, insert: fileContentString},
                     effects: effects
                 });
                 document.getElementById('save-button').disabled = true;
@@ -875,9 +916,5 @@ function initializeTerminal() {
     term.open(document.getElementById('terminal'));
     fitAddon.fit();
     window.addEventListener('resize', () => fitAddon.fit());
-
-    term.writeln('Welcome to the CodeGrinder Terminal!');
-    term.writeln('This is a test of the ANSI color support.');
-    term.writeln('\x1b[1;31mRed\x1b[0m \x1b[1;32mGreen\x1b[0m \x1b[1;33mYellow\x1b[0m \x1b[1;34mBlue\x1b[0m \x1b[1;35mMagenta\x1b[0m \x1b[1;36mCyan\x1b[0m \x1b[1;37mWhite\x1b[0m');
-    selectTerminalTab();
+    //selectTerminalTab();
 }

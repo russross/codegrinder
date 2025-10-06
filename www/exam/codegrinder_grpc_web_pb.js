@@ -37,7 +37,7 @@ proto.codegrinder = require('./codegrinder_pb.js');
 proto.codegrinder.CodeGrinderServiceClient =
     function(hostname, credentials, options) {
   if (!options) options = {};
-  options.format = 'text';
+  options.format = 'binary';
 
   /**
    * @private @const {!grpc.web.GrpcWebClientBase} The client
@@ -63,7 +63,7 @@ proto.codegrinder.CodeGrinderServiceClient =
 proto.codegrinder.CodeGrinderServicePromiseClient =
     function(hostname, credentials, options) {
   if (!options) options = {};
-  options.format = 'text';
+  options.format = 'binary';
 
   /**
    * @private @const {!grpc.web.GrpcWebClientBase} The client

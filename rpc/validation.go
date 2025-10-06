@@ -87,15 +87,24 @@ func (problem *Problem) Normalize(now time.Time, steps []*ProblemStep) error {
 		if incomplete {
 			continue
 		}
-		if step.Whitelist == nil {
-			step.Whitelist = make(map[string]bool)
+		// build a temporary map for whitelist processing
+		wlMap := make(map[string]bool)
+		for _, name := range step.Whitelist {
+			wlMap[name] = true
 		}
+
 		if n > 0 {
 			// make sure everything on the whitelist is carried forward
-			for name := range steps[n-1].Whitelist {
-				step.Whitelist[name] = true
+			for _, name := range steps[n-1].Whitelist {
+				wlMap[name] = true
 			}
 		}
+		// convert back to slice
+		step.Whitelist = make([]string, 0, len(wlMap))
+		for name := range wlMap {
+			step.Whitelist = append(step.Whitelist, name)
+		}
+		sort.Strings(step.Whitelist)
 	}
 
 	// sanity check timestamps
@@ -121,22 +130,21 @@ func (problem *Problem) ComputeSignature(secret string, steps []*ProblemStep) st
 	v["options"] = problem.Options
 	v.Add("createdAt", problem.CreatedAt.AsTime().Round(time.Second).UTC().Format(time.RFC3339))
 	v.Add("updatedAt", problem.UpdatedAt.AsTime().Round(time.Second).UTC().Format(time.RFC3339))
-	for n, step := range steps {
-		if step == nil {
-			v.Add(fmt.Sprintf("step-%d-nil", n+1), "")
-			continue
-		}
-		v.Add(fmt.Sprintf("step-%d-problem-type", step.Step), step.ProblemType)
-		v.Add(fmt.Sprintf("step-%d-note", step.Step), step.Note)
-		v.Add(fmt.Sprintf("step-%d-weight", step.Step), strconv.FormatFloat(step.Weight, 'g', -1, 64))
-		for name, contents := range step.Files {
-			v.Add(fmt.Sprintf("step-%d-file-%s", step.Step, name), string(contents))
-		}
-		for name := range step.Whitelist {
-			v.Add(fmt.Sprintf("step-%d-whitelist-%s", step.Step, name), "true")
-		}
-	}
-
+	   for n, step := range steps {
+			if step == nil {
+				v.Add(fmt.Sprintf("step-%d-nil", n+1), "")
+				continue
+			}
+			v.Add(fmt.Sprintf("step-%d-problem-type", step.Step), step.ProblemType)
+			v.Add(fmt.Sprintf("step-%d-note", step.Step), step.Note)
+			v.Add(fmt.Sprintf("step-%d-weight", step.Step), strconv.FormatFloat(step.Weight, 'g', -1, 64))
+			for _, file := range step.Files {
+				v.Add(fmt.Sprintf("step-%d-file-%s", step.Step, file.Path), string(file.Contents))
+			}
+			for _, name := range step.Whitelist {
+				v.Add(fmt.Sprintf("step-%d-whitelist-%s", step.Step, name), "true")
+			}
+	   }
 	// compute signature
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write(encode(v))
@@ -150,25 +158,24 @@ func (problemType *ProblemType) ComputeSignature(secret string) string {
 	v := make(url.Values)
 
 	// gather all relevant fields
-	v.Add("name", problemType.Name)
-	v.Add("image", problemType.Image)
-	for name, contents := range problemType.Files {
-		v.Add(fmt.Sprintf("file-%s", name), string(contents))
-	}
-	for name, action := range problemType.Actions {
-		v.Add(fmt.Sprintf("action-%s-command", name), action.Command)
-		v.Add(fmt.Sprintf("action-%s-parser", name), action.Parser)
-		v.Add(fmt.Sprintf("action-%s-message", name), action.Message)
-		v.Add(fmt.Sprintf("action-%s-interactive", name), strconv.FormatBool(action.Interactive))
-		v.Add(fmt.Sprintf("action-%s-max-cpu", name), strconv.FormatInt(action.MaxCpu, 10))
-		v.Add(fmt.Sprintf("action-%s-max-session", name), strconv.FormatInt(action.MaxSession, 10))
-		v.Add(fmt.Sprintf("action-%s-max-timeout", name), strconv.FormatInt(action.MaxTimeout, 10))
-		v.Add(fmt.Sprintf("action-%s-max-fd", name), strconv.FormatInt(action.MaxFd, 10))
-		v.Add(fmt.Sprintf("action-%s-max-file-size", name), strconv.FormatInt(action.MaxFileSize, 10))
-		v.Add(fmt.Sprintf("action-%s-max-memory", name), strconv.FormatInt(action.MaxMemory, 10))
-		v.Add(fmt.Sprintf("action-%s-max-threads", name), strconv.FormatInt(action.MaxThreads, 10))
-	}
-
+	   v.Add("name", problemType.Name)
+	   v.Add("image", problemType.Image)
+	   for _, file := range problemType.Files {
+			v.Add(fmt.Sprintf("file-%s", file.Path), string(file.Contents))
+	   }
+	   for _, action := range problemType.Actions {
+			v.Add(fmt.Sprintf("action-%s-command", action.Action), action.Command)
+			v.Add(fmt.Sprintf("action-%s-parser", action.Action), action.Parser)
+			v.Add(fmt.Sprintf("action-%s-message", action.Action), action.Message)
+			v.Add(fmt.Sprintf("action-%s-interactive", action.Action), strconv.FormatBool(action.Interactive))
+			v.Add(fmt.Sprintf("action-%s-max-cpu", action.Action), strconv.FormatInt(action.MaxCpu, 10))
+			v.Add(fmt.Sprintf("action-%s-max-session", action.Action), strconv.FormatInt(action.MaxSession, 10))
+			v.Add(fmt.Sprintf("action-%s-max-timeout", action.Action), strconv.FormatInt(action.MaxTimeout, 10))
+			v.Add(fmt.Sprintf("action-%s-max-fd", action.Action), strconv.FormatInt(action.MaxFd, 10))
+			v.Add(fmt.Sprintf("action-%s-max-file-size", action.Action), strconv.FormatInt(action.MaxFileSize, 10))
+			v.Add(fmt.Sprintf("action-%s-max-memory", action.Action), strconv.FormatInt(action.MaxMemory, 10))
+			v.Add(fmt.Sprintf("action-%s-max-threads", action.Action), strconv.FormatInt(action.MaxThreads, 10))
+	   }
 	// compute signature
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write(encode(v))
@@ -189,48 +196,49 @@ func (step *ProblemStep) Normalize(n int64) error {
 		return fmt.Errorf("error building instructions for step %d: %v", n, err)
 	}
 	step.Instructions = instructions
-	if step.Weight <= 0.0 {
-		// default to 1.0
-		step.Weight = 1.0
-	}
-	clean := make(map[string][]byte)
-	for name, contents := range step.Files {
-		dir := filepath.Dir(filepath.FromSlash(name))
-		fixed := contents
-		if (dir == "." || !ProblemStepDirectoryWhitelist[dir]) && utf8.Valid(contents) {
-			fixed = fixLineEndings(contents)
-			if !bytes.Equal(fixed, contents) {
-				log.Printf("fixed line endings for %s", name)
-			}
-		} else if utf8.Valid(contents) {
-			fixed = fixNewLines(contents)
-			if !bytes.Equal(fixed, contents) {
-				log.Printf("fixed newlines for %s", name)
-			}
+	   if step.Weight <= 0.0 {
+			// default to 1.0
+			step.Weight = 1.0
 		}
-		clean[name] = fixed
+		clean := []*File{}
+		for _, file := range step.Files {
+			dir := filepath.Dir(filepath.FromSlash(file.Path))
+			fixed := file.Contents
+			if (dir == "." || !ProblemStepDirectoryWhitelist[dir]) && utf8.Valid(file.Contents) {
+				fixed = fixLineEndings(file.Contents)
+				if !bytes.Equal(fixed, file.Contents) {
+					log.Printf("fixed line endings for %s", file.Path)
+				}
+			} else if utf8.Valid(file.Contents) {
+				fixed = fixNewLines(file.Contents)
+				if !bytes.Equal(fixed, file.Contents) {
+					log.Printf("fixed newlines for %s", file.Path)
+				}
+			}
+			clean = append(clean, &File{Path: file.Path, Contents: fixed})
+		}
+		step.Files = clean
+		return nil
 	}
-	step.Files = clean
-	return nil
-}
-
 // BuildInstructions builds the instructions for a ProblemStep as HTML
 func (step *ProblemStep) BuildInstructions() (string, error) {
 	// get a list of all files in the doc directory
 	used := make(map[string]bool)
-	for name := range step.Files {
-		if filepath.Dir(name) == "doc" {
-			used[name] = false
+	fileMap := make(map[string]*File)
+	for _, file := range step.Files {
+		fileMap[file.Path] = file
+		if filepath.Dir(file.Path) == "doc" {
+			used[file.Path] = false
 		}
 	}
 
 	var justHTML []byte
 	dochtml := filepath.Join("doc", "doc.html")
 	docmd := filepath.Join("doc", "doc.md")
-	if data, ok := step.Files[dochtml]; ok {
-		justHTML = data
+	if file, ok := fileMap[dochtml]; ok {
+		justHTML = file.Contents
 		used[dochtml] = true
-	} else if data, ok := step.Files[docmd]; ok {
+	} else if file, ok := fileMap[docmd]; ok {
 		// render markdown
 		var extensions blackfriday.Extensions
 		extensions |= blackfriday.NoIntraEmphasis
@@ -242,7 +250,7 @@ func (step *ProblemStep) BuildInstructions() (string, error) {
 
 		renderer := blackfriday.NewHTMLRenderer(blackfriday.HTMLRendererParameters{})
 
-		justHTML = blackfriday.Run(data,
+		justHTML = blackfriday.Run(file.Contents,
 			blackfriday.WithExtensions(extensions),
 			blackfriday.WithRenderer(renderer))
 		used[docmd] = true
@@ -273,7 +281,7 @@ func (step *ProblemStep) BuildInstructions() (string, error) {
 				if a.Key == "src" {
 					if strings.HasPrefix(a.Val, "data:") {
 						// do nothing--the data is already encoded in the tag
-					} else if contents, present := step.Files[filepath.Join("doc", a.Val)]; present {
+					} else if file, present := fileMap[filepath.Join("doc", a.Val)]; present {
 						mime := ""
 						switch {
 						case strings.HasSuffix(a.Val, ".gif"):
@@ -293,7 +301,7 @@ func (step *ProblemStep) BuildInstructions() (string, error) {
 						// base64 encode the image
 						log.Printf("encoding image %s as base64 data URI", a.Val)
 						used[filepath.Join("doc", a.Val)] = true
-						s := base64.StdEncoding.EncodeToString(contents)
+						s := base64.StdEncoding.EncodeToString(file.Contents)
 						a.Val = fmt.Sprintf("data:%s;base64,%s", mime, s)
 						n.Attr[i] = a
 					} else {

@@ -34,9 +34,10 @@ message Course {
   google.protobuf.Timestamp updated_at = 7;
 }
 
-// ScoreList represents a list of scores for a major category
-message ScoreList {
-  repeated double scores = 1;
+// ScoreEntry represents a single score entry with a key and a list of scores
+message ScoreEntry {
+  string key = 1;
+  repeated string scores = 2;
 }
 
 // Assignment represents a single instance of a problem set for a student in a course.
@@ -47,7 +48,7 @@ message Assignment {
   int64 user_id = 4;
   string roles = 5;
   bool instructor = 6;
-  map<string, ScoreList> raw_scores = 7;
+  repeated ScoreEntry raw_scores = 7;
   double score = 8;
   string grade_id = 9;
   string lti_id = 10;
@@ -80,8 +81,8 @@ message ProblemSet {
 message ProblemType {
    string name = 1;
    string image = 2;
-   map<string, string> files = 3;
-   map<string, ProblemTypeAction> actions = 4;
+   repeated File files = 3;
+   repeated ProblemTypeAction actions = 4;
 }
 
 // ProblemTypeAction defines the labels, parser, interactivity, and handler for a
@@ -100,6 +101,12 @@ message ProblemTypeAction {
    int64 max_file_size = 11;
    int64 max_memory = 12;
    int64 max_threads = 13;
+}
+
+// File represents a file with a path and contents.
+message File {
+  string path = 1;
+  bytes contents = 2;
 }
 
 // Problem represents a single problem.
@@ -121,9 +128,9 @@ message ProblemStep {
    string note = 4;
    string instructions = 5;
    double weight = 6;
-   map<string, string> files = 7;
-   map<string, bool> whitelist = 8;
-   map<string, string> solution = 9;
+   repeated File files = 7;
+   repeated string whitelist = 8;
+   repeated File solution = 9;
 }
 
 // ProblemSetProblem represents a problem in a problem set.
@@ -158,10 +165,10 @@ message EventMessage {
    string event = 2;
    repeated string exec_command = 3;
    int32 exit_status = 4;
-   string stream_data = 5;
+   bytes stream_data = 5;
    string error = 6;
    ReportCard report_card = 7;
-   map<string, string> files = 8;
+   repeated File files = 8;
 }
 
 // Commit defines an attempt at solving one step of a Problem.
@@ -172,7 +179,7 @@ message Commit {
    int64 step = 4;
    string action = 5;
    string note = 6;
-   map<string, string> files = 7;
+   repeated File files = 7;
    repeated EventMessage transcript = 8;
    ReportCard report_card = 9;
    double score = 10;
@@ -182,8 +189,8 @@ message Commit {
 
 // ProblemBundle represents a bundle of problem data.
 message ProblemBundle {
-   map<string, ProblemType> problem_types = 1;
-   map<string, string> problem_type_signatures = 2;
+   repeated ProblemType problem_types = 1;
+   repeated Signature problem_type_signatures = 2;
    Problem problem = 3;
    repeated ProblemStep problem_steps = 4;
    string problem_signature = 5;
@@ -197,6 +204,12 @@ message ProblemBundle {
 message ProblemSetBundle {
    ProblemSet problem_set = 1;
    repeated ProblemSetProblem problem_set_problems = 2;
+}
+
+// Signature represents a problem type signature.
+message Signature {
+  string problem_type = 1;
+  string signature = 2;
 }
 
 // CommitBundle represents a bundle of commit data.
