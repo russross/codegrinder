@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/go-martini/martini"
+	"github.com/improbable-eng/grpc-web/go/grpcweb"
 	"github.com/martini-contrib/binding"
 	mgzip "github.com/martini-contrib/gzip"
 	"github.com/martini-contrib/render"
@@ -483,8 +484,8 @@ func main() {
 
 		// set up gRPC server
 		grpcServer = grpc.NewServer(
-			grpc.RPCCompressor(grpc.NewGZIPCompressor()),
-			grpc.RPCDecompressor(grpc.NewGZIPDecompressor()),
+			//grpc.RPCCompressor(grpc.NewGZIPCompressor()),
+			//grpc.RPCDecompressor(grpc.NewGZIPDecompressor()),
 		)
 		pb.RegisterCodeGrinderServiceServer(grpcServer, &codeGrinderServiceServer{})
 		reflection.Register(grpcServer)
@@ -504,29 +505,36 @@ func main() {
 			Client:     acmeClient,
 		}
 
-		// Create unified handler that routes between gRPC and HTTP
+		// Wrap the gRPC server to handle gRPC-Web requests
+		wrappedGrpc := grpcweb.WrapServer(grpcServer,
+			// Enable CORS for gRPC-Web from any origin
+			grpcweb.WithOriginFunc(func(origin string) bool {
+				return true
+			}),
+		)
+
+		// Create unified handler that routes between gRPC-Web, gRPC, and HTTP
 		unifiedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Check if this is a gRPC request
+			// 1. Check for gRPC-Web requests
+			if wrappedGrpc.IsGrpcWebRequest(r) {
+				wrappedGrpc.ServeHTTP(w, r)
+				return
+			}
+			// 2. Check for native gRPC requests
 			if r.ProtoMajor == 2 && strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
 				grpcServer.ServeHTTP(w, r)
-			} else {
-				// Handle as regular HTTP (Martini) request
-				m.ServeHTTP(w, r)
+				return
 			}
+			// 3. Fallback to the Martini REST handler
+			m.ServeHTTP(w, r)
 		})
 
 		// Configure TLS with HTTP/2 support
 		tlsConfig := &tls.Config{
 			PreferServerCipherSuites: true,
-			MinVersion:               tls.VersionTLS13,
-			NextProtos:               []string{"h2", "http/1.1", acme.ALPNProto},
-			GetCertificate: func(chi *tls.ClientHelloInfo) (*tls.Certificate, error) {
-				cert, err := lem.GetCertificate(chi)
-				if err != nil {
-					log.Printf("GetCertificate error for SNI %q: %v", chi.ServerName, err)
-				}
-				return cert, err
-			},
+			MinVersion:               tls.VersionTLS12,
+			NextProtos:               []string{"h2", "http/1.1", acme.ALPNProto}, // Enable HTTP/2
+			GetCertificate:           lem.GetCertificate,
 		}
 
 		// Create single HTTPS server that handles both protocols
@@ -544,7 +552,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("net.Listen(\"tcp4\"): %v", err)
 		}
-		log.Printf("accepting https connections (HTTP and gRPC) on 0.0.0.0:443")
+		log.Printf("accepting https connections (HTTP, gRPC, and gRPC-Web) on 0.0.0.0:443")
 
 		// 2. Wrap the listener in a TLS listener
 		tlsListener := tls.NewListener(listener, server.TLSConfig)
@@ -553,26 +561,31 @@ func main() {
 		if err := server.Serve(tlsListener); err != nil {
 			log.Fatalf("server.Serve: %v", err)
 		}
-		/*
-			log.Printf("accepting https connections (HTTP and gRPC) on :443")
-			if err := server.ListenAndServeTLS("", ""); err != nil {
-				log.Fatalf("ListenAndServeTLS: %v", err)
-			}
-		*/
 	} else {
 		// run without TLS
 		// note: this will work behind a TLS proxy or for debugging with some calls
 		// but LTI will refuse to connect to an insecure host
+
+		// Wrap the gRPC server to handle gRPC-Web requests
+		wrappedGrpc := grpcweb.WrapServer(grpcServer,
+			// Enable CORS for gRPC-Web from any origin
+			grpcweb.WithOriginFunc(func(origin string) bool {
+				return true
+			}),
+		)
+
 		unifiedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// For non-TLS, gRPC detection is simpler (still check content-type)
-			if strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
+			// Route gRPC-Web, gRPC, and HTTP requests to the correct handler
+			if wrappedGrpc.IsGrpcWebRequest(r) {
+				wrappedGrpc.ServeHTTP(w, r)
+			} else if strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
 				grpcServer.ServeHTTP(w, r)
 			} else {
 				m.ServeHTTP(w, r)
 			}
 		})
 
-		log.Printf("accepting http connections (HTTP and gRPC) on %s", nonTLSAddress)
+		log.Printf("accepting http connections (HTTP, gRPC, and gRPC-Web) on %s", nonTLSAddress)
 		if err := http.ListenAndServe(nonTLSAddress, unifiedHandler); err != nil {
 			log.Fatalf("ListenAndServe: %v", err)
 		}
