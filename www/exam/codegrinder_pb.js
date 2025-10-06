@@ -4149,7 +4149,7 @@ proto.codegrinder.ProblemType.deserializeBinaryFromReader = function(msg, reader
     case 3:
       var value = msg.getFilesMap();
       reader.readMessage(value, function(message, reader) {
-        jspb.Map.deserializeBinary(message, reader, jspb.BinaryReader.prototype.readString, jspb.BinaryReader.prototype.readBytes, null, "", "");
+        jspb.Map.deserializeBinary(message, reader, jspb.BinaryReader.prototype.readString, jspb.BinaryReader.prototype.readString, null, "", "");
          });
       break;
     case 4:
@@ -4203,7 +4203,7 @@ proto.codegrinder.ProblemType.serializeBinaryToWriter = function(message, writer
   }
   f = message.getFilesMap(true);
   if (f && f.getLength() > 0) {
-    f.serializeBinary(3, writer, jspb.BinaryWriter.prototype.writeString, jspb.BinaryWriter.prototype.writeBytes);
+    f.serializeBinary(3, writer, jspb.BinaryWriter.prototype.writeString, jspb.BinaryWriter.prototype.writeString);
   }
   f = message.getActionsMap(true);
   if (f && f.getLength() > 0) {
@@ -4249,13 +4249,13 @@ proto.codegrinder.ProblemType.prototype.setImage = function(value) {
 
 
 /**
- * map<string, bytes> files = 3;
+ * map<string, string> files = 3;
  * @param {boolean=} opt_noLazyCreate Do not create the map if
  * empty, instead returning `undefined`
- * @return {!jspb.Map<string,!(string|Uint8Array)>}
+ * @return {!jspb.Map<string,string>}
  */
 proto.codegrinder.ProblemType.prototype.getFilesMap = function(opt_noLazyCreate) {
-  return /** @type {!jspb.Map<string,!(string|Uint8Array)>} */ (
+  return /** @type {!jspb.Map<string,string>} */ (
       jspb.Message.getMapField(this, 3, opt_noLazyCreate,
       null));
 };
@@ -5285,7 +5285,7 @@ proto.codegrinder.ProblemStep.deserializeBinaryFromReader = function(msg, reader
     case 7:
       var value = msg.getFilesMap();
       reader.readMessage(value, function(message, reader) {
-        jspb.Map.deserializeBinary(message, reader, jspb.BinaryReader.prototype.readString, jspb.BinaryReader.prototype.readBytes, null, "", "");
+        jspb.Map.deserializeBinary(message, reader, jspb.BinaryReader.prototype.readString, jspb.BinaryReader.prototype.readString, null, "", "");
          });
       break;
     case 8:
@@ -5297,7 +5297,7 @@ proto.codegrinder.ProblemStep.deserializeBinaryFromReader = function(msg, reader
     case 9:
       var value = msg.getSolutionMap();
       reader.readMessage(value, function(message, reader) {
-        jspb.Map.deserializeBinary(message, reader, jspb.BinaryReader.prototype.readString, jspb.BinaryReader.prototype.readBytes, null, "", "");
+        jspb.Map.deserializeBinary(message, reader, jspb.BinaryReader.prototype.readString, jspb.BinaryReader.prototype.readString, null, "", "");
          });
       break;
     default:
@@ -5373,7 +5373,7 @@ proto.codegrinder.ProblemStep.serializeBinaryToWriter = function(message, writer
   }
   f = message.getFilesMap(true);
   if (f && f.getLength() > 0) {
-    f.serializeBinary(7, writer, jspb.BinaryWriter.prototype.writeString, jspb.BinaryWriter.prototype.writeBytes);
+    f.serializeBinary(7, writer, jspb.BinaryWriter.prototype.writeString, jspb.BinaryWriter.prototype.writeString);
   }
   f = message.getWhitelistMap(true);
   if (f && f.getLength() > 0) {
@@ -5381,7 +5381,7 @@ proto.codegrinder.ProblemStep.serializeBinaryToWriter = function(message, writer
   }
   f = message.getSolutionMap(true);
   if (f && f.getLength() > 0) {
-    f.serializeBinary(9, writer, jspb.BinaryWriter.prototype.writeString, jspb.BinaryWriter.prototype.writeBytes);
+    f.serializeBinary(9, writer, jspb.BinaryWriter.prototype.writeString, jspb.BinaryWriter.prototype.writeString);
   }
 };
 
@@ -5495,13 +5495,13 @@ proto.codegrinder.ProblemStep.prototype.setWeight = function(value) {
 
 
 /**
- * map<string, bytes> files = 7;
+ * map<string, string> files = 7;
  * @param {boolean=} opt_noLazyCreate Do not create the map if
  * empty, instead returning `undefined`
- * @return {!jspb.Map<string,!(string|Uint8Array)>}
+ * @return {!jspb.Map<string,string>}
  */
 proto.codegrinder.ProblemStep.prototype.getFilesMap = function(opt_noLazyCreate) {
-  return /** @type {!jspb.Map<string,!(string|Uint8Array)>} */ (
+  return /** @type {!jspb.Map<string,string>} */ (
       jspb.Message.getMapField(this, 7, opt_noLazyCreate,
       null));
 };
@@ -5541,13 +5541,13 @@ proto.codegrinder.ProblemStep.prototype.clearWhitelistMap = function() {
 
 
 /**
- * map<string, bytes> solution = 9;
+ * map<string, string> solution = 9;
  * @param {boolean=} opt_noLazyCreate Do not create the map if
  * empty, instead returning `undefined`
- * @return {!jspb.Map<string,!(string|Uint8Array)>}
+ * @return {!jspb.Map<string,string>}
  */
 proto.codegrinder.ProblemStep.prototype.getSolutionMap = function(opt_noLazyCreate) {
-  return /** @type {!jspb.Map<string,!(string|Uint8Array)>} */ (
+  return /** @type {!jspb.Map<string,string>} */ (
       jspb.Message.getMapField(this, 9, opt_noLazyCreate,
       null));
 };
@@ -6287,7 +6287,7 @@ time: (f = msg.getTime()) && google_protobuf_timestamp_pb.Timestamp.toObject(inc
 event: jspb.Message.getFieldWithDefault(msg, 2, ""),
 execCommandList: (f = jspb.Message.getRepeatedField(msg, 3)) == null ? undefined : f,
 exitStatus: jspb.Message.getFieldWithDefault(msg, 4, 0),
-streamData: msg.getStreamData_asB64(),
+streamData: jspb.Message.getFieldWithDefault(msg, 5, ""),
 error: jspb.Message.getFieldWithDefault(msg, 6, ""),
 reportCard: (f = msg.getReportCard()) && proto.codegrinder.ReportCard.toObject(includeInstance, f),
 filesMap: (f = msg.getFilesMap()) ? f.toObject(includeInstance, undefined) : []
@@ -6345,7 +6345,7 @@ proto.codegrinder.EventMessage.deserializeBinaryFromReader = function(msg, reade
       msg.setExitStatus(value);
       break;
     case 5:
-      var value = /** @type {!Uint8Array} */ (reader.readBytes());
+      var value = /** @type {string} */ (reader.readString());
       msg.setStreamData(value);
       break;
     case 6:
@@ -6360,7 +6360,7 @@ proto.codegrinder.EventMessage.deserializeBinaryFromReader = function(msg, reade
     case 8:
       var value = msg.getFilesMap();
       reader.readMessage(value, function(message, reader) {
-        jspb.Map.deserializeBinary(message, reader, jspb.BinaryReader.prototype.readString, jspb.BinaryReader.prototype.readBytes, null, "", "");
+        jspb.Map.deserializeBinary(message, reader, jspb.BinaryReader.prototype.readString, jspb.BinaryReader.prototype.readString, null, "", "");
          });
       break;
     default:
@@ -6421,9 +6421,9 @@ proto.codegrinder.EventMessage.serializeBinaryToWriter = function(message, write
       f
     );
   }
-  f = message.getStreamData_asU8();
+  f = message.getStreamData();
   if (f.length > 0) {
-    writer.writeBytes(
+    writer.writeString(
       5,
       f
     );
@@ -6445,7 +6445,7 @@ proto.codegrinder.EventMessage.serializeBinaryToWriter = function(message, write
   }
   f = message.getFilesMap(true);
   if (f && f.getLength() > 0) {
-    f.serializeBinary(8, writer, jspb.BinaryWriter.prototype.writeString, jspb.BinaryWriter.prototype.writeBytes);
+    f.serializeBinary(8, writer, jspb.BinaryWriter.prototype.writeString, jspb.BinaryWriter.prototype.writeString);
   }
 };
 
@@ -6561,44 +6561,20 @@ proto.codegrinder.EventMessage.prototype.setExitStatus = function(value) {
 
 
 /**
- * optional bytes stream_data = 5;
- * @return {!(string|Uint8Array)}
- */
-proto.codegrinder.EventMessage.prototype.getStreamData = function() {
-  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 5, ""));
-};
-
-
-/**
- * optional bytes stream_data = 5;
- * This is a type-conversion wrapper around `getStreamData()`
+ * optional string stream_data = 5;
  * @return {string}
  */
-proto.codegrinder.EventMessage.prototype.getStreamData_asB64 = function() {
-  return /** @type {string} */ (jspb.Message.bytesAsB64(
-      this.getStreamData()));
+proto.codegrinder.EventMessage.prototype.getStreamData = function() {
+  return /** @type {string} */ (jspb.Message.getFieldWithDefault(this, 5, ""));
 };
 
 
 /**
- * optional bytes stream_data = 5;
- * Note that Uint8Array is not supported on all browsers.
- * @see http://caniuse.com/Uint8Array
- * This is a type-conversion wrapper around `getStreamData()`
- * @return {!Uint8Array}
- */
-proto.codegrinder.EventMessage.prototype.getStreamData_asU8 = function() {
-  return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
-      this.getStreamData()));
-};
-
-
-/**
- * @param {!(string|Uint8Array)} value
+ * @param {string} value
  * @return {!proto.codegrinder.EventMessage} returns this
  */
 proto.codegrinder.EventMessage.prototype.setStreamData = function(value) {
-  return jspb.Message.setProto3BytesField(this, 5, value);
+  return jspb.Message.setProto3StringField(this, 5, value);
 };
 
 
@@ -6658,13 +6634,13 @@ proto.codegrinder.EventMessage.prototype.hasReportCard = function() {
 
 
 /**
- * map<string, bytes> files = 8;
+ * map<string, string> files = 8;
  * @param {boolean=} opt_noLazyCreate Do not create the map if
  * empty, instead returning `undefined`
- * @return {!jspb.Map<string,!(string|Uint8Array)>}
+ * @return {!jspb.Map<string,string>}
  */
 proto.codegrinder.EventMessage.prototype.getFilesMap = function(opt_noLazyCreate) {
-  return /** @type {!jspb.Map<string,!(string|Uint8Array)>} */ (
+  return /** @type {!jspb.Map<string,string>} */ (
       jspb.Message.getMapField(this, 8, opt_noLazyCreate,
       null));
 };
@@ -6795,7 +6771,7 @@ proto.codegrinder.Commit.deserializeBinaryFromReader = function(msg, reader) {
     case 7:
       var value = msg.getFilesMap();
       reader.readMessage(value, function(message, reader) {
-        jspb.Map.deserializeBinary(message, reader, jspb.BinaryReader.prototype.readString, jspb.BinaryReader.prototype.readBytes, null, "", "");
+        jspb.Map.deserializeBinary(message, reader, jspb.BinaryReader.prototype.readString, jspb.BinaryReader.prototype.readString, null, "", "");
          });
       break;
     case 8:
@@ -6895,7 +6871,7 @@ proto.codegrinder.Commit.serializeBinaryToWriter = function(message, writer) {
   }
   f = message.getFilesMap(true);
   if (f && f.getLength() > 0) {
-    f.serializeBinary(7, writer, jspb.BinaryWriter.prototype.writeString, jspb.BinaryWriter.prototype.writeBytes);
+    f.serializeBinary(7, writer, jspb.BinaryWriter.prototype.writeString, jspb.BinaryWriter.prototype.writeString);
   }
   f = message.getTranscriptList();
   if (f.length > 0) {
@@ -7048,13 +7024,13 @@ proto.codegrinder.Commit.prototype.setNote = function(value) {
 
 
 /**
- * map<string, bytes> files = 7;
+ * map<string, string> files = 7;
  * @param {boolean=} opt_noLazyCreate Do not create the map if
  * empty, instead returning `undefined`
- * @return {!jspb.Map<string,!(string|Uint8Array)>}
+ * @return {!jspb.Map<string,string>}
  */
 proto.codegrinder.Commit.prototype.getFilesMap = function(opt_noLazyCreate) {
-  return /** @type {!jspb.Map<string,!(string|Uint8Array)>} */ (
+  return /** @type {!jspb.Map<string,string>} */ (
       jspb.Message.getMapField(this, 7, opt_noLazyCreate,
       null));
 };

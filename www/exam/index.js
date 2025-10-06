@@ -245,7 +245,7 @@ async function loadProblem(client, assignment, problemSetProblem, problemTypes) 
         unique: problem.getUnique(),
         note: problem.getNote(),
         merged_file_list: [...mergedFiles.keys()],
-        problem_type: problemType.toObject(),
+        problem_type: problemType,
         merged_files: mergedFiles,
         instructions: currentStep.getInstructions(),
         current_step_number: step, // Store the current step number
@@ -313,7 +313,7 @@ async function nextStep(client, assignment, problem, oldStep, mergedFiles, probl
                 const problemTypeResponse = await client.getProblemType(problemTypeRequest, {});
                 problemTypes.set(newStep.getProblemType(), problemTypeResponse.getProblemType());
             }
-            window.problemSet[problemIndex].problem_type = problemTypes.get(newStep.getProblemType()).toObject();
+            window.problemSet[problemIndex].problem_type = problemTypes.get(newStep.getProblemType());
         }
 
     } catch (err) {
@@ -336,7 +336,7 @@ async function handleDaycare(bundle) {
     const daycareClient = new CodeGrinderServicePromiseClient(bundle.getHostname() || window.location.origin);
     const daycareRequest = new DaycareRequest()
         .setCommitBundle(bundle)
-        .setProblemType(currentProblem.problem_type.name)
+        .setProblemType(currentProblem.problem_type.getName())
         .setAction(bundle.getCommit().getAction())
         .setArgsList([]); // Empty list of strings
 
@@ -477,7 +477,7 @@ async function doAction(action) {
         }
 
         // 6. Print the message field from the ProblemStepAction
-        const problemTypeActionsMap = new Map(currentProblem.problem_type.actionsMap);
+        const problemTypeActionsMap = currentProblem.problem_type.getActionsMap();
         const problemStepAction = problemTypeActionsMap.get(action);
         if (problemStepAction && problemStepAction.getMessage()) {
             term.writeln(problemStepAction.getMessage());
@@ -632,10 +632,11 @@ function renderMenuBar() {
 
     // 4. Actions Buttons
     // Ensure problem_type and actionsMap exist before accessing
-    const actionsMap = currentProblem.problem_type && currentProblem.problem_type.actionsMap ? currentProblem.problem_type.actionsMap : []; // Initialize as array
-    let availableActions = actionsMap
-        .map(action => {
-            return { name: action[0], text: action[0].charAt(0).toUpperCase() + action[0].slice(1) };
+    const actionsMap = currentProblem.problem_type.getActionsMap();
+    const actionsList = actionsMap.getEntryList(); // Array of [key, value]
+    let availableActions = actionsList
+        .map(([name, actionObj]) => {
+            return { name, text: name.charAt(0).toUpperCase() + name.slice(1) };
         })
         .sort((a, b) => a.name.localeCompare(b.name)); // Sort actions alphabetically
 

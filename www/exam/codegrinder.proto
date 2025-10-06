@@ -80,7 +80,7 @@ message ProblemSet {
 message ProblemType {
    string name = 1;
    string image = 2;
-   map<string, bytes> files = 3;
+   map<string, string> files = 3;
    map<string, ProblemTypeAction> actions = 4;
 }
 
@@ -121,9 +121,9 @@ message ProblemStep {
    string note = 4;
    string instructions = 5;
    double weight = 6;
-   map<string, bytes> files = 7;
+   map<string, string> files = 7;
    map<string, bool> whitelist = 8;
-   map<string, bytes> solution = 9;
+   map<string, string> solution = 9;
 }
 
 // ProblemSetProblem represents a problem in a problem set.
@@ -158,10 +158,10 @@ message EventMessage {
    string event = 2;
    repeated string exec_command = 3;
    int32 exit_status = 4;
-   bytes stream_data = 5;
+   string stream_data = 5;
    string error = 6;
    ReportCard report_card = 7;
-   map<string, bytes> files = 8;
+   map<string, string> files = 8;
 }
 
 // Commit defines an attempt at solving one step of a Problem.
@@ -172,7 +172,7 @@ message Commit {
    int64 step = 4;
    string action = 5;
    string note = 6;
-   map<string, bytes> files = 7;
+   map<string, string> files = 7;
    repeated EventMessage transcript = 8;
    ReportCard report_card = 9;
    double score = 10;
