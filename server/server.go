@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"crypto/hmac"
@@ -135,6 +136,8 @@ func main() {
 	}
 	Config.SessionSecret = unBase64(Config.SessionSecret)
 	Config.DaycareSecret = unBase64(Config.DaycareSecret)
+
+	loadIPWhitelist()
 
 	if Config.Hostname == "" {
 		log.Fatalf("cannot run with no hostname in the config file")
@@ -484,8 +487,8 @@ func main() {
 
 		// set up gRPC server
 		grpcServer = grpc.NewServer(
-			//grpc.RPCCompressor(grpc.NewGZIPCompressor()),
-			//grpc.RPCDecompressor(grpc.NewGZIPDecompressor()),
+		//grpc.RPCCompressor(grpc.NewGZIPCompressor()),
+		//grpc.RPCDecompressor(grpc.NewGZIPDecompressor()),
 		)
 		pb.RegisterCodeGrinderServiceServer(grpcServer, &codeGrinderServiceServer{})
 		reflection.Register(grpcServer)
@@ -515,6 +518,20 @@ func main() {
 
 		// Create unified handler that routes between gRPC-Web, gRPC, and HTTP
 		unifiedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Extract IP address from RemoteAddr
+			ip, _, err := net.SplitHostPort(r.RemoteAddr)
+			if err != nil {
+				log.Printf("error splitting host port for %s: %v", r.RemoteAddr, err)
+				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+				return
+			}
+
+			if !isIPWhitelisted(ip) {
+				log.Printf("rejected non-whitelisted IP: %s", ip)
+				http.Error(w, "Forbidden", http.StatusForbidden)
+				return
+			}
+
 			// 1. Check for gRPC-Web requests
 			if wrappedGrpc.IsGrpcWebRequest(r) {
 				wrappedGrpc.ServeHTTP(w, r)
@@ -575,6 +592,20 @@ func main() {
 		)
 
 		unifiedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Extract IP address from RemoteAddr
+			ip, _, err := net.SplitHostPort(r.RemoteAddr)
+			if err != nil {
+				log.Printf("error splitting host port for %s: %v", r.RemoteAddr, err)
+				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+				return
+			}
+
+			if !isIPWhitelisted(ip) {
+				log.Printf("rejected non-whitelisted IP: %s", ip)
+				http.Error(w, "Forbidden", http.StatusForbidden)
+				return
+			}
+
 			// Route gRPC-Web, gRPC, and HTTP requests to the correct handler
 			if wrappedGrpc.IsGrpcWebRequest(r) {
 				wrappedGrpc.ServeHTTP(w, r)
@@ -658,6 +689,29 @@ func loggedErrorf(f string, params ...interface{}) error {
 	return fmt.Errorf(f, params...)
 }
 
+var ipWhitelist []*net.IPNet // Global variable to store parsed whitelist entries
+
+// isIPWhitelisted checks if the given IP address is in the whitelist.
+func isIPWhitelisted(ipStr string) bool {
+	// If the whitelist is empty or not loaded, allow all connections.
+	if len(ipWhitelist) == 0 {
+		return true
+	}
+
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		log.Printf("failed to parse IP address: %s", ipStr)
+		return false
+	}
+
+	for _, network := range ipWhitelist {
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
 func parseID(w http.ResponseWriter, name, s string) (int64, error) {
 	id, err := strconv.ParseInt(s, 10, 64)
 	if err != nil {
@@ -698,6 +752,71 @@ func unBase64(s string) string {
 		return string(raw)
 	}
 	return s
+}
+
+// loadIPWhitelist loads IP addresses and CIDR blocks from "whitelist.txt".
+// If the file is not found, IP filtering is disabled.
+func loadIPWhitelist() {
+	file, err := os.Open("whitelist.txt")
+	if os.IsNotExist(err) {
+		log.Printf("whitelist.txt not found, IP filtering disabled.")
+		return // ipWhitelist remains nil, so isIPWhitelisted will return true
+	}
+	if err != nil {
+		log.Printf("error opening whitelist.txt: %v", err)
+		return
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	var tempWhitelist []*net.IPNet
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue // Skip empty lines and comments
+		}
+
+		// Handle wildcard entries like 144.38.145.*
+		if strings.HasSuffix(line, ".*") {
+			line = strings.TrimSuffix(line, ".*") + ".0/24"
+		}
+
+		// Try parsing as CIDR
+		_, network, err := net.ParseCIDR(line)
+		if err == nil {
+			tempWhitelist = append(tempWhitelist, network)
+			continue
+		}
+
+		// Try parsing as single IP, then convert to /32 CIDR
+		ip := net.ParseIP(line)
+		if ip != nil {
+			// For IPv4, append /32. For IPv6, append /128.
+			maskSize := 32
+			if ip.To4() == nil { // It's an IPv6 address
+				maskSize = 128
+			}
+			_, network, err = net.ParseCIDR(fmt.Sprintf("%s/%d", ip.String(), maskSize))
+			if err == nil {
+				tempWhitelist = append(tempWhitelist, network)
+				continue
+			}
+		}
+
+		log.Printf("warning: invalid whitelist entry skipped: %s (error: %v)", line, err)
+	}
+
+	if err := scanner.Err(); err != nil {
+		log.Printf("error reading whitelist.txt: %v", err)
+		return
+	}
+
+	if len(tempWhitelist) > 0 {
+		ipWhitelist = tempWhitelist
+		log.Printf("loaded %d IP whitelist entries from whitelist.txt", len(ipWhitelist))
+	} else {
+		log.Printf("whitelist.txt was empty or contained no valid entries, IP filtering disabled.")
+	}
 }
 
 type daycares struct {
