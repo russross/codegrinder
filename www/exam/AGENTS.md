@@ -20,7 +20,7 @@ isolated fragments.
 - `.pushed_to_exam`: This file is a marker created by the `make` command after successfully pushing changes to the test server.
 - `index.html`: The main entry point of the application.
 - `codegrinder_pb.js` and `codegrinder_grpc_web_pb.js`: These are JavaScript files generated from the protobuf definition. They contain the message classes and the gRPC-web client service.
-- `rpc/codegrinder.proto`: The protobuf definition file that describes the gRPC services and messages.
+- `codegrinder.proto`: The protobuf definition file that describes the gRPC services and messages.
 - `Makefile`: Contains the build commands.
 - `package.json`: Defines the project's dependencies and scripts.
 - `webpack.config.js`: The configuration file for webpack, which is used to bundle the JavaScript files.
@@ -58,12 +58,13 @@ This project went through a significant debugging and refactoring process. Here 
     *   **Inspect Server Code**: Understanding the server's configuration and code is crucial for debugging client-server communication issues.
     *   **Leverage Search**: Searching for error messages and library names can quickly lead to known issues, documentation, and solutions.
 
-6.  **Read rpc/codegrinder.proto**:
+6.  **Read codegrinder.proto**:
     *   **Do not assume**: A common source of errors is making
         incorrect assumptions about the protocol messages and field
-        names. Always check in rpc/codegrinder.proto or look at the
+        names. Always check in codegrinder.proto or look at the
         generated files if more specific details are needed.
 
 7.  **Protobuf Object Handling**:
+    *   **Initialize Nested Objects**: The error `TypeError: f.serializeBinary is not a function` often indicates that a nested protobuf message field within a parent protobuf object has not been properly initialized. When creating new protobuf objects, ensure that all nested message fields are explicitly set to new instances of their respective protobuf classes, even if they are empty. For example, if `Commit` has a `ReportCard` field, and `ReportCard` has a `Duration` field, then when creating a new `Commit` object, you must also create a new `ReportCard` object and a new `Duration` object and set them accordingly (e.g., `commit.setReportCard(new ReportCard().setDuration(new Duration()))`). This also applies to repeated fields, which should be initialized as empty arrays (e.g., `commit.setTranscriptList([])`).
     *   **Use Protobuf Objects Consistently**: Avoid converting protobuf message objects to plain JavaScript objects (using `.toObject()`) for use in application state. Mixing these two types of objects can lead to serialization errors (e.g., `f.serializeBinary is not a function`) when a function expects a full protobuf message object but receives a plain object.
     *   **Access Fields via Getters**: When working with a protobuf message object, always use the generated getter methods (e.g., `getFoo()`, `getBarMap()`, `getBazList()`) to access its fields. Do not access properties directly, as the internal structure is not guaranteed. For map fields, use methods like `getEntryList()` to get an array of key-value pairs or `has()` to check for a key's existence.

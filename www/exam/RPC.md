@@ -1,7 +1,7 @@
 gRPC message sequences
 ======================
 
-See `rpc/codegrinder.proto`, which defines the gRPC protocol. This
+See `codegrinder.proto`, which defines the gRPC protocol. This
 document uses the protocol definition names; you must translate
 naming conventions to what JavaScript gRPC-web expects to use these.
 
@@ -189,9 +189,9 @@ Here is the sequence:
         version of the file (NOT from the ProblemStep) into a map of
         "student files".
 
-    *   For files that ARE in the whitelist, replace the version in
-        the active file set with the version from the newly-loaded
-        `ProblemStep`.
+    *   For files that are NOT in the whitelist, replace the version
+        in the active file set with the version from the
+        newly-loaded `ProblemStep`.
 
 3.  Create a `Commit` object with the following fields populated:
 

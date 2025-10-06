@@ -7,3 +7,10 @@ push: .pushed_to_exam
 
 dist/bundle.js: index.js index.html webpack.config.js codegrinder_pb.js codegrinder_grpc_web_pb.js
 	./node_modules/.bin/webpack
+
+codegrinder_grpc_web_pb.js codegrinder_pb.js: codegrinder.proto
+	protoc \
+		--js_out=import_style=commonjs,binary:./ \
+		--grpc-web_out=import_style=commonjs,mode=grpcwebtext:./ \
+		--proto_path=. \
+		codegrinder.proto

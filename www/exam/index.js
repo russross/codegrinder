@@ -12,9 +12,14 @@ const {
     CommitBundle,
     PostCommitBundlesUnsignedRequest,
     PostCommitBundlesSignedRequest,
-    DaycareRequest
+    DaycareRequest,
+    ReportCard,
+    ProblemType,
+    Problem,
+    ProblemStep
 } = require('./codegrinder_pb');
 const { Timestamp } = require('google-protobuf/google/protobuf/timestamp_pb.js');
+const google_protobuf_duration_pb = require('google-protobuf/google/protobuf/duration_pb.js');
 const {EditorView, keymap} = require("@codemirror/view");
 const {defaultKeymap} = require("@codemirror/commands");
 const {basicSetup} = require("codemirror");
@@ -421,9 +426,9 @@ async function doAction(action) {
             }
         });
 
-        // For files that ARE in the whitelist, replace the version in the active file set with the version from the newly-loaded ProblemStep.
+        // For files that are NOT in the whitelist, replace the version in the active file set with the version from the newly-loaded ProblemStep.
         reloadedProblemStep.getFilesMap().forEach((content, path) => {
-            if (whitelist.has(path)) {
+            if (!whitelist.has(path)) {
                 currentProblem.merged_files.set(path, content);
             }
         });
@@ -439,8 +444,7 @@ async function doAction(action) {
         studentFiles.forEach((content, path) => filesMap.set(path, content));
         const now = new Date();
         const timestamp = new Timestamp();
-        timestamp.setSeconds(Math.floor(now.getTime() / 1000));
-        timestamp.setNanos((now.getTime() % 1000) * 1e6);
+        timestamp.fromDate(now);
         commit.setCreatedAt(timestamp);
         commit.setUpdatedAt(timestamp);
 
