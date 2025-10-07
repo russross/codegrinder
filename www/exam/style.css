@@ -48,6 +48,14 @@ body {
     margin: 0 10px;
 }
 
+.menu-label {
+    margin-right: 10px;
+}
+
+.actions-label {
+    margin-left: 40px;
+}
+
 #main-content {
     display: flex;
     flex-grow: 1;

@@ -1,3 +1,4 @@
+const Split = require('split.js').default || require('split.js');
 
 const { CodeGrinderServicePromiseClient } = require('./codegrinder_grpc_web_pb');
 const {
@@ -617,6 +618,10 @@ function renderMenuBar() {
     menuBar.innerHTML = ''; // Clear existing content
 
     // 1. Problem Selection Buttons
+    const problemLabel = document.createElement('span');
+    problemLabel.textContent = window.problemSet.length > 1 ? 'Problems:' : 'Problem:';
+    problemLabel.classList.add('menu-label');
+    menuBar.appendChild(problemLabel);
     window.problemSet.forEach(problem => {
         const problemButton = document.createElement('button');
         problemButton.textContent = problem.note;
@@ -644,10 +649,11 @@ function renderMenuBar() {
         menuBar.appendChild(problemButton);
     });
 
-    // Add a divider
-    const divider = document.createElement('div');
-    divider.classList.add('menu-divider');
-    menuBar.appendChild(divider);
+    // Add Actions label
+    const actionsLabel = document.createElement('span');
+    actionsLabel.textContent = 'Actions:';
+    actionsLabel.classList.add('menu-label', 'actions-label');
+    menuBar.appendChild(actionsLabel);
 
     // 3. Save Button
     const saveButton = document.createElement('button');
