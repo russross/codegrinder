@@ -1,7 +1,6 @@
 package rpc
 
 import (
-	"strconv"
 	"time"
 
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -52,14 +51,10 @@ func ToRPCAssignment(a *types.Assignment) *Assignment {
 	if a == nil {
 		return nil
 	}
-	rawScores := make([]*ScoreEntry, 0, len(a.RawScores))
+	rawScores := make(map[string]*ScoreList)
 	if a.RawScores != nil {
 		for k, v := range a.RawScores {
-			stringScores := make([]string, len(v))
-			for i, score := range v {
-				stringScores[i] = strconv.FormatFloat(score, 'g', -1, 64)
-			}
-			rawScores = append(rawScores, &ScoreEntry{Key: k, Scores: stringScores})
+			rawScores[k] = &ScoreList{Scores: v}
 		}
 	}
 
@@ -121,16 +116,10 @@ func ToRPCProblemType(pt *types.ProblemType) *ProblemType {
 	if pt == nil {
 		return nil
 	}
-	files := make([]*File, 0, len(pt.Files))
-	if pt.Files != nil {
-		for k, v := range pt.Files {
-			files = append(files, &File{Path: k, Contents: v})
-		}
-	}
-	actions := make([]*ProblemTypeAction, 0, len(pt.Actions))
+	actions := make(map[string]*ProblemTypeAction)
 	if pt.Actions != nil {
-		for _, v := range pt.Actions {
-			actions = append(actions, &ProblemTypeAction{
+		for k, v := range pt.Actions {
+			actions[k] = &ProblemTypeAction{
 				ProblemType: v.ProblemType,
 				Action:      v.Action,
 				Command:     v.Command,
@@ -144,13 +133,13 @@ func ToRPCProblemType(pt *types.ProblemType) *ProblemType {
 				MaxFileSize: v.MaxFileSize,
 				MaxMemory:   v.MaxMemory,
 				MaxThreads:  v.MaxThreads,
-			})
+			}
 		}
 	}
 	return &ProblemType{
 		Name:    pt.Name,
 		Image:   pt.Image,
-		Files:   files,
+		Files:   pt.Files,
 		Actions: actions,
 	}
 }
@@ -176,24 +165,6 @@ func ToRPCProblemStep(ps *types.ProblemStep) *ProblemStep {
 	if ps == nil {
 		return nil
 	}
-	files := make([]*File, 0, len(ps.Files))
-	if ps.Files != nil {
-		for k, v := range ps.Files {
-			files = append(files, &File{Path: k, Contents: v})
-		}
-	}
-	whitelist := make([]string, 0, len(ps.Whitelist))
-	if ps.Whitelist != nil {
-		for k := range ps.Whitelist {
-			whitelist = append(whitelist, k)
-		}
-	}
-	solution := make([]*File, 0, len(ps.Solution))
-	if ps.Solution != nil {
-		for k, v := range ps.Solution {
-			solution = append(solution, &File{Path: k, Contents: v})
-		}
-	}
 	return &ProblemStep{
 		ProblemId:    ps.ProblemID,
 		Step:         ps.Step,
@@ -201,9 +172,9 @@ func ToRPCProblemStep(ps *types.ProblemStep) *ProblemStep {
 		Note:         ps.Note,
 		Instructions: ps.Instructions,
 		Weight:       ps.Weight,
-		Files:        files,
-		Whitelist:    whitelist,
-		Solution:     solution,
+		Files:        ps.Files,
+		Whitelist:    ps.Whitelist,
+		Solution:     ps.Solution,
 	}
 }
 
@@ -250,12 +221,6 @@ func ToRPCEventMessage(em *types.EventMessage) *EventMessage {
 	if em.ReportCard != nil {
 		reportCard = ToRPCReportCard(em.ReportCard)
 	}
-	files := make([]*File, 0, len(em.Files))
-	if em.Files != nil {
-		for k, v := range em.Files {
-			files = append(files, &File{Path: k, Contents: v})
-		}
-	}
 	return &EventMessage{
 		Time:        timestamppb.New(em.Time),
 		Event:       em.Event,
@@ -264,7 +229,7 @@ func ToRPCEventMessage(em *types.EventMessage) *EventMessage {
 		StreamData:  em.StreamData,
 		Error:       em.Error,
 		ReportCard:  reportCard,
-		Files:       files,
+		Files:       em.Files,
 	}
 }
 
@@ -281,12 +246,6 @@ func ToRPCCommit(c *types.Commit) *Commit {
 	if c.ReportCard != nil {
 		reportCard = ToRPCReportCard(c.ReportCard)
 	}
-	files := make([]*File, 0, len(c.Files))
-	if c.Files != nil {
-		for k, v := range c.Files {
-			files = append(files, &File{Path: k, Contents: v})
-		}
-	}
 	return &Commit{
 		Id:           c.ID,
 		AssignmentId: c.AssignmentID,
@@ -294,7 +253,7 @@ func ToRPCCommit(c *types.Commit) *Commit {
 		Step:         c.Step,
 		Action:       c.Action,
 		Note:         c.Note,
-		Files:        files,
+		Files:        c.Files,
 		Transcript:   transcript,
 		ReportCard:   reportCard,
 		Score:        c.Score,
@@ -308,16 +267,10 @@ func ToRPCProblemBundle(pb *types.ProblemBundle) *ProblemBundle {
 	if pb == nil {
 		return nil
 	}
-	problemTypes := make([]*ProblemType, 0, len(pb.ProblemTypes))
+	problemTypes := make(map[string]*ProblemType)
 	if pb.ProblemTypes != nil {
-		for _, v := range pb.ProblemTypes {
-			problemTypes = append(problemTypes, ToRPCProblemType(v))
-		}
-	}
-	problemTypeSignatures := make([]*Signature, 0, len(pb.ProblemTypeSignatures))
-	if pb.ProblemTypeSignatures != nil {
-		for k, v := range pb.ProblemTypeSignatures {
-			problemTypeSignatures = append(problemTypeSignatures, &Signature{ProblemType: k, Signature: v})
+		for k, v := range pb.ProblemTypes {
+			problemTypes[k] = ToRPCProblemType(v)
 		}
 	}
 	commits := make([]*Commit, len(pb.Commits))
@@ -330,7 +283,7 @@ func ToRPCProblemBundle(pb *types.ProblemBundle) *ProblemBundle {
 	}
 	return &ProblemBundle{
 		ProblemTypes:          problemTypes,
-		ProblemTypeSignatures: problemTypeSignatures,
+		ProblemTypeSignatures: pb.ProblemTypeSignatures,
 		Problem:               problem,
 		ProblemSteps:          convertProblemStepsToRPC(pb.ProblemSteps),
 		ProblemSignature:      pb.ProblemSignature,
@@ -448,17 +401,8 @@ func (a *Assignment) ToREST() *types.Assignment {
 	}
 	rawScores := make(map[string][]float64)
 	if a.RawScores != nil {
-		for _, entry := range a.RawScores {
-			floatScores := make([]float64, len(entry.Scores))
-			for i, s := range entry.Scores {
-				f, err := strconv.ParseFloat(s, 64)
-				if err != nil {
-					// Handle error, perhaps log it or return an error
-					continue
-				}
-				floatScores[i] = f
-			}
-			rawScores[entry.Key] = floatScores
+		for k, v := range a.RawScores {
+			rawScores[k] = v.Scores
 		}
 	}
 
@@ -520,16 +464,10 @@ func (pt *ProblemType) ToREST() *types.ProblemType {
 	if pt == nil {
 		return nil
 	}
-	files := make(map[string][]byte)
-	if pt.Files != nil {
-		for _, file := range pt.Files {
-			files[file.Path] = file.Contents
-		}
-	}
 	actions := make(map[string]*types.ProblemTypeAction)
 	if pt.Actions != nil {
-		for _, v := range pt.Actions {
-			actions[v.Action] = &types.ProblemTypeAction{
+		for k, v := range pt.Actions {
+			actions[k] = &types.ProblemTypeAction{
 				ProblemType: v.ProblemType,
 				Action:      v.Action,
 				Command:     v.Command,
@@ -549,7 +487,7 @@ func (pt *ProblemType) ToREST() *types.ProblemType {
 	return &types.ProblemType{
 		Name:    pt.Name,
 		Image:   pt.Image,
-		Files:   files,
+		Files:   pt.Files,
 		Actions: actions,
 	}
 }
@@ -575,24 +513,6 @@ func (ps *ProblemStep) ToREST() *types.ProblemStep {
 	if ps == nil {
 		return nil
 	}
-	files := make(map[string][]byte)
-	if ps.Files != nil {
-		for _, file := range ps.Files {
-			files[file.Path] = file.Contents
-		}
-	}
-	whitelist := make(map[string]bool)
-	if ps.Whitelist != nil {
-		for _, name := range ps.Whitelist {
-			whitelist[name] = true
-		}
-	}
-	solution := make(map[string][]byte)
-	if ps.Solution != nil {
-		for _, file := range ps.Solution {
-			solution[file.Path] = file.Contents
-		}
-	}
 	return &types.ProblemStep{
 		ProblemID:    ps.ProblemId,
 		Step:         ps.Step,
@@ -600,9 +520,9 @@ func (ps *ProblemStep) ToREST() *types.ProblemStep {
 		Note:         ps.Note,
 		Instructions: ps.Instructions,
 		Weight:       ps.Weight,
-		Files:        files,
-		Whitelist:    whitelist,
-		Solution:     solution,
+		Files:        ps.Files,
+		Whitelist:    ps.Whitelist,
+		Solution:     ps.Solution,
 	}
 }
 
@@ -649,12 +569,6 @@ func (em *EventMessage) ToREST() *types.EventMessage {
 	if em.ReportCard != nil {
 		reportCard = em.ReportCard.ToREST()
 	}
-	files := make(map[string][]byte)
-	if em.Files != nil {
-		for _, file := range em.Files {
-			files[file.Path] = file.Contents
-		}
-	}
 	return &types.EventMessage{
 		Time:        em.Time.AsTime(),
 		Event:       em.Event,
@@ -663,7 +577,7 @@ func (em *EventMessage) ToREST() *types.EventMessage {
 		StreamData:  em.StreamData,
 		Error:       em.Error,
 		ReportCard:  reportCard,
-		Files:       files,
+		Files:       em.Files,
 	}
 }
 
@@ -680,12 +594,6 @@ func (c *Commit) ToREST() *types.Commit {
 	if c.ReportCard != nil {
 		reportCard = c.ReportCard.ToREST()
 	}
-	files := make(map[string][]byte)
-	if c.Files != nil {
-		for _, file := range c.Files {
-			files[file.Path] = file.Contents
-		}
-	}
 	return &types.Commit{
 		ID:           c.Id,
 		AssignmentID: c.AssignmentId,
@@ -693,7 +601,7 @@ func (c *Commit) ToREST() *types.Commit {
 		Step:         c.Step,
 		Action:       c.Action,
 		Note:         c.Note,
-		Files:        files,
+		Files:        c.Files,
 		Transcript:   transcript,
 		ReportCard:   reportCard,
 		Score:        c.Score,
@@ -709,14 +617,8 @@ func (pb *ProblemBundle) ToREST() *types.ProblemBundle {
 	}
 	problemTypes := make(map[string]*types.ProblemType)
 	if pb.ProblemTypes != nil {
-		for _, pt := range pb.ProblemTypes {
-			problemTypes[pt.Name] = pt.ToREST()
-		}
-	}
-	problemTypeSignatures := make(map[string]string)
-	if pb.ProblemTypeSignatures != nil {
-		for _, sig := range pb.ProblemTypeSignatures {
-			problemTypeSignatures[sig.ProblemType] = sig.Signature
+		for k, v := range pb.ProblemTypes {
+			problemTypes[k] = v.ToREST()
 		}
 	}
 	commits := make([]*types.Commit, len(pb.Commits))
@@ -725,7 +627,7 @@ func (pb *ProblemBundle) ToREST() *types.ProblemBundle {
 	}
 	return &types.ProblemBundle{
 		ProblemTypes:          problemTypes,
-		ProblemTypeSignatures: problemTypeSignatures,
+		ProblemTypeSignatures: pb.ProblemTypeSignatures,
 		Problem:               pb.Problem.ToREST(),
 		ProblemSteps:          convertProblemStepsToREST(pb.ProblemSteps),
 		ProblemSignature:      pb.ProblemSignature,
