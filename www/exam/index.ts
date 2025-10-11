@@ -78,6 +78,8 @@ let assignment: Assignment | null = null;
 let language = new Compartment();
 let editableCompartment = new Compartment();
 let currentlyOpenFilePath: string | null = null;
+let hasUserMadeChanges: boolean = false;
+let isProgrammaticEditorUpdate: boolean = false;
 
 function getLanguageExtension(filename: string): LanguageSupport | null {
     const ext = filename.split('.').pop();
@@ -124,16 +126,20 @@ document.addEventListener('DOMContentLoaded', (): void => {
             editableCompartment.of(EditorView.editable.of(true)),
             EditorView.updateListener.of((update: ViewUpdate): void => {
                 if (update.docChanged) {
-                    if (currentProblem) {
-                        const selectedFile = document.querySelector('.file-tree li.selected') as HTMLLIElement | null;
-                        if (selectedFile) {
-                            const filePath = selectedFile.dataset.path;
-                            if (filePath) {
-                                const newContentString = editor.state.doc.toString();
-                                const newContentUint8 = new TextEncoder().encode(newContentString);
-                                currentProblem.merged_files.set(filePath, newContentUint8);
-                                // Enable the save button
-                                (document.getElementById('save-button') as HTMLButtonElement).disabled = false;
+                    // Only enable save button if the change was user-initiated
+                    if (!isProgrammaticEditorUpdate && update.transactions.some(tr => tr.isUserEvent)) {
+                        hasUserMadeChanges = true; // Set the flag
+                        if (currentProblem) {
+                            const selectedFile = document.querySelector('.file-tree li.selected') as HTMLLIElement | null;
+                            if (selectedFile) {
+                                const filePath = selectedFile.dataset.path;
+                                if (filePath) {
+                                    const newContentString = editor.state.doc.toString();
+                                    const newContentUint8 = new TextEncoder().encode(newContentString);
+                                    currentProblem.merged_files.set(filePath, newContentUint8);
+                                    // Enable the save button
+                                    (document.getElementById('save-button') as HTMLButtonElement).disabled = false;
+                                }
                             }
                         }
                     }
@@ -638,12 +644,11 @@ function initializeProblemSelection(): void {
 
 
 async function saveIfNeeded(): Promise<void> {
-    const saveButton = document.getElementById('save-button') as HTMLButtonElement | null;
     // The save action is a no-op if there are no unsaved changes.
-    // We use the save button's disabled state as the source of truth for unsaved changes.
-    if (saveButton && !saveButton.disabled) {
+    if (hasUserMadeChanges) { // Use the new flag
         console.log("Unsaved changes detected, performing save action...");
         await doAction('');
+        hasUserMadeChanges = false; // Reset the flag after saving
     }
 }
 
@@ -679,7 +684,9 @@ function renderMenuBar(): void {
                     renderFileTree();
                     renderInstructionsPane();
                     selectInstructionsTab();
+                    isProgrammaticEditorUpdate = true; // Set flag before dispatch
                     editor.dispatch({changes: {from: 0, to: editor.state.doc.length, insert: ''}});
+                    isProgrammaticEditorUpdate = false; // Reset flag after dispatch
                     if (term) {
                         term.clear();
                     }
@@ -889,10 +896,12 @@ function renderTree(node: { [key: string]: FileTreeNode }, parentElement: HTMLEl
                     effects.push(language.reconfigure([]));
                 }
 
+                isProgrammaticEditorUpdate = true; // Set flag before dispatch
                 editor!.dispatch({
                     changes: {from: 0, to: editor!.state.doc.length, insert: fileContentString},
                     effects: effects
                 });
+                isProgrammaticEditorUpdate = false; // Reset flag after dispatch
             });
         } else {
             // Folders are no longer interactive for expanding/collapsing.
