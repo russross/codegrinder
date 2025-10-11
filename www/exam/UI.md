@@ -44,8 +44,7 @@ Here is the complete layout of the UI:
                 clicked
             *   Refresh the UI so everything is based around the new
                 active problem
-    *   There is a divider between the problem selection buttons and
-        the rest of the buttons
+
     *   A "Save" button.
         *   Triggers the "save" action, referenced numerous times in
             this document. The save action is a no-op if there are
@@ -78,10 +77,13 @@ Here is the complete layout of the UI:
             organized into a hierarchy like a unix file tree
         *   Files named in the ProblemStep `whitelist` map (or
             folders that contain such files) are sorted first in the
-            list. The `whitelist` map maps file path names to a
-            boolean that is always true.
-        *   It is rendered as a simple unordered list, but with
-            suitable icons instead of bullet points.
+            list. Within these groups, files are listed before
+            directories, and then all items are sorted
+            alphabetically. The `whitelist` map maps file path names
+            to a boolean that is always true.
+        *   It is rendered as a simple unordered list, with placeholder
+            icons instead of bullet points. Specific icons are not
+            defined in the JavaScript, but can be added via CSS.
         *   No dynamic motion: folders do not collapse or anything,
             the list is just there
         *   File names are highlighted when the mouse hovers over
@@ -111,10 +113,7 @@ Here is the complete layout of the UI:
         *   Changes made in the editor are reflected in the active
             file set
         *   Syntax highlighting is based on the file name extension
-        *   Important special case: `*.s` and `*.S` extensions
-            indicate RISC-V assembly language. If RISC-V syntax
-            definitions are not available, use Aarch64 or MIPS
-            assembly as fallbacks if they are available
+            *   `*.s` or `*.S`: assembly language syntax (using GAS mode)
         *   Syntax highlighting should be implemented for:
             *   `*.c` or `*.h`: C syntax
             *   `*.s` or `*.S`: assembly language syntax
