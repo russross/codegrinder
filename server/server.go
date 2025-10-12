@@ -41,6 +41,7 @@ import (
 	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
 	"google.golang.org/grpc"
+	_ "google.golang.org/grpc/encoding/gzip"
 	"google.golang.org/grpc/reflection"
 )
 
@@ -486,10 +487,7 @@ func main() {
 		r.Post("/commit_bundles/signed", withTx, withCurrentUser, gunzip, binding.Json(CommitBundle{}), restPostCommitBundlesSigned)
 
 		// set up gRPC server
-		grpcServer = grpc.NewServer(
-		//grpc.RPCCompressor(grpc.NewGZIPCompressor()),
-		//grpc.RPCDecompressor(grpc.NewGZIPDecompressor()),
-		)
+		grpcServer = grpc.NewServer()
 		pb.RegisterCodeGrinderServiceServer(grpcServer, &codeGrinderServiceServer{})
 		reflection.Register(grpcServer)
 	}

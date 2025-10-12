@@ -16,21 +16,21 @@ import (
 	. "github.com/russross/codegrinder/rpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/encoding/gzip"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // newGRPCClient creates a gRPC client and context for reuse across commands
 func newGRPCClient() (CodeGrinderServiceClient, *grpc.ClientConn, context.Context, error) {
-	creds := credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})
-	conn, err := grpc.Dial(Config.Host+":443", grpc.WithTransportCredentials(creds),
-		grpc.WithCompressor(grpc.NewGZIPCompressor()),
-		grpc.WithDecompressor(grpc.NewGZIPDecompressor()))
+	ctx := context.Background()
+	creds := credentials.NewTLS(&tls.Config{})
+	opts := grpc.WithDefaultCallOptions(grpc.UseCompressor(gzip.Name))
+	conn, err := grpc.DialContext(ctx, Config.Host+":443", grpc.WithTransportCredentials(creds), opts)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	client := NewCodeGrinderServiceClient(conn)
-	ctx := context.Background()
 	ctx = metadata.AppendToOutgoingContext(ctx, "cookie", Config.Cookie)
 	return client, conn, ctx, nil
 }
@@ -326,30 +326,22 @@ func saveDotFile(dotfile *DotFileInfo) {
 }
 
 func handleDaycareStream(client CodeGrinderServiceClient, conn *grpc.ClientConn, bundle *CommitBundle, args []string, directory string, processEvents bool) (*CommitBundle, error) {
-	// Determine the connection to use
-	var useClient CodeGrinderServiceClient
-	var useConn *grpc.ClientConn
-	var ctx context.Context
-
-	if client != nil && conn != nil && bundle.Hostname == Config.Host {
-		// Use the passed-in connection
-		useClient = client
-		useConn = conn
-	} else {
+	// do we need a new connection?
+	if bundle.Hostname != Config.Host {
 		// Create a new connection to the daycare server
-		creds := credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})
+		ctx := context.Background()
+		creds := credentials.NewTLS(&tls.Config{})
+		opts := grpc.WithDefaultCallOptions(grpc.UseCompressor(gzip.Name))
 		var err error
-		useConn, err = grpc.Dial(bundle.Hostname+":443", grpc.WithTransportCredentials(creds),
-			grpc.WithCompressor(grpc.NewGZIPCompressor()),
-			grpc.WithDecompressor(grpc.NewGZIPDecompressor()))
+		conn, err = grpc.DialContext(ctx, Config.Host+":443", grpc.WithTransportCredentials(creds), opts)
 		if err != nil {
 			return nil, fmt.Errorf("error connecting to daycare server: %v", err)
 		}
-		defer useConn.Close()
-		useClient = NewCodeGrinderServiceClient(useConn)
+		defer conn.Close()
+		client = NewCodeGrinderServiceClient(conn)
 	}
 
-	ctx = context.Background()
+	ctx := context.Background()
 
 	// Form the Daycare request
 	req := &DaycareRequest{
@@ -361,7 +353,7 @@ func handleDaycareStream(client CodeGrinderServiceClient, conn *grpc.ClientConn,
 	dumpMessage("Daycare", true, req)
 
 	// Make the streaming Daycare call
-	stream, err := useClient.Daycare(ctx, req)
+	stream, err := client.Daycare(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("error starting Daycare session: %v", err)
 	}
