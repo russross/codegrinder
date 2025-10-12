@@ -294,10 +294,6 @@ def _codegrinder_download_handler() -> None:
 
         downloads: List[str] = []
         for assignment in assignments:
-            # ignore quizzes
-            if assignment.problemSetID <= 0:
-                continue
-
             # get the course
             if assignment.courseID not in courses:
                 courses[assignment.courseID] = must_get_object(f'/courses/{assignment.courseID}', None, Course)

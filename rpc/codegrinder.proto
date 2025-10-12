@@ -271,6 +271,8 @@ service CodeGrinderService {
    rpc GetUsers(GetUsersRequest) returns (GetUsersResponse);
    // GetUserMe retrieves the current user
    rpc GetUserMe(GetUserMeRequest) returns (GetUserMeResponse);
+   // GetUserSession trades a session key for a cookie
+   rpc GetUserSession(GetUserSessionRequest) returns (GetUserSessionResponse);
    // GetUser retrieves a specific user
    rpc GetUser(GetUserRequest) returns (GetUserResponse);
    // GetCourseUsers retrieves users in a course
@@ -475,6 +477,16 @@ message GetUserMeRequest {
 // Response for GetUserMe
 message GetUserMeResponse {
    User user = 1;
+}
+
+// Request for GetUserSession
+message GetUserSessionRequest {
+   string key = 1;
+}
+
+// Response for GetUserSession
+message GetUserSessionResponse {
+   string cookie = 1;
 }
 
 // Request for GetUser

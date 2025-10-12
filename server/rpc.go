@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -600,6 +601,25 @@ func (s *codeGrinderServiceServer) GetUserMe(ctx context.Context, req *pb.GetUse
 	}
 
 	return &pb.GetUserMeResponse{User: user}, nil
+}
+
+// GetUserSession trades a session key for a cookie
+func (s *codeGrinderServiceServer) GetUserSession(ctx context.Context, req *pb.GetUserSessionRequest) (*pb.GetUserSessionResponse, error) {
+	// Get the session from the key
+	session, err := getUserSession(req.Key)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+
+	// Encode the session into a cookie value
+	cookieValue, err := session.Encode()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "error encoding session: %v", err)
+	}
+
+	// Return the cookie in the format expected by the CLI
+	cookie := fmt.Sprintf("%s=%s", CookieName, cookieValue)
+	return &pb.GetUserSessionResponse{Cookie: cookie}, nil
 }
 
 // GetUser retrieves a specific user

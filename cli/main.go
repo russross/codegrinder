@@ -213,18 +213,32 @@ func CommandLogin(cmd *cobra.Command, args []string) {
 	}
 	defer conn.Close()
 
-	dumpMessage("GetUserMe", true, &GetUserMeRequest{SessionCookie: key})
-	userResp, err := client.GetUserMe(ctx, &GetUserMeRequest{SessionCookie: key})
+	// Trade the session key for a cookie
+	dumpMessage("GetUserSession", true, &GetUserSessionRequest{Key: key})
+	sessionResp, err := client.GetUserSession(ctx, &GetUserSessionRequest{Key: key})
 	if err != nil {
 		log.Fatalf("failed to login: %v", err)
 	}
-	dumpMessage("GetUserMe", false, userResp)
-	Config.Cookie = key
+	dumpMessage("GetUserSession", false, sessionResp)
+	Config.Cookie = sessionResp.Cookie
+
+	// Reconnect with the new cookie
+	client, conn, ctx, err = newGRPCClient()
+	if err != nil {
+		log.Fatalf("failed to reconnect to server: %v", err)
+	}
+	defer conn.Close()
 
 	// see if they need an upgrade
 	checkVersion(client, ctx)
 
 	// try it out by fetching a user record
+	dumpMessage("GetUserMe", true, &GetUserMeRequest{})
+	userResp, err := client.GetUserMe(ctx, &GetUserMeRequest{})
+	if err != nil {
+		log.Fatalf("failed to fetch user: %v", err)
+	}
+	dumpMessage("GetUserMe", false, userResp)
 	user := userResp.User
 
 	// save config for later use
