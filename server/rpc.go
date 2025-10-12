@@ -1046,6 +1046,13 @@ func (s *codeGrinderServiceServer) PostCommitBundlesUnsigned(ctx context.Context
 
 		// Convert proto to REST
 		bundle := req.Bundle.ToREST()
+		bundle.Hostname = ""
+		bundle.Commit.Transcript = []*EventMessage{}
+		bundle.Commit.ReportCard = nil
+		bundle.Commit.Score = 0.0
+		now := time.Now()
+		bundle.Commit.CreatedAt = now
+		bundle.Commit.UpdatedAt = now
 
 		// Post commit bundles unsigned
 		result, err := saveCommitBundleCommon(time.Now(), tx, currentUser, bundle)
