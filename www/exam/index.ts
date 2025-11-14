@@ -432,6 +432,9 @@ async function handleDaycare(bundle: CommitBundle): Promise<CommitBundle | void>
             } else if (response.response.oneofKind === 'error') {
                 term.writeln(`server return an error: ${response.response.error}`);
                 throw new Error(response.response.error);
+            } else if (response.response.oneofKind === 'commitBundle') {
+                const bundle = response.response.commitBundle;
+                return bundle;
             }
         }
         console.log('handleDaycare: Daycare stream ended.');
@@ -548,6 +551,9 @@ async function doAction(action: string): Promise<void> {
         const daycareResult = await handleDaycare(responseBundle);
         if (daycareResult) {
             responseBundle = daycareResult;
+            console.log('doAction: responseBundle', responseBundle);
+        } else {
+            console.log('doAction: no responseBundle');
         }
 
 
