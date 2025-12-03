@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -188,7 +189,11 @@ func HandleProblemAction(bundle *CommitBundle, problemTypeParam, actionParam str
 	nannyName := fmt.Sprintf("nanny-%d", bundle.UserID)
 	limits := newLimits(action)
 	limits.override(bundle.Problem.Options)
-	n, err := NewNanny(bundle.ProblemType, bundle.Problem, action.Action, args, limits, nannyName)
+	timeout := time.Duration(limits.maxCPU*2+5) * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	n, err := NewNanny(ctx, bundle.ProblemType, bundle.Problem, action.Action, args, limits, nannyName)
 	if err != nil {
 		sendError(fmt.Errorf("error creating container: %v", err))
 		return
@@ -424,6 +429,7 @@ func streamNannyEvents(n *Nanny, commit *Commit, eventChan chan<- *DaycareRespon
 }
 
 type Nanny struct {
+	ctx        context.Context
 	Name       string
 	Start      time.Time
 	ID         string
@@ -434,7 +440,7 @@ type Nanny struct {
 	Files      map[string][]byte
 }
 
-func NewNanny(problemType *ProblemType, problem *Problem, action string, args []string, limits *limits, name string) (*Nanny, error) {
+func NewNanny(ctx context.Context, problemType *ProblemType, problem *Problem, action string, args []string, limits *limits, name string) (*Nanny, error) {
 	disk := limits.maxFileSize * 1024 * 1024
 	timeLimit := limits.maxCPU * 2
 	userAndGroup := fmt.Sprintf("%d:%d", studentUID, studentUID)
@@ -475,19 +481,19 @@ func NewNanny(problemType *ProblemType, problem *Problem, action string, args []
 		limits.maxCPU, limits.maxFD, limits.maxFileSize, limits.maxMemory, limits.maxThreads)
 
 	// execute the command.
-	cmd := exec.Command(containerEngine, cmdArgs...)
+	cmd := exec.CommandContext(ctx, containerEngine, cmdArgs...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		// if the container already exists, try to remove it and retry
 		// this prevents a single student running multiple graders concurrently
 		if strings.Contains(string(output), "is already in use") {
 			log.Printf("killing existing container with same name %s", name)
-			if err2 := removeContainer(name); err2 != nil {
+			if err2 := removeContainer(ctx, name); err2 != nil {
 				return nil, err2
 			}
 
 			// retry the command
-			output, err = exec.Command(containerEngine, cmdArgs...).CombinedOutput()
+			output, err = exec.CommandContext(ctx, containerEngine, cmdArgs...).CombinedOutput()
 		}
 		if err != nil {
 			return nil, fmt.Errorf("container run failed: %v\nOutput: %s", err, string(output))
@@ -497,6 +503,7 @@ func NewNanny(problemType *ProblemType, problem *Problem, action string, args []
 	containerID := strings.TrimSpace(string(output))
 
 	return &Nanny{
+			ctx:        ctx,
 			Name:       name,
 			Start:      time.Now(),
 			ID:         containerID,
@@ -513,15 +520,15 @@ func (n *Nanny) Shutdown(msg string) error {
 	n.Closed = true
 
 	// shut down the container
-	if err := removeContainer(n.ID); err != nil {
+	if err := removeContainer(n.ctx, n.ID); err != nil {
 		return fmt.Errorf("Nanny.Shutdown: %v", err)
 	}
 	return nil
 }
 
 // removeContainer forcefully stops and removes a container by its ID or name.
-func removeContainer(id string) error {
-	cmd := exec.Command(containerEngine, "rm", "-f", id)
+func removeContainer(ctx context.Context, id string) error {
+	cmd := exec.CommandContext(ctx, containerEngine, "rm", "-f", id)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("error killing container %s: %v", id, err)
 	}
@@ -587,7 +594,7 @@ func (n *Nanny) PutFiles(files map[string][]byte, mode int64) error {
 
 	// use 'docker cp' to copy the tarball into the /home/student directory.
 	// pipe the tar buffer to the command's stdin.
-	cmd := exec.Command(containerEngine, "cp", "-", n.ID+":/home/student/")
+	cmd := exec.CommandContext(n.ctx, containerEngine, "cp", "-", n.ID+":/home/student/")
 	cmd.Stdin = buf
 
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -612,7 +619,7 @@ func (n *Nanny) GetFiles(filenames []string) (map[string][]byte, error) {
 		}
 
 		// use 'docker cp' to get the /home/student directory as a tar stream
-		cmd := exec.Command(containerEngine, "cp", n.ID+":/home/student/.", "-")
+		cmd := exec.CommandContext(n.ctx, containerEngine, "cp", n.ID+":/home/student/.", "-")
 		var tarFile bytes.Buffer
 		cmd.Stdout = &tarFile
 
@@ -697,7 +704,7 @@ func (n *Nanny) Exec(cmd []string) (stdout, stderr, script *bytes.Buffer, status
 	// construct the 'docker exec' command arguments.
 	execCmdArgs := []string{"exec", "--user", strconv.Itoa(studentUID), n.ID}
 	execCmdArgs = append(execCmdArgs, cmd...)
-	command := exec.Command(containerEngine, execCmdArgs...)
+	command := exec.CommandContext(n.ctx, containerEngine, execCmdArgs...)
 
 	// buffers to capture the full output for return.
 	var stdoutBuf, stderrBuf, scriptBuf bytes.Buffer
