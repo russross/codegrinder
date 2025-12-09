@@ -125,7 +125,7 @@ func (s *codeGrinderServiceServer) ListProblems(ctx context.Context, req *pb.Lis
 		user = pb.ToRPCUser(currentUser)
 
 		// Get assignments
-		typeAssignments, err = getUserAssignments(tx, session.UserID, currentUser)
+		typeAssignments, err = getUserAssignments(tx, session.UserID, currentUser, IPFilterAllowed(ctx))
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting assignments: %v", err)
 		}
@@ -703,7 +703,7 @@ func (s *codeGrinderServiceServer) GetUserAssignments(ctx context.Context, req *
 		}
 
 		// Get user assignments
-		restAssignments, err := getUserAssignments(tx, req.UserId, currentUser)
+		restAssignments, err := getUserAssignments(tx, req.UserId, currentUser, IPFilterAllowed(ctx))
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting user assignments: %v", err)
 		}
@@ -737,7 +737,7 @@ func (s *codeGrinderServiceServer) GetCourseUserAssignments(ctx context.Context,
 		}
 
 		// Get course user assignments
-		restAssignments, err := getCourseUserAssignments(tx, req.CourseId, req.UserId, currentUser)
+		restAssignments, err := getCourseUserAssignments(tx, req.CourseId, req.UserId, currentUser, IPFilterAllowed(ctx))
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting course user assignments: %v", err)
 		}
@@ -771,7 +771,7 @@ func (s *codeGrinderServiceServer) GetAssignments(ctx context.Context, req *pb.G
 		}
 
 		// Get assignments
-		restAssignments, err := getAssignments(tx, currentUser, req.Search)
+		restAssignments, err := getAssignments(tx, currentUser, req.Search, IPFilterAllowed(ctx))
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting assignments: %v", err)
 		}
@@ -805,7 +805,7 @@ func (s *codeGrinderServiceServer) GetAssignment(ctx context.Context, req *pb.Ge
 		}
 
 		// Get assignment
-		restAssignment, err := getAssignment(tx, req.AssignmentId, currentUser)
+		restAssignment, err := getAssignment(tx, req.AssignmentId, currentUser, IPFilterAllowed(ctx))
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting assignment: %v", err)
 		}
@@ -836,7 +836,7 @@ func (s *codeGrinderServiceServer) GetAssignmentProblemCommitLast(ctx context.Co
 		}
 
 		// Get assignment problem commit last
-		restCommit, err := getAssignmentProblemCommitLast(tx, req.AssignmentId, req.ProblemId, currentUser)
+		restCommit, err := getAssignmentProblemCommitLast(tx, req.AssignmentId, req.ProblemId, currentUser, IPFilterAllowed(ctx))
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting assignment problem commit last: %v", err)
 		}
@@ -869,7 +869,7 @@ func (s *codeGrinderServiceServer) GetAssignmentProblemStepCommitLast(ctx contex
 		}
 
 		// Get assignment problem step commit last
-		restCommit, err := getAssignmentProblemStepCommitLast(tx, req.AssignmentId, req.ProblemId, req.Step, currentUser)
+		restCommit, err := getAssignmentProblemStepCommitLast(tx, req.AssignmentId, req.ProblemId, req.Step, currentUser, IPFilterAllowed(ctx))
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting assignment problem step commit last: %v", err)
 		}
@@ -1075,7 +1075,7 @@ func (s *codeGrinderServiceServer) PostCommitBundlesUnsigned(ctx context.Context
 		bundle.Commit.UpdatedAt = now
 
 		// Post commit bundles unsigned
-		result, err := saveCommitBundleCommon(time.Now(), tx, currentUser, bundle)
+		result, err := saveCommitBundleCommon(time.Now(), tx, currentUser, bundle, IPFilterAllowed(ctx))
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error posting commit bundles unsigned: %v", err)
 		}
@@ -1110,7 +1110,7 @@ func (s *codeGrinderServiceServer) PostCommitBundlesSigned(ctx context.Context, 
 		bundle := req.Bundle.ToREST()
 
 		// Post commit bundles signed
-		result, err := saveCommitBundleCommon(time.Now(), tx, currentUser, bundle)
+		result, err := saveCommitBundleCommon(time.Now(), tx, currentUser, bundle, IPFilterAllowed(ctx))
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error posting commit bundles signed: %v", err)
 		}

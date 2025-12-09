@@ -59,6 +59,7 @@ type Assignment struct {
 	UserID             int64                `json:"userID" meddler:"user_id"`
 	Roles              string               `json:"roles" meddler:"roles"`
 	Instructor         bool                 `json:"instructor" meddler:"instructor"`
+	Restricted         bool                 `json:"-" meddler:"restricted"`
 	RawScores          map[string][]float64 `json:"rawScores" meddler:"raw_scores,json"`
 	Score              float64              `json:"score" meddler:"score,zeroisnull"`
 	GradeID            string               `json:"-" meddler:"grade_id,zeroisnull"`

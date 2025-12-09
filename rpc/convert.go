@@ -424,6 +424,7 @@ func (a *Assignment) ToREST() *types.Assignment {
 		UserID:             a.UserId,
 		Roles:              a.Roles,
 		Instructor:         a.Instructor,
+		Restricted:         false,
 		RawScores:          rawScores,
 		Score:              a.Score,
 		GradeID:            a.GradeId,

@@ -111,6 +111,7 @@ CREATE TABLE assignments (
     user_id                 integer NOT NULL,
     roles                   text NOT NULL,
     instructor              boolean NOT NULL,
+    restricted              boolean NOT NULL,
     raw_scores              text NOT NULL,
     score                   real,
     grade_id                text,
@@ -218,15 +219,20 @@ CREATE VIEW user_users AS
     FROM users;
 
 CREATE VIEW user_assignments AS
-    SELECT DISTINCT instructors.id AS user_id, assignments.id AS assignment_id
-    FROM users AS instructors
-    JOIN assignments AS instructors_assignments ON instructors.id = instructors_assignments.user_id
-    JOIN courses ON instructors_assignments.course_id = courses.id
-    JOIN assignments ON courses.id = assignments.course_id
-    WHERE instructors_assignments.instructor
-    UNION
-    SELECT user_id, id as assignment_id
-    FROM assignments;
+    SELECT user_id, assignment_id, MIN(restricted) AS restricted
+    FROM (
+        -- student-facing: their own assignment with stored restriction
+        SELECT user_id, id AS assignment_id, restricted
+        FROM assignments
+        UNION ALL
+        -- instructor-facing: all assignments in courses they instruct, never restricted
+        SELECT instructors_assignments.user_id, assignments.id AS assignment_id, 0 AS restricted
+        FROM assignments
+        JOIN assignments AS instructors_assignments
+            ON instructors_assignments.course_id = assignments.course_id
+            AND instructors_assignments.instructor
+    )
+    GROUP BY user_id, assignment_id;
 
 CREATE VIEW assignment_search_fields AS
     SELECT assignments.id AS assignment_id,

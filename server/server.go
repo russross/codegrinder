@@ -1,9 +1,9 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/tls"
@@ -42,8 +42,14 @@ import (
 	"golang.org/x/crypto/acme/autocert"
 	"google.golang.org/grpc"
 	_ "google.golang.org/grpc/encoding/gzip"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/reflection"
 )
+
+// IPFilterConfig holds configuration for optional IP filtering.
+type IPFilterConfig struct {
+	Whitelist []string `json:"whitelist"` // List of IPs/CIDRs/wildcards to allow
+}
 
 // Config holds site-specific configuration data.
 // Contains a mix of Daycare and main server parameters.
@@ -70,6 +76,9 @@ var Config struct {
 	AcmeCache       string      `json:"acmeDir"`         // Full path of Acme cache file: default "$CODEGRINDERROOT/acme"
 	SQLite3Path     string      `json:"sqlite3Path"`     // path to the sqlite database file: default "$CODEGRINDERROOT/db/codegrinder.db"
 	SessionsExpire  []time.Time `json:"sessionsExpire"`  // times/dates when sessions should expire (year is ignored)
+
+	// optional IP filtering for inbound requests; nil/empty disables filtering
+	IPFilter *IPFilterConfig `json:"ipFilter"`
 }
 
 var root string
@@ -154,6 +163,7 @@ func main() {
 	m.Logger(log.New(os.Stderr, "", log.Lshortfile))
 	//m.Use(martini.Logger())
 	m.Use(martini.Recovery())
+	m.Use(ipFilterMiddleware)
 	m.MapTo(r, (*martini.Routes)(nil))
 	m.Action(r.Handle)
 
@@ -487,7 +497,10 @@ func main() {
 		r.Post("/commit_bundles/signed", withTx, withCurrentUser, gunzip, binding.Json(CommitBundle{}), restPostCommitBundlesSigned)
 
 		// set up gRPC server
-		grpcServer = grpc.NewServer()
+		grpcServer = grpc.NewServer(
+			grpc.UnaryInterceptor(unaryIPFilterInterceptor),
+			grpc.StreamInterceptor(streamIPFilterInterceptor),
+		)
 		pb.RegisterCodeGrinderServiceServer(grpcServer, &codeGrinderServiceServer{})
 		reflection.Register(grpcServer)
 	}
@@ -516,20 +529,6 @@ func main() {
 
 		// Create unified handler that routes between gRPC-Web, gRPC, and HTTP
 		unifiedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Extract IP address from RemoteAddr
-			ip, _, err := net.SplitHostPort(r.RemoteAddr)
-			if err != nil {
-				log.Printf("error splitting host port for %s: %v", r.RemoteAddr, err)
-				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-				return
-			}
-
-			if !isIPWhitelisted(ip) {
-				log.Printf("rejected non-whitelisted IP: %s", ip)
-				http.Error(w, "Forbidden", http.StatusForbidden)
-				return
-			}
-
 			// 1. Check for gRPC-Web requests
 			if wrappedGrpc.IsGrpcWebRequest(r) {
 				wrappedGrpc.ServeHTTP(w, r)
@@ -590,20 +589,6 @@ func main() {
 		)
 
 		unifiedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Extract IP address from RemoteAddr
-			ip, _, err := net.SplitHostPort(r.RemoteAddr)
-			if err != nil {
-				log.Printf("error splitting host port for %s: %v", r.RemoteAddr, err)
-				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-				return
-			}
-
-			if !isIPWhitelisted(ip) {
-				log.Printf("rejected non-whitelisted IP: %s", ip)
-				http.Error(w, "Forbidden", http.StatusForbidden)
-				return
-			}
-
 			// Route gRPC-Web, gRPC, and HTTP requests to the correct handler
 			if wrappedGrpc.IsGrpcWebRequest(r) {
 				wrappedGrpc.ServeHTTP(w, r)
@@ -689,6 +674,51 @@ func loggedErrorf(f string, params ...interface{}) error {
 
 var ipWhitelist []*net.IPNet // Global variable to store parsed whitelist entries
 
+type ipFilterAllowedKey struct{}
+
+func isIPFilteringEnabled() bool {
+	return len(ipWhitelist) > 0
+}
+
+func ipFromAddr(addr string) (string, error) {
+	// fast path for bare IPs
+	if ip := net.ParseIP(addr); ip != nil {
+		return addr, nil
+	}
+
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", err
+	}
+	return host, nil
+}
+
+func ipFilterAllowed(addr string) bool {
+	if !isIPFilteringEnabled() {
+		return true
+	}
+
+	ip, err := ipFromAddr(addr)
+	if err != nil {
+		log.Printf("failed to parse remote address for IP filter: %v", err)
+		return false
+	}
+	return isIPWhitelisted(ip)
+}
+
+// IPFilterAllowed returns the value injected into the context indicating whether
+// the request is allowed by the configured IP filter. If filtering is disabled
+// and the flag has not been set, this returns true.
+func IPFilterAllowed(ctx context.Context) bool {
+	if ctx == nil {
+		return !isIPFilteringEnabled()
+	}
+	if allowed, ok := ctx.Value(ipFilterAllowedKey{}).(bool); ok {
+		return allowed
+	}
+	return !isIPFilteringEnabled()
+}
+
 // isIPWhitelisted checks if the given IP address is in the whitelist.
 func isIPWhitelisted(ipStr string) bool {
 	// If the whitelist is empty or not loaded, allow all connections.
@@ -752,26 +782,20 @@ func unBase64(s string) string {
 	return s
 }
 
-// loadIPWhitelist loads IP addresses and CIDR blocks from "whitelist.txt".
-// If the file is not found, IP filtering is disabled.
+// loadIPWhitelist populates ipWhitelist from Config.IPFilter.
+// Missing/empty config disables IP filtering.
 func loadIPWhitelist() {
-	file, err := os.Open("whitelist.txt")
-	if os.IsNotExist(err) {
-		log.Printf("whitelist.txt not found, IP filtering disabled.")
-		return // ipWhitelist remains nil, so isIPWhitelisted will return true
-	}
-	if err != nil {
-		log.Printf("error opening whitelist.txt: %v", err)
+	ipWhitelist = nil
+	if Config.IPFilter == nil || len(Config.IPFilter.Whitelist) == 0 {
+		log.Printf("IP filtering disabled (no ipFilter.whitelist configured).")
 		return
 	}
-	defer file.Close()
 
-	scanner := bufio.NewScanner(file)
 	var tempWhitelist []*net.IPNet
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue // Skip empty lines and comments
+	for _, entry := range Config.IPFilter.Whitelist {
+		line := strings.TrimSpace(entry)
+		if line == "" {
+			continue // skip empty entries
 		}
 
 		// Handle wildcard entries like 144.38.145.*
@@ -804,17 +828,48 @@ func loadIPWhitelist() {
 		log.Printf("warning: invalid whitelist entry skipped: %s (error: %v)", line, err)
 	}
 
-	if err := scanner.Err(); err != nil {
-		log.Printf("error reading whitelist.txt: %v", err)
-		return
-	}
-
 	if len(tempWhitelist) > 0 {
 		ipWhitelist = tempWhitelist
-		log.Printf("loaded %d IP whitelist entries from whitelist.txt", len(ipWhitelist))
+		log.Printf("loaded %d IP whitelist entries from config", len(ipWhitelist))
 	} else {
-		log.Printf("whitelist.txt was empty or contained no valid entries, IP filtering disabled.")
+		log.Printf("ipFilter.whitelist was empty or contained no valid entries, IP filtering disabled.")
 	}
+}
+
+// ipFilterMiddleware injects the IP filter flag into the request context for REST handlers.
+func ipFilterMiddleware(c martini.Context, r *http.Request) {
+	allowed := ipFilterAllowed(r.RemoteAddr)
+	ctx := context.WithValue(r.Context(), ipFilterAllowedKey{}, allowed)
+	reqWithCtx := r.WithContext(ctx)
+	c.Map(reqWithCtx)
+	c.Next()
+}
+
+type wrappedServerStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (w *wrappedServerStream) Context() context.Context {
+	return w.ctx
+}
+
+func unaryIPFilterInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	allowed := !isIPFilteringEnabled()
+	if p, ok := peer.FromContext(ctx); ok && p.Addr != nil {
+		allowed = ipFilterAllowed(p.Addr.String())
+	}
+	ctx = context.WithValue(ctx, ipFilterAllowedKey{}, allowed)
+	return handler(ctx, req)
+}
+
+func streamIPFilterInterceptor(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	allowed := !isIPFilteringEnabled()
+	if p, ok := peer.FromContext(ss.Context()); ok && p.Addr != nil {
+		allowed = ipFilterAllowed(p.Addr.String())
+	}
+	ctx := context.WithValue(ss.Context(), ipFilterAllowedKey{}, allowed)
+	return handler(srv, &wrappedServerStream{ServerStream: ss, ctx: ctx})
 }
 
 type daycares struct {

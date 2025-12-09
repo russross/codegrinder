@@ -255,13 +255,13 @@ func restGetCourseUsers(w http.ResponseWriter, tx *sql.Tx, params martini.Params
 }
 
 // restGetUserAssignments handles GET /users/:user_id/assignments
-func restGetUserAssignments(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
+func restGetUserAssignments(w http.ResponseWriter, r *http.Request, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
 	userID, err := parseID(w, "user_id", params["user_id"])
 	if err != nil {
 		return
 	}
 
-	assignments, err := getUserAssignments(tx, userID, currentUser)
+	assignments, err := getUserAssignments(tx, userID, currentUser, IPFilterAllowed(r.Context()))
 	if err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
@@ -270,7 +270,7 @@ func restGetUserAssignments(w http.ResponseWriter, tx *sql.Tx, params martini.Pa
 }
 
 // restGetCourseUserAssignments handles GET /courses/:course_id/users/:user_id/assignments
-func restGetCourseUserAssignments(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
+func restGetCourseUserAssignments(w http.ResponseWriter, r *http.Request, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
 	courseID, err := parseID(w, "course_id", params["course_id"])
 	if err != nil {
 		return
@@ -280,7 +280,7 @@ func restGetCourseUserAssignments(w http.ResponseWriter, tx *sql.Tx, params mart
 		return
 	}
 
-	assignments, err := getCourseUserAssignments(tx, courseID, userID, currentUser)
+	assignments, err := getCourseUserAssignments(tx, courseID, userID, currentUser, IPFilterAllowed(r.Context()))
 	if err != nil {
 		if err.Error() == "not found" {
 			loggedHTTPErrorf(w, http.StatusNotFound, "not found")
@@ -299,7 +299,7 @@ func restGetAssignments(w http.ResponseWriter, r *http.Request, tx *sql.Tx, curr
 		return
 	}
 
-	assignments, err := getAssignments(tx, currentUser, r.Form["search"])
+	assignments, err := getAssignments(tx, currentUser, r.Form["search"], IPFilterAllowed(r.Context()))
 	if err != nil {
 		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 		return
@@ -308,13 +308,13 @@ func restGetAssignments(w http.ResponseWriter, r *http.Request, tx *sql.Tx, curr
 }
 
 // restGetAssignment handles GET /assignments/:assignment_id
-func restGetAssignment(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
+func restGetAssignment(w http.ResponseWriter, r *http.Request, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
 	assignmentID, err := parseID(w, "assignment_id", params["assignment_id"])
 	if err != nil {
 		return
 	}
 
-	assignment, err := getAssignment(tx, assignmentID, currentUser)
+	assignment, err := getAssignment(tx, assignmentID, currentUser, IPFilterAllowed(r.Context()))
 	if err != nil {
 		loggedHTTPDBNotFoundError(w, err)
 		return
@@ -323,7 +323,7 @@ func restGetAssignment(w http.ResponseWriter, tx *sql.Tx, params martini.Params,
 }
 
 // restGetAssignmentProblemCommitLast handles GET /assignments/:assignment_id/problems/:problem_id/commits/last
-func restGetAssignmentProblemCommitLast(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
+func restGetAssignmentProblemCommitLast(w http.ResponseWriter, r *http.Request, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
 	assignmentID, err := parseID(w, "assignment_id", params["assignment_id"])
 	if err != nil {
 		return
@@ -333,7 +333,7 @@ func restGetAssignmentProblemCommitLast(w http.ResponseWriter, tx *sql.Tx, param
 		return
 	}
 
-	commit, err := getAssignmentProblemCommitLast(tx, assignmentID, problemID, currentUser)
+	commit, err := getAssignmentProblemCommitLast(tx, assignmentID, problemID, currentUser, IPFilterAllowed(r.Context()))
 	if err != nil {
 		loggedHTTPDBNotFoundError(w, err)
 		return
@@ -342,7 +342,7 @@ func restGetAssignmentProblemCommitLast(w http.ResponseWriter, tx *sql.Tx, param
 }
 
 // restGetAssignmentProblemStepCommitLast handles GET /assignments/:assignment_id/problems/:problem_id/steps/:step/commits/last
-func restGetAssignmentProblemStepCommitLast(w http.ResponseWriter, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
+func restGetAssignmentProblemStepCommitLast(w http.ResponseWriter, r *http.Request, tx *sql.Tx, params martini.Params, currentUser *User, render render.Render) {
 	assignmentID, err := parseID(w, "assignment_id", params["assignment_id"])
 	if err != nil {
 		return
@@ -356,7 +356,7 @@ func restGetAssignmentProblemStepCommitLast(w http.ResponseWriter, tx *sql.Tx, p
 		return
 	}
 
-	commit, err := getAssignmentProblemStepCommitLast(tx, assignmentID, problemID, step, currentUser)
+	commit, err := getAssignmentProblemStepCommitLast(tx, assignmentID, problemID, step, currentUser, IPFilterAllowed(r.Context()))
 	if err != nil {
 		loggedHTTPDBNotFoundError(w, err)
 		return
@@ -365,7 +365,7 @@ func restGetAssignmentProblemStepCommitLast(w http.ResponseWriter, tx *sql.Tx, p
 }
 
 // restPostProblemBundleUnconfirmed handles POST /problem_bundles/unconfirmed
-func restPostProblemBundleUnconfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser *User, bundle ProblemBundle, render render.Render) {
+func restPostProblemBundleUnconfirmed(w http.ResponseWriter, _ *http.Request, tx *sql.Tx, currentUser *User, bundle ProblemBundle, render render.Render) {
 	result, err := signProblemBundleUnconfirmed(tx, currentUser, &bundle)
 	if err != nil {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "problem bundle error: %v", err)
@@ -375,7 +375,7 @@ func restPostProblemBundleUnconfirmed(w http.ResponseWriter, tx *sql.Tx, current
 }
 
 // restPostProblemBundleConfirmed handles POST /problem_bundles/confirmed
-func restPostProblemBundleConfirmed(w http.ResponseWriter, tx *sql.Tx, currentUser *User, bundle ProblemBundle, render render.Render) {
+func restPostProblemBundleConfirmed(w http.ResponseWriter, _ *http.Request, tx *sql.Tx, currentUser *User, bundle ProblemBundle, render render.Render) {
 	result, err := saveProblemBundleCommon(tx, currentUser, &bundle)
 	if err != nil {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "problem bundle error: %v", err)
@@ -424,7 +424,7 @@ func restPutProblemSetBundle(w http.ResponseWriter, tx *sql.Tx, params martini.P
 }
 
 // restPostCommitBundlesUnsigned handles POST /commit_bundles/unsigned
-func restPostCommitBundlesUnsigned(w http.ResponseWriter, tx *sql.Tx, currentUser *User, bundle CommitBundle, render render.Render) {
+func restPostCommitBundlesUnsigned(w http.ResponseWriter, r *http.Request, tx *sql.Tx, currentUser *User, bundle CommitBundle, render render.Render) {
 	now := time.Now()
 
 	if bundle.Commit == nil {
@@ -448,7 +448,7 @@ func restPostCommitBundlesUnsigned(w http.ResponseWriter, tx *sql.Tx, currentUse
 	bundle.Commit.Score = 0.0
 	bundle.Commit.CreatedAt = now
 	bundle.Commit.UpdatedAt = now
-	result, err := saveCommitBundleCommon(now, tx, currentUser, &bundle)
+	result, err := saveCommitBundleCommon(now, tx, currentUser, &bundle, IPFilterAllowed(r.Context()))
 	if err != nil {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "commit bundle error: %v", err)
 		return
@@ -457,7 +457,7 @@ func restPostCommitBundlesUnsigned(w http.ResponseWriter, tx *sql.Tx, currentUse
 }
 
 // restPostCommitBundlesSigned handles POST /commit_bundles/signed
-func restPostCommitBundlesSigned(w http.ResponseWriter, tx *sql.Tx, currentUser *User, bundle CommitBundle, render render.Render) {
+func restPostCommitBundlesSigned(w http.ResponseWriter, r *http.Request, tx *sql.Tx, currentUser *User, bundle CommitBundle, render render.Render) {
 	now := time.Now()
 
 	if bundle.Commit == nil {
@@ -468,7 +468,7 @@ func restPostCommitBundlesSigned(w http.ResponseWriter, tx *sql.Tx, currentUser 
 		loggedHTTPErrorf(w, http.StatusBadRequest, "bundle must include commit signature")
 		return
 	}
-	result, err := saveCommitBundleCommon(now, tx, currentUser, &bundle)
+	result, err := saveCommitBundleCommon(now, tx, currentUser, &bundle, IPFilterAllowed(r.Context()))
 	if err != nil {
 		loggedHTTPErrorf(w, http.StatusBadRequest, "commit bundle error: %v", err)
 		return
