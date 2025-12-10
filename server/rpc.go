@@ -890,6 +890,10 @@ func (s *codeGrinderServiceServer) GetAssignmentProblemStepCommitLast(ctx contex
 func (s *codeGrinderServiceServer) PostProblemBundleUnconfirmed(ctx context.Context, req *pb.PostProblemBundleUnconfirmedRequest) (*pb.PostProblemBundleUnconfirmedResponse, error) {
 	var resultBundle *ProblemBundle
 
+	if req == nil || req.Bundle == nil {
+		return nil, status.Error(codes.InvalidArgument, "bundle is required")
+	}
+
 	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
 		// Get current user
 		session, err := getSessionFromGRPC(ctx)
@@ -927,6 +931,10 @@ func (s *codeGrinderServiceServer) PostProblemBundleUnconfirmed(ctx context.Cont
 func (s *codeGrinderServiceServer) PostProblemBundleConfirmed(ctx context.Context, req *pb.PostProblemBundleConfirmedRequest) (*pb.PostProblemBundleConfirmedResponse, error) {
 	var resultBundle *ProblemBundle
 
+	if req == nil || req.Bundle == nil {
+		return nil, status.Error(codes.InvalidArgument, "bundle is required")
+	}
+
 	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
 		// Get current user
 		session, err := getSessionFromGRPC(ctx)
@@ -962,6 +970,10 @@ func (s *codeGrinderServiceServer) PostProblemBundleConfirmed(ctx context.Contex
 // PutProblemBundle handles updating problem bundle
 func (s *codeGrinderServiceServer) PutProblemBundle(ctx context.Context, req *pb.PutProblemBundleRequest) (*pb.PutProblemBundleResponse, error) {
 	var resultBundle *ProblemBundle
+
+	if req == nil || req.Bundle == nil {
+		return nil, status.Error(codes.InvalidArgument, "bundle is required")
+	}
 
 	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
 		// Get current user
@@ -999,6 +1011,10 @@ func (s *codeGrinderServiceServer) PutProblemBundle(ctx context.Context, req *pb
 func (s *codeGrinderServiceServer) PostProblemSetBundle(ctx context.Context, req *pb.PostProblemSetBundleRequest) (*pb.PostProblemSetBundleResponse, error) {
 	var resultBundle *ProblemSetBundle
 
+	if req == nil || req.Bundle == nil {
+		return nil, status.Error(codes.InvalidArgument, "bundle is required")
+	}
+
 	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
 		// Convert proto to types
 		bundle := req.Bundle.ToREST()
@@ -1026,6 +1042,10 @@ func (s *codeGrinderServiceServer) PostProblemSetBundle(ctx context.Context, req
 func (s *codeGrinderServiceServer) PutProblemSetBundle(ctx context.Context, req *pb.PutProblemSetBundleRequest) (*pb.PutProblemSetBundleResponse, error) {
 	var resultBundle *ProblemSetBundle
 
+	if req == nil || req.Bundle == nil {
+		return nil, status.Error(codes.InvalidArgument, "bundle is required")
+	}
+
 	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
 		// Convert proto to types
 		bundle := req.Bundle.ToREST()
@@ -1052,6 +1072,10 @@ func (s *codeGrinderServiceServer) PutProblemSetBundle(ctx context.Context, req 
 // PostCommitBundlesUnsigned handles unsigned commit bundle
 func (s *codeGrinderServiceServer) PostCommitBundlesUnsigned(ctx context.Context, req *pb.PostCommitBundlesUnsignedRequest) (*pb.PostCommitBundlesUnsignedResponse, error) {
 	var resultBundle *pb.CommitBundle
+
+	if req == nil || req.Bundle == nil {
+		return nil, status.Error(codes.InvalidArgument, "bundle is required")
+	}
 
 	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
 		// Get current user
@@ -1095,6 +1119,10 @@ func (s *codeGrinderServiceServer) PostCommitBundlesUnsigned(ctx context.Context
 func (s *codeGrinderServiceServer) PostCommitBundlesSigned(ctx context.Context, req *pb.PostCommitBundlesSignedRequest) (*pb.PostCommitBundlesSignedResponse, error) {
 	var resultBundle *pb.CommitBundle
 
+	if req == nil || req.Bundle == nil {
+		return nil, status.Error(codes.InvalidArgument, "bundle is required")
+	}
+
 	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
 		// Get current user
 		session, err := getSessionFromGRPC(ctx)
@@ -1131,6 +1159,13 @@ func (s *codeGrinderServiceServer) Daycare(req *pb.DaycareRequest, stream pb.Cod
 	// Get context from the stream
 	ctx := stream.Context()
 
+	if req == nil {
+		return status.Error(codes.InvalidArgument, "request is required")
+	}
+	if req.CommitBundle == nil {
+		return status.Error(codes.InvalidArgument, "commit bundle is required")
+	}
+
 	// Convert protobuf request to legacy types
 	commitBundle := req.CommitBundle.ToREST()
 	problemType := req.ProblemType
@@ -1164,6 +1199,11 @@ func (s *codeGrinderServiceServer) Daycare(req *pb.DaycareRequest, stream pb.Cod
 			pbResponse = &pb.DaycareResponse{
 				Response: &pb.DaycareResponse_CommitBundle{CommitBundle: pb.ToRPCCommitBundle(response.CommitBundle)},
 			}
+		}
+		if pbResponse == nil {
+			// Malformed response; skip to avoid panic
+			log.Printf("gRPC Daycare received empty response payload; skipping send")
+			continue
 		}
 		if err := stream.Send(pbResponse); err != nil {
 			log.Printf("gRPC stream send error: %v", err)

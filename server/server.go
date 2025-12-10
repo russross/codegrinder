@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -41,9 +42,11 @@ import (
 	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	_ "google.golang.org/grpc/encoding/gzip"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/reflection"
+	"google.golang.org/grpc/status"
 )
 
 // IPFilterConfig holds configuration for optional IP filtering.
@@ -498,11 +501,14 @@ func main() {
 
 		// set up gRPC server
 		grpcServer = grpc.NewServer(
-			grpc.UnaryInterceptor(unaryIPFilterInterceptor),
-			grpc.StreamInterceptor(streamIPFilterInterceptor),
+			grpc.ChainUnaryInterceptor(panicRecoveryUnaryInterceptor, unaryIPFilterInterceptor),
+			grpc.ChainStreamInterceptor(panicRecoveryStreamInterceptor, streamIPFilterInterceptor),
 		)
 		pb.RegisterCodeGrinderServiceServer(grpcServer, &codeGrinderServiceServer{})
 		reflection.Register(grpcServer)
+	} else {
+		// ensure grpcServer is nil when TA role is disabled so we can guard usage later
+		grpcServer = nil
 	}
 
 	if use_tls {
@@ -519,29 +525,37 @@ func main() {
 			Client:     acmeClient,
 		}
 
-		// Wrap the gRPC server to handle gRPC-Web requests
-		wrappedGrpc := grpcweb.WrapServer(grpcServer,
-			// Enable CORS for gRPC-Web from any origin
-			grpcweb.WithOriginFunc(func(origin string) bool {
-				return true
-			}),
-		)
+		// Wrap the gRPC server to handle gRPC-Web requests when available
+		var unifiedHandler http.Handler
+		if grpcServer != nil {
+			wrappedGrpc := grpcweb.WrapServer(grpcServer,
+				// Enable CORS for gRPC-Web from any origin
+				grpcweb.WithOriginFunc(func(origin string) bool {
+					return true
+				}),
+			)
 
-		// Create unified handler that routes between gRPC-Web, gRPC, and HTTP
-		unifiedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// 1. Check for gRPC-Web requests
-			if wrappedGrpc.IsGrpcWebRequest(r) {
-				wrappedGrpc.ServeHTTP(w, r)
-				return
-			}
-			// 2. Check for native gRPC requests
-			if r.ProtoMajor == 2 && strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
-				grpcServer.ServeHTTP(w, r)
-				return
-			}
-			// 3. Fallback to the Martini REST handler
-			m.ServeHTTP(w, r)
-		})
+			// Create unified handler that routes between gRPC-Web, gRPC, and HTTP
+			unifiedHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// 1. Check for gRPC-Web requests
+				if wrappedGrpc.IsGrpcWebRequest(r) {
+					wrappedGrpc.ServeHTTP(w, r)
+					return
+				}
+				// 2. Check for native gRPC requests
+				if r.ProtoMajor == 2 && strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
+					grpcServer.ServeHTTP(w, r)
+					return
+				}
+				// 3. Fallback to the Martini REST handler
+				m.ServeHTTP(w, r)
+			})
+		} else {
+			// Daycare-only mode: no gRPC server, just serve REST
+			unifiedHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				m.ServeHTTP(w, r)
+			})
+		}
 
 		// Configure TLS with HTTP/2 support
 		tlsConfig := &tls.Config{
@@ -580,24 +594,32 @@ func main() {
 		// note: this will work behind a TLS proxy or for debugging with some calls
 		// but LTI will refuse to connect to an insecure host
 
-		// Wrap the gRPC server to handle gRPC-Web requests
-		wrappedGrpc := grpcweb.WrapServer(grpcServer,
-			// Enable CORS for gRPC-Web from any origin
-			grpcweb.WithOriginFunc(func(origin string) bool {
-				return true
-			}),
-		)
+		var unifiedHandler http.Handler
+		if grpcServer != nil {
+			// Wrap the gRPC server to handle gRPC-Web requests
+			wrappedGrpc := grpcweb.WrapServer(grpcServer,
+				// Enable CORS for gRPC-Web from any origin
+				grpcweb.WithOriginFunc(func(origin string) bool {
+					return true
+				}),
+			)
 
-		unifiedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Route gRPC-Web, gRPC, and HTTP requests to the correct handler
-			if wrappedGrpc.IsGrpcWebRequest(r) {
-				wrappedGrpc.ServeHTTP(w, r)
-			} else if strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
-				grpcServer.ServeHTTP(w, r)
-			} else {
+			unifiedHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// Route gRPC-Web, gRPC, and HTTP requests to the correct handler
+				if wrappedGrpc.IsGrpcWebRequest(r) {
+					wrappedGrpc.ServeHTTP(w, r)
+				} else if strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
+					grpcServer.ServeHTTP(w, r)
+				} else {
+					m.ServeHTTP(w, r)
+				}
+			})
+		} else {
+			// Daycare-only mode: no gRPC server, just serve REST
+			unifiedHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				m.ServeHTTP(w, r)
-			}
-		})
+			})
+		}
 
 		log.Printf("accepting http connections (HTTP, gRPC, and gRPC-Web) on %s", nonTLSAddress)
 		if err := http.ListenAndServe(nonTLSAddress, unifiedHandler); err != nil {
@@ -870,6 +892,28 @@ func streamIPFilterInterceptor(srv interface{}, ss grpc.ServerStream, info *grpc
 	}
 	ctx := context.WithValue(ss.Context(), ipFilterAllowedKey{}, allowed)
 	return handler(srv, &wrappedServerStream{ServerStream: ss, ctx: ctx})
+}
+
+// panicRecoveryUnaryInterceptor catches panics in unary gRPC handlers to avoid bringing down the server.
+func panicRecoveryUnaryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("panic in gRPC unary handler %s: %v\n%s", info.FullMethod, r, debug.Stack())
+			err = status.Errorf(codes.Internal, "internal server error")
+		}
+	}()
+	return handler(ctx, req)
+}
+
+// panicRecoveryStreamInterceptor catches panics in streaming gRPC handlers to avoid process crashes.
+func panicRecoveryStreamInterceptor(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("panic in gRPC stream handler %s: %v\n%s", info.FullMethod, r, debug.Stack())
+			err = status.Errorf(codes.Internal, "internal server error")
+		}
+	}()
+	return handler(srv, ss)
 }
 
 type daycares struct {

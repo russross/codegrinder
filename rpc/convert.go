@@ -9,6 +9,20 @@ import (
 	"github.com/russross/codegrinder/types"
 )
 
+func timestampToTime(ts *timestamppb.Timestamp) time.Time {
+	if ts == nil {
+		return time.Time{}
+	}
+	return ts.AsTime()
+}
+
+func durationToDuration(d *durationpb.Duration) time.Duration {
+	if d == nil {
+		return 0
+	}
+	return d.AsDuration()
+}
+
 // ToRPCUser converts a REST User to a gRPC User
 func ToRPCUser(u *types.User) *User {
 	if u == nil {
@@ -372,9 +386,9 @@ func (u *User) ToREST() *types.User {
 		CanvasID:       u.CanvasId,
 		Author:         u.Author,
 		Admin:          u.Admin,
-		CreatedAt:      u.CreatedAt.AsTime(),
-		UpdatedAt:      u.UpdatedAt.AsTime(),
-		LastSignedInAt: u.LastSignedInAt.AsTime(),
+		CreatedAt:      timestampToTime(u.CreatedAt),
+		UpdatedAt:      timestampToTime(u.UpdatedAt),
+		LastSignedInAt: timestampToTime(u.LastSignedInAt),
 	}
 }
 
@@ -389,8 +403,8 @@ func (c *Course) ToREST() *types.Course {
 		Label:     c.Label,
 		LtiID:     c.LtiId,
 		CanvasID:  c.CanvasId,
-		CreatedAt: c.CreatedAt.AsTime(),
-		UpdatedAt: c.UpdatedAt.AsTime(),
+		CreatedAt: timestampToTime(c.CreatedAt),
+		UpdatedAt: timestampToTime(c.UpdatedAt),
 	}
 }
 
@@ -407,14 +421,17 @@ func (a *Assignment) ToREST() *types.Assignment {
 	}
 
 	var unlockAt, dueAt, lockAt *time.Time
-	if a.UnlockAt != nil {
-		unlockAt = &[]time.Time{a.UnlockAt.AsTime()}[0]
+	if a.UnlockAt != nil && a.UnlockAt.Seconds != 0 {
+		t := timestampToTime(a.UnlockAt)
+		unlockAt = &t
 	}
-	if a.DueAt != nil {
-		dueAt = &[]time.Time{a.DueAt.AsTime()}[0]
+	if a.DueAt != nil && a.DueAt.Seconds != 0 {
+		t := timestampToTime(a.DueAt)
+		dueAt = &t
 	}
-	if a.LockAt != nil {
-		lockAt = &[]time.Time{a.LockAt.AsTime()}[0]
+	if a.LockAt != nil && a.LockAt.Seconds != 0 {
+		t := timestampToTime(a.LockAt)
+		lockAt = &t
 	}
 
 	return &types.Assignment{
@@ -440,8 +457,8 @@ func (a *Assignment) ToREST() *types.Assignment {
 		UnlockAt:           unlockAt,
 		DueAt:              dueAt,
 		LockAt:             lockAt,
-		CreatedAt:          a.CreatedAt.AsTime(),
-		UpdatedAt:          a.UpdatedAt.AsTime(),
+		CreatedAt:          timestampToTime(a.CreatedAt),
+		UpdatedAt:          timestampToTime(a.UpdatedAt),
 	}
 }
 
@@ -455,8 +472,8 @@ func (ps *ProblemSet) ToREST() *types.ProblemSet {
 		Unique:    ps.Unique,
 		Note:      ps.Note,
 		Tags:      ps.Tags,
-		CreatedAt: ps.CreatedAt.AsTime(),
-		UpdatedAt: ps.UpdatedAt.AsTime(),
+		CreatedAt: timestampToTime(ps.CreatedAt),
+		UpdatedAt: timestampToTime(ps.UpdatedAt),
 	}
 }
 
@@ -504,8 +521,8 @@ func (p *Problem) ToREST() *types.Problem {
 		Note:      p.Note,
 		Tags:      p.Tags,
 		Options:   p.Options,
-		CreatedAt: p.CreatedAt.AsTime(),
-		UpdatedAt: p.UpdatedAt.AsTime(),
+		CreatedAt: timestampToTime(p.CreatedAt),
+		UpdatedAt: timestampToTime(p.UpdatedAt),
 	}
 }
 
@@ -556,7 +573,7 @@ func (rc *ReportCard) ToREST() *types.ReportCard {
 	return &types.ReportCard{
 		Passed:   rc.Passed,
 		Note:     rc.Note,
-		Duration: rc.Duration.AsDuration(),
+		Duration: durationToDuration(rc.Duration),
 		Results:  results,
 	}
 }
@@ -571,7 +588,7 @@ func (em *EventMessage) ToREST() *types.EventMessage {
 		reportCard = em.ReportCard.ToREST()
 	}
 	return &types.EventMessage{
-		Time:        em.Time.AsTime(),
+		Time:        timestampToTime(em.Time),
 		Event:       em.Event,
 		ExecCommand: em.ExecCommand,
 		ExitStatus:  int(em.ExitStatus),
@@ -589,7 +606,9 @@ func (c *Commit) ToREST() *types.Commit {
 	}
 	transcript := make([]*types.EventMessage, len(c.Transcript))
 	for i, t := range c.Transcript {
-		transcript[i] = t.ToREST()
+		if t != nil {
+			transcript[i] = t.ToREST()
+		}
 	}
 	var reportCard *types.ReportCard
 	if c.ReportCard != nil {
@@ -606,8 +625,8 @@ func (c *Commit) ToREST() *types.Commit {
 		Transcript:   transcript,
 		ReportCard:   reportCard,
 		Score:        c.Score,
-		CreatedAt:    c.CreatedAt.AsTime(),
-		UpdatedAt:    c.UpdatedAt.AsTime(),
+		CreatedAt:    timestampToTime(c.CreatedAt),
+		UpdatedAt:    timestampToTime(c.UpdatedAt),
 	}
 }
 
@@ -624,12 +643,18 @@ func (pb *ProblemBundle) ToREST() *types.ProblemBundle {
 	}
 	commits := make([]*types.Commit, len(pb.Commits))
 	for i, c := range pb.Commits {
-		commits[i] = c.ToREST()
+		if c != nil {
+			commits[i] = c.ToREST()
+		}
+	}
+	var problem *types.Problem
+	if pb.Problem != nil {
+		problem = pb.Problem.ToREST()
 	}
 	return &types.ProblemBundle{
 		ProblemTypes:          problemTypes,
 		ProblemTypeSignatures: pb.ProblemTypeSignatures,
-		Problem:               pb.Problem.ToREST(),
+		Problem:               problem,
 		ProblemSteps:          convertProblemStepsToREST(pb.ProblemSteps),
 		ProblemSignature:      pb.ProblemSignature,
 		Hostname:              pb.Hostname,
@@ -644,8 +669,12 @@ func (psb *ProblemSetBundle) ToREST() *types.ProblemSetBundle {
 	if psb == nil {
 		return nil
 	}
+	var problemSet *types.ProblemSet
+	if psb.ProblemSet != nil {
+		problemSet = psb.ProblemSet.ToREST()
+	}
 	return &types.ProblemSetBundle{
-		ProblemSet:         psb.ProblemSet.ToREST(),
+		ProblemSet:         problemSet,
 		ProblemSetProblems: convertProblemSetProblemsToREST(psb.ProblemSetProblems),
 	}
 }
@@ -655,16 +684,28 @@ func (cb *CommitBundle) ToREST() *types.CommitBundle {
 	if cb == nil {
 		return nil
 	}
+	var problemType *types.ProblemType
+	if cb.ProblemType != nil {
+		problemType = cb.ProblemType.ToREST()
+	}
+	var problem *types.Problem
+	if cb.Problem != nil {
+		problem = cb.Problem.ToREST()
+	}
+	var commit *types.Commit
+	if cb.Commit != nil {
+		commit = cb.Commit.ToREST()
+	}
 	return &types.CommitBundle{
-		ProblemType:          cb.ProblemType.ToREST(),
+		ProblemType:          problemType,
 		ProblemTypeSignature: cb.ProblemTypeSignature,
-		Problem:              cb.Problem.ToREST(),
+		Problem:              problem,
 		ProblemSteps:         convertProblemStepsToREST(cb.ProblemSteps),
 		ProblemSignature:     cb.ProblemSignature,
 		Action:               cb.Action,
 		Hostname:             cb.Hostname,
 		UserID:               cb.UserId,
-		Commit:               cb.Commit.ToREST(),
+		Commit:               commit,
 		CommitSignature:      cb.CommitSignature,
 	}
 }
@@ -673,7 +714,9 @@ func (cb *CommitBundle) ToREST() *types.CommitBundle {
 func convertProblemStepsToREST(pss []*ProblemStep) []*types.ProblemStep {
 	steps := make([]*types.ProblemStep, len(pss))
 	for i, ps := range pss {
-		steps[i] = ps.ToREST()
+		if ps != nil {
+			steps[i] = ps.ToREST()
+		}
 	}
 	return steps
 }
@@ -681,7 +724,9 @@ func convertProblemStepsToREST(pss []*ProblemStep) []*types.ProblemStep {
 func convertProblemSetProblemsToREST(psps []*ProblemSetProblem) []*types.ProblemSetProblem {
 	problems := make([]*types.ProblemSetProblem, len(psps))
 	for i, psp := range psps {
-		problems[i] = psp.ToREST()
+		if psp != nil {
+			problems[i] = psp.ToREST()
+		}
 	}
 	return problems
 }
