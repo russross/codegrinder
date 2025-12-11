@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"time"
@@ -13,15 +12,10 @@ import (
 )
 
 // prepareSignedBundle gathers and signs a commit bundle for direct submission to a daycare server
-func prepareSignedBundle(now time.Time, action string, daycareHost string, client CodeGrinderServiceClient, ctx context.Context) (*CommitBundle, error) {
-	// Get the user ID
-	dumpMessage("GetUserMe", true, &GetUserMeRequest{})
-	userResp, err := client.GetUserMe(ctx, &GetUserMeRequest{})
-	if err != nil {
-		log.Fatalf("failed to get user: %v", err)
+func prepareSignedBundle(now time.Time, action string, daycareHost string, client CodeGrinderServiceClient, ctx context.Context, user *User) (*CommitBundle, error) {
+	if user == nil {
+		return nil, fmt.Errorf("missing user information for daycare bundle")
 	}
-	dumpMessage("GetUserMe", false, userResp)
-	user := userResp.User
 
 	// Gather student data
 	problemType, problem, step, _, commit, _, _ := gatherStudent(now, ".", client, ctx)

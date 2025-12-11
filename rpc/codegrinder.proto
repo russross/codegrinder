@@ -241,6 +241,8 @@ message Version {
 
 // CodeGrinderService provides CodeGrinder operations
 service CodeGrinderService {
+   // Hello performs session validation/exchange and returns server info
+   rpc Hello(HelloRequest) returns (HelloResponse);
    // ListProblems retrieves all problems and related data for the authenticated user
    rpc ListProblems(ListProblemsRequest) returns (ListProblemsResponse);
    // GetVersion retrieves version information
@@ -304,7 +306,19 @@ service CodeGrinderService {
     // PostCommitBundlesSigned handles signed commit bundle
     rpc PostCommitBundlesSigned(PostCommitBundlesSignedRequest) returns (PostCommitBundlesSignedResponse);
     // Daycare handles streaming daycare requests
-    rpc Daycare(DaycareRequest) returns (stream DaycareResponse);
+   rpc Daycare(DaycareRequest) returns (stream DaycareResponse);
+}
+
+// Request for Hello
+message HelloRequest {
+   string key = 1;
+}
+
+// Response for Hello
+message HelloResponse {
+   string cookie = 1;
+   User user = 2;
+   Version version = 3;
 }
 
 // Request for ListProblems

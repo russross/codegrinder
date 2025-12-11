@@ -30,6 +30,9 @@ is part of a different sequence.
 
 1.  `GetUserMe`: responds with a `User` object in the field `user`
 
+1.  `Hello`: responds with a `User` object in the field `user` and
+    version details in the `version` field.
+
 2.  `GetAssignment`: request requires `assignment_id`, which comes
     from the `assignment=` URL paramater of the initial page load.
     responds with an `Assignment` object in the field `assignment`

@@ -11,7 +11,7 @@ import (
 )
 
 func CommandSync(cmd *cobra.Command, args []string) {
-	client, conn, ctx, err := setup(cmd)
+	client, conn, ctx, user, err := setup(cmd)
 	if err != nil {
 		log.Fatalf("failed to connect to gRPC server: %v", err)
 	}
@@ -23,15 +23,6 @@ func CommandSync(cmd *cobra.Command, args []string) {
 		cmd.Help()
 		os.Exit(1)
 	}
-
-	// get the user ID
-	dumpMessage("GetUserMe", true, &GetUserMeRequest{})
-	userResp, err := client.GetUserMe(ctx, &GetUserMeRequest{})
-	if err != nil {
-		log.Fatalf("failed to get user: %v", err)
-	}
-	dumpMessage("GetUserMe", false, userResp)
-	user := userResp.User
 
 	_, problem, _, _, commit, _, _ := gatherStudent(now, ".", client, ctx)
 	commit.Action = ""

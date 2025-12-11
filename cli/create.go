@@ -72,7 +72,7 @@ type ConfigFile struct {
 }
 
 func CommandCreate(cmd *cobra.Command, args []string) {
-	client, conn, ctx, err := setup(cmd)
+	client, conn, ctx, user, err := setup(cmd)
 	if err != nil {
 		log.Fatalf("failed to connect to gRPC server: %v", err)
 	}
@@ -108,14 +108,6 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 
 	unsigned, stepDir, step := gatherAuthor(now, isUpdate, action, ".", client, ctx)
 
-	// get user ID
-	dumpMessage("GetUserMe", true, &GetUserMeRequest{})
-	userResp, err := client.GetUserMe(ctx, &GetUserMeRequest{})
-	if err != nil {
-		log.Fatalf("failed to get user: %v", err)
-	}
-	dumpMessage("GetUserMe", false, userResp)
-	user := userResp.User
 	unsigned.UserId = user.Id
 
 	// get the request validated and signed

@@ -100,6 +100,82 @@ func getCurrentUserFromSession(tx *sql.Tx, session *CookieSession) (*User, error
 	return currentUser, nil
 }
 
+// Hello handles login tokens, cookie validation, and returns version info
+func (s *codeGrinderServiceServer) Hello(ctx context.Context, req *pb.HelloRequest) (*pb.HelloResponse, error) {
+	version := &pb.Version{
+		Version:                  CurrentVersion.Version,
+		GrindVersionRequired:     CurrentVersion.GrindVersionRequired,
+		GrindVersionRecommended:  CurrentVersion.GrindVersionRecommended,
+		ThonnyVersionRequired:    CurrentVersion.ThonnyVersionRequired,
+		ThonnyVersionRecommended: CurrentVersion.ThonnyVersionRecommended,
+	}
+
+	if req.Key != "" {
+		session, err := getUserSession(req.Key)
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+		}
+
+		cookieValue, err := session.Encode()
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "error encoding session: %v", err)
+		}
+
+		var user *pb.User
+		err = withTXForGRPC(ctx, func(tx *sql.Tx) error {
+			currentUser, err := getCurrentUserFromSession(tx, session)
+			if err != nil {
+				return err
+			}
+
+			restUser, err := getUserMe(tx, currentUser)
+			if err != nil {
+				return status.Errorf(codes.Internal, "db error getting user me: %v", err)
+			}
+			user = pb.ToRPCUser(restUser)
+
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		return &pb.HelloResponse{
+			Cookie:  fmt.Sprintf("%s=%s", CookieName, cookieValue),
+			User:    user,
+			Version: version,
+		}, nil
+	}
+
+	var user *pb.User
+	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
+		session, err := getSessionFromGRPC(ctx)
+		if err != nil {
+			return err
+		}
+		currentUser, err := getCurrentUserFromSession(tx, session)
+		if err != nil {
+			return err
+		}
+
+		restUser, err := getUserMe(tx, currentUser)
+		if err != nil {
+			return status.Errorf(codes.Internal, "db error getting user me: %v", err)
+		}
+		user = pb.ToRPCUser(restUser)
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.HelloResponse{
+		User:    user,
+		Version: version,
+	}, nil
+}
+
 // ListProblems retrieves all problems and related data for the authenticated user
 func (s *codeGrinderServiceServer) ListProblems(ctx context.Context, req *pb.ListProblemsRequest) (*pb.ListProblemsResponse, error) {
 	// Validate session

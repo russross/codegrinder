@@ -6,12 +6,11 @@ import (
 	"path/filepath"
 	"time"
 
-	. "github.com/russross/codegrinder/rpc"
 	"github.com/spf13/cobra"
 )
 
 func CommandSolve(cmd *cobra.Command, args []string) {
-	client, conn, ctx, err := setup(cmd)
+	client, conn, ctx, user, err := setup(cmd)
 	if err != nil {
 		log.Fatalf("failed to connect to gRPC server: %v", err)
 	}
@@ -24,14 +23,6 @@ func CommandSolve(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	// get the user ID
-	dumpMessage("GetUserMe", true, &GetUserMeRequest{})
-	userResp, err := client.GetUserMe(ctx, &GetUserMeRequest{})
-	if err != nil {
-		log.Fatalf("failed to get user: %v", err)
-	}
-	dumpMessage("GetUserMe", false, userResp)
-	user := userResp.User
 	if !user.Author {
 		log.Fatalf("you must be an author to use this command")
 	}

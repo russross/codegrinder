@@ -241,6 +241,8 @@ message Version {
 
 // CodeGrinderService provides CodeGrinder operations
 service CodeGrinderService {
+   // Hello performs session validation/exchange and returns server info
+   rpc Hello(HelloRequest) returns (HelloResponse);
    // ListProblems retrieves all problems and related data for the authenticated user
    rpc ListProblems(ListProblemsRequest) returns (ListProblemsResponse);
    // GetVersion retrieves version information
@@ -271,6 +273,8 @@ service CodeGrinderService {
    rpc GetUsers(GetUsersRequest) returns (GetUsersResponse);
    // GetUserMe retrieves the current user
    rpc GetUserMe(GetUserMeRequest) returns (GetUserMeResponse);
+   // GetUserSession trades a session key for a cookie
+   rpc GetUserSession(GetUserSessionRequest) returns (GetUserSessionResponse);
    // GetUser retrieves a specific user
    rpc GetUser(GetUserRequest) returns (GetUserResponse);
    // GetCourseUsers retrieves users in a course
@@ -302,7 +306,19 @@ service CodeGrinderService {
     // PostCommitBundlesSigned handles signed commit bundle
     rpc PostCommitBundlesSigned(PostCommitBundlesSignedRequest) returns (PostCommitBundlesSignedResponse);
     // Daycare handles streaming daycare requests
-    rpc Daycare(DaycareRequest) returns (stream DaycareResponse);
+   rpc Daycare(DaycareRequest) returns (stream DaycareResponse);
+}
+
+// Request for Hello
+message HelloRequest {
+   string key = 1;
+}
+
+// Response for Hello
+message HelloResponse {
+   string cookie = 1;
+   User user = 2;
+   Version version = 3;
 }
 
 // Request for ListProblems
@@ -475,6 +491,16 @@ message GetUserMeRequest {
 // Response for GetUserMe
 message GetUserMeResponse {
    User user = 1;
+}
+
+// Request for GetUserSession
+message GetUserSessionRequest {
+   string key = 1;
+}
+
+// Response for GetUserSession
+message GetUserSessionResponse {
+   string cookie = 1;
 }
 
 // Request for GetUser

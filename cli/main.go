@@ -213,33 +213,19 @@ func CommandLogin(cmd *cobra.Command, args []string) {
 	}
 	defer conn.Close()
 
-	// Trade the session key for a cookie
-	dumpMessage("GetUserSession", true, &GetUserSessionRequest{Key: key})
-	sessionResp, err := client.GetUserSession(ctx, &GetUserSessionRequest{Key: key})
+	dumpMessage("Hello", true, &HelloRequest{Key: key})
+	helloResp, err := client.Hello(ctx, &HelloRequest{Key: key})
 	if err != nil {
 		log.Fatalf("failed to login: %v", err)
 	}
-	dumpMessage("GetUserSession", false, sessionResp)
-	Config.Cookie = sessionResp.Cookie
+	dumpMessage("Hello", false, helloResp)
+	Config.Cookie = helloResp.Cookie
 
-	// Reconnect with the new cookie
-	client, conn, ctx, err = newGRPCClient()
-	if err != nil {
-		log.Fatalf("failed to reconnect to server: %v", err)
+	checkVersion(helloResp.Version)
+	user := helloResp.User
+	if user == nil {
+		log.Fatalf("failed to fetch user: empty response")
 	}
-	defer conn.Close()
-
-	// see if they need an upgrade
-	checkVersion(client, ctx)
-
-	// try it out by fetching a user record
-	dumpMessage("GetUserMe", true, &GetUserMeRequest{})
-	userResp, err := client.GetUserMe(ctx, &GetUserMeRequest{})
-	if err != nil {
-		log.Fatalf("failed to fetch user: %v", err)
-	}
-	dumpMessage("GetUserMe", false, userResp)
-	user := userResp.User
 
 	// save config for later use
 	mustWriteConfig()
@@ -265,7 +251,7 @@ func hasInstructorFile() bool {
 	return err == nil
 }
 
-func setup(cmd *cobra.Command) (CodeGrinderServiceClient, *grpc.ClientConn, context.Context, error) {
+func setup(cmd *cobra.Command) (CodeGrinderServiceClient, *grpc.ClientConn, context.Context, *User, error) {
 	// Load config
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -289,13 +275,23 @@ func setup(cmd *cobra.Command) (CodeGrinderServiceClient, *grpc.ClientConn, cont
 	// Now create connection
 	client, conn, ctx, err := newGRPCClient()
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
-	// Check version
-	checkVersion(client, ctx)
+	dumpMessage("Hello", true, &HelloRequest{})
+	helloResp, err := client.Hello(ctx, &HelloRequest{})
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	dumpMessage("Hello", false, helloResp)
 
-	return client, conn, ctx, nil
+	checkVersion(helloResp.Version)
+
+	if helloResp.User == nil {
+		return nil, nil, nil, nil, fmt.Errorf("server returned no user")
+	}
+
+	return client, conn, ctx, helloResp.User, nil
 }
 
 func mustWriteConfig() {
@@ -326,31 +322,20 @@ func plural(n int) string {
 	return "s"
 }
 
-func checkVersion(client CodeGrinderServiceClient, ctx context.Context) {
-	dumpMessage("GetVersion", true, &GetVersionRequest{})
-	resp, err := client.GetVersion(ctx, &GetVersionRequest{})
-	if err != nil {
-		log.Fatalf("failed to get version from server: %v", err)
-	}
-	dumpMessage("GetVersion", false, resp)
-
-	server := &Version{
-		Version:                  resp.Version.Version,
-		GrindVersionRequired:     resp.Version.GrindVersionRequired,
-		GrindVersionRecommended:  resp.Version.GrindVersionRecommended,
-		ThonnyVersionRequired:    resp.Version.ThonnyVersionRequired,
-		ThonnyVersionRecommended: resp.Version.ThonnyVersionRecommended,
+func checkVersion(version *Version) {
+	if version == nil {
+		log.Fatalf("failed to get version from server")
 	}
 
 	grindCurrent := semver.MustParse(types.CurrentVersion.Version)
-	grindRequired := semver.MustParse(server.GrindVersionRequired)
+	grindRequired := semver.MustParse(version.GrindVersionRequired)
 	if grindRequired.GT(grindCurrent) {
-		log.Printf("this is grind version %s, but the server requires %s or higher", types.CurrentVersion.Version, server.GrindVersionRequired)
+		log.Printf("this is grind version %s, but the server requires %s or higher", types.CurrentVersion.Version, version.GrindVersionRequired)
 		log.Fatalf("  you must upgrade to continue")
 	}
-	grindRecommended := semver.MustParse(server.GrindVersionRecommended)
+	grindRecommended := semver.MustParse(version.GrindVersionRecommended)
 	if grindRecommended.GT(grindCurrent) {
-		log.Printf("this is grind version %s, but the server recommends %s or higher", types.CurrentVersion.Version, server.GrindVersionRecommended)
+		log.Printf("this is grind version %s, but the server recommends %s or higher", types.CurrentVersion.Version, version.GrindVersionRecommended)
 		log.Printf("  please upgrade as soon as possible")
 	}
 }

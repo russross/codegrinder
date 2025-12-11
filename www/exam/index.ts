@@ -1,5 +1,5 @@
 import {
-    GetUserMeRequest,
+    HelloRequest,
     GetAssignmentRequest,
     GetProblemSetProblemsRequest,
     GetProblemRequest,
@@ -164,11 +164,15 @@ async function loadAssignment(): Promise<void> {
     window.problemSet = []; // Clear existing problem set
 
     try {
-        // 1. GetUserMe
-        console.log('loadAssignment: Fetching user...');
-        const userCall = await client.getUserMe(GetUserMeRequest.create(), {});
-        user = userCall.response.user!;
-        console.log('loadAssignment: User:', user);
+        // 1. Hello
+        console.log('loadAssignment: Performing hello...');
+        const helloCall = await client.hello(HelloRequest.create(), {});
+        user = helloCall.response.user!;
+        const serverVersion = helloCall.response.version;
+        console.log('loadAssignment: User:', user, 'Version:', serverVersion);
+        if (!user) {
+            throw new Error('User not returned from hello call.');
+        }
 
         // Get assignment_id from URL
         const urlParams = new URLSearchParams(window.location.search);
