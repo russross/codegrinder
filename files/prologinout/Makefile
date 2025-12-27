@@ -1,36 +1,33 @@
 .SUFFIXES:
-.SUFFIXES: .pl .out .xml
+.SUFFIXES: .pl .out .xml .input .transcript
 
 PROLOGSOURCE=$(wildcard *.pl)
 
-STEPPER_DELAY=0.01
-STEPPER_WARMUPDELAY=0.25
-STEPPER_POSTCRASHLINES=15
-STEPPER_WRONGLINES=10
-STEPPER_SUFFIX=input
-STEPPER_INDIR=inputs
-STEPPER_OUTDIR=inputs
 STEPPER_CMD=swipl -qs $(PROLOGSOURCE)
-export STEPPER_DELAY STEPPER_WARMUPDELAY STEPPER_POSTCRASHLINES STEPPER_WRONGLINES
-export STEPPER_SUFFIX STEPPER_INDIR STEPPER_OUTDIR STEPPER_CMD
+STEPPER_DIR=inputs
+STEPPER_TIMEOUT=5
+STEPPER_POSTERRORLINES=15
+STEPPER_GRADE=false
+export STEPPER_CMD STEPPER_DIR STEPPER_TIMEOUT STEPPER_POSTERRORLINES STEPPER_GRADE
 
 all:	step
 
-step:
-	python3 lib/stepper
-
+grade:	export STEPPER_GRADE := true
 grade:
-	rm -f test_detail.xml inputs/*.actual
-	python3 lib/grader
-
-shell:
-	swipl
+	@rm -f test_detail.xml
+	python3 lib/stepper
 
 run:	
 	$(STEPPER_CMD)
 
+step:
+	python3 lib/stepper
+
+shell:
+	swipl
+
 setup:
-	sudo apt install -y icdiff make python3 swi-prolog
+	sudo apt install -y curl make python3 swi-prolog
 
 clean:
-	rm -f tests/*.actual test_detail.xml
+	rm -f test_detail.xml

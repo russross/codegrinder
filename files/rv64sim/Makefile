@@ -44,7 +44,7 @@ a.out:	$(AOUTOBJECT)
 	$(LD) $(LDFLAGS) $^
 
 setup:
-	sudo apt install curl clang lld lldb make python3 qemu-user-binfmt
+	sudo apt install -y curl clang lld lldb make python3 qemu-user-binfmt
 
 clean:
 	rm -f core *.o *.out *.xml

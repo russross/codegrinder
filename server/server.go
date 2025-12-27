@@ -547,9 +547,15 @@ func main() {
 		// Configure TLS with HTTP/2 support
 		tlsConfig := &tls.Config{
 			PreferServerCipherSuites: true,
-			MinVersion:               tls.VersionTLS12,
-			NextProtos:               []string{"h2", "http/1.1", acme.ALPNProto}, // Enable HTTP/2
-			GetCertificate:           lem.GetCertificate,
+			MinVersion:               tls.VersionTLS13,
+			NextProtos:               []string{"h2", "http/1.1", acme.ALPNProto},
+			GetCertificate: func(chi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+				cert, err := lem.GetCertificate(chi)
+				if err != nil {
+					log.Printf("GetCertificate error for SNI %q: %v", chi.ServerName, err)
+				}
+				return cert, err
+			},
 		}
 
 		// Create single HTTPS server that handles both protocols
@@ -755,10 +761,11 @@ func unBase64(s string) string {
 // loadIPWhitelist loads IP addresses and CIDR blocks from "whitelist.txt".
 // If the file is not found, IP filtering is disabled.
 func loadIPWhitelist() {
-	file, err := os.Open("whitelist.txt")
+	whitelist := filepath.Join(root, "whitelist.txt")
+	file, err := os.Open(whitelist)
 	if os.IsNotExist(err) {
-		log.Printf("whitelist.txt not found, IP filtering disabled.")
-		return // ipWhitelist remains nil, so isIPWhitelisted will return true
+		log.Printf("%s not found, IP filtering disabled.", whitelist)
+		return
 	}
 	if err != nil {
 		log.Printf("error opening whitelist.txt: %v", err)
