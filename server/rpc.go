@@ -100,6 +100,82 @@ func getCurrentUserFromSession(tx *sql.Tx, session *CookieSession) (*User, error
 	return currentUser, nil
 }
 
+// Hello handles login tokens, cookie validation, and returns version info
+func (s *codeGrinderServiceServer) Hello(ctx context.Context, req *pb.HelloRequest) (*pb.HelloResponse, error) {
+	version := &pb.Version{
+		Version:                  CurrentVersion.Version,
+		GrindVersionRequired:     CurrentVersion.GrindVersionRequired,
+		GrindVersionRecommended:  CurrentVersion.GrindVersionRecommended,
+		ThonnyVersionRequired:    CurrentVersion.ThonnyVersionRequired,
+		ThonnyVersionRecommended: CurrentVersion.ThonnyVersionRecommended,
+	}
+
+	if req.Key != "" {
+		session, err := getUserSession(req.Key)
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+		}
+
+		cookieValue, err := session.Encode()
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "error encoding session: %v", err)
+		}
+
+		var user *pb.User
+		err = withTXForGRPC(ctx, func(tx *sql.Tx) error {
+			currentUser, err := getCurrentUserFromSession(tx, session)
+			if err != nil {
+				return err
+			}
+
+			restUser, err := getUserMe(tx, currentUser)
+			if err != nil {
+				return status.Errorf(codes.Internal, "db error getting user me: %v", err)
+			}
+			user = pb.ToRPCUser(restUser)
+
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		return &pb.HelloResponse{
+			Cookie:  fmt.Sprintf("%s=%s", CookieName, cookieValue),
+			User:    user,
+			Version: version,
+		}, nil
+	}
+
+	var user *pb.User
+	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
+		session, err := getSessionFromGRPC(ctx)
+		if err != nil {
+			return err
+		}
+		currentUser, err := getCurrentUserFromSession(tx, session)
+		if err != nil {
+			return err
+		}
+
+		restUser, err := getUserMe(tx, currentUser)
+		if err != nil {
+			return status.Errorf(codes.Internal, "db error getting user me: %v", err)
+		}
+		user = pb.ToRPCUser(restUser)
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.HelloResponse{
+		User:    user,
+		Version: version,
+	}, nil
+}
+
 // ListProblems retrieves all problems and related data for the authenticated user
 func (s *codeGrinderServiceServer) ListProblems(ctx context.Context, req *pb.ListProblemsRequest) (*pb.ListProblemsResponse, error) {
 	// Validate session
@@ -125,7 +201,7 @@ func (s *codeGrinderServiceServer) ListProblems(ctx context.Context, req *pb.Lis
 		user = pb.ToRPCUser(currentUser)
 
 		// Get assignments
-		typeAssignments, err = getUserAssignments(tx, session.UserID, currentUser)
+		typeAssignments, err = getUserAssignments(tx, session.UserID, currentUser, IPFilterAllowed(ctx))
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting assignments: %v", err)
 		}
@@ -703,7 +779,7 @@ func (s *codeGrinderServiceServer) GetUserAssignments(ctx context.Context, req *
 		}
 
 		// Get user assignments
-		restAssignments, err := getUserAssignments(tx, req.UserId, currentUser)
+		restAssignments, err := getUserAssignments(tx, req.UserId, currentUser, IPFilterAllowed(ctx))
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting user assignments: %v", err)
 		}
@@ -737,7 +813,7 @@ func (s *codeGrinderServiceServer) GetCourseUserAssignments(ctx context.Context,
 		}
 
 		// Get course user assignments
-		restAssignments, err := getCourseUserAssignments(tx, req.CourseId, req.UserId, currentUser)
+		restAssignments, err := getCourseUserAssignments(tx, req.CourseId, req.UserId, currentUser, IPFilterAllowed(ctx))
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting course user assignments: %v", err)
 		}
@@ -771,7 +847,7 @@ func (s *codeGrinderServiceServer) GetAssignments(ctx context.Context, req *pb.G
 		}
 
 		// Get assignments
-		restAssignments, err := getAssignments(tx, currentUser, req.Search)
+		restAssignments, err := getAssignments(tx, currentUser, req.Search, IPFilterAllowed(ctx))
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting assignments: %v", err)
 		}
@@ -805,7 +881,7 @@ func (s *codeGrinderServiceServer) GetAssignment(ctx context.Context, req *pb.Ge
 		}
 
 		// Get assignment
-		restAssignment, err := getAssignment(tx, req.AssignmentId, currentUser)
+		restAssignment, err := getAssignment(tx, req.AssignmentId, currentUser, IPFilterAllowed(ctx))
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting assignment: %v", err)
 		}
@@ -836,7 +912,7 @@ func (s *codeGrinderServiceServer) GetAssignmentProblemCommitLast(ctx context.Co
 		}
 
 		// Get assignment problem commit last
-		restCommit, err := getAssignmentProblemCommitLast(tx, req.AssignmentId, req.ProblemId, currentUser)
+		restCommit, err := getAssignmentProblemCommitLast(tx, req.AssignmentId, req.ProblemId, currentUser, IPFilterAllowed(ctx))
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting assignment problem commit last: %v", err)
 		}
@@ -869,7 +945,7 @@ func (s *codeGrinderServiceServer) GetAssignmentProblemStepCommitLast(ctx contex
 		}
 
 		// Get assignment problem step commit last
-		restCommit, err := getAssignmentProblemStepCommitLast(tx, req.AssignmentId, req.ProblemId, req.Step, currentUser)
+		restCommit, err := getAssignmentProblemStepCommitLast(tx, req.AssignmentId, req.ProblemId, req.Step, currentUser, IPFilterAllowed(ctx))
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error getting assignment problem step commit last: %v", err)
 		}
@@ -889,6 +965,10 @@ func (s *codeGrinderServiceServer) GetAssignmentProblemStepCommitLast(ctx contex
 // PostProblemBundleUnconfirmed handles unconfirmed problem bundle
 func (s *codeGrinderServiceServer) PostProblemBundleUnconfirmed(ctx context.Context, req *pb.PostProblemBundleUnconfirmedRequest) (*pb.PostProblemBundleUnconfirmedResponse, error) {
 	var resultBundle *ProblemBundle
+
+	if req == nil || req.Bundle == nil {
+		return nil, status.Error(codes.InvalidArgument, "bundle is required")
+	}
 
 	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
 		// Get current user
@@ -927,6 +1007,10 @@ func (s *codeGrinderServiceServer) PostProblemBundleUnconfirmed(ctx context.Cont
 func (s *codeGrinderServiceServer) PostProblemBundleConfirmed(ctx context.Context, req *pb.PostProblemBundleConfirmedRequest) (*pb.PostProblemBundleConfirmedResponse, error) {
 	var resultBundle *ProblemBundle
 
+	if req == nil || req.Bundle == nil {
+		return nil, status.Error(codes.InvalidArgument, "bundle is required")
+	}
+
 	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
 		// Get current user
 		session, err := getSessionFromGRPC(ctx)
@@ -962,6 +1046,10 @@ func (s *codeGrinderServiceServer) PostProblemBundleConfirmed(ctx context.Contex
 // PutProblemBundle handles updating problem bundle
 func (s *codeGrinderServiceServer) PutProblemBundle(ctx context.Context, req *pb.PutProblemBundleRequest) (*pb.PutProblemBundleResponse, error) {
 	var resultBundle *ProblemBundle
+
+	if req == nil || req.Bundle == nil {
+		return nil, status.Error(codes.InvalidArgument, "bundle is required")
+	}
 
 	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
 		// Get current user
@@ -999,6 +1087,10 @@ func (s *codeGrinderServiceServer) PutProblemBundle(ctx context.Context, req *pb
 func (s *codeGrinderServiceServer) PostProblemSetBundle(ctx context.Context, req *pb.PostProblemSetBundleRequest) (*pb.PostProblemSetBundleResponse, error) {
 	var resultBundle *ProblemSetBundle
 
+	if req == nil || req.Bundle == nil {
+		return nil, status.Error(codes.InvalidArgument, "bundle is required")
+	}
+
 	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
 		// Convert proto to types
 		bundle := req.Bundle.ToREST()
@@ -1025,6 +1117,10 @@ func (s *codeGrinderServiceServer) PostProblemSetBundle(ctx context.Context, req
 // PutProblemSetBundle handles updating problem set bundle
 func (s *codeGrinderServiceServer) PutProblemSetBundle(ctx context.Context, req *pb.PutProblemSetBundleRequest) (*pb.PutProblemSetBundleResponse, error) {
 	var resultBundle *ProblemSetBundle
+
+	if req == nil || req.Bundle == nil {
+		return nil, status.Error(codes.InvalidArgument, "bundle is required")
+	}
 
 	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
 		// Convert proto to types
@@ -1053,6 +1149,10 @@ func (s *codeGrinderServiceServer) PutProblemSetBundle(ctx context.Context, req 
 func (s *codeGrinderServiceServer) PostCommitBundlesUnsigned(ctx context.Context, req *pb.PostCommitBundlesUnsignedRequest) (*pb.PostCommitBundlesUnsignedResponse, error) {
 	var resultBundle *pb.CommitBundle
 
+	if req == nil || req.Bundle == nil {
+		return nil, status.Error(codes.InvalidArgument, "bundle is required")
+	}
+
 	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
 		// Get current user
 		session, err := getSessionFromGRPC(ctx)
@@ -1075,7 +1175,7 @@ func (s *codeGrinderServiceServer) PostCommitBundlesUnsigned(ctx context.Context
 		bundle.Commit.UpdatedAt = now
 
 		// Post commit bundles unsigned
-		result, err := saveCommitBundleCommon(time.Now(), tx, currentUser, bundle)
+		result, err := saveCommitBundleCommon(time.Now(), tx, currentUser, bundle, IPFilterAllowed(ctx))
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error posting commit bundles unsigned: %v", err)
 		}
@@ -1095,6 +1195,10 @@ func (s *codeGrinderServiceServer) PostCommitBundlesUnsigned(ctx context.Context
 func (s *codeGrinderServiceServer) PostCommitBundlesSigned(ctx context.Context, req *pb.PostCommitBundlesSignedRequest) (*pb.PostCommitBundlesSignedResponse, error) {
 	var resultBundle *pb.CommitBundle
 
+	if req == nil || req.Bundle == nil {
+		return nil, status.Error(codes.InvalidArgument, "bundle is required")
+	}
+
 	err := withTXForGRPC(ctx, func(tx *sql.Tx) error {
 		// Get current user
 		session, err := getSessionFromGRPC(ctx)
@@ -1110,7 +1214,7 @@ func (s *codeGrinderServiceServer) PostCommitBundlesSigned(ctx context.Context, 
 		bundle := req.Bundle.ToREST()
 
 		// Post commit bundles signed
-		result, err := saveCommitBundleCommon(time.Now(), tx, currentUser, bundle)
+		result, err := saveCommitBundleCommon(time.Now(), tx, currentUser, bundle, IPFilterAllowed(ctx))
 		if err != nil {
 			return status.Errorf(codes.Internal, "db error posting commit bundles signed: %v", err)
 		}
@@ -1130,6 +1234,13 @@ func (s *codeGrinderServiceServer) PostCommitBundlesSigned(ctx context.Context, 
 func (s *codeGrinderServiceServer) Daycare(req *pb.DaycareRequest, stream pb.CodeGrinderService_DaycareServer) error {
 	// Get context from the stream
 	ctx := stream.Context()
+
+	if req == nil {
+		return status.Error(codes.InvalidArgument, "request is required")
+	}
+	if req.CommitBundle == nil {
+		return status.Error(codes.InvalidArgument, "commit bundle is required")
+	}
 
 	// Convert protobuf request to legacy types
 	commitBundle := req.CommitBundle.ToREST()
@@ -1164,6 +1275,11 @@ func (s *codeGrinderServiceServer) Daycare(req *pb.DaycareRequest, stream pb.Cod
 			pbResponse = &pb.DaycareResponse{
 				Response: &pb.DaycareResponse_CommitBundle{CommitBundle: pb.ToRPCCommitBundle(response.CommitBundle)},
 			}
+		}
+		if pbResponse == nil {
+			// Malformed response; skip to avoid panic
+			log.Printf("gRPC Daycare received empty response payload; skipping send")
+			continue
 		}
 		if err := stream.Send(pbResponse); err != nil {
 			log.Printf("gRPC stream send error: %v", err)

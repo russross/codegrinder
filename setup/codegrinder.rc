@@ -9,6 +9,11 @@ start_pre() {
     ewaitfile 30 /var/run/docker.sock
 }
 
+supervisor="supervise-daemon"
+respawn_delay=2
+respawn_max=10
+respawn_period=300
+
 command="/home/russ/go/bin/server"
 command_args="-daycare"
 command_user="russ:russ"

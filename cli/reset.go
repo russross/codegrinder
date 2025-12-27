@@ -14,21 +14,13 @@ import (
 )
 
 func CommandReset(cmd *cobra.Command, args []string) {
-	client, conn, ctx, err := setup(cmd)
+	client, conn, ctx, _, err := setup(cmd)
 	if err != nil {
 		log.Fatalf("failed to connect to gRPC server: %v", err)
 	}
 	defer conn.Close()
 
 	now := time.Now()
-
-	// get the user ID
-	dumpMessage("GetUserMe", true, &GetUserMeRequest{})
-	_, err = client.GetUserMe(ctx, &GetUserMeRequest{})
-	if err != nil {
-		log.Fatalf("failed to get user: %v", err)
-	}
-	dumpMessage("GetUserMe", false, nil)
 
 	problemType, problem, step, assignment, _, dotfile, problemDir := gatherStudent(now, ".", client, ctx)
 	info := dotfile.Problems[problem.Unique]

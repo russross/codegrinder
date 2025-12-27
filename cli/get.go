@@ -11,7 +11,7 @@ import (
 )
 
 func CommandGet(cmd *cobra.Command, args []string) {
-	client, conn, ctx, err := setup(cmd)
+	client, conn, ctx, user, err := setup(cmd)
 	if err != nil {
 		log.Fatalf("failed to connect to gRPC server: %v", err)
 	}
@@ -37,14 +37,6 @@ func CommandGet(cmd *cobra.Command, args []string) {
 		rootDir = args[1]
 		prettyRoot = rootDir
 	}
-
-	dumpMessage("GetUserMe", true, &GetUserMeRequest{})
-	userResp, err := client.GetUserMe(ctx, &GetUserMeRequest{})
-	if err != nil {
-		log.Fatalf("failed to get user: %v", err)
-	}
-	dumpMessage("GetUserMe", false, userResp)
-	user := userResp.User
 
 	var assignment *Assignment
 	if id, err := strconv.Atoi(name); err == nil && id > 0 {

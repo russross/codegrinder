@@ -1,9 +1,9 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/tls"
@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -41,9 +42,17 @@ import (
 	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	_ "google.golang.org/grpc/encoding/gzip"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/reflection"
+	"google.golang.org/grpc/status"
 )
+
+// IPFilterConfig holds configuration for optional IP filtering.
+type IPFilterConfig struct {
+	Whitelist []string `json:"whitelist"` // List of IPs/CIDRs/wildcards to allow
+}
 
 // Config holds site-specific configuration data.
 // Contains a mix of Daycare and main server parameters.
@@ -70,6 +79,9 @@ var Config struct {
 	AcmeCache       string      `json:"acmeDir"`         // Full path of Acme cache file: default "$CODEGRINDERROOT/acme"
 	SQLite3Path     string      `json:"sqlite3Path"`     // path to the sqlite database file: default "$CODEGRINDERROOT/db/codegrinder.db"
 	SessionsExpire  []time.Time `json:"sessionsExpire"`  // times/dates when sessions should expire (year is ignored)
+
+	// optional IP filtering for inbound requests; nil/empty disables filtering
+	IPFilter *IPFilterConfig `json:"ipFilter"`
 }
 
 var root string
@@ -154,6 +166,7 @@ func main() {
 	m.Logger(log.New(os.Stderr, "", log.Lshortfile))
 	//m.Use(martini.Logger())
 	m.Use(martini.Recovery())
+	m.Use(ipFilterMiddleware)
 	m.MapTo(r, (*martini.Routes)(nil))
 	m.Action(r.Handle)
 
@@ -487,9 +500,15 @@ func main() {
 		r.Post("/commit_bundles/signed", withTx, withCurrentUser, gunzip, binding.Json(CommitBundle{}), restPostCommitBundlesSigned)
 
 		// set up gRPC server
-		grpcServer = grpc.NewServer()
+		grpcServer = grpc.NewServer(
+			grpc.ChainUnaryInterceptor(panicRecoveryUnaryInterceptor, unaryIPFilterInterceptor),
+			grpc.ChainStreamInterceptor(panicRecoveryStreamInterceptor, streamIPFilterInterceptor),
+		)
 		pb.RegisterCodeGrinderServiceServer(grpcServer, &codeGrinderServiceServer{})
 		reflection.Register(grpcServer)
+	} else {
+		// ensure grpcServer is nil when TA role is disabled so we can guard usage later
+		grpcServer = nil
 	}
 
 	if use_tls {
@@ -506,43 +525,37 @@ func main() {
 			Client:     acmeClient,
 		}
 
-		// Wrap the gRPC server to handle gRPC-Web requests
-		wrappedGrpc := grpcweb.WrapServer(grpcServer,
-			// Enable CORS for gRPC-Web from any origin
-			grpcweb.WithOriginFunc(func(origin string) bool {
-				return true
-			}),
-		)
+		// Wrap the gRPC server to handle gRPC-Web requests when available
+		var unifiedHandler http.Handler
+		if grpcServer != nil {
+			wrappedGrpc := grpcweb.WrapServer(grpcServer,
+				// Enable CORS for gRPC-Web from any origin
+				grpcweb.WithOriginFunc(func(origin string) bool {
+					return true
+				}),
+			)
 
-		// Create unified handler that routes between gRPC-Web, gRPC, and HTTP
-		unifiedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Extract IP address from RemoteAddr
-			ip, _, err := net.SplitHostPort(r.RemoteAddr)
-			if err != nil {
-				log.Printf("error splitting host port for %s: %v", r.RemoteAddr, err)
-				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-				return
-			}
-
-			if !isIPWhitelisted(ip) {
-				log.Printf("rejected non-whitelisted IP: %s", ip)
-				http.Error(w, "Forbidden", http.StatusForbidden)
-				return
-			}
-
-			// 1. Check for gRPC-Web requests
-			if wrappedGrpc.IsGrpcWebRequest(r) {
-				wrappedGrpc.ServeHTTP(w, r)
-				return
-			}
-			// 2. Check for native gRPC requests
-			if r.ProtoMajor == 2 && strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
-				grpcServer.ServeHTTP(w, r)
-				return
-			}
-			// 3. Fallback to the Martini REST handler
-			m.ServeHTTP(w, r)
-		})
+			// Create unified handler that routes between gRPC-Web, gRPC, and HTTP
+			unifiedHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// 1. Check for gRPC-Web requests
+				if wrappedGrpc.IsGrpcWebRequest(r) {
+					wrappedGrpc.ServeHTTP(w, r)
+					return
+				}
+				// 2. Check for native gRPC requests
+				if r.ProtoMajor == 2 && strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
+					grpcServer.ServeHTTP(w, r)
+					return
+				}
+				// 3. Fallback to the Martini REST handler
+				m.ServeHTTP(w, r)
+			})
+		} else {
+			// Daycare-only mode: no gRPC server, just serve REST
+			unifiedHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				m.ServeHTTP(w, r)
+			})
+		}
 
 		// Configure TLS with HTTP/2 support
 		tlsConfig := &tls.Config{
@@ -587,38 +600,32 @@ func main() {
 		// note: this will work behind a TLS proxy or for debugging with some calls
 		// but LTI will refuse to connect to an insecure host
 
-		// Wrap the gRPC server to handle gRPC-Web requests
-		wrappedGrpc := grpcweb.WrapServer(grpcServer,
-			// Enable CORS for gRPC-Web from any origin
-			grpcweb.WithOriginFunc(func(origin string) bool {
-				return true
-			}),
-		)
+		var unifiedHandler http.Handler
+		if grpcServer != nil {
+			// Wrap the gRPC server to handle gRPC-Web requests
+			wrappedGrpc := grpcweb.WrapServer(grpcServer,
+				// Enable CORS for gRPC-Web from any origin
+				grpcweb.WithOriginFunc(func(origin string) bool {
+					return true
+				}),
+			)
 
-		unifiedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Extract IP address from RemoteAddr
-			ip, _, err := net.SplitHostPort(r.RemoteAddr)
-			if err != nil {
-				log.Printf("error splitting host port for %s: %v", r.RemoteAddr, err)
-				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-				return
-			}
-
-			if !isIPWhitelisted(ip) {
-				log.Printf("rejected non-whitelisted IP: %s", ip)
-				http.Error(w, "Forbidden", http.StatusForbidden)
-				return
-			}
-
-			// Route gRPC-Web, gRPC, and HTTP requests to the correct handler
-			if wrappedGrpc.IsGrpcWebRequest(r) {
-				wrappedGrpc.ServeHTTP(w, r)
-			} else if strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
-				grpcServer.ServeHTTP(w, r)
-			} else {
+			unifiedHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// Route gRPC-Web, gRPC, and HTTP requests to the correct handler
+				if wrappedGrpc.IsGrpcWebRequest(r) {
+					wrappedGrpc.ServeHTTP(w, r)
+				} else if strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
+					grpcServer.ServeHTTP(w, r)
+				} else {
+					m.ServeHTTP(w, r)
+				}
+			})
+		} else {
+			// Daycare-only mode: no gRPC server, just serve REST
+			unifiedHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				m.ServeHTTP(w, r)
-			}
-		})
+			})
+		}
 
 		log.Printf("accepting http connections (HTTP, gRPC, and gRPC-Web) on %s", nonTLSAddress)
 		if err := http.ListenAndServe(nonTLSAddress, unifiedHandler); err != nil {
@@ -695,6 +702,51 @@ func loggedErrorf(f string, params ...interface{}) error {
 
 var ipWhitelist []*net.IPNet // Global variable to store parsed whitelist entries
 
+type ipFilterAllowedKey struct{}
+
+func isIPFilteringEnabled() bool {
+	return len(ipWhitelist) > 0
+}
+
+func ipFromAddr(addr string) (string, error) {
+	// fast path for bare IPs
+	if ip := net.ParseIP(addr); ip != nil {
+		return addr, nil
+	}
+
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", err
+	}
+	return host, nil
+}
+
+func ipFilterAllowed(addr string) bool {
+	if !isIPFilteringEnabled() {
+		return true
+	}
+
+	ip, err := ipFromAddr(addr)
+	if err != nil {
+		log.Printf("failed to parse remote address for IP filter: %v", err)
+		return false
+	}
+	return isIPWhitelisted(ip)
+}
+
+// IPFilterAllowed returns the value injected into the context indicating whether
+// the request is allowed by the configured IP filter. If filtering is disabled
+// and the flag has not been set, this returns true.
+func IPFilterAllowed(ctx context.Context) bool {
+	if ctx == nil {
+		return !isIPFilteringEnabled()
+	}
+	if allowed, ok := ctx.Value(ipFilterAllowedKey{}).(bool); ok {
+		return allowed
+	}
+	return !isIPFilteringEnabled()
+}
+
 // isIPWhitelisted checks if the given IP address is in the whitelist.
 func isIPWhitelisted(ipStr string) bool {
 	// If the whitelist is empty or not loaded, allow all connections.
@@ -758,27 +810,20 @@ func unBase64(s string) string {
 	return s
 }
 
-// loadIPWhitelist loads IP addresses and CIDR blocks from "whitelist.txt".
-// If the file is not found, IP filtering is disabled.
+// loadIPWhitelist populates ipWhitelist from Config.IPFilter.
+// Missing/empty config disables IP filtering.
 func loadIPWhitelist() {
-	whitelist := filepath.Join(root, "whitelist.txt")
-	file, err := os.Open(whitelist)
-	if os.IsNotExist(err) {
-		log.Printf("%s not found, IP filtering disabled.", whitelist)
+	ipWhitelist = nil
+	if Config.IPFilter == nil || len(Config.IPFilter.Whitelist) == 0 {
+		log.Printf("IP filtering disabled (no ipFilter.whitelist configured).")
 		return
 	}
-	if err != nil {
-		log.Printf("error opening whitelist.txt: %v", err)
-		return
-	}
-	defer file.Close()
 
-	scanner := bufio.NewScanner(file)
 	var tempWhitelist []*net.IPNet
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue // Skip empty lines and comments
+	for _, entry := range Config.IPFilter.Whitelist {
+		line := strings.TrimSpace(entry)
+		if line == "" {
+			continue // skip empty entries
 		}
 
 		// Handle wildcard entries like 144.38.145.*
@@ -811,17 +856,70 @@ func loadIPWhitelist() {
 		log.Printf("warning: invalid whitelist entry skipped: %s (error: %v)", line, err)
 	}
 
-	if err := scanner.Err(); err != nil {
-		log.Printf("error reading whitelist.txt: %v", err)
-		return
-	}
-
 	if len(tempWhitelist) > 0 {
 		ipWhitelist = tempWhitelist
-		log.Printf("loaded %d IP whitelist entries from whitelist.txt", len(ipWhitelist))
+		log.Printf("loaded %d IP whitelist entries from config", len(ipWhitelist))
 	} else {
-		log.Printf("whitelist.txt was empty or contained no valid entries, IP filtering disabled.")
+		log.Printf("ipFilter.whitelist was empty or contained no valid entries, IP filtering disabled.")
 	}
+}
+
+// ipFilterMiddleware injects the IP filter flag into the request context for REST handlers.
+func ipFilterMiddleware(c martini.Context, r *http.Request) {
+	allowed := ipFilterAllowed(r.RemoteAddr)
+	ctx := context.WithValue(r.Context(), ipFilterAllowedKey{}, allowed)
+	reqWithCtx := r.WithContext(ctx)
+	c.Map(reqWithCtx)
+	c.Next()
+}
+
+type wrappedServerStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (w *wrappedServerStream) Context() context.Context {
+	return w.ctx
+}
+
+func unaryIPFilterInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	allowed := !isIPFilteringEnabled()
+	if p, ok := peer.FromContext(ctx); ok && p.Addr != nil {
+		allowed = ipFilterAllowed(p.Addr.String())
+	}
+	ctx = context.WithValue(ctx, ipFilterAllowedKey{}, allowed)
+	return handler(ctx, req)
+}
+
+func streamIPFilterInterceptor(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	allowed := !isIPFilteringEnabled()
+	if p, ok := peer.FromContext(ss.Context()); ok && p.Addr != nil {
+		allowed = ipFilterAllowed(p.Addr.String())
+	}
+	ctx := context.WithValue(ss.Context(), ipFilterAllowedKey{}, allowed)
+	return handler(srv, &wrappedServerStream{ServerStream: ss, ctx: ctx})
+}
+
+// panicRecoveryUnaryInterceptor catches panics in unary gRPC handlers to avoid bringing down the server.
+func panicRecoveryUnaryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("panic in gRPC unary handler %s: %v\n%s", info.FullMethod, r, debug.Stack())
+			err = status.Errorf(codes.Internal, "internal server error")
+		}
+	}()
+	return handler(ctx, req)
+}
+
+// panicRecoveryStreamInterceptor catches panics in streaming gRPC handlers to avoid process crashes.
+func panicRecoveryStreamInterceptor(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("panic in gRPC stream handler %s: %v\n%s", info.FullMethod, r, debug.Stack())
+			err = status.Errorf(codes.Internal, "internal server error")
+		}
+	}()
+	return handler(srv, ss)
 }
 
 type daycares struct {

@@ -391,8 +391,10 @@ func LtiProblemSet(w http.ResponseWriter, r *http.Request, tx *sql.Tx, form LTIR
 	// load the assignment
 	asst := new(Assignment)
 
+	restricted := ui == "exam"
+
 	if unique != bootstrapAssignmentName {
-		if asst, err = getUpdateAssignment(tx, &form, now, course, problemSet, user); err != nil {
+		if asst, err = getUpdateAssignment(tx, &form, now, course, problemSet, user, restricted); err != nil {
 			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error: %v", err)
 			return
 		}
@@ -493,7 +495,7 @@ func getUpdateCourse(tx *sql.Tx, form *LTIRequest, now time.Time) (*Course, erro
 }
 
 // get/create/update this assignment
-func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Course, problemSet *ProblemSet, user *User) (*Assignment, error) {
+func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Course, problemSet *ProblemSet, user *User, restricted bool) (*Assignment, error) {
 	asst := new(Assignment)
 	err := meddler.QueryRow(tx, asst, `SELECT * FROM assignments WHERE course_id = ? AND lti_id = ? AND user_id = ?`,
 		course.ID, form.ResourceLinkID, user.ID)
@@ -513,6 +515,7 @@ func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Co
 		asst.LockAt = nil
 		asst.CreatedAt = now
 		asst.UpdatedAt = now
+		asst.Restricted = restricted
 	}
 
 	problemSetID := int64(0)
@@ -541,6 +544,7 @@ func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Co
 		asst.ProblemSetID != problemSetID ||
 		asst.UserID != user.ID ||
 		asst.Roles != form.Roles ||
+		asst.Restricted != restricted ||
 		(form.PersonSourcedID != "" && asst.GradeID != form.PersonSourcedID) ||
 		asst.LtiID != form.ResourceLinkID ||
 		asst.CanvasTitle != form.CanvasAssignmentTitle ||
@@ -560,6 +564,7 @@ func getUpdateAssignment(tx *sql.Tx, form *LTIRequest, now time.Time, course *Co
 	asst.ProblemSetID = problemSetID
 	asst.UserID = user.ID
 	asst.Roles = form.Roles
+	asst.Restricted = restricted
 
 	if asst.IsInstructorRole() {
 		if !asst.Instructor {

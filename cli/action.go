@@ -12,7 +12,7 @@ import (
 )
 
 func CommandAction(cmd *cobra.Command, args []string) {
-	client, conn, ctx, err := setup(cmd)
+	client, conn, ctx, user, err := setup(cmd)
 	if err != nil {
 		log.Fatalf("failed to connect to gRPC server: %v", err)
 	}
@@ -41,7 +41,7 @@ func CommandAction(cmd *cobra.Command, args []string) {
 		}
 
 		// Prepare the signed bundle
-		bundle, err := prepareSignedBundle(now, action, parsedURL.Host, client, ctx)
+		bundle, err := prepareSignedBundle(now, action, parsedURL.Host, client, ctx, user)
 		if err != nil {
 			log.Fatalf("error preparing signed bundle: %v", err)
 		}
@@ -62,15 +62,6 @@ func CommandAction(cmd *cobra.Command, args []string) {
 		log.Printf("'%s action' is for testing code, not for grading", os.Args[0])
 		log.Fatalf("  to submit your code for grading, use '%s grade'", os.Args[0])
 	}
-
-	// get the user ID
-	dumpMessage("GetUserMe", true, &GetUserMeRequest{})
-	userResp, err := client.GetUserMe(ctx, &GetUserMeRequest{})
-	if err != nil {
-		log.Fatalf("failed to get user: %v", err)
-	}
-	dumpMessage("GetUserMe", false, userResp)
-	user := userResp.User
 
 	problemType, problem, _, _, commit, _, _ := gatherStudent(now, ".", client, ctx)
 	commit.Action = action

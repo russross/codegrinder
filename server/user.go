@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"database/sql"
 	"fmt"
-	. "github.com/russross/codegrinder/types"
-	"github.com/russross/meddler"
 	"html"
 	"log"
 	"math/rand"
@@ -14,6 +12,9 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	. "github.com/russross/codegrinder/types"
+	"github.com/russross/meddler"
 )
 
 const loginRecordTimeout = 5 * time.Minute
@@ -168,7 +169,7 @@ func getCourseUsers(tx *sql.Tx, courseID int64, currentUser *User) ([]*User, err
 
 // getAssignments returns a list of assignments filtered by search terms.
 // Authorization: currentUser must be logged in and sees only assignments from courses they are enrolled in.
-func getAssignments(tx *sql.Tx, currentUser *User, searchTerms []string) ([]*Assignment, error) {
+func getAssignments(tx *sql.Tx, currentUser *User, searchTerms []string, ipAllowed bool) ([]*Assignment, error) {
 	// build search terms
 	where := ""
 	args := []interface{}{}
@@ -177,6 +178,13 @@ func getAssignments(tx *sql.Tx, currentUser *User, searchTerms []string) ([]*Ass
 	}
 
 	where, args = addWhereEq(where, args, "user_assignments.user_id", currentUser.ID)
+	if where == "" {
+		where = " WHERE"
+	} else {
+		where += " AND"
+	}
+	where += " (? OR NOT user_assignments.restricted)"
+	args = append(args, ipAllowed)
 	assignments := []*Assignment{}
 	err := meddler.QueryAll(tx, &assignments, `SELECT assignments.* FROM assignments JOIN assignment_search_fields `+
 		`ON assignments.id = assignment_search_fields.assignment_id `+
@@ -190,14 +198,14 @@ func getAssignments(tx *sql.Tx, currentUser *User, searchTerms []string) ([]*Ass
 
 // getUserAssignments returns a list of assignments for the given user.
 // Authorization: currentUser must be logged in and can only access assignments for users they have a relationship with.
-func getUserAssignments(tx *sql.Tx, userID int64, currentUser *User) ([]*Assignment, error) {
+func getUserAssignments(tx *sql.Tx, userID int64, currentUser *User, ipAllowed bool) ([]*Assignment, error) {
 	assignments := []*Assignment{}
 
 	err := meddler.QueryAll(tx, &assignments, `SELECT assignments.* `+
 		`FROM assignments JOIN user_assignments ON assignments.id = user_assignments.assignment_id `+
-		`WHERE assignments.user_id = ? AND user_assignments.user_id = ? `+
+		`WHERE assignments.user_id = ? AND user_assignments.user_id = ? AND (? OR NOT user_assignments.restricted) `+
 		`ORDER BY course_id, updated_at`,
-		userID, currentUser.ID)
+		userID, currentUser.ID, ipAllowed)
 	if err != nil {
 		return nil, err
 	}
@@ -207,14 +215,14 @@ func getUserAssignments(tx *sql.Tx, userID int64, currentUser *User) ([]*Assignm
 
 // getCourseUserAssignments returns a list of assignments for the given user in the given course.
 // Authorization: currentUser must be logged in and can only access courses they are enrolled in.
-func getCourseUserAssignments(tx *sql.Tx, courseID int64, userID int64, currentUser *User) ([]*Assignment, error) {
+func getCourseUserAssignments(tx *sql.Tx, courseID int64, userID int64, currentUser *User, ipAllowed bool) ([]*Assignment, error) {
 	assignments := []*Assignment{}
 
 	err := meddler.QueryAll(tx, &assignments, `SELECT assignments.* `+
 		`FROM assignments JOIN user_assignments ON assignments.id = user_assignments.assignment_id `+
-		`WHERE course_id = ? AND assignments.user_id = ? AND user_assignments.user_id = ? `+
+		`WHERE course_id = ? AND assignments.user_id = ? AND user_assignments.user_id = ? AND (? OR NOT user_assignments.restricted) `+
 		`ORDER BY updated_at`,
-		courseID, userID, currentUser.ID)
+		courseID, userID, currentUser.ID, ipAllowed)
 	if err != nil {
 		return nil, err
 	}
@@ -228,13 +236,13 @@ func getCourseUserAssignments(tx *sql.Tx, courseID int64, userID int64, currentU
 
 // getAssignment returns the given assignment.
 // Authorization: currentUser must be logged in and can only access assignments they are assigned to.
-func getAssignment(tx *sql.Tx, assignmentID int64, currentUser *User) (*Assignment, error) {
+func getAssignment(tx *sql.Tx, assignmentID int64, currentUser *User, ipAllowed bool) (*Assignment, error) {
 	assignment := new(Assignment)
 
 	err := meddler.QueryRow(tx, assignment, `SELECT assignments.* `+
 		`FROM assignments JOIN user_assignments ON assignments.id = user_assignments.assignment_id `+
-		`WHERE assignments.id = ? AND user_assignments.user_id = ?`,
-		assignmentID, currentUser.ID)
+		`WHERE assignments.id = ? AND user_assignments.user_id = ? AND (? OR NOT user_assignments.restricted)`,
+		assignmentID, currentUser.ID, ipAllowed)
 	if err != nil {
 		return nil, err
 	}
@@ -244,13 +252,13 @@ func getAssignment(tx *sql.Tx, assignmentID int64, currentUser *User) (*Assignme
 
 // getAssignmentProblemCommitLast returns the most recent commit of the highest-numbered step for the given problem of the given assignment.
 // Authorization: currentUser must be logged in and can only access assignments they are assigned to.
-func getAssignmentProblemCommitLast(tx *sql.Tx, assignmentID int64, problemID int64, currentUser *User) (*Commit, error) {
+func getAssignmentProblemCommitLast(tx *sql.Tx, assignmentID int64, problemID int64, currentUser *User, ipAllowed bool) (*Commit, error) {
 	commit := new(Commit)
 
 	err := meddler.QueryRow(tx, commit, `SELECT commits.* `+
 		`FROM commits JOIN user_assignments ON commits.assignment_id = user_assignments.assignment_id `+
-		`WHERE commits.assignment_id = ? AND problem_id = ? AND user_assignments.user_id = ? `+
-		`ORDER BY step DESC, updated_at DESC LIMIT 1`, assignmentID, problemID, currentUser.ID)
+		`WHERE commits.assignment_id = ? AND problem_id = ? AND user_assignments.user_id = ? AND (? OR NOT user_assignments.restricted) `+
+		`ORDER BY step DESC, updated_at DESC LIMIT 1`, assignmentID, problemID, currentUser.ID, ipAllowed)
 	if err != nil {
 		return nil, err
 	}
@@ -260,14 +268,14 @@ func getAssignmentProblemCommitLast(tx *sql.Tx, assignmentID int64, problemID in
 
 // getAssignmentProblemStepCommitLast returns the most recent commit for the given step of the given problem of the given assignment.
 // Authorization: currentUser must be logged in and can only access assignments they are assigned to.
-func getAssignmentProblemStepCommitLast(tx *sql.Tx, assignmentID int64, problemID int64, step int64, currentUser *User) (*Commit, error) {
+func getAssignmentProblemStepCommitLast(tx *sql.Tx, assignmentID int64, problemID int64, step int64, currentUser *User, ipAllowed bool) (*Commit, error) {
 	commit := new(Commit)
 
 	err := meddler.QueryRow(tx, commit, `SELECT commits.* `+
 		`FROM commits JOIN user_assignments ON commits.assignment_id = user_assignments.assignment_id `+
-		`WHERE commits.assignment_id = ? AND problem_id = ? AND step = ? AND user_assignments.user_id = ? `+
+		`WHERE commits.assignment_id = ? AND problem_id = ? AND step = ? AND user_assignments.user_id = ? AND (? OR NOT user_assignments.restricted) `+
 		`ORDER BY updated_at DESC LIMIT 1`,
-		assignmentID, problemID, step, currentUser.ID)
+		assignmentID, problemID, step, currentUser.ID, ipAllowed)
 	if err != nil {
 		return nil, err
 	}
@@ -275,7 +283,7 @@ func getAssignmentProblemStepCommitLast(tx *sql.Tx, assignmentID int64, problemI
 	return commit, nil
 }
 
-func saveCommitBundleCommon(now time.Time, tx *sql.Tx, currentUser *User, bundle *CommitBundle) (*CommitBundle, error) {
+func saveCommitBundleCommon(now time.Time, tx *sql.Tx, currentUser *User, bundle *CommitBundle, ipAllowed bool) (*CommitBundle, error) {
 	if bundle.ProblemType != nil {
 		return nil, fmt.Errorf("bundle must not include a problem type object")
 	}
@@ -302,11 +310,11 @@ func saveCommitBundleCommon(now time.Time, tx *sql.Tx, currentUser *User, bundle
 	// get the assignment and figure out if this is the student or the instructor
 	isInstructor := false
 	assignment := new(Assignment)
-	err := meddler.QueryRow(tx, assignment, `SELECT * FROM assignments WHERE id = ? AND user_id = ?`, commit.AssignmentID, currentUser.ID)
+	err := meddler.QueryRow(tx, assignment, `SELECT * FROM assignments WHERE id = ? AND user_id = ? AND (? OR NOT restricted)`, commit.AssignmentID, currentUser.ID, ipAllowed)
 	if err == sql.ErrNoRows {
 		// try loading it as the instructor
 		err = meddler.QueryRow(tx, assignment, `SELECT assignments.* FROM assignments JOIN user_assignments ON assignments.id = user_assignments.assignment_id `+
-			`WHERE user_assignments.assignment_id = ? AND user_assignments.user_id = ?`, commit.AssignmentID, currentUser.ID)
+			`WHERE user_assignments.assignment_id = ? AND user_assignments.user_id = ? AND (? OR NOT user_assignments.restricted)`, commit.AssignmentID, currentUser.ID, ipAllowed)
 		if err == nil {
 			isInstructor = true
 		}
