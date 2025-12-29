@@ -51,6 +51,26 @@ CREATE TABLE problem_steps (
 );
 CREATE INDEX problem_steps_problem_type ON problem_steps (problem_type);
 
+CREATE TABLE problem_step_files (
+    problem_id              integer NOT NULL,
+    step                    integer NOT NULL,
+    path                    text NOT NULL,
+    content                 blob NOT NULL,
+
+    PRIMARY KEY (problem_id, step, path),
+    FOREIGN KEY (problem_id, step) REFERENCES problem_steps (problem_id, step) ON DELETE CASCADE ON UPDATE CASCADE
+) WITHOUT ROWID;
+
+CREATE TABLE problem_step_solution_files (
+    problem_id              integer NOT NULL,
+    step                    integer NOT NULL,
+    path                    text NOT NULL,
+    content                 blob NOT NULL,
+
+    PRIMARY KEY (problem_id, step, path),
+    FOREIGN KEY (problem_id, step) REFERENCES problem_steps (problem_id, step) ON DELETE CASCADE ON UPDATE CASCADE
+) WITHOUT ROWID;
+
 CREATE TABLE problem_sets (
     id                      integer PRIMARY KEY,
     unique_id               text NOT NULL,
@@ -157,26 +177,6 @@ CREATE TABLE commits (
 );
 CREATE UNIQUE INDEX commits_unique_assignment_problem_step ON commits (assignment_id, problem_id, step);
 CREATE INDEX commits_problem_id_step ON commits (problem_id, step);
-
-CREATE TABLE problem_step_files (
-    problem_id              integer NOT NULL,
-    step                    integer NOT NULL,
-    path                    text NOT NULL,
-    content                 blob NOT NULL,
-
-    PRIMARY KEY (problem_id, step, path),
-    FOREIGN KEY (problem_id, step) REFERENCES problem_steps (problem_id, step) ON DELETE CASCADE ON UPDATE CASCADE
-) WITHOUT ROWID;
-
-CREATE TABLE problem_step_solution_files (
-    problem_id              integer NOT NULL,
-    step                    integer NOT NULL,
-    path                    text NOT NULL,
-    content                 blob NOT NULL,
-
-    PRIMARY KEY (problem_id, step, path),
-    FOREIGN KEY (problem_id, step) REFERENCES problem_steps (problem_id, step) ON DELETE CASCADE ON UPDATE CASCADE
-) WITHOUT ROWID;
 
 CREATE TABLE commit_files (
     commit_id               integer NOT NULL,
@@ -285,51 +285,3 @@ CREATE VIEW problem_set_search_fields AS
     JOIN problem_set_problems ON problem_sets.id = problem_set_problems.problem_set_id
     JOIN problems ON problem_set_problems.problem_id = problems.id
     GROUP BY problem_sets.id;
-
-CREATE TABLE quizzes (
-    id                      integer PRIMARY KEY,
-    assignment_id           integer NOT NULL,
-    lti_id                  text NOT NULL,
-    note                    text NOT NULL,
-    weight                  real NOT NULL,
-    participation_threshold real NOT NULL,
-    participation_percent   real NOT NULL,
-    is_graded               boolean NOT NULL,
-    created_at              datetime NOT NULL,
-    updated_at              datetime NOT NULL,
-
-    FOREIGN KEY (assignment_id) REFERENCES assignments (id) ON DELETE CASCADE ON UPDATE CASCADE
-);
-CREATE INDEX quizzes_assignment_id ON quizzes (assignment_id);
-
-
-CREATE TABLE questions (
-    id                      integer PRIMARY KEY,
-    quiz_id                 integer NOT NULL,
-    question_number         integer NOT NULL,
-    note                    text NOT NULL,
-    weight                  real NOT NULL,
-    points_for_attempt      real NOT NULL,
-    is_multiple_choice      boolean NOT NULL,
-    answers                 text NOT NULL,
-    closed_at               datetime,
-    created_at              datetime NOT NULL,
-    updated_at              datetime NOT NULL,
-
-    FOREIGN KEY (quiz_id) REFERENCES quizzes (id) ON DELETE CASCADE ON UPDATE CASCADE
-);
-CREATE UNIQUE INDEX questions_quiz_id_index_number ON questions (quiz_id, question_number);
-
-CREATE TABLE responses (
-    id                      integer PRIMARY KEY,
-    assignment_id           integer NOT NULL,
-    question_id             integer NOT NULL,
-    response                text NOT NULL,
-    created_at              datetime NOT NULL,
-    updated_at              datetime NOT NULL,
-
-    FOREIGN KEY (assignment_id) REFERENCES assignments (id) ON DELETE CASCADE ON UPDATE CASCADE,
-    FOREIGN KEY (question_id) REFERENCES questions (id) ON DELETE CASCADE ON UPDATE CASCADE
-);
-CREATE UNIQUE INDEX responses_assignment_id_question_id ON responses (assignment_id, question_id);
-CREATE INDEX responses_question_id ON responses (question_id);

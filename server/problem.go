@@ -306,7 +306,17 @@ func getProblemStep(tx *sql.Tx, problemID int64, step int64, currentUser *User) 
 		}
 	}
 
-	if !currentUser.Author {
+	// load files
+	if err := loadProblemStepFiles(tx, problemStep); err != nil {
+		return nil, fmt.Errorf("db error loading files: %v", err)
+	}
+
+	// load solutions only for admin/author users
+	if currentUser.Admin || currentUser.Author {
+		if err := loadProblemStepSolution(tx, problemStep); err != nil {
+			return nil, fmt.Errorf("db error loading solutions: %v", err)
+		}
+	} else {
 		problemStep.Solution = nil
 	}
 
