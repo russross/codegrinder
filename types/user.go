@@ -87,7 +87,7 @@ type Commit struct {
 	Step         int64             `json:"step" meddler:"step"` // note: one-based
 	Action       string            `json:"action" meddler:"action,zeroisnull"`
 	Note         string            `json:"note" meddler:"note,zeroisnull"`
-	Files        map[string][]byte `json:"files" meddler:"files,json"`
+	Files        map[string][]byte `json:"files" meddler:"-"`
 	Transcript   []*EventMessage   `json:"transcript,omitempty" meddler:"transcript,json"`
 	ReportCard   *ReportCard       `json:"reportCard" meddler:"report_card,json"`
 	Score        float64           `json:"score" meddler:"score,zeroisnull"`

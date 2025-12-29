@@ -43,9 +43,7 @@ CREATE TABLE problem_steps (
     note                    text NOT NULL,
     instructions            text NOT NULL,
     weight                  real NOT NULL,
-    files                   text NOT NULL,
     whitelist               text NOT NULL,
-    solution                text NOT NULL,
 
     PRIMARY KEY (problem_id, step),
     FOREIGN KEY (problem_id) REFERENCES problems (id) ON DELETE CASCADE ON UPDATE CASCADE,
@@ -148,7 +146,6 @@ CREATE TABLE commits (
     step                    integer NOT NULL,
     action                  text,
     note                    text,
-    files                   text NOT NULL,
     transcript              text NOT NULL,
     report_card             text NOT NULL,
     score                   real,
@@ -160,6 +157,35 @@ CREATE TABLE commits (
 );
 CREATE UNIQUE INDEX commits_unique_assignment_problem_step ON commits (assignment_id, problem_id, step);
 CREATE INDEX commits_problem_id_step ON commits (problem_id, step);
+
+CREATE TABLE problem_step_files (
+    problem_id              integer NOT NULL,
+    step                    integer NOT NULL,
+    path                    text NOT NULL,
+    content                 blob NOT NULL,
+
+    PRIMARY KEY (problem_id, step, path),
+    FOREIGN KEY (problem_id, step) REFERENCES problem_steps (problem_id, step) ON DELETE CASCADE ON UPDATE CASCADE
+) WITHOUT ROWID;
+
+CREATE TABLE problem_step_solution_files (
+    problem_id              integer NOT NULL,
+    step                    integer NOT NULL,
+    path                    text NOT NULL,
+    content                 blob NOT NULL,
+
+    PRIMARY KEY (problem_id, step, path),
+    FOREIGN KEY (problem_id, step) REFERENCES problem_steps (problem_id, step) ON DELETE CASCADE ON UPDATE CASCADE
+) WITHOUT ROWID;
+
+CREATE TABLE commit_files (
+    commit_id               integer NOT NULL,
+    path                    text NOT NULL,
+    content                 blob NOT NULL,
+
+    PRIMARY KEY (commit_id, path),
+    FOREIGN KEY (commit_id) REFERENCES commits (id) ON DELETE CASCADE ON UPDATE CASCADE
+) WITHOUT ROWID;
 
 CREATE VIEW assts AS
     SELECT

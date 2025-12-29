@@ -263,6 +263,11 @@ func getAssignmentProblemCommitLast(tx *sql.Tx, assignmentID int64, problemID in
 		return nil, err
 	}
 
+	// Load files for commit
+	if err := loadCommitFiles(tx, commit); err != nil {
+		return nil, fmt.Errorf("db error loading files: %v", err)
+	}
+
 	return commit, nil
 }
 
@@ -278,6 +283,11 @@ func getAssignmentProblemStepCommitLast(tx *sql.Tx, assignmentID int64, problemI
 		assignmentID, problemID, step, currentUser.ID, ipAllowed)
 	if err != nil {
 		return nil, err
+	}
+
+	// Load files for commit
+	if err := loadCommitFiles(tx, commit); err != nil {
+		return nil, fmt.Errorf("db error loading files: %v", err)
 	}
 
 	return commit, nil
@@ -385,7 +395,10 @@ func saveCommitBundleCommon(now time.Time, tx *sql.Tx, currentUser *User, bundle
 		return nil, fmt.Errorf("db error: %v", err)
 	}
 
-	// filter out solution
+	// get step files, but not solution files
+	if err = loadProblemStepFiles(tx, &step); err != nil {
+		return nil, fmt.Errorf("db error: %v", err)
+	}
 	step.Solution = nil
 
 	// get the problem type for this step
@@ -465,6 +478,11 @@ func saveCommitBundleCommon(now time.Time, tx *sql.Tx, currentUser *User, bundle
 	} else {
 		if err := meddler.Save(tx, "commits", commit); err != nil {
 			return nil, fmt.Errorf("db error: %v", err)
+		}
+
+		// save commit files separately
+		if err := saveCommitFiles(tx, commit); err != nil {
+			return nil, fmt.Errorf("db error saving commit files: %v", err)
 		}
 
 		// save an updated timestamp on the assignment if it would otherwise not be updated
@@ -710,4 +728,46 @@ func makeLoginKey() string {
 		key += keyCharSet[n : n+1]
 	}
 	return key
+}
+
+// loadCommitFiles loads all files for a commit from the commit_files table.
+func loadCommitFiles(tx *sql.Tx, commit *Commit) error {
+	commit.Files = make(map[string][]byte)
+	rows, err := tx.Query(
+		`SELECT path, content FROM commit_files WHERE commit_id = ?`,
+		commit.ID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var path string
+		var content []byte
+		if err := rows.Scan(&path, &content); err != nil {
+			return err
+		}
+		commit.Files[path] = content
+	}
+	return rows.Err()
+}
+
+// saveCommitFiles saves all files for a commit to the commit_files table.
+// It first deletes any existing files for this commit, then inserts the new ones.
+func saveCommitFiles(tx *sql.Tx, commit *Commit) error {
+	// Delete existing files for this commit
+	if _, err := tx.Exec(`DELETE FROM commit_files WHERE commit_id = ?`,
+		commit.ID); err != nil {
+		return err
+	}
+
+	// Insert new files
+	for path, content := range commit.Files {
+		if _, err := tx.Exec(
+			`INSERT INTO commit_files (commit_id, path, content) VALUES (?, ?, ?)`,
+			commit.ID, path, content); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

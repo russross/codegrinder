@@ -70,9 +70,9 @@ type ProblemStep struct {
 	Note         string            `json:"note" meddler:"note"`
 	Instructions string            `json:"instructions" meddler:"instructions"`
 	Weight       float64           `json:"weight" meddler:"weight"`
-	Files        map[string][]byte `json:"files" meddler:"files,json"`
+	Files        map[string][]byte `json:"files" meddler:"-"`
 	Whitelist    map[string]bool   `json:"whitelist" meddler:"whitelist,json"`
-	Solution     map[string][]byte `json:"solution,omitempty" meddler:"solution,json"`
+	Solution     map[string][]byte `json:"solution,omitempty" meddler:"-"`
 }
 
 type ProblemSet struct {

@@ -259,6 +259,30 @@ func GetProblemSteps(w http.ResponseWriter, r *http.Request, tx *sql.Tx, params 
 		return
 	}
 
+	if len(problemSteps) == 0 {
+		loggedHTTPErrorf(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	// load files for all steps
+	for _, elt := range problemSteps {
+		if err := loadProblemStepFiles(tx, elt); err != nil {
+			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error loading files: %v", err)
+			return
+		}
+
+		// only load solution files for admin/author users
+		if currentUser.Admin || currentUser.Author {
+			if err := loadProblemStepSolution(tx, elt); err != nil {
+				loggedHTTPErrorf(w, http.StatusInternalServerError, "db error loading solutions: %v", err)
+				return
+			}
+		} else {
+			elt.Solution = nil
+		}
+		return
+	}
+
 	render.JSON(http.StatusOK, problemSteps)
 }
 
@@ -305,6 +329,22 @@ func GetProblemStep(w http.ResponseWriter, tx *sql.Tx, params martini.Params, cu
 	if err != nil {
 		loggedHTTPDBNotFoundError(w, err)
 		return
+	}
+
+	// load files
+	if err = loadProblemStepFiles(tx, problemStep); err != nil {
+		loggedHTTPErrorf(w, http.StatusInternalServerError, "db error loading files: %v", err)
+		return
+	}
+
+	// load solutions only for admin/author users
+	if currentUser.Admin || currentUser.Author {
+		if err := loadProblemStepSolution(tx, problemStep); err != nil {
+			loggedHTTPErrorf(w, http.StatusInternalServerError, "db error loading solutions: %v", err)
+			return
+		}
+	} else {
+		problemStep.Solution = nil
 	}
 
 	render.JSON(http.StatusOK, problemStep)
@@ -470,4 +510,88 @@ func GetProblemSetProblems(w http.ResponseWriter, r *http.Request, tx *sql.Tx, p
 	}
 
 	render.JSON(http.StatusOK, problemSetProblems)
+}
+
+// loadProblemStepFiles loads all files for a problem step from the problem_step_files table.
+func loadProblemStepFiles(tx *sql.Tx, step *ProblemStep) error {
+	step.Files = make(map[string][]byte)
+	rows, err := tx.Query(
+		`SELECT path, content FROM problem_step_files WHERE problem_id = ? AND step = ?`,
+		step.ProblemID, step.Step)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var path string
+		var content []byte
+		if err := rows.Scan(&path, &content); err != nil {
+			return err
+		}
+		step.Files[path] = content
+	}
+	return rows.Err()
+}
+
+// saveProblemStepFiles saves all files for a problem step to the problem_step_files table.
+// It first deletes any existing files for this step, then inserts the new ones.
+func saveProblemStepFiles(tx *sql.Tx, step *ProblemStep) error {
+	// Delete existing files for this step
+	if _, err := tx.Exec(`DELETE FROM problem_step_files WHERE problem_id = ? AND step = ?`,
+		step.ProblemID, step.Step); err != nil {
+		return err
+	}
+
+	// Insert new files
+	for path, content := range step.Files {
+		if _, err := tx.Exec(
+			`INSERT INTO problem_step_files (problem_id, step, path, content) VALUES (?, ?, ?, ?)`,
+			step.ProblemID, step.Step, path, content); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// loadProblemStepSolution loads all solution files for a problem step from the problem_step_solution_files table.
+func loadProblemStepSolution(tx *sql.Tx, step *ProblemStep) error {
+	step.Solution = make(map[string][]byte)
+	rows, err := tx.Query(
+		`SELECT path, content FROM problem_step_solution_files WHERE problem_id = ? AND step = ?`,
+		step.ProblemID, step.Step)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var path string
+		var content []byte
+		if err := rows.Scan(&path, &content); err != nil {
+			return err
+		}
+		step.Solution[path] = content
+	}
+	return rows.Err()
+}
+
+// saveProblemStepSolution saves all solution files for a problem step to the problem_step_solution_files table.
+// It first deletes any existing solutions for this step, then inserts the new ones.
+func saveProblemStepSolution(tx *sql.Tx, step *ProblemStep) error {
+	// Delete existing solutions for this step
+	if _, err := tx.Exec(`DELETE FROM problem_step_solution_files WHERE problem_id = ? AND step = ?`,
+		step.ProblemID, step.Step); err != nil {
+		return err
+	}
+
+	// Insert new solutions
+	for path, content := range step.Solution {
+		if _, err := tx.Exec(
+			`INSERT INTO problem_step_solution_files (problem_id, step, path, content) VALUES (?, ?, ?, ?)`,
+			step.ProblemID, step.Step, path, content); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

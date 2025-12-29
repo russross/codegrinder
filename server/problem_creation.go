@@ -255,34 +255,22 @@ func saveProblemBundleCommon(tx *sql.Tx, currentUser *User, bundle *ProblemBundl
 		} else {
 			// update an existing record
 			// meddler only understands integer primary keys, so we have to do it the long way
-			filesJSON, err := json.Marshal(step.Files)
-			if err != nil {
-				return nil, fmt.Errorf("json encoding error for step.Files: %v", err)
-			}
 			whitelistJSON, err := json.Marshal(step.Whitelist)
 			if err != nil {
 				return nil, fmt.Errorf("json encoding error for step.Whitelist: %v", err)
-			}
-			solutionJSON, err := json.Marshal(step.Solution)
-			if err != nil {
-				return nil, fmt.Errorf("json encoding error for step.Solution: %v", err)
 			}
 			result, err := tx.Exec(`UPDATE problem_steps SET `+
 				`problem_type=?, `+
 				`note=?, `+
 				`instructions=?, `+
 				`weight=?, `+
-				`files=?, `+
-				`whitelist=?, `+
-				`solution=? `+
+				`whitelist=? `+
 				`WHERE problem_id=? AND step=?`,
 				step.ProblemType,
 				step.Note,
 				step.Instructions,
 				step.Weight,
-				filesJSON,
 				whitelistJSON,
-				solutionJSON,
 				step.ProblemID,
 				step.Step)
 			if err != nil {
@@ -295,6 +283,14 @@ func saveProblemBundleCommon(tx *sql.Tx, currentUser *User, bundle *ProblemBundl
 			if affected != 1 {
 				return nil, fmt.Errorf("expected 1 row up be updated, found %d", affected)
 			}
+		}
+
+		// save files and solution files
+		if err := saveProblemStepFiles(tx, step); err != nil {
+			return nil, fmt.Errorf("db error saving files: %v", err)
+		}
+		if err := saveProblemStepSolution(tx, step); err != nil {
+			return nil, fmt.Errorf("db error saving solution files: %v", err)
 		}
 	}
 
