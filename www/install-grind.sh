@@ -35,8 +35,9 @@ fi
 
 # Download and install the binary
 URL="https://codegrinder.russross.com/$BINARY"
-curl --silent --compressed --fail -o /usr/local/bin/grind "$URL"
-chmod 755 /usr/local/bin/grind
+sudo sh -c \
+    "curl --silent --compressed --fail -o /usr/local/bin/grind $URL && \
+    chmod 755 /usr/local/bin/grind"
 
 echo 'grind installed successfully'
 echo 'type "grind" and you should see a help message'
