@@ -554,6 +554,10 @@ func saveProblemStepFiles(tx *sql.Tx, step *ProblemStep) error {
 
 	// Insert new files
 	for path, content := range step.Files {
+		// Ensure content is not nil (convert nil slice to empty slice)
+		if content == nil {
+			content = []byte{}
+		}
 		if _, err := tx.Exec(
 			`INSERT INTO problem_step_files (problem_id, step, path, content) VALUES (?, ?, ?, ?)`,
 			step.ProblemID, step.Step, path, content); err != nil {
@@ -596,6 +600,10 @@ func saveProblemStepSolution(tx *sql.Tx, step *ProblemStep) error {
 
 	// Insert new solutions
 	for path, content := range step.Solution {
+		// Ensure content is not nil (convert nil slice to empty slice)
+		if content == nil {
+			content = []byte{}
+		}
 		if _, err := tx.Exec(
 			`INSERT INTO problem_step_solution_files (problem_id, step, path, content) VALUES (?, ?, ?, ?)`,
 			step.ProblemID, step.Step, path, content); err != nil {
