@@ -15,7 +15,7 @@ import (
 func CommandType(cmd *cobra.Command, args []string) {
 	client, conn, ctx, _, err := setup(cmd)
 	if err != nil {
-		log.Fatalf("failed to connect to gRPC server: %v", err)
+		log.Fatalf("failed to connect to gRPC server: %s", cleanError(err))
 	}
 	defer conn.Close()
 
@@ -32,7 +32,7 @@ func CommandType(cmd *cobra.Command, args []string) {
 		dumpMessage("GetProblemTypes", true, &GetProblemTypesRequest{})
 		problemTypesResp, err := client.GetProblemTypes(ctx, &GetProblemTypesRequest{})
 		if err != nil {
-			log.Fatalf("failed to get problem types: %v", err)
+			log.Fatalf("failed to get problem types: %s", cleanError(err))
 		}
 		dumpMessage("GetProblemTypes", false, problemTypesResp)
 		problemTypes := problemTypesResp.ProblemTypes
@@ -84,7 +84,7 @@ func CommandType(cmd *cobra.Command, args []string) {
 	dumpMessage("GetProblemType", true, &GetProblemTypeRequest{Name: problemTypeName})
 	problemTypeResp, err := client.GetProblemType(ctx, &GetProblemTypeRequest{Name: problemTypeName})
 	if err != nil {
-		log.Fatalf("failed to get problem type: %v", err)
+		log.Fatalf("failed to get problem type: %s", cleanError(err))
 	}
 	dumpMessage("GetProblemType", false, problemTypeResp)
 	problemType := problemTypeResp.ProblemType

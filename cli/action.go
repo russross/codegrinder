@@ -14,7 +14,7 @@ import (
 func CommandAction(cmd *cobra.Command, args []string) {
 	client, conn, ctx, user, err := setup(cmd)
 	if err != nil {
-		log.Fatalf("failed to connect to gRPC server: %v", err)
+		log.Fatalf("failed to connect to gRPC server: %s", cleanError(err))
 	}
 	defer conn.Close()
 
@@ -37,13 +37,13 @@ func CommandAction(cmd *cobra.Command, args []string) {
 		// Extract the hostname part for the signature
 		parsedURL, err := url.Parse(daycareHost)
 		if err != nil {
-			log.Fatalf("invalid daycare URL: %v", err)
+			log.Fatalf("invalid daycare URL: %s", cleanError(err))
 		}
 
 		// Prepare the signed bundle
 		bundle, err := prepareSignedBundle(now, action, parsedURL.Host, client, ctx, user)
 		if err != nil {
-			log.Fatalf("error preparing signed bundle: %v", err)
+			log.Fatalf("error preparing signed bundle: %s", cleanError(err))
 		}
 
 		fmt.Printf("starting interactive session for %s step %d with daycare server %s\n",
@@ -52,7 +52,7 @@ func CommandAction(cmd *cobra.Command, args []string) {
 		// Connect to the specified daycare server directly
 		// call handleDaycareStream in interactive mode
 		if _, err := handleDaycareStream(nil, nil, bundle, nil, ".", true); err != nil {
-			log.Fatalf("interactive session failed: %v", err)
+			log.Fatalf("interactive session failed: %s", cleanError(err))
 		}
 		return
 	}
@@ -87,7 +87,7 @@ func CommandAction(cmd *cobra.Command, args []string) {
 	dumpMessage("PostCommitBundlesUnsigned", true, &PostCommitBundlesUnsignedRequest{Bundle: unsigned})
 	signedResp, err := client.PostCommitBundlesUnsigned(ctx, &PostCommitBundlesUnsignedRequest{Bundle: unsigned})
 	if err != nil {
-		log.Fatalf("failed to post commit bundle: %v", err)
+		log.Fatalf("failed to post commit bundle: %s", cleanError(err))
 	}
 	dumpMessage("PostCommitBundlesUnsigned", false, signedResp)
 	signed := signedResp.Bundle
@@ -100,6 +100,6 @@ func CommandAction(cmd *cobra.Command, args []string) {
 
 	// call handleDaycareStream in interactive mode
 	if _, err := handleDaycareStream(client, conn, signed, nil, ".", true); err != nil {
-		log.Fatalf("interactive session failed: %v", err)
+		log.Fatalf("interactive session failed: %s", cleanError(err))
 	}
 }

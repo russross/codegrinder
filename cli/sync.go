@@ -13,7 +13,7 @@ import (
 func CommandSync(cmd *cobra.Command, args []string) {
 	client, conn, ctx, user, err := setup(cmd)
 	if err != nil {
-		log.Fatalf("failed to connect to gRPC server: %v", err)
+		log.Fatalf("failed to connect to gRPC server: %s", cleanError(err))
 	}
 	defer conn.Close()
 
@@ -36,7 +36,7 @@ func CommandSync(cmd *cobra.Command, args []string) {
 	dumpMessage("PostCommitBundlesUnsigned", true, &PostCommitBundlesUnsignedRequest{Bundle: unsigned})
 	_, err = client.PostCommitBundlesUnsigned(ctx, &PostCommitBundlesUnsignedRequest{Bundle: unsigned})
 	if err != nil {
-		log.Fatalf("failed to post commit bundle: %v", err)
+		log.Fatalf("failed to post commit bundle: %s", cleanError(err))
 		dumpMessage("PostCommitBundlesUnsigned", false, nil)
 	}
 	fmt.Printf("problem %s step %d synced\n", problem.Unique, commit.Step)

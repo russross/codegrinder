@@ -13,7 +13,7 @@ import (
 func CommandList(cmd *cobra.Command, args []string) {
 	client, conn, ctx, _, err := setup(cmd)
 	if err != nil {
-		log.Fatalf("failed to connect to gRPC server: %v", err)
+		log.Fatalf("failed to connect to gRPC server: %s", cleanError(err))
 	}
 	defer conn.Close()
 
@@ -26,7 +26,7 @@ func CommandList(cmd *cobra.Command, args []string) {
 	dumpMessage("ListProblems", true, &ListProblemsRequest{})
 	resp, err := client.ListProblems(ctx, &ListProblemsRequest{})
 	if err != nil {
-		log.Fatalf("failed to get list from gRPC: %v", err)
+		log.Fatalf("failed to get list from gRPC: %s", cleanError(err))
 	}
 	dumpMessage("ListProblems", false, resp)
 

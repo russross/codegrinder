@@ -13,7 +13,7 @@ import (
 func CommandGrade(cmd *cobra.Command, args []string) {
 	client, conn, ctx, user, err := setup(cmd)
 	if err != nil {
-		log.Fatalf("failed to connect to gRPC server: %v", err)
+		log.Fatalf("failed to connect to gRPC server: %s", cleanError(err))
 	}
 	defer conn.Close()
 
@@ -36,7 +36,7 @@ func CommandGrade(cmd *cobra.Command, args []string) {
 	dumpMessage("PostCommitBundlesUnsigned", true, &PostCommitBundlesUnsignedRequest{Bundle: unsigned})
 	signedResp, err := client.PostCommitBundlesUnsigned(ctx, &PostCommitBundlesUnsignedRequest{Bundle: unsigned})
 	if err != nil {
-		log.Fatalf("failed to post commit bundle: %v", err)
+		log.Fatalf("failed to post commit bundle: %s", cleanError(err))
 	}
 	dumpMessage("PostCommitBundlesUnsigned", false, signedResp)
 	signed := signedResp.Bundle
@@ -50,7 +50,7 @@ func CommandGrade(cmd *cobra.Command, args []string) {
 	// call handleDaycareStream in non-interactive mode
 	graded, err := handleDaycareStream(client, conn, signed, nil, "", false)
 	if err != nil {
-		log.Fatalf("failed to confirm commit bundle: %v", err)
+		log.Fatalf("failed to confirm commit bundle: %s", cleanError(err))
 	}
 	if graded == nil {
 		log.Fatalf("the server ended the connection without sending a report card")
@@ -66,7 +66,7 @@ func CommandGrade(cmd *cobra.Command, args []string) {
 	dumpMessage("PostCommitBundlesSigned", true, &PostCommitBundlesSignedRequest{Bundle: toSave})
 	savedResp, err := client.PostCommitBundlesSigned(ctx, &PostCommitBundlesSignedRequest{Bundle: toSave})
 	if err != nil {
-		log.Fatalf("failed to post signed commit bundle: %v", err)
+		log.Fatalf("failed to post signed commit bundle: %s", cleanError(err))
 	}
 	dumpMessage("PostCommitBundlesSigned", false, savedResp)
 	saved := savedResp.Bundle
@@ -86,7 +86,7 @@ func CommandGrade(cmd *cobra.Command, args []string) {
 
 		// play the transcript
 		if err := commit.DumpTranscript(os.Stdout); err != nil {
-			log.Fatalf("failed to dump transcript: %v", err)
+			log.Fatalf("failed to dump transcript: %s", cleanError(err))
 		}
 	}
 }

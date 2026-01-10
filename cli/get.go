@@ -13,7 +13,7 @@ import (
 func CommandGet(cmd *cobra.Command, args []string) {
 	client, conn, ctx, user, err := setup(cmd)
 	if err != nil {
-		log.Fatalf("failed to connect to gRPC server: %v", err)
+		log.Fatalf("failed to connect to gRPC server: %s", cleanError(err))
 	}
 	defer conn.Close()
 
@@ -44,7 +44,7 @@ func CommandGet(cmd *cobra.Command, args []string) {
 		dumpMessage("GetAssignment", true, &GetAssignmentRequest{AssignmentId: int64(id)})
 		assignmentResp, err := client.GetAssignment(ctx, &GetAssignmentRequest{AssignmentId: int64(id)})
 		if err != nil {
-			log.Fatalf("failed to get assignment: %v", err)
+			log.Fatalf("failed to get assignment: %s", cleanError(err))
 		}
 		dumpMessage("GetAssignment", false, assignmentResp)
 		assignment = assignmentResp.Assignment
@@ -64,7 +64,7 @@ func CommandGet(cmd *cobra.Command, args []string) {
 		dumpMessage("GetAssignments", true, &GetAssignmentsRequest{Search: searchTerms})
 		assignmentsResp, err := client.GetAssignments(ctx, &GetAssignmentsRequest{Search: searchTerms})
 		if err != nil {
-			log.Fatalf("failed to get assignments: %v", err)
+			log.Fatalf("failed to get assignments: %s", cleanError(err))
 		}
 		dumpMessage("GetAssignments", false, assignmentsResp)
 		assignmentList := assignmentsResp.Assignments

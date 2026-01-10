@@ -209,14 +209,14 @@ func CommandLogin(cmd *cobra.Command, args []string) {
 	// Set up gRPC connection
 	client, conn, ctx, err := newGRPCClient()
 	if err != nil {
-		log.Fatalf("failed to connect to server: %v", err)
+		log.Fatalf("failed to connect to server: %s", cleanError(err))
 	}
 	defer conn.Close()
 
 	dumpMessage("Hello", true, &HelloRequest{Key: key})
 	helloResp, err := client.Hello(ctx, &HelloRequest{Key: key})
 	if err != nil {
-		log.Fatalf("failed to login: %v", err)
+		log.Fatalf("failed to login: %s", cleanError(err))
 	}
 	dumpMessage("Hello", false, helloResp)
 	Config.Cookie = helloResp.Cookie
@@ -245,7 +245,7 @@ func courseDirectory(label string) string {
 func hasInstructorFile() bool {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		log.Fatalf("unable to find home directory: %v", err)
+		log.Fatalf("unable to find home directory: %s", cleanError(err))
 	}
 	_, err = os.Stat(filepath.Join(home, instructorFile))
 	return err == nil
@@ -255,7 +255,7 @@ func setup(cmd *cobra.Command) (CodeGrinderServiceClient, *grpc.ClientConn, cont
 	// Load config
 	home, err := os.UserHomeDir()
 	if err != nil {
-		log.Fatalf("unable to find home directory: %v", err)
+		log.Fatalf("unable to find home directory: %s", cleanError(err))
 	}
 	if home == "" {
 		log.Fatalf("home directory is not set")
@@ -297,7 +297,7 @@ func setup(cmd *cobra.Command) (CodeGrinderServiceClient, *grpc.ClientConn, cont
 func mustWriteConfig() {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		log.Fatalf("unable to find home directory: %v", err)
+		log.Fatalf("unable to find home directory: %s", cleanError(err))
 	}
 	if home == "" {
 		log.Fatalf("home directory is not setn")
@@ -306,7 +306,7 @@ func mustWriteConfig() {
 
 	raw, err := json.MarshalIndent(&Config, "", "    ")
 	if err != nil {
-		log.Fatalf("JSON error encoding cookie file: %v", err)
+		log.Fatalf("JSON error encoding cookie file: %s", cleanError(err))
 	}
 	raw = append(raw, '\n')
 

@@ -16,7 +16,7 @@ import (
 func CommandReset(cmd *cobra.Command, args []string) {
 	client, conn, ctx, _, err := setup(cmd)
 	if err != nil {
-		log.Fatalf("failed to connect to gRPC server: %v", err)
+		log.Fatalf("failed to connect to gRPC server: %s", cleanError(err))
 	}
 	defer conn.Close()
 
@@ -54,7 +54,7 @@ func CommandReset(cmd *cobra.Command, args []string) {
 		dumpMessage("GetAssignmentProblemStepCommitLast", true, &GetAssignmentProblemStepCommitLastRequest{AssignmentId: assignment.Id, ProblemId: problem.Id, Step: info.Step - 1})
 		commitResp, err := client.GetAssignmentProblemStepCommitLast(ctx, &GetAssignmentProblemStepCommitLastRequest{AssignmentId: assignment.Id, ProblemId: problem.Id, Step: info.Step - 1})
 		if err != nil {
-			log.Fatalf("failed to get commit: %v", err)
+			log.Fatalf("failed to get commit: %s", cleanError(err))
 		}
 		dumpMessage("GetAssignmentProblemStepCommitLast", false, commitResp)
 		commit := commitResp.Commit

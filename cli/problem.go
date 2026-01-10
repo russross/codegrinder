@@ -14,7 +14,7 @@ import (
 func CommandProblem(cmd *cobra.Command, args []string) {
 	client, conn, ctx, _, err := setup(cmd)
 	if err != nil {
-		log.Fatalf("failed to connect to gRPC server: %v", err)
+		log.Fatalf("failed to connect to gRPC server: %s", cleanError(err))
 	}
 	defer conn.Close()
 
@@ -32,7 +32,7 @@ func CommandProblem(cmd *cobra.Command, args []string) {
 	dumpMessage("GetProblemSets", true, &GetProblemSetsRequest{Search: searchTerms})
 	problemSetsResp, err := client.GetProblemSets(ctx, &GetProblemSetsRequest{Search: searchTerms})
 	if err != nil {
-		log.Fatalf("failed to get problem sets: %v", err)
+		log.Fatalf("failed to get problem sets: %s", cleanError(err))
 	}
 	dumpMessage("GetProblemSets", false, problemSetsResp)
 	problemSets := problemSetsResp.ProblemSets
@@ -57,7 +57,7 @@ func CommandProblem(cmd *cobra.Command, args []string) {
 		dumpMessage("GetProblemSetProblems", true, &GetProblemSetProblemsRequest{ProblemSetId: ps.Id})
 		pspsResp, err := client.GetProblemSetProblems(ctx, &GetProblemSetProblemsRequest{ProblemSetId: ps.Id})
 		if err != nil {
-			log.Fatalf("failed to get problem set problems: %v", err)
+			log.Fatalf("failed to get problem set problems: %s", cleanError(err))
 		}
 		dumpMessage("GetProblemSetProblems", false, pspsResp)
 		psps := pspsResp.ProblemSetProblems
@@ -68,7 +68,7 @@ func CommandProblem(cmd *cobra.Command, args []string) {
 				dumpMessage("GetProblem", true, &GetProblemRequest{ProblemId: psp.ProblemId})
 				problemResp, err := client.GetProblem(ctx, &GetProblemRequest{ProblemId: psp.ProblemId})
 				if err != nil {
-					log.Fatalf("failed to get problem: %v", err)
+					log.Fatalf("failed to get problem: %s", cleanError(err))
 				}
 				dumpMessage("GetProblem", false, problemResp)
 				problem = problemResp.Problem
@@ -81,7 +81,7 @@ func CommandProblem(cmd *cobra.Command, args []string) {
 				dumpMessage("GetProblemSteps", true, &GetProblemStepsRequest{ProblemId: psp.ProblemId})
 				stepsResp, err := client.GetProblemSteps(ctx, &GetProblemStepsRequest{ProblemId: psp.ProblemId})
 				if err != nil {
-					log.Fatalf("failed to get problem steps: %v", err)
+					log.Fatalf("failed to get problem steps: %s", cleanError(err))
 				}
 				dumpMessage("GetProblemSteps", false, stepsResp)
 				steps = stepsResp.ProblemSteps

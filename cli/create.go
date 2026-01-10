@@ -74,7 +74,7 @@ type ConfigFile struct {
 func CommandCreate(cmd *cobra.Command, args []string) {
 	client, conn, ctx, user, err := setup(cmd)
 	if err != nil {
-		log.Fatalf("failed to connect to gRPC server: %v", err)
+		log.Fatalf("failed to connect to gRPC server: %s", cleanError(err))
 	}
 	defer conn.Close()
 
@@ -114,7 +114,7 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 	dumpMessage("PostProblemBundleUnconfirmed", true, &PostProblemBundleUnconfirmedRequest{Bundle: unsigned})
 	signedResp, err := client.PostProblemBundleUnconfirmed(ctx, &PostProblemBundleUnconfirmedRequest{Bundle: unsigned})
 	if err != nil {
-		log.Fatalf("failed to post problem bundle unconfirmed: %v", err)
+		log.Fatalf("failed to post problem bundle unconfirmed: %s", cleanError(err))
 	}
 	dumpMessage("PostProblemBundleUnconfirmed", false, signedResp)
 	signed := signedResp.Bundle
@@ -146,7 +146,7 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 
 		// call handleDaycareStream in interactive mode
 		if _, err := handleDaycareStream(client, conn, unvalidated, nil, stepDir, true); err != nil {
-			log.Fatalf("interactive session failed: %v", err)
+			log.Fatalf("interactive session failed: %s", cleanError(err))
 		}
 		return
 	}
@@ -168,7 +168,7 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 		// call handleDaycareStream in non-interactive mode
 		validated, err := handleDaycareStream(client, conn, unvalidated, nil, "", false)
 		if err != nil {
-			log.Fatalf("failed to validate the step: %v", err)
+			log.Fatalf("failed to validate the step: %s", cleanError(err))
 		}
 		if validated == nil {
 			log.Fatalf("the server ended the connection without sending a report card")
@@ -179,7 +179,7 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 
 			// play the transcript
 			if err := validated.Commit.DumpTranscript(os.Stdout); err != nil {
-				log.Fatalf("failed to dump transcript: %v", err)
+				log.Fatalf("failed to dump transcript: %s", cleanError(err))
 			}
 			log.Fatalf("please fix solution and try again")
 		}
@@ -200,7 +200,7 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 		dumpMessage("PostProblemBundleConfirmed", true, &PostProblemBundleConfirmedRequest{Bundle: signed})
 		finalResp, err := client.PostProblemBundleConfirmed(ctx, &PostProblemBundleConfirmedRequest{Bundle: signed})
 		if err != nil {
-			log.Fatalf("failed to post problem bundle confirmed: %v", err)
+			log.Fatalf("failed to post problem bundle confirmed: %s", cleanError(err))
 		}
 		dumpMessage("PostProblemBundleConfirmed", false, finalResp)
 		final = finalResp.Bundle
@@ -209,7 +209,7 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 		dumpMessage("PutProblemBundle", true, &PutProblemBundleRequest{ProblemId: signed.Problem.Id, Bundle: signed})
 		finalResp, err := client.PutProblemBundle(ctx, &PutProblemBundleRequest{ProblemId: signed.Problem.Id, Bundle: signed})
 		if err != nil {
-			log.Fatalf("failed to put problem bundle: %v", err)
+			log.Fatalf("failed to put problem bundle: %s", cleanError(err))
 		}
 		dumpMessage("PutProblemBundle", false, finalResp)
 		final = finalResp.Bundle
@@ -240,7 +240,7 @@ func CommandCreate(cmd *cobra.Command, args []string) {
 		dumpMessage("PostProblemSetBundle", true, &PostProblemSetBundleRequest{Bundle: psBundle})
 		finalPSBundleResp, err := client.PostProblemSetBundle(ctx, &PostProblemSetBundleRequest{Bundle: psBundle})
 		if err != nil {
-			log.Fatalf("failed to post problem set bundle: %v", err)
+			log.Fatalf("failed to post problem set bundle: %s", cleanError(err))
 		}
 		dumpMessage("PostProblemSetBundle", false, finalPSBundleResp)
 		finalPSBundle := finalPSBundleResp.Bundle
@@ -252,7 +252,7 @@ func findProblemCfg(now time.Time, startDir string) (string, string, int, *Probl
 	// find the absolute directory so we can walk up the tree if needed
 	directory, err := filepath.Abs(startDir)
 	if err != nil {
-		log.Fatalf("error finding directory: %v", err)
+		log.Fatalf("error finding directory: %s", cleanError(err))
 	}
 
 	// find the problem.cfg file
@@ -370,7 +370,7 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string, 
 			dumpMessage("GetProblemType", true, &GetProblemTypeRequest{Name: step.ProblemType})
 			problemTypeResp, err := client.GetProblemType(ctx, &GetProblemTypeRequest{Name: step.ProblemType})
 			if err != nil {
-				log.Fatalf("failed to get problem type: %v", err)
+				log.Fatalf("failed to get problem type: %s", cleanError(err))
 			}
 			dumpMessage("GetProblemType", false, problemTypeResp)
 			problemTypes[step.ProblemType] = problemTypeResp.ProblemType
@@ -386,7 +386,7 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string, 
 	dumpMessage("GetProblems", true, &GetProblemsRequest{Unique: problem.Unique})
 	existingResp, err := client.GetProblems(ctx, &GetProblemsRequest{Unique: problem.Unique})
 	if err != nil {
-		log.Fatalf("failed to get problems: %v", err)
+		log.Fatalf("failed to get problems: %s", cleanError(err))
 	}
 	dumpMessage("GetProblems", false, existingResp)
 	existing := existingResp.Problems
@@ -401,7 +401,7 @@ func gatherAuthor(now time.Time, isUpdate bool, action string, startDir string, 
 		dumpMessage("GetProblemSets", true, &GetProblemSetsRequest{Unique: problem.Unique})
 		existingSetsResp, err := client.GetProblemSets(ctx, &GetProblemSetsRequest{Unique: problem.Unique})
 		if err != nil {
-			log.Fatalf("failed to get problem sets: %v", err)
+			log.Fatalf("failed to get problem sets: %s", cleanError(err))
 		}
 		dumpMessage("GetProblemSets", false, existingSetsResp)
 		existingSets := existingSetsResp.ProblemSets
@@ -679,7 +679,7 @@ func createProblemSet(path string, isUpdate bool, client CodeGrinderServiceClien
 	dumpMessage("GetProblemSets", true, &GetProblemSetsRequest{Unique: problemSet.Unique})
 	existingResp, err := client.GetProblemSets(ctx, &GetProblemSetsRequest{Unique: problemSet.Unique})
 	if err != nil {
-		log.Fatalf("failed to get problem sets: %v", err)
+		log.Fatalf("failed to get problem sets: %s", cleanError(err))
 	}
 	dumpMessage("GetProblemSets", false, existingResp)
 	existing := existingResp.ProblemSets
@@ -716,7 +716,7 @@ func createProblemSet(path string, isUpdate bool, client CodeGrinderServiceClien
 		dumpMessage("GetProblems", true, &GetProblemsRequest{Unique: unique})
 		problemsResp, err := client.GetProblems(ctx, &GetProblemsRequest{Unique: unique})
 		if err != nil {
-			log.Fatalf("failed to get problems: %v", err)
+			log.Fatalf("failed to get problems: %s", cleanError(err))
 		}
 		dumpMessage("GetProblems", false, problemsResp)
 		problems := problemsResp.Problems
@@ -743,7 +743,7 @@ func createProblemSet(path string, isUpdate bool, client CodeGrinderServiceClien
 		dumpMessage("PostProblemSetBundle", true, &PostProblemSetBundleRequest{Bundle: bundle})
 		finalResp, err := client.PostProblemSetBundle(ctx, &PostProblemSetBundleRequest{Bundle: bundle})
 		if err != nil {
-			log.Fatalf("failed to post problem set bundle: %v", err)
+			log.Fatalf("failed to post problem set bundle: %s", cleanError(err))
 		}
 		dumpMessage("PostProblemSetBundle", false, finalResp)
 		final = finalResp.Bundle
@@ -752,7 +752,7 @@ func createProblemSet(path string, isUpdate bool, client CodeGrinderServiceClien
 		dumpMessage("PutProblemSetBundle", true, &PutProblemSetBundleRequest{Bundle: bundle})
 		finalResp, err := client.PutProblemSetBundle(ctx, &PutProblemSetBundleRequest{Bundle: bundle})
 		if err != nil {
-			log.Fatalf("failed to put problem set bundle: %v", err)
+			log.Fatalf("failed to put problem set bundle: %s", cleanError(err))
 		}
 		dumpMessage("PutProblemSetBundle", false, finalResp)
 		final = finalResp.Bundle

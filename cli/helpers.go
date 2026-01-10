@@ -18,8 +18,17 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/encoding/gzip"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// cleanError extracts the error message from a gRPC error, removing the wrapper
+func cleanError(err error) string {
+	if st, ok := status.FromError(err); ok {
+		return st.Message()
+	}
+	return err.Error()
+}
 
 // newGRPCClient creates a gRPC client and context for reuse across commands
 func newGRPCClient() (CodeGrinderServiceClient, *grpc.ClientConn, context.Context, error) {
@@ -51,7 +60,7 @@ func nextStep(directory string, info *ProblemInfo, problem *Problem, commit *Com
 	dumpMessage("GetProblemStep", true, &GetProblemStepRequest{ProblemId: problem.Id, Step: commit.Step})
 	oldStepResp, err := client.GetProblemStep(ctx, &GetProblemStepRequest{ProblemId: problem.Id, Step: commit.Step})
 	if err != nil {
-		log.Fatalf("failed to get old step: %v", err)
+		log.Fatalf("failed to get old step: %s", cleanError(err))
 	}
 	oldStep = oldStepResp.ProblemStep
 	fmt.Printf("moving to step %d\n", newStep.Step)
@@ -60,7 +69,7 @@ func nextStep(directory string, info *ProblemInfo, problem *Problem, commit *Com
 		dumpMessage("GetProblemType", true, &GetProblemTypeRequest{Name: oldStep.ProblemType})
 		problemTypeResp, err := client.GetProblemType(ctx, &GetProblemTypeRequest{Name: oldStep.ProblemType})
 		if err != nil {
-			log.Fatalf("failed to get problem type: %v", err)
+			log.Fatalf("failed to get problem type: %s", cleanError(err))
 		}
 		dumpMessage("GetProblemType", false, problemTypeResp)
 		types[oldStep.ProblemType] = problemTypeResp.ProblemType
@@ -69,7 +78,7 @@ func nextStep(directory string, info *ProblemInfo, problem *Problem, commit *Com
 		dumpMessage("GetProblemType", true, &GetProblemTypeRequest{Name: newStep.ProblemType})
 		problemTypeResp, err := client.GetProblemType(ctx, &GetProblemTypeRequest{Name: newStep.ProblemType})
 		if err != nil {
-			log.Fatalf("failed to get problem type: %v", err)
+			log.Fatalf("failed to get problem type: %s", cleanError(err))
 		}
 		dumpMessage("GetProblemType", false, problemTypeResp)
 		types[newStep.ProblemType] = problemTypeResp.ProblemType
@@ -170,7 +179,7 @@ func gatherStudent(now time.Time, startDir string, client CodeGrinderServiceClie
 	dumpMessage("GetAssignment", true, &GetAssignmentRequest{AssignmentId: dotfile.AssignmentID})
 	assignmentResp, err := client.GetAssignment(ctx, &GetAssignmentRequest{AssignmentId: dotfile.AssignmentID})
 	if err != nil {
-		log.Fatalf("failed to get assignment: %v", err)
+		log.Fatalf("failed to get assignment: %s", cleanError(err))
 	}
 	dumpMessage("GetAssignment", false, assignmentResp)
 	assignment := assignmentResp.Assignment
@@ -197,7 +206,7 @@ func gatherStudent(now time.Time, startDir string, client CodeGrinderServiceClie
 	dumpMessage("GetProblem", true, &GetProblemRequest{ProblemId: info.ID})
 	problemResp, err := client.GetProblem(ctx, &GetProblemRequest{ProblemId: info.ID})
 	if err != nil {
-		log.Fatalf("failed to get problem: %v", err)
+		log.Fatalf("failed to get problem: %s", cleanError(err))
 	}
 	dumpMessage("GetProblem", false, problemResp)
 	problem := problemResp.Problem
@@ -205,7 +214,7 @@ func gatherStudent(now time.Time, startDir string, client CodeGrinderServiceClie
 	dumpMessage("GetProblemStep", true, &GetProblemStepRequest{ProblemId: problem.Id, Step: info.Step})
 	stepResp, err := client.GetProblemStep(ctx, &GetProblemStepRequest{ProblemId: problem.Id, Step: info.Step})
 	if err != nil {
-		log.Fatalf("failed to get problem step: %v", err)
+		log.Fatalf("failed to get problem step: %s", cleanError(err))
 	}
 	dumpMessage("GetProblemStep", false, stepResp)
 	step := stepResp.ProblemStep
@@ -213,7 +222,7 @@ func gatherStudent(now time.Time, startDir string, client CodeGrinderServiceClie
 	dumpMessage("GetProblemType", true, &GetProblemTypeRequest{Name: step.ProblemType})
 	problemTypeResp, err := client.GetProblemType(ctx, &GetProblemTypeRequest{Name: step.ProblemType})
 	if err != nil {
-		log.Fatalf("failed to get problem type: %v", err)
+		log.Fatalf("failed to get problem type: %s", cleanError(err))
 	}
 	dumpMessage("GetProblemType", false, problemTypeResp)
 	problemType := problemTypeResp.ProblemType
@@ -335,7 +344,7 @@ func handleDaycareStream(client CodeGrinderServiceClient, conn *grpc.ClientConn,
 		var err error
 		conn, err = grpc.DialContext(ctx, Config.Host+":443", grpc.WithTransportCredentials(creds), opts)
 		if err != nil {
-			return nil, fmt.Errorf("error connecting to daycare server: %v", err)
+			return nil, fmt.Errorf("error connecting to daycare server: %s", cleanError(err))
 		}
 		defer conn.Close()
 		client = NewCodeGrinderServiceClient(conn)
@@ -355,7 +364,7 @@ func handleDaycareStream(client CodeGrinderServiceClient, conn *grpc.ClientConn,
 	// Make the streaming Daycare call
 	stream, err := client.Daycare(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("error starting Daycare session: %v", err)
+		return nil, fmt.Errorf("error starting Daycare session: %s", cleanError(err))
 	}
 	dumpMessage("Daycare", false, nil)
 
@@ -417,7 +426,7 @@ func getAssignment(assignment *Assignment, rootDir, prettyRoot string, client Co
 	dumpMessage("GetCourse", true, &GetCourseRequest{CourseId: assignment.CourseId})
 	courseResp, err := client.GetCourse(ctx, &GetCourseRequest{CourseId: assignment.CourseId})
 	if err != nil {
-		log.Fatalf("failed to get course: %v", err)
+		log.Fatalf("failed to get course: %s", cleanError(err))
 	}
 	dumpMessage("GetCourse", false, courseResp)
 	course := courseResp.Course
@@ -426,7 +435,7 @@ func getAssignment(assignment *Assignment, rootDir, prettyRoot string, client Co
 	dumpMessage("GetProblemSet", true, &GetProblemSetRequest{ProblemSetId: assignment.ProblemSetId})
 	problemSetResp, err := client.GetProblemSet(ctx, &GetProblemSetRequest{ProblemSetId: assignment.ProblemSetId})
 	if err != nil {
-		log.Fatalf("failed to get problem set: %v", err)
+		log.Fatalf("failed to get problem set: %s", cleanError(err))
 	}
 	dumpMessage("GetProblemSet", false, problemSetResp)
 	problemSet := problemSetResp.ProblemSet
@@ -435,7 +444,7 @@ func getAssignment(assignment *Assignment, rootDir, prettyRoot string, client Co
 	dumpMessage("GetProblemSetProblems", true, &GetProblemSetProblemsRequest{ProblemSetId: assignment.ProblemSetId})
 	problemSetProblemsResp, err := client.GetProblemSetProblems(ctx, &GetProblemSetProblemsRequest{ProblemSetId: assignment.ProblemSetId})
 	if err != nil {
-		log.Fatalf("failed to get problem set problems: %v", err)
+		log.Fatalf("failed to get problem set problems: %s", cleanError(err))
 	}
 	dumpMessage("GetProblemSetProblems", false, problemSetProblemsResp)
 	problemSetProblems := problemSetProblemsResp.ProblemSetProblems
@@ -451,7 +460,7 @@ func getAssignment(assignment *Assignment, rootDir, prettyRoot string, client Co
 		dumpMessage("GetProblem", true, &GetProblemRequest{ProblemId: elt.ProblemId})
 		problemResp, err := client.GetProblem(ctx, &GetProblemRequest{ProblemId: elt.ProblemId})
 		if err != nil {
-			log.Fatalf("failed to get problem: %v", err)
+			log.Fatalf("failed to get problem: %s", cleanError(err))
 		}
 		dumpMessage("GetProblem", false, problemResp)
 		problem = problemResp.Problem
@@ -472,7 +481,7 @@ func getAssignment(assignment *Assignment, rootDir, prettyRoot string, client Co
 		dumpMessage("GetProblemStep", true, &GetProblemStepRequest{ProblemId: problem.Id, Step: problemSteps[problem.Unique]})
 		stepResp, err := client.GetProblemStep(ctx, &GetProblemStepRequest{ProblemId: problem.Id, Step: problemSteps[problem.Unique]})
 		if err != nil {
-			log.Fatalf("failed to get problem step: %v", err)
+			log.Fatalf("failed to get problem step: %s", cleanError(err))
 		}
 		dumpMessage("GetProblemStep", false, stepResp)
 		step = stepResp.ProblemStep
@@ -484,7 +493,7 @@ func getAssignment(assignment *Assignment, rootDir, prettyRoot string, client Co
 			dumpMessage("GetProblemType", true, &GetProblemTypeRequest{Name: step.ProblemType})
 			problemTypeResp, err := client.GetProblemType(ctx, &GetProblemTypeRequest{Name: step.ProblemType})
 			if err != nil {
-				log.Fatalf("failed to get problem type: %v", err)
+				log.Fatalf("failed to get problem type: %s", cleanError(err))
 			}
 			dumpMessage("GetProblemType", false, problemTypeResp)
 			types[step.ProblemType] = problemTypeResp.ProblemType

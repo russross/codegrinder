@@ -17,7 +17,7 @@ import (
 func CommandStudent(cmd *cobra.Command, args []string) {
 	client, conn, ctx, _, err := setup(cmd)
 	if err != nil {
-		log.Fatalf("failed to connect to gRPC server: %v", err)
+		log.Fatalf("failed to connect to gRPC server: %s", cleanError(err))
 	}
 	defer conn.Close()
 
@@ -42,7 +42,7 @@ func CommandStudent(cmd *cobra.Command, args []string) {
 	dumpMessage("GetAssignments", true, &GetAssignmentsRequest{Search: searchTerms})
 	assignmentsResp, err := client.GetAssignments(ctx, &GetAssignmentsRequest{Search: searchTerms})
 	if err != nil {
-		log.Fatalf("failed to get assignments: %v", err)
+		log.Fatalf("failed to get assignments: %s", cleanError(err))
 	}
 	dumpMessage("GetAssignments", false, assignmentsResp)
 	assignments := assignmentsResp.Assignments
@@ -65,7 +65,7 @@ func CommandStudent(cmd *cobra.Command, args []string) {
 			dumpMessage("GetUser", true, &GetUserRequest{UserId: asst.UserId})
 			userResp, err := client.GetUser(ctx, &GetUserRequest{UserId: asst.UserId})
 			if err != nil {
-				log.Fatalf("failed to get user: %v", err)
+				log.Fatalf("failed to get user: %s", cleanError(err))
 			}
 			dumpMessage("GetUser", false, userResp)
 			users[asst.UserId] = userResp.User
@@ -74,7 +74,7 @@ func CommandStudent(cmd *cobra.Command, args []string) {
 			dumpMessage("GetCourse", true, &GetCourseRequest{CourseId: asst.CourseId})
 			courseResp, err := client.GetCourse(ctx, &GetCourseRequest{CourseId: asst.CourseId})
 			if err != nil {
-				log.Fatalf("failed to get course: %v", err)
+				log.Fatalf("failed to get course: %s", cleanError(err))
 			}
 			dumpMessage("GetCourse", false, courseResp)
 			courses[asst.CourseId] = courseResp.Course
@@ -123,7 +123,7 @@ func downloadStudentAssignment(id int64, assignment *Assignment, client CodeGrin
 		dumpMessage("GetAssignment", true, &GetAssignmentRequest{AssignmentId: id})
 		assignmentResp, err := client.GetAssignment(ctx, &GetAssignmentRequest{AssignmentId: id})
 		if err != nil {
-			log.Fatalf("failed to get assignment: %v", err)
+			log.Fatalf("failed to get assignment: %s", cleanError(err))
 		}
 		dumpMessage("GetAssignment", false, assignmentResp)
 		assignment = assignmentResp.Assignment
@@ -131,7 +131,7 @@ func downloadStudentAssignment(id int64, assignment *Assignment, client CodeGrin
 	dumpMessage("GetUser", true, &GetUserRequest{UserId: assignment.UserId})
 	userResp, err := client.GetUser(ctx, &GetUserRequest{UserId: assignment.UserId})
 	if err != nil {
-		log.Fatalf("failed to get user: %v", err)
+		log.Fatalf("failed to get user: %s", cleanError(err))
 	}
 	dumpMessage("GetUser", false, userResp)
 	user := userResp.User
@@ -157,9 +157,9 @@ func downloadStudentAssignment(id int64, assignment *Assignment, client CodeGrin
 	}
 	proc, err := os.StartProcess(shell, []string{shell}, attr)
 	if err != nil {
-		log.Fatalf("error launching shell: %v", err)
+		log.Fatalf("error launching shell: %s", cleanError(err))
 	}
 	if _, err := proc.Wait(); err != nil {
-		log.Fatalf("error waiting for shell to terminate: %v", err)
+		log.Fatalf("error waiting for shell to terminate: %s", cleanError(err))
 	}
 }
