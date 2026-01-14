@@ -1,6 +1,7 @@
 FROM debian:bookworm
 
 RUN mkdir /home/student && chmod 777 /home/student
+ENV HOME=/home/student
 WORKDIR /home/student
 
 RUN apt update

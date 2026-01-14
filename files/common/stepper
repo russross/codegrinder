@@ -10,7 +10,10 @@ XML report.
 """
 
 import os
+import re
 import selectors
+import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -41,6 +44,8 @@ class AnsiColors:
 EOL_SYMBOL = '⏎'
 # Width for aligning prefixes in error reports for readability
 ERROR_PREFIX_WIDTH = 20
+# Maximum buffer size to prevent OOM attacks (10 MB)
+MAX_BUFFER_SIZE = 10 * 1024 * 1024
 
 # --- Semantic Print Functions ---
 
@@ -86,7 +91,7 @@ def print_summary(text: str, success: bool) -> None:
 
 def generate_xml_report(results: List[Dict[str, Any]], tests: int, failures: int, total_time: float) -> None:
     """
-    Generates a JUnix-style XML report from the test results.
+    Generates a JUnit-style XML report from the test results.
     """
     outname = 'test_detail.xml'
     testsuites = ET.Element('testsuites')
@@ -128,6 +133,67 @@ def generate_xml_report(results: List[Dict[str, Any]], tests: int, failures: int
         print_fatal(f"FATAL: Could not write XML report to '{outname}': {e}")
 
 
+def parse_input_transform(transform_str: str) -> Tuple[str, str]:
+    """
+    Parses a sed-style substitution pattern like 's/.transcript/.input/'
+    or 's/outputs\\/(.*).transcript/\\1.sql/'
+    into (pattern, replacement) tuple.
+    Returns the regex pattern and replacement strings.
+    """
+    # Expected format: s/pattern/replacement/ or s/pattern/replacement
+    if not transform_str.startswith('s/'):
+        raise ValueError(f"Invalid transform format: '{transform_str}'. Expected 's/pattern/replacement/'")
+
+    # Remove the 's/' prefix
+    rest = transform_str[2:]
+
+    # Split by unescaped '/' to get pattern and replacement
+    # Handle escaped characters properly
+    parts = []
+    current = ""
+    i = 0
+    while i < len(rest):
+        if rest[i] == '\\' and i + 1 < len(rest):
+            # Escaped character - keep both backslash and next char
+            current += rest[i:i+2]
+            i += 2
+        elif rest[i] == '/':
+            # Unescaped separator
+            parts.append(current)
+            current = ""
+            i += 1
+        else:
+            current += rest[i]
+            i += 1
+    # Add remaining part
+    if current:
+        parts.append(current)
+
+    if len(parts) < 2:
+        raise ValueError(f"Invalid transform format: '{transform_str}'. Expected 's/pattern/replacement/'")
+
+    pattern = parts[0]
+    replacement = parts[1]
+
+    return pattern, replacement
+
+
+def apply_input_transform(transcript_path: Path, pattern: str, replacement: str) -> Path:
+    """
+    Applies the input transform to a transcript path to get the input path.
+    Uses regex substitution to support backreferences.
+    The pattern and replacement can use backreferences like \1, \2, etc.
+    """
+    # Apply the regex pattern to the full path string
+    full_path_str = str(transcript_path)
+    try:
+        input_path_str = re.sub(pattern, replacement, full_path_str)
+    except re.error as e:
+        raise ValueError(f"Invalid regex pattern: {e}")
+
+    return Path(input_path_str)
+
+
 def main() -> None:
     """
     Main entry point. Reads environment variables, finds transcript files,
@@ -136,19 +202,37 @@ def main() -> None:
     # --- 1. Read and Validate Environment Variables ---
     try:
         cmd_str = os.environ['STEPPER_CMD']
-        cmd = cmd_str.split()
+        cmd = shlex.split(cmd_str)
         stepper_dir = Path(os.environ['STEPPER_DIR'])
         post_error_lines = int(os.environ['STEPPER_POSTERRORLINES'])
         timeout = float(os.environ['STEPPER_TIMEOUT'])
         # Check for STEPPER_GRADE to enable grade mode
         grade_mode = os.environ.get('STEPPER_GRADE', 'false').lower() == 'true'
+        # Get input transform pattern (default: s/.transcript/.input/)
+        input_transform_str = os.environ.get('STEPPER_INPUT_TRANSFORM', 's/.transcript/.input/')
     except (KeyError, ValueError) as e:
         print_fatal(f"FATAL: Invalid or missing environment variable: {e}")
+        sys.exit(1)
+
+    # Parse the input transform pattern
+    try:
+        transform_pattern, transform_replacement = parse_input_transform(input_transform_str)
+    except ValueError as e:
+        print_fatal(f"FATAL: {e}")
         sys.exit(1)
 
     if not stepper_dir.is_dir():
         print_fatal(f"FATAL: STEPPER_DIR '{stepper_dir}' is not a valid directory.")
         sys.exit(1)
+
+    # --- 1b. Setup Signal Handling ---
+    # Ensure clean cleanup on Ctrl+C or SIGTERM
+    def signal_handler(signum: int, frame: Any) -> None:
+        print_fatal("\nInterrupted by user")
+        sys.exit(130)  # Standard exit code for SIGINT
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
 
     # --- 2. Find and Run Test Cases ---
     transcript_files = sorted(list(stepper_dir.glob('*.transcript')))
@@ -162,8 +246,14 @@ def main() -> None:
 
     for transcript_path in transcript_files:
         print("-" * 80)
-        input_path = transcript_path.with_suffix('.input')
-        run_command = f"$ {' '.join(cmd)} < {input_path}"
+        input_path = apply_input_transform(transcript_path, transform_pattern, transform_replacement)
+
+        # Substitute @INPUT@ with input path (no-op if @INPUT@ not present)
+        cmd_str = os.environ['STEPPER_CMD'].replace('@INPUT@', str(input_path))
+        cmd = shlex.split(cmd_str)
+
+        # Display the command that will be run
+        run_command = f"$ {cmd_str}"
         print_info(run_command)
         print() # Add a newline for spacing
 
@@ -271,26 +361,24 @@ def run_test_case(cmd: List[str], transcript_path: Path, timeout: float, post_er
                 partial_buffer = partial_stdout if is_stdout else partial_stderr
                 
                 actual_line: str
-                new_buffer: str
                 if '\n' in partial_buffer:
-                    line, new_buffer = partial_buffer.split('\n', 1)
+                    line, partial_buffer = partial_buffer.split('\n', 1)
                     actual_line = line + '\n'
+                    if is_stdout:
+                        partial_stdout = partial_buffer
+                    else:
+                        partial_stderr = partial_buffer
                 else:
-                    line_from_proc, new_buffer = read_line_from_process(proc, sel, is_stdout, partial_buffer, timeout)
+                    line_from_proc, partial_stdout, partial_stderr = read_line_from_process(proc, sel, is_stdout, partial_stdout, partial_stderr, timeout)
                     if line_from_proc is None:
                         reason = f"Timeout or EOF waiting for output on {stream_name}."
                         if proc.poll() is not None:
                             reason = f"Program exited before producing expected output on {stream_name}."
-                        updated_stdout = new_buffer if is_stdout else partial_stdout
-                        updated_stderr = new_buffer if not is_stdout else partial_stderr
-                        error_log = handle_error(reason, proc, sel, expected_actions, post_error_lines, timeout, updated_stdout, updated_stderr)
+                            # Drain any remaining output from the exited process
+                            partial_stdout, partial_stderr = drain_process_output(proc, sel, partial_stdout, partial_stderr)
+                        error_log = handle_error(reason, proc, sel, expected_actions, post_error_lines, timeout, partial_stdout, partial_stderr)
                         return False, error_log
                     actual_line = line_from_proc
-
-                if is_stdout:
-                    partial_stdout = new_buffer
-                else:
-                    partial_stderr = new_buffer
                 
                 if actual_line != expected_content:
                     error_log = handle_error(f"Output mismatch on {stream_name}.", proc, sel, expected_actions, post_error_lines, timeout, partial_stdout, partial_stderr, actual_line)
@@ -307,10 +395,17 @@ def run_test_case(cmd: List[str], transcript_path: Path, timeout: float, post_er
         # --- Post-Loop Checks ---
         extra_out = partial_stdout
         extra_err = partial_stderr
-        
+
         # Drain any remaining output from the process
-        while proc.poll() is None or sel.get_map():
-            events = sel.select(0.1) 
+        try:
+            has_fds = bool(sel.get_map())
+        except (ValueError, Exception):
+            has_fds = False
+        while proc.poll() is None or has_fds:
+            try:
+                events = sel.select(0.1)
+            except (ValueError, Exception):
+                break  # Selector is closed 
             if not events and proc.poll() is not None:
                 break
 
@@ -322,7 +417,7 @@ def run_test_case(cmd: List[str], transcript_path: Path, timeout: float, post_er
                         sel.unregister(fileobj)
                         continue
                     
-                    decoded_data = data.decode('utf-8')
+                    decoded_data = data.decode('utf-8', errors='replace')
                     if key.data == 'stdout': extra_out += decoded_data
                     else: extra_err += decoded_data
                 except (BlockingIOError, UnicodeDecodeError):
@@ -330,12 +425,15 @@ def run_test_case(cmd: List[str], transcript_path: Path, timeout: float, post_er
         
         exit_code = proc.returncode if proc.returncode is not None else proc.wait()
 
+        # Drain any remaining stderr before checking exit code
+        extra_out, extra_err = drain_process_output(proc, sel, extra_out, extra_err)
+
         if extra_out or extra_err:
             error_log = handle_error("Program produced unexpected extra output after completion.", proc, sel, deque(), post_error_lines, timeout, extra_out, extra_err)
             return False, error_log
 
         if exit_code != 0:
-            error_log = handle_error(f"Program exited with non-zero status code: {exit_code}", proc, sel, deque(), post_error_lines, timeout, "", "")
+            error_log = handle_error(f"Program exited with non-zero status code: {exit_code}", proc, sel, deque(), post_error_lines, timeout, "", extra_err)
             return False, error_log
 
     except (IOError, ValueError) as e:
@@ -346,45 +444,104 @@ def run_test_case(cmd: List[str], transcript_path: Path, timeout: float, post_er
         # Ensure process and its resources are cleaned up
         if proc.poll() is None:
             proc.terminate()
-            proc.wait()
-        sel.close()
+            try:
+                proc.wait(timeout=1.0)  # Give 1 second for graceful termination
+            except subprocess.TimeoutExpired:
+                proc.kill()  # Force kill if it doesn't respond
+                proc.wait()
+        try:
+            sel.close()
+        except Exception:
+            pass  # Selector might already be closed
         for p in [proc.stdin, proc.stdout, proc.stderr]:
             if p and not p.closed:
-                p.close()
+                try:
+                    p.close()
+                except Exception:
+                    pass
 
     return True, ""
 
-def read_line_from_process(proc: subprocess.Popen[bytes], sel: selectors.DefaultSelector, from_stdout: bool, buffer: str, timeout: float) -> Tuple[Optional[str], str]:
-    """Reads from process until a full line is available or timeout occurs."""
+def read_line_from_process(proc: subprocess.Popen[bytes], sel: selectors.DefaultSelector, from_stdout: bool, stdout_buffer: str, stderr_buffer: str, timeout: float) -> Tuple[Optional[str], str, str]:
+    """Reads from process until a full line is available on expected stream or timeout occurs.
+
+    Buffers data from both stdout and stderr, even when waiting for one specific stream.
+    This prevents data loss from interleaved output.
+    """
     start_time = time.monotonic()
     stream_name = 'stdout' if from_stdout else 'stderr'
-    
-    while time.monotonic() - start_time < timeout:
-        remaining_time = timeout - (time.monotonic() - start_time)
-        if remaining_time <= 0: break
-        
-        events = sel.select(remaining_time)
-        if not events:
-            return None, buffer # Timeout
 
+    while time.monotonic() - start_time < timeout:
+        if proc.poll() is not None:
+            return None, stdout_buffer, stderr_buffer
+        remaining_time = timeout - (time.monotonic() - start_time)
+        if remaining_time <= 0:
+            break
+        select_timeout = min(remaining_time, 0.1)
+        events = sel.select(select_timeout)
+        if not events:
+            continue
         for key, _ in events:
-            if key.data != stream_name:
-                continue
-            
             fileobj = cast(IO[bytes], key.fileobj)
             try:
                 data = fileobj.read()
                 if not data: # EOF
-                    return None, buffer
-                buffer += data.decode('utf-8')
+                    sel.unregister(fileobj)  # Clean up the dead fd
+                    continue
+                decoded = data.decode('utf-8', errors='replace')
+                # Buffer data from both streams, even if waiting for one
+                if key.data == 'stdout':
+                    stdout_buffer += decoded
+                else:
+                    stderr_buffer += decoded
             except (BlockingIOError, UnicodeDecodeError):
                 continue
-            
-            if '\n' in buffer:
-                line, new_buffer = buffer.split('\n', 1)
-                return line + '\n', new_buffer
-    
-    return None, buffer # Timeout
+
+            # Check if expected stream now has a complete line
+            expected_buffer = stdout_buffer if from_stdout else stderr_buffer
+
+            # Check for buffer size limit to prevent OOM
+            if len(expected_buffer) > MAX_BUFFER_SIZE:
+                return None, stdout_buffer, stderr_buffer  # Treat as timeout/error
+
+            if '\n' in expected_buffer:
+                line, new_buffer = expected_buffer.split('\n', 1)
+                if from_stdout:
+                    return line + '\n', new_buffer, stderr_buffer
+                else:
+                    return line + '\n', stdout_buffer, new_buffer
+
+    return None, stdout_buffer, stderr_buffer  # Timeout
+
+
+def drain_process_output(proc: subprocess.Popen[bytes], sel: selectors.DefaultSelector, partial_stdout: str, partial_stderr: str) -> Tuple[str, str]:
+    """Drains all remaining output from process pipes. Works even if process has exited."""
+    extra_out = partial_stdout
+    extra_err = partial_stderr
+
+    # Attempt to read any remaining data from the pipes
+    try:
+        try:
+            sel_map = sel.get_map().values()
+        except (ValueError, Exception):
+            return extra_out, extra_err  # Selector is closed, return what we have
+        for key in list(sel_map):
+            fileobj = cast(IO[bytes], key.fileobj)
+            try:
+                data = fileobj.read()
+                if data:
+                    decoded_data = data.decode('utf-8', errors='replace')
+                    if key.data == 'stdout':
+                        extra_out += decoded_data
+                    else:
+                        extra_err += decoded_data
+            except (BlockingIOError, UnicodeDecodeError):
+                pass
+    except Exception:
+        # Silently ignore errors during draining
+        pass
+
+    return extra_out, extra_err
 
 def handle_error(reason: str, proc: subprocess.Popen[bytes], sel: selectors.DefaultSelector, expected_actions: Deque[Tuple[str, str]], post_error_lines: int, timeout: float, partial_stdout: str, partial_stderr: str, mismatched_line: Optional[str] = None) -> str:
     """
@@ -428,6 +585,39 @@ def handle_error(reason: str, proc: subprocess.Popen[bytes], sel: selectors.Defa
     log_lines.append(header_actual)
     print_header(header_actual, AnsiColors.YELLOW)
 
+    # Check if this is a crash (non-zero exit) with stderr content
+    exit_code = proc.returncode if proc.returncode is not None else 0
+    if exit_code != 0 and partial_stderr.strip():
+        # Display crash stderr prominently
+        crash_header = "\n*** STDERR FROM CRASHED PROGRAM ***"
+        log_lines.append(crash_header)
+        print_header(crash_header, AnsiColors.RED, bold=True)
+
+        # Split stderr into lines and apply truncation logic
+        stderr_lines = partial_stderr.split('\n')
+        # Remove empty last element if stderr ends with newline
+        if stderr_lines and stderr_lines[-1] == '':
+            stderr_lines = stderr_lines[:-1]
+
+        max_stderr_lines = 20
+        if len(stderr_lines) > max_stderr_lines:
+            # Show first N lines with truncation notice
+            display_lines = stderr_lines[:max_stderr_lines]
+            truncation_notice = f"\n(... stderr truncated, showing first {max_stderr_lines} of {len(stderr_lines)} lines ...)"
+            log_lines.extend([repr(line) for line in display_lines])
+            log_lines.append(truncation_notice)
+            for line in display_lines:
+                print_stderr(line)
+            print_warning(truncation_notice)
+        else:
+            # Show all lines
+            log_lines.extend([repr(line) for line in stderr_lines])
+            for line in stderr_lines:
+                print_stderr(line)
+
+        # Clear partial_stderr so it's not shown again in the normal flow
+        partial_stderr = ""
+
     lines_shown = 0
     if mismatched_line:
         prefix = f"{'MISMATCHED LINE:':<{ERROR_PREFIX_WIDTH}}"
@@ -462,7 +652,7 @@ def handle_error(reason: str, proc: subprocess.Popen[bytes], sel: selectors.Defa
             print_header(wait_text, AnsiColors.BLUE, bold=False)
             break
 
-        line_out, partial_stdout = read_line_from_process(proc, sel, True, partial_stdout, 0.1)
+        line_out, partial_stdout, partial_stderr = read_line_from_process(proc, sel, True, partial_stdout, partial_stderr, 0.1)
         if line_out is not None:
             prefix = f"{'SUBSEQUENT STDOUT:':<{ERROR_PREFIX_WIDTH}}"
             line_text = f"{prefix}{repr(line_out)}"
@@ -470,16 +660,20 @@ def handle_error(reason: str, proc: subprocess.Popen[bytes], sel: selectors.Defa
             print_warning(line_text)
             lines_shown += 1
             if lines_shown >= post_error_lines: break
-        
+
         if lines_shown >= post_error_lines: break
 
-        line_err, partial_stderr = read_line_from_process(proc, sel, False, partial_stderr, 0.1)
+        line_err, partial_stdout, partial_stderr = read_line_from_process(proc, sel, False, partial_stdout, partial_stderr, 0.1)
         if line_err is not None:
             prefix = f"{'SUBSEQUENT STDERR:':<{ERROR_PREFIX_WIDTH}}"
             line_text = f"{prefix}{repr(line_err)}"
             log_lines.append(line_text)
             print_warning(line_text)
             lines_shown += 1
+
+    # Drain any remaining output from exited process
+    if proc.poll() is not None:
+        partial_stdout, partial_stderr = drain_process_output(proc, sel, partial_stdout, partial_stderr)
 
     # Handle the "extra output" case cleanly
     if reason == "Program produced unexpected extra output after completion.":

@@ -7,15 +7,12 @@ test:
 	go fmt
 	go test -v
 
-grade:	go2xunit/go2xunit
+grade:
 	go fmt
-	go test -v | go2xunit/go2xunit -output test_detail.xml
-
-go2xunit/go2xunit:
-	cd go2xunit && go build
+	go test -v | python3 lib/go2xunit.py -output test_detail.xml
 
 setup:
-	sudo apt install -y icdiff make golang python3
+	sudo apt install -y make golang python3
 
 clean:
-	rm -f *.xml go2xunit/go2xunit
+	rm -f *.xml

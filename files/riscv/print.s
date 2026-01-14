@@ -31,8 +31,8 @@ print_string:
 
 # print_int(n)
 print_int:
-                addi    sp, sp, -32
-                sd      ra, 24(sp)
+                addi    sp, sp, -16
+                sw      ra, 12(sp)
 
                 # a0: n
                 # a1: ptr
@@ -73,14 +73,14 @@ print_int:
 
                 mv      a0, sp
                 jal     print_string
-5:              ld      ra, 24(sp)
-                addi    sp, sp, 32
+5:              lw      ra, 12(sp)
+                addi    sp, sp, 16
                 ret
 
 # print_hex(n)
 print_hex:
-                addi    sp, sp, -32
-                sd      ra, 24(sp)
+                addi    sp, sp, -16
+                sw      ra, 12(sp)
 
                 # a0: n
                 # a1: ptr
@@ -123,15 +123,15 @@ print_hex:
 
                 mv      a0, sp
                 jal     print_string
-5:              ld      ra, 24(sp)
-                addi    sp, sp, 32
+5:              lw      ra, 12(sp)
+                addi    sp, sp, 16
                 ret
 
 # print_set(set)
 print_set:
                 # prelude
                 addi    sp, sp, -16
-                sd      ra, 8(sp)
+                sw      ra, 12(sp)
 
                 # a0: in
                 # a1: out
@@ -154,6 +154,6 @@ print_set:
                 mv      a0, a1
                 jal     print_int
 
-                ld      ra, 8(sp)
+                lw      ra, 12(sp)
                 addi    sp, sp, 16
                 ret

@@ -1,23 +1,21 @@
 .SUFFIXES:
-.SUFFIXES: .db .sql .actual .expected .xml
+.SUFFIXES: .db .sql .transcript .xml
 
-STEPPER_DELAY=0.05
-STEPPER_WARMUPDELAY=0.5
-STEPPER_POSTCRASHLINES=15
-STEPPER_WRONGLINES=10
-STEPPER_SUFFIX=sql
-STEPPER_INDIR=.
-STEPPER_OUTDIR=outputs
-STEPPER_CMD=sqlite3 database.db
-export STEPPER_DELAY STEPPER_WARMUPDELAY STEPPER_POSTCRASHLINES STEPPER_WRONGLINES
-export STEPPER_SUFFIX STEPPER_INDIR STEPPER_OUTDIR STEPPER_CMD
+STEPPER_DIR=outputs
+STEPPER_TIMEOUT=5
+STEPPER_POSTERRORLINES=15
+STEPPER_CMD=sqlite3 --batch database.db ".read @INPUT@"
+STEPPER_INPUT_TRANSFORM=s/outputs\/(.*).transcript/\1.sql/
+STEPPER_GRADE=false
+export STEPPER_DIR STEPPER_TIMEOUT STEPPER_POSTERRORLINES STEPPER_CMD STEPPER_INPUT_TRANSFORM STEPPER_GRADE
 
 all:	step
 
+grade:	export STEPPER_GRADE := true
 grade:	$(HOME)/.sqliterc
-	@rm -f database.db test_detail.xml outputs/*.actual
+	@rm -f database.db test_detail.xml
 	@for x in $(shell ls .*.sql); do sqlite3 database.db < $$x > /dev/null; done
-	@python3 lib/grader
+	python3 lib/stepper
 
 step:	$(HOME)/.sqliterc
 	@rm -f database.db
@@ -32,8 +30,5 @@ shell:	$(HOME)/.sqliterc
 $(HOME)/.sqliterc:	lib/.sqliterc
 	cp lib/.sqliterc $(HOME)/
 
-setup:
-	sudo apt install -y icdiff make python3 sqlite3
-
 clean:
-	rm -f test_detail.xml database.db outputs/*.actual
+	rm -f test_detail.xml database.db
