@@ -41,6 +41,8 @@ INSERT INTO problem_type_actions (problem_type, action, command, parser, message
 INSERT INTO problem_types (name, image) VALUES ('riscv', 'codegrinder/riscv');
 INSERT INTO problem_type_actions (problem_type, action, command, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('riscv', 'grade', 'make grade', 'xunit', 'Grading‥', 0, 60, 60, 60, 100, 10, 1024, 20);
 INSERT INTO problem_type_actions (problem_type, action, command, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('riscv', 'step', 'make step', NULL, 'Stepping‥', 0, 60, 60, 60, 100, 10, 1024, 20);
+INSERT INTO problem_type_actions (problem_type, action, command, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('riscv', 'run', 'make run', NULL, 'Running‥', 0, 60, 60, 60, 100, 10, 1024, 20);
+INSERT INTO problem_type_actions (problem_type, action, command, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('riscv', 'trace', 'make trace', NULL, 'Tracing‥', 0, 60, 60, 60, 100, 10, 1024, 20);
 
 INSERT INTO problem_types (name, image) VALUES ('rustunittest', 'codegrinder/rust');
 INSERT INTO problem_type_actions (problem_type, action, command, parser, message, interactive, max_cpu, max_session, max_timeout, max_fd, max_file_size, max_memory, max_threads) VALUES ('rustunittest', 'grade', 'make grade', 'xunit', 'Grading‥', 0, 30, 60, 60, 100, 20, 1024, 200);

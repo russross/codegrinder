@@ -1,25 +1,22 @@
 .SUFFIXES:
-.SUFFIXES: .go .xml .out
+.SUFFIXES: .go .out .xml .input .transcript
 
 GODEBUG=installgoroot=all
 export GODEBUG
 
-STEPPER_DELAY=0.01
-STEPPER_WARMUPDELAY=1.0
-STEPPER_POSTCRASHLINES=15
-STEPPER_WRONGLINES=10
-STEPPER_SUFFIX=input
-STEPPER_INDIR=inputs
-STEPPER_OUTDIR=inputs
 STEPPER_CMD=./a.out
-export STEPPER_DELAY STEPPER_WARMUPDELAY STEPPER_POSTCRASHLINES STEPPER_WRONGLINES
-export STEPPER_SUFFIX STEPPER_INDIR STEPPER_OUTDIR STEPPER_CMD
+STEPPER_DIR=inputs
+STEPPER_TIMEOUT=5
+STEPPER_POSTERRORLINES=15
+STEPPER_GRADE=false
+export STEPPER_CMD STEPPER_DIR STEPPER_TIMEOUT STEPPER_POSTERRORLINES STEPPER_GRADE
 
 all:	step
 
+grade:	export STEPPER_GRADE := true
 grade:	a.out
-	rm -f test_detail.xml inputs/*.actual
-	python3 lib/grader
+	@rm -f test_detail.xml
+	python3 lib/stepper
 
 run:	a.out
 	./a.out
@@ -30,9 +27,6 @@ step:	a.out
 a.out:	*.go
 	go fmt
 	go build -o a.out
-
-setup:
-	sudo apt install -y golang icdiff make python3
 
 clean:
 	rm -f *.out *.xml

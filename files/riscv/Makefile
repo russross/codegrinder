@@ -5,8 +5,8 @@ ALLSRC=$(wildcard *.s)
 START=$(filter start.s, $(ALLSRC))
 AOUTSRC=$(START) $(filter-out $(START), $(ALLSRC))
 
-RISCLET_VERSION=v0.4.2
-STEPPER_CMD=risclet run $(AOUTSRC)
+RISCLET_VERSION=v0.4.3
+STEPPER_CMD=risclet run --check-abi $(AOUTSRC)
 STEPPER_DIR=inputs
 STEPPER_TIMEOUT=5
 STEPPER_POSTERRORLINES=15

@@ -90,7 +90,7 @@ print_hex:
                 bgez    a0, 1f
                 neg     a0, a0
 1:              mv      a1, sp
-				li		a2, 10
+                li      a2, 10
 2:              andi    t0, a0, 0xf
                 blt     t0, a2, 3f
                 addi    t0, t0, 'a' - ('0' + 10)

@@ -7,7 +7,9 @@ RUN apk add --no-cache \
     make \
     python3
 ENV GODEBUG=installgoroot=all
-ENV GOCACHE=/tmp/go-cache
 RUN apk add --no-cache \
     go
-RUN go install -a std
+RUN mkdir /go-cache && chmod 777 /go-cache
+ENV GOCACHE=/go-cache
+ENV CGO_ENABLED=0
+RUN umask 0000 && go install -a std
