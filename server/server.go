@@ -17,6 +17,7 @@ import (
 	"io/ioutil"
 	"log"
 	"math/rand"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -286,7 +287,40 @@ func main() {
 			}
 		}
 		m.Use(skipMiddleware("/sockets/", mgzip.All()))
-		m.Use(martini.Static(filepath.Join(root, "www"), martini.StaticOptions{SkipLogging: false}))
+		// Custom static file middleware with proper MIME type handling
+		m.Use(func(c martini.Context, w http.ResponseWriter, r *http.Request) {
+			wwwRoot := filepath.Join(root, "www")
+			path := filepath.Join(wwwRoot, filepath.Clean(r.URL.Path))
+
+			// Security check: ensure the path is within the www directory
+			if !strings.HasPrefix(path, wwwRoot) {
+				c.Next()
+				return
+			}
+
+			// Check if the file exists
+			info, err := os.Stat(path)
+			if err != nil {
+				// File doesn't exist, continue to next handler
+				c.Next()
+				return
+			}
+
+			// we do not serve directories
+			if info.IsDir() {
+				c.Next()
+				return
+			}
+
+			// Set proper MIME type
+			contentType := mime.TypeByExtension(filepath.Ext(path))
+			if contentType != "" {
+				w.Header().Set("Content-Type", contentType)
+			}
+
+			// Serve the file
+			http.ServeFile(w, r, path)
+		})
 		m.Use(render.Renderer(render.Options{IndentJSON: false}))
 
 		// set up the database
