@@ -1,6 +1,6 @@
 '''Thonny plugin to integrate with CodeGrinder for coding practice'''
 
-__version__ = '2.7.1'
+__version__ = '2.7.3'
 
 import base64
 import certifi
@@ -22,9 +22,120 @@ from thonnycontrib.thonny_codegrinder_plugin import tkhtmlview
 import tkinter.messagebox
 import tkinter.simpledialog
 import tkinter.ttk
-from typing import List, Dict, Tuple, Optional, Any
+from typing import List, Dict, Tuple, Optional, Any, Union, Type, Callable, Sequence, cast
+from abc import abstractmethod
 import websocket
 import shutil
+import tkinter as tk
+
+#
+# Type stubs for Thonny API
+# Generated from thonny-src analysis
+#
+
+class Workbench(tk.Tk):
+    """Thonny workbench - main UI container (extends tk.Tk)"""
+    def add_command(
+        self,
+        command_id: str,
+        menu_name: str,
+        command_label: str,
+        handler: Optional[Callable[[], None]] = None,
+        tester: Optional[Callable[[], bool]] = None,
+        default_sequence: Optional[str] = None,
+        extra_sequences: Sequence[str] = [],
+        flag_name: Optional[str] = None,
+        skip_sequence_binding: bool = False,
+        accelerator: Optional[str] = None,
+        group: int = 99,
+        position_in_group: str = "end",
+        image: Optional[str] = None,
+        caption: Optional[str] = None,
+        alternative_caption: Optional[str] = None,
+        include_in_menu: bool = True,
+        include_in_toolbar: bool = False,
+        submenu: Optional[tk.Menu] = None,
+        bell_when_denied: bool = True,
+        show_extra_sequences: bool = False,
+    ) -> None:
+        """Register menu command with optional keyboard shortcut and handler"""
+        ...
+
+    def add_view(
+        self,
+        cls: Type[tk.Widget],
+        label: str,
+        default_location: str,
+        visible_by_default: bool = False,
+        default_position_key: Optional[str] = None,
+    ) -> None:
+        """Register a view (dockable widget) that can be shown/hidden"""
+        ...
+
+    def get_editor_notebook(self) -> "EditorNotebook":
+        """Get the main editor notebook containing all open files"""
+        raise NotImplementedError("Thonny stub")
+
+    def get_view(self, view_id: str, create: bool = True) -> tk.Widget:
+        """Get a view by class name (e.g., 'ShellView')"""
+        raise NotImplementedError("Thonny stub")
+
+    def show_view(self, view_id: str, set_focus: bool = True) -> Union[bool, tk.Widget]:
+        """Show/bring to front a registered view"""
+        raise NotImplementedError("Thonny stub")
+
+    def winfo_toplevel(self) -> tk.Tk:
+        """Get the root window (inherited from tk.Widget)"""
+        raise NotImplementedError("Thonny stub")
+
+
+class EditorNotebook(tk.Widget):
+    """Container for all open editor tabs"""
+    def save_all_named_editors(self) -> None:
+        """Save all editors that have a filename"""
+        ...
+
+    def get_current_editor(self) -> Optional["Editor"]:
+        """Get the currently active editor, or None"""
+        ...
+
+
+class Editor(tk.Widget):
+    """Single editor widget for a file"""
+    def get_filename(self, try_hard: bool = False) -> Optional[str]:
+        """Get the filename of this editor's content"""
+        ...
+
+
+class HtmlFrame(tk.Widget):
+    """HTML rendering frame from tkhtmlview"""
+    def set_content(self, content: str) -> None:
+        """Set HTML content to display"""
+        ...
+
+
+class ShellView(tk.PanedWindow):
+    """Interactive Python shell view (extends tk.PanedWindow)"""
+    def clear_shell(self) -> None:
+        """Clear all output from the shell"""
+        ...
+
+    def submit_magic_command(self, cmd_line: Union[str, List[str]]) -> None:
+        """Submit a shell magic command (e.g., '%cd ...')"""
+        ...
+
+    def submit_python_code(self, cmd_line: str) -> None:
+        """Execute Python code in the shell"""
+        ...
+
+
+class SimpleDialog(tkinter.simpledialog.SimpleDialog):
+    """Type stub extending tkinter.simpledialog.SimpleDialog with attribute types"""
+    root: tk.Toplevel
+    parent: tk.Widget
+    default: Optional[str]
+    cancel: Optional[str]
+
 
 #
 # inject the CodeGrinder menu items into Thonny
@@ -186,7 +297,7 @@ def _codegrinder_login_handler() -> None:
 
         tkinter.messagebox.showinfo('Login successful',
             f'Login successful; welcome {user.name}',
-            master=thonny.get_workbench())
+            parent=thonny.get_workbench())
 
     except SilentException:
         pass
@@ -203,7 +314,7 @@ def _codegrinder_logout_handler() -> None:
             'or are logged into your own account, '+
             'you can normally leave yourself logged in '+
             'for the entire semester',
-            master=thonny.get_workbench())
+            parent=thonny.get_workbench())
     except SilentException:
         pass
     except DialogException as dialog:
@@ -222,7 +333,7 @@ def show_instructions(problemDir: str) -> None:
     with open(os.path.join(problemDir, 'doc', 'index.html'), 'rb') as fp:
         doc = fp.read().decode('utf-8')
 
-    iv = thonny.get_workbench().get_view('HtmlFrame')
+    iv: "HtmlFrame" = cast("HtmlFrame", thonny.get_workbench().get_view('HtmlFrame'))
     if '<body>' in doc and '</body>' in doc:
         parts = doc.split('<body>')
         if len(parts) == 2:
@@ -268,8 +379,9 @@ def _codegrinder_run_tests_handler() -> None:
             raise DialogException('Unknown problem type',
                 'I do not know how to run the tests for this problem.',
                 True)
-        thonny.get_workbench().get_view('ShellView').clear_shell()
-        thonny.get_workbench().get_view('ShellView').submit_magic_command(cmd_line)
+        shell: ShellView = cast(ShellView, thonny.get_workbench().get_view('ShellView'))
+        shell.clear_shell()
+        shell.submit_magic_command(cmd_line)
 
     except SilentException:
         pass
@@ -286,8 +398,20 @@ def _codegrinder_download_handler() -> None:
             tkinter.messagebox.showinfo('No assignments found',
                 'Remember that you must click on each assignment in Canvas once ' +
                 'before you can access it here.',
-                master=thonny.get_workbench())
+                parent=thonny.get_workbench())
             return
+
+        # build a mapping of problem set unique names to all their assignment IDs,
+        # and cache the problem set objects to avoid duplicate network requests
+        problem_set_cache: Dict[int, ProblemSet] = {}
+        problem_set_assignment_ids: Dict[str, List[int]] = {}
+        for assignment in assignments:
+            if assignment.problemSetID not in problem_set_cache:
+                problem_set_cache[assignment.problemSetID] = must_get_object(f'/problem_sets/{assignment.problemSetID}', None, ProblemSet)
+            problem_set = problem_set_cache[assignment.problemSetID]
+            if problem_set.unique not in problem_set_assignment_ids:
+                problem_set_assignment_ids[problem_set.unique] = []
+            problem_set_assignment_ids[problem_set.unique].append(assignment.id)
 
         # cache the course downloads
         courses: Dict[int, Course] = {}
@@ -300,7 +424,7 @@ def _codegrinder_download_handler() -> None:
             course = courses[assignment.courseID]
 
             # download the assignment
-            problemDir = get_assignment(assignment, course, home)
+            problemDir = get_assignment(assignment, course, home, problem_set_assignment_ids, problem_set_cache)
             if problemDir is not None:
                 downloads.append(problemDir)
 
@@ -310,13 +434,13 @@ def _codegrinder_download_handler() -> None:
                 'before you can access it here.\n\nIf you have clicked on it in Canvas and ' +
                 'are seeing this message, then you have probably already downloaded it ' +
                 'and are ready to start working on it.',
-                master=thonny.get_workbench())
+                parent=thonny.get_workbench())
         else:
             msg = f'Downloaded {len(downloads)} new assignment{"" if len(downloads) == 1 else "s"}'
             if len(downloads) > 0:
                 msg += ':\n\n' + '\n'.join(downloads)
             tkinter.messagebox.showinfo('Assignments downloaded', msg,
-                master=thonny.get_workbench())
+                parent=thonny.get_workbench())
 
     except SilentException:
         pass
@@ -329,7 +453,7 @@ def _codegrinder_save_and_sync_handler() -> None:
         (filename, dotfile, problemSetDir, problemDir) = get_codegrinder_project_info()
 
         must_load_config()
-        now = datetime.datetime.utcnow()
+        now = datetime.datetime.now(datetime.timezone.utc)
 
         user: User = must_get_object('/users/me', None, User)
 
@@ -348,7 +472,7 @@ def _codegrinder_save_and_sync_handler() -> None:
         msg += 'You should always select this option '
         msg += 'before contacting your instructor for help.'
         tkinter.messagebox.showinfo('Saved successfully', msg,
-            master=thonny.get_workbench())
+            parent=thonny.get_workbench())
 
     except SilentException:
         pass
@@ -361,7 +485,7 @@ def _codegrinder_reset_handler() -> None:
         (filename, dotfile, problemSetDir, problemDir) = get_codegrinder_project_info()
 
         must_load_config()
-        now = datetime.datetime.utcnow()
+        now = datetime.datetime.now(datetime.timezone.utc)
 
         user: User = must_get_object('/users/me', None, User)
 
@@ -408,14 +532,14 @@ def _codegrinder_reset_handler() -> None:
         if len(changed) == 0:
             tkinter.messagebox.showinfo('No files have been changed',
                 'No files have been changed since the beginning of the current step.',
-                master=thonny.get_workbench())
+                parent=thonny.get_workbench())
             return
 
         file_list = '\n'.join(changed)
         answer: bool = tkinter.messagebox.askokcancel('Are you sure?',
             f'Any changes you have made in the following files will be overwritten:\n\n{file_list}\n\n'+
             f'Do you wish to continue?',
-            master=thonny.get_workbench())
+            parent=thonny.get_workbench())
 
         if answer:
             update_files(problemDir, files, {})
@@ -430,7 +554,7 @@ def _codegrinder_progress_handler() -> None:
         (filename, dotfile, problemSetDir, problemDir) = get_codegrinder_project_info()
 
         must_load_config()
-        now = datetime.datetime.utcnow()
+        now = datetime.datetime.now(datetime.timezone.utc)
 
         # get the assignment
         assignment: Assignment = must_get_object(f'/assignments/{dotfile.assignmentID}', None, Assignment)
@@ -488,7 +612,7 @@ def _codegrinder_progress_handler() -> None:
             msg += f'Overall score: {assignment.score * 100.0:.0f}%'
 
         tkinter.messagebox.showinfo('Assignment progress report', msg,
-            master=thonny.get_workbench())
+            parent=thonny.get_workbench())
 
     except SilentException:
         pass
@@ -502,7 +626,7 @@ def _codegrinder_grade_handler() -> None:
         (filename, dotfile, problemSetDir, problemDir) = get_codegrinder_project_info()
 
         must_load_config()
-        now = datetime.datetime.utcnow()
+        now = datetime.datetime.now(datetime.timezone.utc)
 
         # get the user ID
         user: User = must_get_object('/users/me', None, User)
@@ -524,7 +648,7 @@ def _codegrinder_grade_handler() -> None:
 
         # send it to the daycare for grading
         # with a progress spinner popup
-        bar = Progress(thonny.get_workbench().winfo_toplevel())
+        bar = Progress(cast(tk.Tk, thonny.get_workbench().winfo_toplevel()))
         graded = must_confirm_commit_bundle(signed, None, bar)
         bar.stop()
 
@@ -538,7 +662,7 @@ def _codegrinder_grade_handler() -> None:
         saved = must_post_commit_bundle('/commit_bundles/signed', None, toSave)
         commit = saved.commit
 
-        shell = thonny.get_workbench().get_view('ShellView')
+        shell: ShellView = cast(ShellView, thonny.get_workbench().get_view('ShellView'))
         shell.clear_shell()
         if commit.reportCard and commit.reportCard.passed is True and commit.score == 1.0:
 
@@ -553,7 +677,7 @@ def _codegrinder_grade_handler() -> None:
                     'Thonny may notice that files are changing and prompt you to see ' +
                     'if you want to update to the "External Modification".\n\n' +
                     'You should select "Yes" if you see that prompt.',
-                    master=thonny.get_workbench())
+                    parent=thonny.get_workbench())
 
                 if next_step(problemDir, dotfile.problems[problem.unique], problem, commit, {problemType.name: problemType}, newStep):
                     # save the updated dotfile with the new step number
@@ -805,11 +929,15 @@ class DialogException(Exception):
 
     def show_dialog(self) -> None:
         if self.warning:
-            tkinter.messagebox.showwarning(self.title, self.message, master=thonny.get_workbench())
+            tkinter.messagebox.showwarning(self.title, self.message, parent=thonny.get_workbench())
         else:
-            tkinter.messagebox.showerror(self.title, self.message, master=thonny.get_workbench())
+            tkinter.messagebox.showerror(self.title, self.message, parent=thonny.get_workbench())
 
 class Progress(tkinter.simpledialog.SimpleDialog):
+    root: tk.Widget
+    bar: tkinter.ttk.Progressbar
+    active: bool
+
     def __init__(self, parent: tkinter.Tk):
         super().__init__(
                 parent,
@@ -821,7 +949,7 @@ class Progress(tkinter.simpledialog.SimpleDialog):
         self.bar = tkinter.ttk.Progressbar(
                 self.root, orient='horizontal', length=200, mode='indeterminate')
         self.bar.pack(expand=True, fill=tkinter.X, side=tkinter.BOTTOM)
-        self.root.attributes('-topmost', True)
+        cast(tk.Toplevel, self.root).attributes('-topmost', True)
         self.parent.update_idletasks()
         self.active = True
 
@@ -850,7 +978,7 @@ def get_home() -> str:
         CSIDL_PERSONAL= 5 # find "My Documents" folder
         SHGFP_TYPE_CURRENT = 0 # get the current value, not the default value
         buf = ctypes.create_unicode_buffer(ctypes.wintypes.MAX_PATH)
-        ctypes.windll.shell32.SHGetFolderPathW(0, CSIDL_PERSONAL, 0, SHGFP_TYPE_CURRENT, buf)
+        ctypes.windll.shell32.SHGetFolderPathW(0, CSIDL_PERSONAL, 0, SHGFP_TYPE_CURRENT, buf)  # type: ignore[attr-defined]
         home = buf.value
     if home == '':
         raise DialogException('Fatal error', 'Unable to locate home directory, giving up')
@@ -980,7 +1108,7 @@ def course_directory(label: str) -> str:
     else:
         return label
 
-def resolve_assignment_conflict(rootDir: str, server_assignment_id: int) -> str:
+def resolve_assignment_conflict(rootDir: str, server_assignment_id: int, problem_set_assignment_ids: Dict[str, List[int]], problem_set_unique: str) -> str:
     grind_path = os.path.join(rootDir, perProblemSetDotFile)
     if os.path.exists(grind_path):
         try:
@@ -989,14 +1117,19 @@ def resolve_assignment_conflict(rootDir: str, server_assignment_id: int) -> str:
                 dotfile = DotFile.from_dict(as_dict)
             if dotfile.assignmentID == server_assignment_id:
                 return 'skip'
+            # check if the existing ID matches any valid assignment ID for this problem set
+            # this handles instructors enrolled in multiple sections
+            if problem_set_unique in problem_set_assignment_ids and dotfile.assignmentID in problem_set_assignment_ids[problem_set_unique]:
+                return 'skip'
         except:
             pass  # treat as mismatch
-    # If no .grind or mismatch
+
+    # .grind missing or IDs don't match (or error reading)
     answer = tkinter.messagebox.askyesno(
         'Assignment Directory Conflict',
         'An existing assignment directory was found that may be from a previous semester or course instance. ' +
         'To download the new assignment, the old directory must be deleted. Do you want to delete it and download fresh?',
-        master=thonny.get_workbench()
+        parent=thonny.get_workbench()
     )
     if answer:
         shutil.rmtree(rootDir)
@@ -1004,14 +1137,14 @@ def resolve_assignment_conflict(rootDir: str, server_assignment_id: int) -> str:
     else:
         return 'skip'
 
-def get_assignment(assignment: Assignment, course: Course, rootDir: str) -> Optional[str]:
-    # get the problem set
-    problemSet: ProblemSet = must_get_object(f'/problem_sets/{assignment.problemSetID}', None, ProblemSet)
+def get_assignment(assignment: Assignment, course: Course, rootDir: str, problem_set_assignment_ids: Dict[str, List[int]], problem_set_cache: Dict[int, ProblemSet]) -> Optional[str]:
+    # get the problem set from cache
+    problemSet: ProblemSet = problem_set_cache[assignment.problemSetID]
 
     # if the target directory exists, check for conflicts
     rootDir = os.path.join(rootDir, course_directory(course.label), problemSet.unique)
     if os.path.exists(rootDir):
-        action = resolve_assignment_conflict(rootDir, assignment.id)
+        action = resolve_assignment_conflict(rootDir, assignment.id, problem_set_assignment_ids, problemSet.unique)
         if action == 'skip':
             return None
         # If 'download', continue (directory was deleted)
