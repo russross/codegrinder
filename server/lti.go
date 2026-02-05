@@ -392,6 +392,19 @@ func LtiProblemSet(w http.ResponseWriter, r *http.Request, tx *sql.Tx, form LTIR
 	asst := new(Assignment)
 
 	restricted := ui == "exam"
+	if restricted && !IPFilterAllowed(r.Context()) {
+		isInstructor := false
+		for _, role := range strings.Split(form.Roles, ",") {
+			if role == "Instructor" || role == "urn:lti:role:ims/lis/TeachingAssistant" {
+				isInstructor = true
+				break
+			}
+		}
+		if !isInstructor {
+			loggedHTTPErrorf(w, http.StatusForbidden, "exam access is restricted to approved IP ranges")
+			return
+		}
+	}
 
 	if unique != bootstrapAssignmentName {
 		if asst, err = getUpdateAssignment(tx, &form, now, course, problemSet, user, restricted); err != nil {

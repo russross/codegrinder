@@ -34,6 +34,7 @@
     "@protobuf-ts/plugin": "^2.9.4",
     "@types/node": "^24.7.2",
     "@types/webpack": "^5.28.5",
+    "baseline-browser-mapping": "^2.9.19",
     "ts-loader": "^9.5.1",
     "ts-node": "^10.9.2",
     "typescript": "^5.5.3"
