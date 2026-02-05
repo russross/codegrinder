@@ -28,9 +28,9 @@ import { GrpcWebFetchTransport } from '@protobuf-ts/grpcweb-transport';
 import Split from 'split.js';
 
 import {EditorView, keymap, ViewUpdate} from "@codemirror/view";
-import {defaultKeymap, indentWithTab} from "@codemirror/commands";
+import {defaultKeymap} from "@codemirror/commands";
 import {basicSetup} from "codemirror";
-import {EditorState, Compartment, StateEffect, Extension} from "@codemirror/state";
+import {EditorSelection, EditorState, Compartment, StateEffect, Extension} from "@codemirror/state";
 import {javascript} from "@codemirror/lang-javascript";
 import {cpp} from "@codemirror/lang-cpp";
 import {markdown} from "@codemirror/lang-markdown";
@@ -81,6 +81,29 @@ let currentlyOpenFilePath: string | null = null;
 let hasUserMadeChanges: boolean = false;
 let isProgrammaticEditorUpdate: boolean = false;
 
+function softTab(view: EditorView): boolean {
+    const tabSize = 4;
+    const {state} = view;
+    const transaction = state.changeByRange(range => {
+        const from = range.from;
+        const to = range.to;
+        const line = state.doc.lineAt(from);
+        const column = from - line.from;
+        let spacesToInsert = tabSize - (column % tabSize);
+        if (spacesToInsert === 0) {
+            spacesToInsert = tabSize;
+        }
+        const insert = " ".repeat(spacesToInsert);
+        return {
+            changes: {from, to, insert},
+            range: EditorSelection.cursor(from + insert.length)
+        };
+    });
+
+    view.dispatch(transaction);
+    return true;
+}
+
 function getLanguageExtension(filename: string): LanguageSupport | null {
     const ext = filename.split('.').pop();
     switch (ext) {
@@ -121,7 +144,7 @@ document.addEventListener('DOMContentLoaded', (): void => {
     const state = EditorState.create({
         extensions: [
             basicSetup,
-            keymap.of([indentWithTab, ...defaultKeymap]),
+            keymap.of([{key: "Tab", run: softTab}, ...defaultKeymap]),
             language.of([]),
             editableCompartment.of(EditorView.editable.of(true)),
             EditorView.updateListener.of((update: ViewUpdate): void => {
