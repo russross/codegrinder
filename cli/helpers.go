@@ -375,7 +375,7 @@ func handleDaycareStream(client CodeGrinderServiceClient, conn *grpc.ClientConn,
 			log.Print("session closed by server")
 			return nil, nil
 		} else if err != nil {
-			return nil, fmt.Errorf("socket error reading event: %v", err)
+			return nil, fmt.Errorf("socket error reading event: %w", err)
 		}
 
 		switch {
@@ -406,7 +406,7 @@ func handleDaycareStream(client CodeGrinderServiceClient, conn *grpc.ClientConn,
 					for name, contents := range replyEvent.Files {
 						log.Printf("downloading file %s\r", name)
 						if err := ioutil.WriteFile(filepath.Join(directory, filepath.FromSlash(name)), contents, 0644); err != nil {
-							return nil, fmt.Errorf("error saving file: %v", err)
+							return nil, fmt.Errorf("error saving file: %w", err)
 						}
 					}
 				}

@@ -80,7 +80,7 @@ func (session *CookieSession) Encode() (string, error) {
 	secure.MaxAge(0)
 	encoded, err := secure.Encode(CookieName, session)
 	if err != nil {
-		return "", fmt.Errorf("creating session: %v", err)
+		return "", fmt.Errorf("creating session: %w", err)
 	}
 	return encoded, nil
 }

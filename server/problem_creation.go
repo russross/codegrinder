@@ -52,7 +52,7 @@ func signProblemBundleUnconfirmed(tx *sql.Tx, currentUser *User, bundle *Problem
 		if _, exists := typeSet[name]; !exists {
 			problemType, err := getProblemType(tx, name)
 			if err != nil {
-				return nil, fmt.Errorf("error loading problem type %q: %v", name, err)
+				return nil, fmt.Errorf("error loading problem type %q: %w", name, err)
 			}
 			typeSet[name] = true
 			bundle.ProblemTypes[name] = problemType
@@ -81,7 +81,7 @@ func signProblemBundleUnconfirmed(tx *sql.Tx, currentUser *User, bundle *Problem
 			if err == sql.ErrNoRows {
 				return nil, fmt.Errorf("request to update problem %d, but that problem does not exist", bundle.Problem.ID)
 			} else {
-				return nil, fmt.Errorf("db error: %v", err)
+				return nil, fmt.Errorf("db error: %w", err)
 			}
 		}
 
@@ -99,7 +99,7 @@ func signProblemBundleUnconfirmed(tx *sql.Tx, currentUser *User, bundle *Problem
 		if err == sql.ErrNoRows {
 			conflict.ID = 0
 		} else {
-			return nil, fmt.Errorf("db error: %v", err)
+			return nil, fmt.Errorf("db error: %w", err)
 		}
 	}
 	if conflict.ID != 0 && conflict.ID != bundle.Problem.ID {
@@ -122,7 +122,7 @@ func signProblemBundleUnconfirmed(tx *sql.Tx, currentUser *User, bundle *Problem
 			}
 			names += name
 		}
-		return nil, fmt.Errorf("failed to find daycare for problem type(s) %s: %v", names, err)
+		return nil, fmt.Errorf("failed to find daycare for problem type(s) %s: %w", names, err)
 	}
 	bundle.Hostname = host
 
@@ -144,7 +144,7 @@ func signProblemBundleUnconfirmed(tx *sql.Tx, currentUser *User, bundle *Problem
 		commit.CreatedAt = now
 		commit.UpdatedAt = now
 		if err := commit.Normalize(now, bundle.ProblemSteps[n].Whitelist); err != nil {
-			return nil, fmt.Errorf("commit %d: %v", n, err)
+			return nil, fmt.Errorf("commit %d: %w", n, err)
 		}
 
 		// set timestamps and compute signature
@@ -184,7 +184,7 @@ func saveProblemBundleCommon(tx *sql.Tx, currentUser *User, bundle *ProblemBundl
 		}
 		pt, err := getProblemType(tx, name)
 		if err != nil {
-			return nil, fmt.Errorf("loading problem type %q: %v", name, err)
+			return nil, fmt.Errorf("loading problem type %q: %w", name, err)
 		}
 		bundle.ProblemTypes[name] = pt
 		typeSig := pt.ComputeSignature(Config.DaycareSecret)
@@ -236,11 +236,11 @@ func saveProblemBundleCommon(tx *sql.Tx, currentUser *User, bundle *ProblemBundl
 
 		// how many steps did the old version have?
 		if err := tx.QueryRow(`SELECT COUNT(1) FROM problem_steps WHERE problem_id = ?`, problem.ID).Scan(&oldStepCount); err != nil {
-			return nil, fmt.Errorf("db error: %v", err)
+			return nil, fmt.Errorf("db error: %w", err)
 		}
 	}
 	if err := meddler.Save(tx, "problems", problem); err != nil {
-		return nil, fmt.Errorf("db error: %v", err)
+		return nil, fmt.Errorf("db error: %w", err)
 	}
 
 	// insert/update all the new steps
@@ -250,14 +250,14 @@ func saveProblemBundleCommon(tx *sql.Tx, currentUser *User, bundle *ProblemBundl
 		if step.Step > int64(oldStepCount) {
 			// insert a new record
 			if err := meddler.Insert(tx, "problem_steps", step); err != nil {
-				return nil, fmt.Errorf("db error: %v", err)
+				return nil, fmt.Errorf("db error: %w", err)
 			}
 		} else {
 			// update an existing record
 			// meddler only understands integer primary keys, so we have to do it the long way
 			whitelistJSON, err := json.Marshal(step.Whitelist)
 			if err != nil {
-				return nil, fmt.Errorf("json encoding error for step.Whitelist: %v", err)
+				return nil, fmt.Errorf("json encoding error for step.Whitelist: %w", err)
 			}
 			result, err := tx.Exec(`UPDATE problem_steps SET `+
 				`problem_type=?, `+
@@ -274,11 +274,11 @@ func saveProblemBundleCommon(tx *sql.Tx, currentUser *User, bundle *ProblemBundl
 				step.ProblemID,
 				step.Step)
 			if err != nil {
-				return nil, fmt.Errorf("db error: %v", err)
+				return nil, fmt.Errorf("db error: %w", err)
 			}
 			affected, err := result.RowsAffected()
 			if err != nil {
-				return nil, fmt.Errorf("db error testing rows affected by update: %v", err)
+				return nil, fmt.Errorf("db error testing rows affected by update: %w", err)
 			}
 			if affected != 1 {
 				return nil, fmt.Errorf("expected 1 row up be updated, found %d", affected)
@@ -287,17 +287,17 @@ func saveProblemBundleCommon(tx *sql.Tx, currentUser *User, bundle *ProblemBundl
 
 		// save files and solution files
 		if err := saveProblemStepFiles(tx, step); err != nil {
-			return nil, fmt.Errorf("db error saving files: %v", err)
+			return nil, fmt.Errorf("db error saving files: %w", err)
 		}
 		if err := saveProblemStepSolution(tx, step); err != nil {
-			return nil, fmt.Errorf("db error saving solution files: %v", err)
+			return nil, fmt.Errorf("db error saving solution files: %w", err)
 		}
 	}
 
 	// delete any extra steps from the old version
 	if len(steps) < oldStepCount {
 		if _, err := tx.Exec(`DELETE FROM problem_steps WHERE problem_id = ? AND step > ?`, problem.ID, len(steps)); err != nil {
-			return nil, fmt.Errorf("db error: %v", err)
+			return nil, fmt.Errorf("db error: %w", err)
 		}
 	}
 
@@ -342,14 +342,14 @@ func updateProblemBundle(tx *sql.Tx, currentUser *User, problemID int64, bundle 
 			`INNER JOIN problem_set_problems ON problem_sets.id = problem_set_problems.problem_set_id `+
 			`WHERE problem_set_problems.problem_id = ?`,
 		bundle.Problem.ID).Scan(&assignmentCount); err != nil {
-		return nil, fmt.Errorf("db error: %v", err)
+		return nil, fmt.Errorf("db error: %w", err)
 	}
 	if assignmentCount > 0 {
 		// if this is an active problem, it must have the same number of steps
 		// and steps must be of the same problem types
 		var oldSteps []*ProblemStep
 		if err := meddler.QueryAll(tx, &oldSteps, `SELECT * FROM problem_steps WHERE problem_id = ?`, bundle.Problem.ID); err != nil {
-			return nil, fmt.Errorf("db error: %v", err)
+			return nil, fmt.Errorf("db error: %w", err)
 		}
 		if len(bundle.ProblemSteps) != len(oldSteps) {
 			return nil, fmt.Errorf("cannot change the number of steps in a problem that is already in use")
@@ -389,7 +389,7 @@ func createProblemSetBundle(tx *sql.Tx, bundle *ProblemSetBundle) (*ProblemSetBu
 
 	// save the problem set object
 	if err := meddler.Insert(tx, "problem_sets", set); err != nil {
-		return nil, fmt.Errorf("db error: %v", err)
+		return nil, fmt.Errorf("db error: %w", err)
 	}
 
 	// save the problem set problem list
@@ -399,7 +399,7 @@ func createProblemSetBundle(tx *sql.Tx, bundle *ProblemSetBundle) (*ProblemSetBu
 			psp.Weight = 1.0
 		}
 		if err := meddler.Insert(tx, "problem_set_problems", psp); err != nil {
-			return nil, fmt.Errorf("db error: %v", err)
+			return nil, fmt.Errorf("db error: %w", err)
 		}
 	}
 
@@ -445,7 +445,7 @@ func updateProblemSetBundle(tx *sql.Tx, bundle *ProblemSetBundle) (*ProblemSetBu
 	// get the list of problems
 	var oldPSPs []*ProblemSetProblem
 	if err := meddler.QueryAll(tx, &oldPSPs, `SELECT * FROM problem_set_problems WHERE problem_set_id = ? ORDER BY problem_id`, set.ID); err != nil {
-		return nil, fmt.Errorf("db error: %v", err)
+		return nil, fmt.Errorf("db error: %w", err)
 	}
 
 	sort.Slice(bundle.ProblemSetProblems, func(i, j int) bool {
@@ -462,7 +462,7 @@ func updateProblemSetBundle(tx *sql.Tx, bundle *ProblemSetBundle) (*ProblemSetBu
 	// cannot change the set of problems for a set that is already assigned
 	var assignmentCount int
 	if err := tx.QueryRow(`SELECT COUNT(1) FROM assignments WHERE problem_set_id = ?`, set.ID).Scan(&assignmentCount); err != nil {
-		return nil, fmt.Errorf("db error: %v", err)
+		return nil, fmt.Errorf("db error: %w", err)
 	}
 	if assignmentCount > 0 && changes {
 		return nil, fmt.Errorf("cannot change the set of problems in a problem set that is already in use")
@@ -470,7 +470,7 @@ func updateProblemSetBundle(tx *sql.Tx, bundle *ProblemSetBundle) (*ProblemSetBu
 
 	// save the updated problem set object
 	if err := meddler.Update(tx, "problem_sets", set); err != nil {
-		return nil, fmt.Errorf("db error: %v", err)
+		return nil, fmt.Errorf("db error: %w", err)
 	}
 
 	// walk through the two lists of problems in step, updating the database as needed
@@ -492,21 +492,21 @@ func updateProblemSetBundle(tx *sql.Tx, bundle *ProblemSetBundle) (*ProblemSetBu
 		case oldPSP != nil && (newPSP == nil || newPSP.ProblemID > oldPSP.ProblemID):
 			// delete the old entry
 			if _, err := tx.Exec(`DELETE FROM problem_set_problems WHERE problem_set_id = ? AND problem_id = ?`, oldPSP.ProblemSetID, oldPSP.ProblemID); err != nil {
-				return nil, fmt.Errorf("db error: %v", err)
+				return nil, fmt.Errorf("db error: %w", err)
 			}
 			i++
 		case newPSP != nil && (oldPSP == nil || oldPSP.ProblemID > newPSP.ProblemID):
 			// insert the new entry
 			newPSP.ProblemSetID = set.ID
 			if err := meddler.Insert(tx, "problem_set_problems", newPSP); err != nil {
-				return nil, fmt.Errorf("db error: %v", err)
+				return nil, fmt.Errorf("db error: %w", err)
 			}
 			j++
 		default:
 			// update the entry in place (if it has changed)
 			if oldPSP.Weight != newPSP.Weight {
 				if _, err := tx.Exec(`UPDATE problem_set_problems SET weight = ? WHERE problem_set_id = ? AND problem_id = ?`, newPSP.Weight, set.ID, oldPSP.ProblemID); err != nil {
-					return nil, fmt.Errorf("db error: %v", err)
+					return nil, fmt.Errorf("db error: %w", err)
 				}
 			}
 			i++

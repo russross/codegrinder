@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -165,7 +166,7 @@ func HandleProblemAction(bundle *CommitBundle, problemTypeParam, actionParam str
 
 	action, err := validateAndExtractAction(bundle, problemTypeParam, actionParam)
 	if err != nil {
-		sendError(fmt.Errorf("validation error: %v", err))
+		sendError(fmt.Errorf("validation error: %w", err))
 		return
 	}
 
@@ -174,7 +175,7 @@ func HandleProblemAction(bundle *CommitBundle, problemTypeParam, actionParam str
 
 	_, files, err := gatherFilesAndStep(bundle)
 	if err != nil {
-		sendError(fmt.Errorf("error gathering files: %v", err))
+		sendError(fmt.Errorf("error gathering files: %w", err))
 		return
 	}
 
@@ -195,7 +196,7 @@ func HandleProblemAction(bundle *CommitBundle, problemTypeParam, actionParam str
 
 	n, err := NewNanny(ctx, bundle.ProblemType, bundle.Problem, action.Action, args, limits, nannyName)
 	if err != nil {
-		sendError(fmt.Errorf("error creating container: %v", err))
+		sendError(fmt.Errorf("error creating container: %w", err))
 		return
 	}
 	defer func() {
@@ -496,7 +497,7 @@ func NewNanny(ctx context.Context, problemType *ProblemType, problem *Problem, a
 			output, err = exec.CommandContext(ctx, containerEngine, cmdArgs...).CombinedOutput()
 		}
 		if err != nil {
-			return nil, fmt.Errorf("container run failed: %v\nOutput: %s", err, string(output))
+			return nil, fmt.Errorf("container run failed: %w\nOutput: %s", err, string(output))
 		}
 	}
 
@@ -520,8 +521,15 @@ func (n *Nanny) Shutdown(msg string) error {
 	n.Closed = true
 
 	// shut down the container
-	if err := removeContainer(n.ctx, n.ID); err != nil {
-		return fmt.Errorf("Nanny.Shutdown: %v", err)
+	// Use a fresh, short-lived context so cleanup still happens if the
+	// request context has already expired.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := removeContainer(ctx, n.ID); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			log.Printf("nanny shutdown timed out for container %s: %v", n.ID, err)
+		}
+		return fmt.Errorf("Nanny.Shutdown: %w", err)
 	}
 	return nil
 }
@@ -530,7 +538,7 @@ func (n *Nanny) Shutdown(msg string) error {
 func removeContainer(ctx context.Context, id string) error {
 	cmd := exec.CommandContext(ctx, containerEngine, "rm", "-f", id)
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("error killing container %s: %v", id, err)
+		return fmt.Errorf("error killing container %s: %w", id, err)
 	}
 	return nil
 }
@@ -565,7 +573,7 @@ func (n *Nanny) PutFiles(files map[string][]byte, mode int64) error {
 				ChangeTime: nowish,
 			}
 			if err := writer.WriteHeader(header); err != nil {
-				return fmt.Errorf("writing tar header for directory: %v", err)
+				return fmt.Errorf("writing tar header for directory: %w", err)
 			}
 		}
 		header := &tar.Header{
@@ -582,14 +590,14 @@ func (n *Nanny) PutFiles(files map[string][]byte, mode int64) error {
 			ChangeTime: nowish,
 		}
 		if err := writer.WriteHeader(header); err != nil {
-			return fmt.Errorf("writing tar header: %v", err)
+			return fmt.Errorf("writing tar header: %w", err)
 		}
 		if _, err := writer.Write(contents); err != nil {
-			return fmt.Errorf("writing to tar file: %v", err)
+			return fmt.Errorf("writing to tar file: %w", err)
 		}
 	}
 	if err := writer.Close(); err != nil {
-		return fmt.Errorf("closing tar file: %v", err)
+		return fmt.Errorf("closing tar file: %w", err)
 	}
 
 	// use 'docker cp' to copy the tarball into the /home/student directory.
@@ -598,7 +606,7 @@ func (n *Nanny) PutFiles(files map[string][]byte, mode int64) error {
 	cmd.Stdin = buf
 
 	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("container cp failed: %v\nOutput: %s", err, string(output))
+		return fmt.Errorf("container cp failed: %w\nOutput: %s", err, string(output))
 	}
 	return nil
 }
@@ -628,7 +636,7 @@ func (n *Nanny) GetFiles(filenames []string) (map[string][]byte, error) {
 		cmd.Stderr = &stderr
 
 		if err := cmd.Run(); err != nil {
-			return nil, fmt.Errorf("container cp from container failed: %v\nOutput: %s", err, tarFile.String())
+			return nil, fmt.Errorf("container cp from container failed: %w\nOutput: %s", err, tarFile.String())
 		}
 
 		// extract the files
@@ -640,14 +648,14 @@ func (n *Nanny) GetFiles(filenames []string) (map[string][]byte, error) {
 				break
 			}
 			if err != nil {
-				return nil, fmt.Errorf("error decoding tar file: %v", err)
+				return nil, fmt.Errorf("error decoding tar file: %w", err)
 			}
 			if header.Typeflag != tar.TypeReg {
 				continue
 			}
 			contents, err := io.ReadAll(reader)
 			if err != nil {
-				return nil, fmt.Errorf("error reading %q from tar file: %v", header.Name, err)
+				return nil, fmt.Errorf("error reading %q from tar file: %w", header.Name, err)
 			}
 			name := filepath.Clean(header.Name)
 			n.Files[name] = contents
@@ -726,7 +734,7 @@ func (n *Nanny) Exec(cmd []string) (stdout, stderr, script *bytes.Buffer, status
 			exitCode = exitError.ExitCode()
 		} else {
 			// a different error occurred (e.g., command not found).
-			return &stdoutBuf, &stderrBuf, &scriptBuf, -1, fmt.Errorf("exec command failed: %v", err)
+			return &stdoutBuf, &stderrBuf, &scriptBuf, -1, fmt.Errorf("exec command failed: %w", err)
 		}
 	}
 

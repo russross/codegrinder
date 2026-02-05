@@ -25,7 +25,7 @@ func getProblemTypes(tx *sql.Tx) ([]*ProblemType, error) {
 	for i, elt := range problemTypes {
 		pt, err := getProblemType(tx, elt.Name)
 		if err != nil {
-			return nil, fmt.Errorf("error loading problem type %s: %v", elt.Name, err)
+			return nil, fmt.Errorf("error loading problem type %s: %w", elt.Name, err)
 		}
 		problemTypes[i] = pt
 	}
@@ -308,13 +308,13 @@ func getProblemStep(tx *sql.Tx, problemID int64, step int64, currentUser *User) 
 
 	// load files
 	if err := loadProblemStepFiles(tx, problemStep); err != nil {
-		return nil, fmt.Errorf("db error loading files: %v", err)
+		return nil, fmt.Errorf("db error loading files: %w", err)
 	}
 
 	// load solutions only for admin/author users
 	if currentUser.Admin || currentUser.Author {
 		if err := loadProblemStepSolution(tx, problemStep); err != nil {
-			return nil, fmt.Errorf("db error loading solutions: %v", err)
+			return nil, fmt.Errorf("db error loading solutions: %w", err)
 		}
 	} else {
 		problemStep.Solution = nil

@@ -79,7 +79,7 @@ func getUsers(tx *sql.Tx, currentUser *User, name, email, instructor, admin stri
 	if instructor != "" {
 		val, err := strconv.ParseBool(instructor)
 		if err != nil {
-			return nil, fmt.Errorf("error parsing instructor value as boolean: %v", err)
+			return nil, fmt.Errorf("error parsing instructor value as boolean: %w", err)
 		}
 		where, args = addWhereEq(where, args, "instructor", val)
 	}
@@ -87,7 +87,7 @@ func getUsers(tx *sql.Tx, currentUser *User, name, email, instructor, admin stri
 	if admin != "" {
 		val, err := strconv.ParseBool(admin)
 		if err != nil {
-			return nil, fmt.Errorf("error parsing admin value as boolean: %v", err)
+			return nil, fmt.Errorf("error parsing admin value as boolean: %w", err)
 		}
 		where, args = addWhereEq(where, args, "admin", val)
 	}
@@ -265,7 +265,7 @@ func getAssignmentProblemCommitLast(tx *sql.Tx, assignmentID int64, problemID in
 
 	// Load files for commit
 	if err := loadCommitFiles(tx, commit); err != nil {
-		return nil, fmt.Errorf("db error loading files: %v", err)
+		return nil, fmt.Errorf("db error loading files: %w", err)
 	}
 
 	return commit, nil
@@ -287,7 +287,7 @@ func getAssignmentProblemStepCommitLast(tx *sql.Tx, assignmentID int64, problemI
 
 	// Load files for commit
 	if err := loadCommitFiles(tx, commit); err != nil {
-		return nil, fmt.Errorf("db error loading files: %v", err)
+		return nil, fmt.Errorf("db error loading files: %w", err)
 	}
 
 	return commit, nil
@@ -350,7 +350,7 @@ func saveCommitBundleCommon(now time.Time, tx *sql.Tx, currentUser *User, bundle
 	err = tx.QueryRow(`SELECT lock_at FROM assignments WHERE instructor AND lti_id = ? AND lock_at IS NOT NULL ORDER BY lock_at DESC LIMIT 1`,
 		assignment.LtiID).Scan(&courseWideLockAt)
 	if err != nil && err != sql.ErrNoRows {
-		return nil, fmt.Errorf("db error: %v", err)
+		return nil, fmt.Errorf("db error: %w", err)
 	} else if err == nil {
 		// there is a course-wide deadline, should we reject?
 		if (assignment.LockAt != nil && now.After(*assignment.LockAt)) ||
@@ -358,7 +358,7 @@ func saveCommitBundleCommon(now time.Time, tx *sql.Tx, currentUser *User, bundle
 			course := new(Course)
 			err = meddler.Load(tx, "courses", course, assignment.CourseID)
 			if err != nil {
-				return nil, fmt.Errorf("db error: %v", err)
+				return nil, fmt.Errorf("db error: %w", err)
 			}
 			return nil, fmt.Errorf("A commit cannot be submitted after the assignment is locked.\n\n"+
 				"If the assignment has been extended then you must click on the assignment\n"+
@@ -370,14 +370,14 @@ func saveCommitBundleCommon(now time.Time, tx *sql.Tx, currentUser *User, bundle
 	// get the problem
 	problem := new(Problem)
 	if err = meddler.QueryRow(tx, problem, `SELECT * FROM problems WHERE id = ?`, commit.ProblemID); err != nil {
-		return nil, fmt.Errorf("db error: %v", err)
+		return nil, fmt.Errorf("db error: %w", err)
 	}
 
 	// get the required step, but keep a slice with empty entries for the other steps
 	// this is for backward compatibility: we used to pass around the full list of steps
 	var stepCount int64
 	if err = tx.QueryRow(`SELECT COUNT(1) FROM problem_steps WHERE problem_id = ?`, commit.ProblemID).Scan(&stepCount); err != nil {
-		return nil, fmt.Errorf("db error: %v", err)
+		return nil, fmt.Errorf("db error: %w", err)
 	}
 	if stepCount < 1 {
 		return nil, fmt.Errorf("no steps found for problem %d", commit.ProblemID)
@@ -392,19 +392,19 @@ func saveCommitBundleCommon(now time.Time, tx *sql.Tx, currentUser *User, bundle
 	var step ProblemStep
 	steps[commit.Step-1] = &step
 	if err = meddler.QueryRow(tx, &step, `SELECT * FROM problem_steps WHERE problem_id = ? AND step = ?`, commit.ProblemID, commit.Step); err != nil {
-		return nil, fmt.Errorf("db error: %v", err)
+		return nil, fmt.Errorf("db error: %w", err)
 	}
 
 	// get step files, but not solution files
 	if err = loadProblemStepFiles(tx, &step); err != nil {
-		return nil, fmt.Errorf("db error: %v", err)
+		return nil, fmt.Errorf("db error: %w", err)
 	}
 	step.Solution = nil
 
 	// get the problem type for this step
 	problemType, err := getProblemType(tx, step.ProblemType)
 	if err != nil {
-		return nil, fmt.Errorf("error loading problem type: %v", err)
+		return nil, fmt.Errorf("error loading problem type: %w", err)
 	}
 
 	if assignment.RawScores == nil {
@@ -423,7 +423,7 @@ func saveCommitBundleCommon(now time.Time, tx *sql.Tx, currentUser *User, bundle
 	var latestStep int64
 	if err = tx.QueryRow(`SELECT step FROM commits WHERE assignment_id = ? AND problem_id = ? ORDER BY step DESC LIMIT 1`, commit.AssignmentID, commit.ProblemID).Scan(&latestStep); err != nil {
 		if err != sql.ErrNoRows {
-			return nil, fmt.Errorf("db error: %v", err)
+			return nil, fmt.Errorf("db error: %w", err)
 		}
 	} else if latestStep > commit.Step {
 		return nil, fmt.Errorf("commit is for step %d, but user has already started work on step %d", commit.Step, latestStep)
@@ -441,7 +441,7 @@ func saveCommitBundleCommon(now time.Time, tx *sql.Tx, currentUser *User, bundle
 		if err == sql.ErrNoRows {
 			commit.ID = 0
 		} else {
-			return nil, fmt.Errorf("db error: %v", err)
+			return nil, fmt.Errorf("db error: %w", err)
 		}
 	} else {
 		commit.ID = openCommit.ID
@@ -477,19 +477,19 @@ func saveCommitBundleCommon(now time.Time, tx *sql.Tx, currentUser *User, bundle
 		log.Printf("instructor is testing student code, skipping save step")
 	} else {
 		if err := meddler.Save(tx, "commits", commit); err != nil {
-			return nil, fmt.Errorf("db error: %v", err)
+			return nil, fmt.Errorf("db error: %w", err)
 		}
 
 		// save commit files separately
 		if err := saveCommitFiles(tx, commit); err != nil {
-			return nil, fmt.Errorf("db error saving commit files: %v", err)
+			return nil, fmt.Errorf("db error saving commit files: %w", err)
 		}
 
 		// save an updated timestamp on the assignment if it would otherwise not be updated
 		if commit.ReportCard == nil {
 			assignment.UpdatedAt = now
 			if err := meddler.Save(tx, "assignments", assignment); err != nil {
-				return nil, fmt.Errorf("db error: %v", err)
+				return nil, fmt.Errorf("db error: %w", err)
 			}
 		}
 	}
@@ -547,7 +547,7 @@ func saveCommitBundleCommon(now time.Time, tx *sql.Tx, currentUser *User, bundle
 		// post grade to LMS using LTI
 		var transcript bytes.Buffer
 		if err := signed.Commit.DumpTranscript(&transcript); err != nil {
-			return nil, fmt.Errorf("error writing transcript: %v", err)
+			return nil, fmt.Errorf("error writing transcript: %w", err)
 		}
 
 		// record the grading transcript
@@ -639,7 +639,7 @@ func GetProblemWeights(tx *sql.Tx, assignment *Assignment) (majorWeights map[str
 		`JOIN problem_steps ON problem_steps.problem_id = problems.id `+
 		`WHERE problem_set_problems.problem_set_id = ? `+
 		`ORDER BY unique_id, step`, assignment.ProblemSetID); err != nil {
-		return nil, nil, fmt.Errorf("db error: %v", err)
+		return nil, nil, fmt.Errorf("db error: %w", err)
 	}
 	if len(weights) == 0 {
 		return nil, nil, fmt.Errorf("no problem step weights found, unable to compute score")
