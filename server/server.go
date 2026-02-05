@@ -308,8 +308,13 @@ func main() {
 
 			// we do not serve directories
 			if info.IsDir() {
-				c.Next()
-				return
+				indexPath := filepath.Join(path, "index.html")
+				indexInfo, err := os.Stat(indexPath)
+				if err != nil || indexInfo.IsDir() {
+					c.Next()
+					return
+				}
+				path = indexPath
 			}
 
 			// Set proper MIME type
