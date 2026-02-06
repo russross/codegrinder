@@ -4,11 +4,13 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -437,6 +439,7 @@ type Nanny struct {
 	Name       string
 	Start      time.Time
 	ID         string
+	CgroupPath string
 	ReportCard *ReportCard
 	Events     chan *EventMessage
 	Transcript []*EventMessage
@@ -505,12 +508,17 @@ func NewNanny(ctx context.Context, problemType *ProblemType, problem *Problem, a
 	}
 
 	containerID := strings.TrimSpace(string(output))
+	cgroupPath, cgroupErr := resolveContainerCgroupPath(ctx, containerID)
+	if cgroupErr != nil {
+		log.Printf("could not resolve cgroup path for container %s: %v", containerID, cgroupErr)
+	}
 
 	return &Nanny{
 			ctx:        ctx,
 			Name:       name,
 			Start:      time.Now(),
 			ID:         containerID,
+			CgroupPath: cgroupPath,
 			ReportCard: NewReportCard(),
 			Events:     make(chan *EventMessage, 100),
 		},
@@ -523,11 +531,15 @@ func (n *Nanny) Shutdown(msg string) error {
 	}
 	n.Closed = true
 
-	// shut down the container
-	// Use a fresh, short-lived context so cleanup still happens if the
-	// request context has already expired.
+	// Shut down the container. Use a fresh context so cleanup still happens
+	// even if the request context has already expired.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+
+	stopContainer(ctx, n.ID)
+	waitContainer(ctx, n.ID)
+	logContainerUsage(ctx, n.Name, n.ID, n.CgroupPath)
+
 	if err := removeContainer(ctx, n.ID); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			log.Printf("nanny shutdown timed out for container %s: %v", n.ID, err)
@@ -537,6 +549,74 @@ func (n *Nanny) Shutdown(msg string) error {
 	return nil
 }
 
+func stopContainer(ctx context.Context, id string) {
+	// Try graceful stop first; ignore failures because the container may already be stopped.
+	_ = exec.CommandContext(ctx, containerEngine, "stop", "--time", "1", id).Run()
+}
+
+func waitContainer(ctx context.Context, id string) {
+	// Wait for the container to exit so its final state is available for logging.
+	_ = exec.CommandContext(ctx, containerEngine, "wait", id).Run()
+}
+
+func logContainerUsage(ctx context.Context, name, id, cgroupPath string) {
+	type inspectState struct {
+		Status     string `json:"Status"`
+		ExitCode   int    `json:"ExitCode"`
+		OOMKilled  bool   `json:"OOMKilled"`
+		Error      string `json:"Error"`
+		StartedAt  string `json:"StartedAt"`
+		FinishedAt string `json:"FinishedAt"`
+	}
+	type inspectDoc struct {
+		State inspectState `json:"State"`
+	}
+
+	var state inspectState
+	inspectOut, inspectErr := exec.CommandContext(ctx, containerEngine, "inspect", id).Output()
+	if inspectErr == nil {
+		var docs []inspectDoc
+		if err := json.Unmarshal(inspectOut, &docs); err == nil && len(docs) > 0 {
+			state = docs[0].State
+		}
+	}
+
+	cgroupErr := ""
+	memPeak, err := readCgroupInt64(cgroupPath, "memory.peak")
+	if err != nil {
+		cgroupErr = appendErr(cgroupErr, fmt.Sprintf("memory.peak: %v", err))
+	}
+	pidsPeak, err := readCgroupInt64(cgroupPath, "pids.peak")
+	if err != nil {
+		cgroupErr = appendErr(cgroupErr, fmt.Sprintf("pids.peak: %v", err))
+	}
+
+	cpuUsageUsec, cpuUserUsec, cpuSystemUsec := int64(-1), int64(-1), int64(-1)
+	if stats, err := readCgroupKVInt64(cgroupPath, "cpu.stat"); err != nil {
+		cgroupErr = appendErr(cgroupErr, fmt.Sprintf("cpu.stat: %v", err))
+	} else {
+		cpuUsageUsec = stats["usage_usec"]
+		cpuUserUsec = stats["user_usec"]
+		cpuSystemUsec = stats["system_usec"]
+	}
+
+	events := map[string]int64{}
+	if vals, err := readCgroupKVInt64(cgroupPath, "memory.events"); err != nil {
+		cgroupErr = appendErr(cgroupErr, fmt.Sprintf("memory.events: %v", err))
+	} else {
+		events = vals
+	}
+	memOOM := events["oom"]
+	memOOMKill := events["oom_kill"]
+	memMax := events["max"]
+	memHigh := events["high"]
+
+	log.Printf("container usage summary name=%s id=%s cgroup=%s status=%s exit=%d oomkilled=%t started=%s finished=%s mem_peak_bytes=%d cpu_usage_usec=%d cpu_user_usec=%d cpu_system_usec=%d pids_peak=%d mem_events_oom=%d mem_events_oom_kill=%d mem_events_max=%d mem_events_high=%d inspect_err=%v cgroup_err=%s",
+		name, id, cgroupPath, state.Status, state.ExitCode, state.OOMKilled, state.StartedAt, state.FinishedAt,
+		memPeak, cpuUsageUsec, cpuUserUsec, cpuSystemUsec, pidsPeak,
+		memOOM, memOOMKill, memMax, memHigh, inspectErr, cgroupErr)
+}
+
 // removeContainer forcefully stops and removes a container by its ID or name.
 func removeContainer(ctx context.Context, id string) error {
 	cmd := exec.CommandContext(ctx, containerEngine, "rm", "-f", id)
@@ -544,6 +624,85 @@ func removeContainer(ctx context.Context, id string) error {
 		return nil // fmt.Errorf("error killing container %s: %w", id, err)
 	}
 	return nil
+}
+
+func resolveContainerCgroupPath(ctx context.Context, id string) (string, error) {
+	pidOut, err := exec.CommandContext(ctx, containerEngine, "inspect", "--format", "{{.State.Pid}}", id).Output()
+	if err != nil {
+		return "", fmt.Errorf("inspect pid failed: %w", err)
+	}
+	pid := strings.TrimSpace(string(pidOut))
+	if pid == "" || pid == "0" {
+		return "", fmt.Errorf("invalid pid from inspect: %q", pid)
+	}
+
+	data, err := os.ReadFile(filepath.Join("/proc", pid, "cgroup"))
+	if err != nil {
+		return "", fmt.Errorf("read /proc/%s/cgroup failed: %w", pid, err)
+	}
+
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		parts := strings.SplitN(line, ":", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		if parts[0] == "0" && parts[1] == "" {
+			return filepath.Join("/sys/fs/cgroup", strings.TrimPrefix(parts[2], "/")), nil
+		}
+	}
+	return "", fmt.Errorf("cgroup v2 path not found in /proc/%s/cgroup", pid)
+}
+
+func readCgroupInt64(cgroupPath, name string) (int64, error) {
+	if cgroupPath == "" {
+		return -1, fmt.Errorf("empty cgroup path")
+	}
+	data, err := os.ReadFile(filepath.Join(cgroupPath, name))
+	if err != nil {
+		return -1, err
+	}
+	raw := strings.TrimSpace(string(data))
+	if raw == "" || raw == "max" {
+		return -1, nil
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return -1, fmt.Errorf("parse %s=%q: %w", name, raw, err)
+	}
+	return n, nil
+}
+
+func readCgroupKVInt64(cgroupPath, name string) (map[string]int64, error) {
+	if cgroupPath == "" {
+		return nil, fmt.Errorf("empty cgroup path")
+	}
+	data, err := os.ReadFile(filepath.Join(cgroupPath, name))
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]int64)
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		n, err := strconv.ParseInt(fields[1], 10, 64)
+		if err != nil {
+			continue
+		}
+		out[fields[0]] = n
+	}
+	return out, nil
+}
+
+func appendErr(existing, next string) string {
+	if next == "" {
+		return existing
+	}
+	if existing == "" {
+		return next
+	}
+	return existing + "; " + next
 }
 
 // copy a set of files to the given container
