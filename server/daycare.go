@@ -541,7 +541,7 @@ func (n *Nanny) Shutdown(msg string) error {
 func removeContainer(ctx context.Context, id string) error {
 	cmd := exec.CommandContext(ctx, containerEngine, "rm", "-f", id)
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("error killing container %s: %w", id, err)
+		return nil // fmt.Errorf("error killing container %s: %w", id, err)
 	}
 	return nil
 }
