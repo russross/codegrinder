@@ -1252,7 +1252,7 @@ func (s *codeGrinderServiceServer) Daycare(req *pb.DaycareRequest, stream pb.Cod
 	eventChan := make(chan *DaycareResponse, 100)
 
 	// Launch HandleProblemAction in a goroutine (it will close the channel)
-	go HandleProblemAction(commitBundle, problemType, action, args, eventChan)
+	go HandleProblemAction(ctx, commitBundle, problemType, action, args, eventChan)
 
 	// Main loop: read from channel and stream via gRPC
 	// NEVER break early; always drain until channel is closed

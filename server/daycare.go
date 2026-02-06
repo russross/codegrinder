@@ -130,8 +130,12 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 	// Create a channel for HandleProblemAction to send responses.
 	eventChan := make(chan *DaycareResponse, 100)
 
+	// Create a request-scoped context that can be canceled on websocket failure.
+	actionCtx, cancelAction := context.WithCancel(context.Background())
+	defer cancelAction()
+
 	// Launch the core logic in a goroutine.
-	go HandleProblemAction(req.CommitBundle, params["problem_type"], params["action"], args, eventChan)
+	go HandleProblemAction(actionCtx, req.CommitBundle, params["problem_type"], params["action"], args, eventChan)
 
 	// Bridge the event channel to the websocket.
 	broken := false
@@ -142,19 +146,18 @@ func SocketProblemTypeAction(w http.ResponseWriter, r *http.Request, params mart
 		}
 		if err := socket.WriteJSON(res); err != nil {
 			broken = true
-			if strings.Contains(err.Error(), "use of closed network connection") {
-				// Client disconnected, just break and let cleanup happen.
-				break
+			cancelAction()
+			if !strings.Contains(err.Error(), "use of closed network connection") {
+				log.Printf("websocket write error: %v", err)
 			}
-			log.Printf("websocket write error: %v", err)
-			break
+			continue
 		}
 	}
 }
 
 // HandleProblemAction contains the core logic for running a problem action,
 // completely decoupled from the websocket/HTTP transport layer.
-func HandleProblemAction(bundle *CommitBundle, problemTypeParam, actionParam string, args []string, eventChan chan<- *DaycareResponse) {
+func HandleProblemAction(parentCtx context.Context, bundle *CommitBundle, problemTypeParam, actionParam string, args []string, eventChan chan<- *DaycareResponse) {
 	defer close(eventChan)
 	now := time.Now()
 
@@ -191,7 +194,7 @@ func HandleProblemAction(bundle *CommitBundle, problemTypeParam, actionParam str
 	limits := newLimits(action)
 	limits.override(bundle.Problem.Options)
 	timeout := time.Duration(limits.maxCPU*2+5) * time.Second
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(parentCtx, timeout)
 	defer cancel()
 
 	n, err := NewNanny(ctx, bundle.ProblemType, bundle.Problem, action.Action, args, limits, nannyName)
