@@ -597,15 +597,18 @@ func logContainerUsage(ctx context.Context, name, id, cgroupPath string, usage c
 
 	parts := []string{
 		fmt.Sprintf("name=%s", name),
-		fmt.Sprintf("status=%s", state.Status),
 		fmt.Sprintf("exit=%d", state.ExitCode),
-		fmt.Sprintf("started=%s", state.StartedAt),
-		fmt.Sprintf("finished=%s", state.FinishedAt),
-		fmt.Sprintf("mem_peak_bytes=%d", usage.memPeak),
-		fmt.Sprintf("cpu_usage_usec=%d", usage.cpuUsageUsec),
-		fmt.Sprintf("cpu_user_usec=%d", usage.cpuUserUsec),
-		fmt.Sprintf("cpu_system_usec=%d", usage.cpuSystemUsec),
+		fmt.Sprintf("mem_peak=%s", humanBytes(usage.memPeak)),
+		fmt.Sprintf("cpu=%s", humanUsecAsDuration(usage.cpuUsageUsec)),
+		fmt.Sprintf("cpu_user=%s", humanUsecAsDuration(usage.cpuUserUsec)),
+		fmt.Sprintf("cpu_system=%s", humanUsecAsDuration(usage.cpuSystemUsec)),
 		fmt.Sprintf("pids_peak=%d", usage.pidsPeak),
+	}
+	if state.Status != "" && state.Status != "exited" {
+		parts = append(parts, fmt.Sprintf("status=%s", state.Status))
+	}
+	if dur := durationFromStrings(state.StartedAt, state.FinishedAt); dur != "" {
+		parts = append(parts, fmt.Sprintf("duration=%s", dur))
 	}
 	if state.OOMKilled {
 		parts = append(parts, "oomkilled=true")
@@ -760,6 +763,51 @@ func collectCgroupUsage(cgroupPath string) cgroupUsage {
 	}
 
 	return usage
+}
+
+func durationFromStrings(startedAt, finishedAt string) string {
+	if startedAt == "" || finishedAt == "" {
+		return ""
+	}
+	start, err := time.Parse(time.RFC3339Nano, startedAt)
+	if err != nil {
+		return ""
+	}
+	finish, err := time.Parse(time.RFC3339Nano, finishedAt)
+	if err != nil {
+		return ""
+	}
+	if finish.Before(start) {
+		return ""
+	}
+	return finish.Sub(start).Round(time.Millisecond).String()
+}
+
+func humanUsecAsDuration(usec int64) string {
+	if usec < 0 {
+		return "-1"
+	}
+	return (time.Duration(usec) * time.Microsecond).String()
+}
+
+func humanBytes(n int64) string {
+	if n < 0 {
+		return "-1"
+	}
+	if n < 1024 {
+		return fmt.Sprintf("%db", n)
+	}
+	v := float64(n)
+	if n < 1024*1024 {
+		return fmt.Sprintf("%.1fk", v/1024.0)
+	}
+	if n < 1024*1024*1024 {
+		return fmt.Sprintf("%.1fm", v/(1024.0*1024.0))
+	}
+	if n < 1024*1024*1024*1024 {
+		return fmt.Sprintf("%.1fg", v/(1024.0*1024.0*1024.0))
+	}
+	return fmt.Sprintf("%.1ft", v/(1024.0*1024.0*1024.0*1024.0))
 }
 
 // copy a set of files to the given container
