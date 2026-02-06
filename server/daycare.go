@@ -536,9 +536,10 @@ func (n *Nanny) Shutdown(msg string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	usage := collectCgroupUsage(n.CgroupPath)
 	stopContainer(ctx, n.ID)
 	waitContainer(ctx, n.ID)
-	logContainerUsage(ctx, n.Name, n.ID, n.CgroupPath)
+	logContainerUsage(ctx, n.Name, n.ID, n.CgroupPath, usage)
 
 	if err := removeContainer(ctx, n.ID); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
@@ -559,7 +560,20 @@ func waitContainer(ctx context.Context, id string) {
 	_ = exec.CommandContext(ctx, containerEngine, "wait", id).Run()
 }
 
-func logContainerUsage(ctx context.Context, name, id, cgroupPath string) {
+type cgroupUsage struct {
+	memPeak       int64
+	pidsPeak      int64
+	cpuUsageUsec  int64
+	cpuUserUsec   int64
+	cpuSystemUsec int64
+	memOOM        int64
+	memOOMKill    int64
+	memMax        int64
+	memHigh       int64
+	errs          string
+}
+
+func logContainerUsage(ctx context.Context, name, id, cgroupPath string, usage cgroupUsage) {
 	type inspectState struct {
 		Status     string `json:"Status"`
 		ExitCode   int    `json:"ExitCode"`
@@ -581,40 +595,40 @@ func logContainerUsage(ctx context.Context, name, id, cgroupPath string) {
 		}
 	}
 
-	cgroupErr := ""
-	memPeak, err := readCgroupInt64(cgroupPath, "memory.peak")
-	if err != nil {
-		cgroupErr = appendErr(cgroupErr, fmt.Sprintf("memory.peak: %v", err))
+	parts := []string{
+		fmt.Sprintf("name=%s", name),
+		fmt.Sprintf("status=%s", state.Status),
+		fmt.Sprintf("exit=%d", state.ExitCode),
+		fmt.Sprintf("started=%s", state.StartedAt),
+		fmt.Sprintf("finished=%s", state.FinishedAt),
+		fmt.Sprintf("mem_peak_bytes=%d", usage.memPeak),
+		fmt.Sprintf("cpu_usage_usec=%d", usage.cpuUsageUsec),
+		fmt.Sprintf("cpu_user_usec=%d", usage.cpuUserUsec),
+		fmt.Sprintf("cpu_system_usec=%d", usage.cpuSystemUsec),
+		fmt.Sprintf("pids_peak=%d", usage.pidsPeak),
 	}
-	pidsPeak, err := readCgroupInt64(cgroupPath, "pids.peak")
-	if err != nil {
-		cgroupErr = appendErr(cgroupErr, fmt.Sprintf("pids.peak: %v", err))
+	if state.OOMKilled {
+		parts = append(parts, "oomkilled=true")
 	}
-
-	cpuUsageUsec, cpuUserUsec, cpuSystemUsec := int64(-1), int64(-1), int64(-1)
-	if stats, err := readCgroupKVInt64(cgroupPath, "cpu.stat"); err != nil {
-		cgroupErr = appendErr(cgroupErr, fmt.Sprintf("cpu.stat: %v", err))
-	} else {
-		cpuUsageUsec = stats["usage_usec"]
-		cpuUserUsec = stats["user_usec"]
-		cpuSystemUsec = stats["system_usec"]
+	if usage.memOOM > 0 {
+		parts = append(parts, fmt.Sprintf("mem_events_oom=%d", usage.memOOM))
 	}
-
-	events := map[string]int64{}
-	if vals, err := readCgroupKVInt64(cgroupPath, "memory.events"); err != nil {
-		cgroupErr = appendErr(cgroupErr, fmt.Sprintf("memory.events: %v", err))
-	} else {
-		events = vals
+	if usage.memOOMKill > 0 {
+		parts = append(parts, fmt.Sprintf("mem_events_oom_kill=%d", usage.memOOMKill))
 	}
-	memOOM := events["oom"]
-	memOOMKill := events["oom_kill"]
-	memMax := events["max"]
-	memHigh := events["high"]
-
-	log.Printf("container usage summary name=%s id=%s cgroup=%s status=%s exit=%d oomkilled=%t started=%s finished=%s mem_peak_bytes=%d cpu_usage_usec=%d cpu_user_usec=%d cpu_system_usec=%d pids_peak=%d mem_events_oom=%d mem_events_oom_kill=%d mem_events_max=%d mem_events_high=%d inspect_err=%v cgroup_err=%s",
-		name, id, cgroupPath, state.Status, state.ExitCode, state.OOMKilled, state.StartedAt, state.FinishedAt,
-		memPeak, cpuUsageUsec, cpuUserUsec, cpuSystemUsec, pidsPeak,
-		memOOM, memOOMKill, memMax, memHigh, inspectErr, cgroupErr)
+	if usage.memMax > 0 {
+		parts = append(parts, fmt.Sprintf("mem_events_max=%d", usage.memMax))
+	}
+	if usage.memHigh > 0 {
+		parts = append(parts, fmt.Sprintf("mem_events_high=%d", usage.memHigh))
+	}
+	if inspectErr != nil {
+		parts = append(parts, fmt.Sprintf("inspect_err=%v", inspectErr))
+	}
+	if usage.errs != "" {
+		parts = append(parts, fmt.Sprintf("cgroup_err=%s", usage.errs))
+	}
+	log.Printf("container usage summary %s", strings.Join(parts, " "))
 }
 
 // removeContainer forcefully stops and removes a container by its ID or name.
@@ -703,6 +717,49 @@ func appendErr(existing, next string) string {
 		return next
 	}
 	return existing + "; " + next
+}
+
+func collectCgroupUsage(cgroupPath string) cgroupUsage {
+	usage := cgroupUsage{
+		memPeak:       -1,
+		pidsPeak:      -1,
+		cpuUsageUsec:  -1,
+		cpuUserUsec:   -1,
+		cpuSystemUsec: -1,
+	}
+
+	memPeak, err := readCgroupInt64(cgroupPath, "memory.peak")
+	if err != nil {
+		usage.errs = appendErr(usage.errs, fmt.Sprintf("memory.peak: %v", err))
+	} else {
+		usage.memPeak = memPeak
+	}
+
+	pidsPeak, err := readCgroupInt64(cgroupPath, "pids.peak")
+	if err != nil {
+		usage.errs = appendErr(usage.errs, fmt.Sprintf("pids.peak: %v", err))
+	} else {
+		usage.pidsPeak = pidsPeak
+	}
+
+	if stats, err := readCgroupKVInt64(cgroupPath, "cpu.stat"); err != nil {
+		usage.errs = appendErr(usage.errs, fmt.Sprintf("cpu.stat: %v", err))
+	} else {
+		usage.cpuUsageUsec = stats["usage_usec"]
+		usage.cpuUserUsec = stats["user_usec"]
+		usage.cpuSystemUsec = stats["system_usec"]
+	}
+
+	if vals, err := readCgroupKVInt64(cgroupPath, "memory.events"); err != nil {
+		usage.errs = appendErr(usage.errs, fmt.Sprintf("memory.events: %v", err))
+	} else {
+		usage.memOOM = vals["oom"]
+		usage.memOOMKill = vals["oom_kill"]
+		usage.memMax = vals["max"]
+		usage.memHigh = vals["high"]
+	}
+
+	return usage
 }
 
 // copy a set of files to the given container
