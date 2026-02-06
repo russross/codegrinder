@@ -31,14 +31,7 @@ func withTXForGRPC(ctx context.Context, fn func(tx *sql.Tx) error) error {
 	defer func() {
 		elapsed := time.Since(start)
 		if elapsed > 500*time.Millisecond {
-			switch {
-			case elapsed < time.Second:
-				elapsed -= elapsed % time.Millisecond
-			case elapsed < 10*time.Second:
-				elapsed -= elapsed % (10 * time.Millisecond)
-			default:
-				elapsed -= elapsed % (100 * time.Millisecond)
-			}
+			elapsed = roundDurationForLog(elapsed)
 			log.Printf("transaction took %v", elapsed)
 		}
 	}()

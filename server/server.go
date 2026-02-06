@@ -341,14 +341,7 @@ func main() {
 			defer func() {
 				elapsed := time.Since(start)
 				if elapsed > 500*time.Millisecond {
-					switch {
-					case elapsed < time.Second:
-						elapsed -= elapsed % time.Millisecond
-					case elapsed < 10*time.Second:
-						elapsed -= elapsed % (10 * time.Millisecond)
-					default:
-						elapsed -= elapsed % (100 * time.Millisecond)
-					}
+					elapsed = roundDurationForLog(elapsed)
 					log.Printf("transaction took %v, req was %s", elapsed, r.RequestURI)
 				}
 			}()
@@ -737,6 +730,17 @@ func loggedHTTPErrorf(w http.ResponseWriter, status int, format string, params .
 func loggedErrorf(f string, params ...interface{}) error {
 	log.Print(logPrefix() + fmt.Sprintf(f, params...))
 	return fmt.Errorf(f, params...)
+}
+
+func roundDurationForLog(d time.Duration) time.Duration {
+	switch {
+	case d < time.Second:
+		return d - d%time.Millisecond
+	case d < 10*time.Second:
+		return d - d%(10*time.Millisecond)
+	default:
+		return d - d%(100*time.Millisecond)
+	}
 }
 
 var ipWhitelist []*net.IPNet // Global variable to store parsed whitelist entries

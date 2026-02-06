@@ -780,14 +780,14 @@ func durationFromStrings(startedAt, finishedAt string) string {
 	if finish.Before(start) {
 		return ""
 	}
-	return finish.Sub(start).Round(time.Millisecond).String()
+	return roundDurationForLog(finish.Sub(start)).String()
 }
 
 func humanUsecAsDuration(usec int64) string {
 	if usec < 0 {
 		return "-1"
 	}
-	return (time.Duration(usec) * time.Microsecond).String()
+	return roundDurationForLog(time.Duration(usec) * time.Microsecond).String()
 }
 
 func humanBytes(n int64) string {
