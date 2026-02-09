@@ -488,8 +488,7 @@ func NewNanny(ctx context.Context, problemType *ProblemType, problem *Problem, a
 		limits.maxCPU, limits.maxFD, limits.maxFileSize, limits.maxMemory, limits.maxThreads)
 
 	// execute the command.
-	cmd := exec.CommandContext(ctx, containerEngine, cmdArgs...)
-	output, err := cmd.CombinedOutput()
+	output, err := exec.CommandContext(ctx, containerEngine, cmdArgs...).CombinedOutput()
 	if err != nil {
 		// if the container already exists, try to remove it and retry
 		// this prevents a single student running multiple graders concurrently
@@ -636,10 +635,7 @@ func logContainerUsage(ctx context.Context, name, id, cgroupPath string, usage c
 
 // removeContainer forcefully stops and removes a container by its ID or name.
 func removeContainer(ctx context.Context, id string) error {
-	cmd := exec.CommandContext(ctx, containerEngine, "rm", "-f", id)
-	if err := cmd.Run(); err != nil {
-		return nil // fmt.Errorf("error killing container %s: %w", id, err)
-	}
+	_ = exec.CommandContext(ctx, containerEngine, "rm", "-f", id).Run()
 	return nil
 }
 
@@ -870,6 +866,7 @@ func (n *Nanny) PutFiles(files map[string][]byte, mode int64) error {
 	// use 'docker cp' to copy the tarball into the /home/student directory.
 	// pipe the tar buffer to the command's stdin.
 	cmd := exec.CommandContext(n.ctx, containerEngine, "cp", "-", n.ID+":/home/student/")
+	cmd.WaitDelay = time.Second
 	cmd.Stdin = buf
 
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -895,6 +892,7 @@ func (n *Nanny) GetFiles(filenames []string) (map[string][]byte, error) {
 
 		// use 'docker cp' to get the /home/student directory as a tar stream
 		cmd := exec.CommandContext(n.ctx, containerEngine, "cp", n.ID+":/home/student/.", "-")
+		cmd.WaitDelay = time.Second
 		var tarFile bytes.Buffer
 		cmd.Stdout = &tarFile
 
@@ -980,6 +978,7 @@ func (n *Nanny) Exec(cmd []string) (stdout, stderr, script *bytes.Buffer, status
 	execCmdArgs := []string{"exec", "--user", strconv.Itoa(studentUID), n.ID}
 	execCmdArgs = append(execCmdArgs, cmd...)
 	command := exec.CommandContext(n.ctx, containerEngine, execCmdArgs...)
+	command.WaitDelay = time.Second
 
 	// buffers to capture the full output for return.
 	var stdoutBuf, stderrBuf, scriptBuf bytes.Buffer
