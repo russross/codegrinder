@@ -1,0 +1,21 @@
+[project]
+name = "pyserver"
+version = "0.1.0"
+description = "Python port scaffold for CodeGrinder server"
+requires-python = ">=3.13"
+dependencies = [
+    "grpcio>=1.78.0",
+    "protobuf>=6.33.5",
+]
+
+[dependency-groups]
+dev = [
+    "grpcio-tools>=1.78.0",
+    "pytest>=9.0.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
+[tool.ty.src]
+exclude = ["codegrinder_pb2.pyi", "codegrinder_pb2_grpc.py"]

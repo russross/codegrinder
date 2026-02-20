@@ -5,3 +5,4 @@ github.com
 config.json
 rpc/*.pb.go
 *.swp
+certs

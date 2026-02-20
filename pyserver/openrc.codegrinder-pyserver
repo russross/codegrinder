@@ -1,0 +1,49 @@
+#!/sbin/openrc-run
+
+name="codegrinder-pyserver"
+description="CodeGrinder Python gRPC/LTI server"
+
+cg_user="russ"
+cg_group="russ"
+codegrinder_root="/home/russ/codegrinder"
+workdir="${codegrinder_root}/pyserver"
+config_path="${codegrinder_root}/config.json"
+grpc_bind="127.0.0.1:8080"
+http_bind="127.0.0.1:8081"
+pidfile="/run/${RC_SVCNAME}.pid"
+
+depend() {
+    need net localmount logger
+}
+
+start() {
+    ebegin "Starting ${name}"
+    start-stop-daemon \
+        --start \
+        --background \
+        --make-pidfile \
+        --pidfile "${pidfile}" \
+        --chdir "${workdir}" \
+        --user "${cg_user}:${cg_group}" \
+        --exec /usr/bin/uv -- \
+        run python main.py --config "${config_path}" --bind "${grpc_bind}" --http-bind "${http_bind}"
+    eend $?
+}
+
+stop() {
+    ebegin "Stopping ${name}"
+    local legacy_uv
+    local legacy_logger
+    legacy_uv="/usr/bin/uv run python main.py --config ${config_path} --bind ${grpc_bind} --http-bind ${http_bind}"
+    legacy_logger="/usr/bin/logger -t codegrinder-pyserver"
+
+    start-stop-daemon --stop --pidfile "${pidfile}" --retry TERM/30/KILL/5
+    local rc=$?
+
+    # Cleanup for old script versions that launched via a shell pipeline and
+    # sometimes left untracked processes without a pidfile.
+    pkill -f "${legacy_uv}" 2>/dev/null || true
+    pkill -f "${legacy_logger}" 2>/dev/null || true
+
+    eend ${rc}
+}

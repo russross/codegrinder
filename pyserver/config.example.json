@@ -1,0 +1,15 @@
+{
+  "hostname": "mud.russross.com",
+  "daycareSecret": "REPLACE_WITH_SECRET",
+  "ltiSecret": "REPLACE_WITH_LTI_SECRET",
+  "sessionSecret": "REPLACE_WITH_SECRET",
+  "containerEngine": "doas podman",
+  "sqlite3Path": "/home/russ/codegrinder/db/codegrinder.db",
+  "capacity": 1,
+  "problemTypes": [
+    "python3",
+    "c",
+    "cpp",
+    "java"
+  ]
+}

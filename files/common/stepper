@@ -44,8 +44,10 @@ class AnsiColors:
 EOL_SYMBOL = '⏎'
 # Width for aligning prefixes in error reports for readability
 ERROR_PREFIX_WIDTH = 20
-# Maximum buffer size to prevent OOM attacks (10 MB)
-MAX_BUFFER_SIZE = 10 * 1024 * 1024
+# Maximum number of characters to capture from each stream for error context.
+MAX_CAPTURE_CHARS = 20_000
+# Maximum lines to display from captured context.
+MAX_DISPLAY_LINES = 25
 
 # --- Semantic Print Functions ---
 
@@ -87,6 +89,21 @@ def print_summary(text: str, success: bool) -> None:
     """Prints a final summary line in green for success or red for failure."""
     color = AnsiColors.GREEN if success else AnsiColors.RED
     print(f"{AnsiColors.BOLD}{color}{text}{AnsiColors.ENDC}", flush=True)
+
+
+def append_capped(buffer: str, data: str, limit: int = MAX_CAPTURE_CHARS) -> str:
+    """Appends text to a buffer without exceeding the capture limit."""
+    if not data or len(buffer) >= limit:
+        return buffer
+    remaining = limit - len(buffer)
+    return buffer + data[:remaining]
+
+
+def append_with_optional_limit(buffer: str, data: str, limit: Optional[int]) -> str:
+    """Appends text with an optional character cap."""
+    if limit is None:
+        return buffer + data
+    return append_capped(buffer, data, limit)
 
 
 def generate_xml_report(results: List[Dict[str, Any]], tests: int, failures: int, total_time: float) -> None:
@@ -293,17 +310,82 @@ def main() -> None:
 
     sys.exit(failed_tests)
 
-def parse_transcript(path: Path) -> Deque[Tuple[str, str]]:
-    """Reads a transcript file and parses it into a deque of (action, content) tuples."""
-    actions: Deque[Tuple[str, str]] = deque()
+def validate_transcript_and_count_inputs(path: Path) -> int:
+    """Validates transcript line format and returns number of stdin actions."""
+    input_count = 0
     with open(path, 'r', encoding='utf-8') as f:
-        for line in f:
+        for line_number, line in enumerate(f, start=1):
             action = line[0]
-            content = line[2:]
             if action not in ('<', '>', '!'):
-                raise ValueError(f"Invalid action character '{action}' in transcript '{path}'")
-            actions.append((action, content))
-    return actions
+                raise ValueError(
+                    f"Invalid action character '{action}' in transcript '{path}' on line {line_number}"
+                )
+            if action == '<':
+                input_count += 1
+    return input_count
+
+
+class TranscriptReader:
+    """Lazily reads transcript actions while supporting bounded lookahead."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.remaining_input_actions = validate_transcript_and_count_inputs(path)
+        self._file = open(path, 'r', encoding='utf-8')
+        self._buffer: Deque[Tuple[str, str]] = deque()
+        self._line_number = 0
+        self._eof = False
+
+    def _read_next_action(self) -> Optional[Tuple[str, str]]:
+        if self._eof:
+            return None
+
+        line = self._file.readline()
+        if line == "":
+            self._eof = True
+            return None
+
+        self._line_number += 1
+        action = line[0]
+        content = line[2:]
+        if action not in ('<', '>', '!'):
+            raise ValueError(
+                f"Invalid action character '{action}' in transcript '{self.path}' on line {self._line_number}"
+            )
+        return action, content
+
+    def _fill_buffer(self, target_size: int) -> None:
+        while len(self._buffer) < target_size:
+            next_action = self._read_next_action()
+            if next_action is None:
+                break
+            self._buffer.append(next_action)
+
+    def peek(self) -> Optional[Tuple[str, str]]:
+        self._fill_buffer(1)
+        if not self._buffer:
+            return None
+        return self._buffer[0]
+
+    def pop(self) -> Optional[Tuple[str, str]]:
+        action = self.peek()
+        if action is None:
+            return None
+
+        popped_action, popped_content = self._buffer.popleft()
+        if popped_action == '<':
+            self.remaining_input_actions -= 1
+        return popped_action, popped_content
+
+    def preview(self, limit: int) -> Deque[Tuple[str, str]]:
+        if limit <= 0:
+            return deque()
+        self._fill_buffer(limit)
+        return deque(list(self._buffer)[:limit])
+
+    def close(self) -> None:
+        if not self._file.closed:
+            self._file.close()
 
 def run_test_case(cmd: List[str], transcript_path: Path, timeout: float, post_error_lines: int) -> Tuple[bool, str]:
     """
@@ -311,7 +393,7 @@ def run_test_case(cmd: List[str], transcript_path: Path, timeout: float, post_er
     Returns (True, "") on success, or (False, error_log) on failure.
     """
     try:
-        expected_actions = parse_transcript(transcript_path)
+        transcript = TranscriptReader(transcript_path)
     except (IOError, ValueError) as e:
         message = f"FATAL: Could not read or parse transcript '{transcript_path}': {e}"
         print_fatal(message)
@@ -335,8 +417,12 @@ def run_test_case(cmd: List[str], transcript_path: Path, timeout: float, post_er
     partial_stderr = ""
     
     try:
-        while expected_actions:
-            expected_action, expected_content = expected_actions[0]
+        while True:
+            expected = transcript.peek()
+            if expected is None:
+                break
+
+            expected_action, expected_content = expected
 
             if expected_action == '<':
                 # --- Handle Expected Input ---
@@ -345,13 +431,22 @@ def run_test_case(cmd: List[str], transcript_path: Path, timeout: float, post_er
                     proc.stdin.write(expected_content.encode('utf-8'))
                     proc.stdin.flush()
                 except (IOError, BrokenPipeError):
-                    error_log = handle_error("Program closed its input stream prematurely.", proc, sel, expected_actions, post_error_lines, timeout, "", "")
+                    error_log = handle_error(
+                        "Program closed its input stream prematurely.",
+                        proc,
+                        sel,
+                        transcript.preview(post_error_lines),
+                        post_error_lines,
+                        timeout,
+                        "",
+                        "",
+                    )
                     return False, error_log
                 
-                expected_actions.popleft()
+                transcript.pop()
                 
                 # Close stdin once all input has been sent
-                if not any(a[0] == '<' for a in expected_actions):
+                if transcript.remaining_input_actions == 0 and not proc.stdin.closed:
                     proc.stdin.close()
 
             elif expected_action in ('>', '!'):
@@ -375,13 +470,34 @@ def run_test_case(cmd: List[str], transcript_path: Path, timeout: float, post_er
                         if proc.poll() is not None:
                             reason = f"Program exited before producing expected output on {stream_name}."
                             # Drain any remaining output from the exited process
-                            partial_stdout, partial_stderr = drain_process_output(proc, sel, partial_stdout, partial_stderr)
-                        error_log = handle_error(reason, proc, sel, expected_actions, post_error_lines, timeout, partial_stdout, partial_stderr)
+                            partial_stdout, partial_stderr = drain_process_output(
+                                proc, sel, partial_stdout, partial_stderr, MAX_CAPTURE_CHARS
+                            )
+                        error_log = handle_error(
+                            reason,
+                            proc,
+                            sel,
+                            transcript.preview(post_error_lines),
+                            post_error_lines,
+                            timeout,
+                            partial_stdout,
+                            partial_stderr,
+                        )
                         return False, error_log
                     actual_line = line_from_proc
                 
                 if actual_line != expected_content:
-                    error_log = handle_error(f"Output mismatch on {stream_name}.", proc, sel, expected_actions, post_error_lines, timeout, partial_stdout, partial_stderr, actual_line)
+                    error_log = handle_error(
+                        f"Output mismatch on {stream_name}.",
+                        proc,
+                        sel,
+                        transcript.preview(post_error_lines),
+                        post_error_lines,
+                        timeout,
+                        partial_stdout,
+                        partial_stderr,
+                        actual_line,
+                    )
                     return False, error_log
 
                 # Success, print and continue
@@ -390,7 +506,7 @@ def run_test_case(cmd: List[str], transcript_path: Path, timeout: float, post_er
                     print_stdout(text_to_print)
                 else:
                     print_stderr(text_to_print)
-                expected_actions.popleft()
+                transcript.pop()
 
         # --- Post-Loop Checks ---
         extra_out = partial_stdout
@@ -418,15 +534,17 @@ def run_test_case(cmd: List[str], transcript_path: Path, timeout: float, post_er
                         continue
                     
                     decoded_data = data.decode('utf-8', errors='replace')
-                    if key.data == 'stdout': extra_out += decoded_data
-                    else: extra_err += decoded_data
-                except (BlockingIOError, UnicodeDecodeError):
+                    if key.data == 'stdout':
+                        extra_out = append_capped(extra_out, decoded_data, MAX_CAPTURE_CHARS)
+                    else:
+                        extra_err = append_capped(extra_err, decoded_data, MAX_CAPTURE_CHARS)
+                except (BlockingIOError, UnicodeDecodeError, OSError, ValueError):
                     continue
         
         exit_code = proc.returncode if proc.returncode is not None else proc.wait()
 
         # Drain any remaining stderr before checking exit code
-        extra_out, extra_err = drain_process_output(proc, sel, extra_out, extra_err)
+        extra_out, extra_err = drain_process_output(proc, sel, extra_out, extra_err, MAX_CAPTURE_CHARS)
 
         if extra_out or extra_err:
             error_log = handle_error("Program produced unexpected extra output after completion.", proc, sel, deque(), post_error_lines, timeout, extra_out, extra_err)
@@ -459,26 +577,47 @@ def run_test_case(cmd: List[str], transcript_path: Path, timeout: float, post_er
                     p.close()
                 except Exception:
                     pass
+        transcript.close()
 
     return True, ""
 
-def read_line_from_process(proc: subprocess.Popen[bytes], sel: selectors.DefaultSelector, from_stdout: bool, stdout_buffer: str, stderr_buffer: str, timeout: float) -> Tuple[Optional[str], str, str]:
+def read_line_from_process(
+    proc: subprocess.Popen[bytes],
+    sel: selectors.DefaultSelector,
+    from_stdout: bool,
+    stdout_buffer: str,
+    stderr_buffer: str,
+    timeout: float,
+    capture_limit: Optional[int] = None,
+) -> Tuple[Optional[str], str, str]:
     """Reads from process until a full line is available on expected stream or timeout occurs.
 
     Buffers data from both stdout and stderr, even when waiting for one specific stream.
     This prevents data loss from interleaved output.
     """
     start_time = time.monotonic()
-    stream_name = 'stdout' if from_stdout else 'stderr'
-
     while time.monotonic() - start_time < timeout:
         if proc.poll() is not None:
+            # Process has exited; drain any remaining pipe data before concluding EOF.
+            stdout_buffer, stderr_buffer = drain_process_output(
+                proc, sel, stdout_buffer, stderr_buffer, capture_limit
+            )
+            expected_buffer = stdout_buffer if from_stdout else stderr_buffer
+            if '\n' in expected_buffer:
+                line, new_buffer = expected_buffer.split('\n', 1)
+                if from_stdout:
+                    return line + '\n', new_buffer, stderr_buffer
+                return line + '\n', stdout_buffer, new_buffer
             return None, stdout_buffer, stderr_buffer
+
         remaining_time = timeout - (time.monotonic() - start_time)
         if remaining_time <= 0:
             break
         select_timeout = min(remaining_time, 0.1)
-        events = sel.select(select_timeout)
+        try:
+            events = sel.select(select_timeout)
+        except (ValueError, OSError):
+            break
         if not events:
             continue
         for key, _ in events:
@@ -491,18 +630,14 @@ def read_line_from_process(proc: subprocess.Popen[bytes], sel: selectors.Default
                 decoded = data.decode('utf-8', errors='replace')
                 # Buffer data from both streams, even if waiting for one
                 if key.data == 'stdout':
-                    stdout_buffer += decoded
+                    stdout_buffer = append_with_optional_limit(stdout_buffer, decoded, capture_limit)
                 else:
-                    stderr_buffer += decoded
-            except (BlockingIOError, UnicodeDecodeError):
+                    stderr_buffer = append_with_optional_limit(stderr_buffer, decoded, capture_limit)
+            except (BlockingIOError, UnicodeDecodeError, OSError, ValueError):
                 continue
 
             # Check if expected stream now has a complete line
             expected_buffer = stdout_buffer if from_stdout else stderr_buffer
-
-            # Check for buffer size limit to prevent OOM
-            if len(expected_buffer) > MAX_BUFFER_SIZE:
-                return None, stdout_buffer, stderr_buffer  # Treat as timeout/error
 
             if '\n' in expected_buffer:
                 line, new_buffer = expected_buffer.split('\n', 1)
@@ -514,12 +649,18 @@ def read_line_from_process(proc: subprocess.Popen[bytes], sel: selectors.Default
     return None, stdout_buffer, stderr_buffer  # Timeout
 
 
-def drain_process_output(proc: subprocess.Popen[bytes], sel: selectors.DefaultSelector, partial_stdout: str, partial_stderr: str) -> Tuple[str, str]:
+def drain_process_output(
+    proc: subprocess.Popen[bytes],
+    sel: selectors.DefaultSelector,
+    partial_stdout: str,
+    partial_stderr: str,
+    capture_limit: Optional[int] = None,
+) -> Tuple[str, str]:
     """Drains all remaining output from process pipes. Works even if process has exited."""
     extra_out = partial_stdout
     extra_err = partial_stderr
 
-    # Attempt to read any remaining data from the pipes
+    # Attempt to read any remaining data from each pipe until it blocks/EOFs.
     try:
         try:
             sel_map = sel.get_map().values()
@@ -527,16 +668,22 @@ def drain_process_output(proc: subprocess.Popen[bytes], sel: selectors.DefaultSe
             return extra_out, extra_err  # Selector is closed, return what we have
         for key in list(sel_map):
             fileobj = cast(IO[bytes], key.fileobj)
-            try:
-                data = fileobj.read()
-                if data:
+            while True:
+                try:
+                    data = fileobj.read()
+                    if not data:
+                        try:
+                            sel.unregister(fileobj)
+                        except Exception:
+                            pass
+                        break
                     decoded_data = data.decode('utf-8', errors='replace')
                     if key.data == 'stdout':
-                        extra_out += decoded_data
+                        extra_out = append_with_optional_limit(extra_out, decoded_data, capture_limit)
                     else:
-                        extra_err += decoded_data
-            except (BlockingIOError, UnicodeDecodeError):
-                pass
+                        extra_err = append_with_optional_limit(extra_err, decoded_data, capture_limit)
+                except (BlockingIOError, UnicodeDecodeError, OSError, ValueError):
+                    break
     except Exception:
         # Silently ignore errors during draining
         pass
@@ -585,110 +732,108 @@ def handle_error(reason: str, proc: subprocess.Popen[bytes], sel: selectors.Defa
     log_lines.append(header_actual)
     print_header(header_actual, AnsiColors.YELLOW)
 
+    def print_capped_lines(section: str, text: str) -> None:
+        """Prints up to MAX_DISPLAY_LINES repr-lines from captured output."""
+        if not text:
+            return
+        section_header = f"\n--- {section} ---"
+        log_lines.append(section_header)
+        print_warning(section_header)
+
+        lines = text.splitlines(keepends=True)
+        shown_lines = lines[:MAX_DISPLAY_LINES]
+        for line in shown_lines:
+            rep = repr(line)
+            log_lines.append(rep)
+            print_warning(rep)
+
+        if len(lines) > MAX_DISPLAY_LINES:
+            truncate_msg = (
+                f"(truncated: showing first {MAX_DISPLAY_LINES} lines from the first "
+                f"{MAX_CAPTURE_CHARS} captured chars)"
+            )
+            log_lines.append(truncate_msg)
+            print_warning(truncate_msg)
+
     # Check if this is a crash (non-zero exit) with stderr content
     exit_code = proc.returncode if proc.returncode is not None else 0
     if exit_code != 0 and partial_stderr.strip():
-        # Display crash stderr prominently
         crash_header = "\n*** STDERR FROM CRASHED PROGRAM ***"
         log_lines.append(crash_header)
         print_header(crash_header, AnsiColors.RED, bold=True)
-
-        # Split stderr into lines and apply truncation logic
-        stderr_lines = partial_stderr.split('\n')
-        # Remove empty last element if stderr ends with newline
-        if stderr_lines and stderr_lines[-1] == '':
-            stderr_lines = stderr_lines[:-1]
-
-        max_stderr_lines = 20
-        if len(stderr_lines) > max_stderr_lines:
-            # Show first N lines with truncation notice
-            display_lines = stderr_lines[:max_stderr_lines]
-            truncation_notice = f"\n(... stderr truncated, showing first {max_stderr_lines} of {len(stderr_lines)} lines ...)"
-            log_lines.extend([repr(line) for line in display_lines])
-            log_lines.append(truncation_notice)
-            for line in display_lines:
-                print_stderr(line)
-            print_warning(truncation_notice)
-        else:
-            # Show all lines
-            log_lines.extend([repr(line) for line in stderr_lines])
-            for line in stderr_lines:
-                print_stderr(line)
+        print_capped_lines("CRASH STDERR", partial_stderr)
 
         # Clear partial_stderr so it's not shown again in the normal flow
         partial_stderr = ""
 
     lines_shown = 0
-    if mismatched_line:
-        prefix = f"{'MISMATCHED LINE:':<{ERROR_PREFIX_WIDTH}}"
-        line_text = f"{prefix}{repr(mismatched_line)}"
-        log_lines.append(line_text)
-        print_warning(line_text)
-        lines_shown += 1
-    
-    # Drain any lines already in the partial buffers
-    while '\n' in partial_stdout and lines_shown < post_error_lines:
-        line, partial_stdout = partial_stdout.split('\n', 1)
-        prefix = f"{'SUBSEQUENT STDOUT:':<{ERROR_PREFIX_WIDTH}}"
-        line_text = f"{prefix}{repr(line + chr(10))}"
-        log_lines.append(line_text)
-        print_warning(line_text)
-        lines_shown += 1
-    
-    while '\n' in partial_stderr and lines_shown < post_error_lines:
-        line, partial_stderr = partial_stderr.split('\n', 1)
-        prefix = f"{'SUBSEQUENT STDERR:':<{ERROR_PREFIX_WIDTH}}"
-        line_text = f"{prefix}{repr(line + chr(10))}"
-        log_lines.append(line_text)
-        print_warning(line_text)
-        lines_shown += 1
-
-    # Drain subsequent output from the process itself
-    start_time = time.monotonic()
-    while lines_shown < post_error_lines and time.monotonic() - start_time < timeout and proc.poll() is None:
-        if expected_actions and expected_actions[0][0] == '<':
-            wait_text = "(Stopping output display as program is expected to wait for input next)"
-            log_lines.append(wait_text)
-            print_header(wait_text, AnsiColors.BLUE, bold=False)
-            break
-
-        line_out, partial_stdout, partial_stderr = read_line_from_process(proc, sel, True, partial_stdout, partial_stderr, 0.1)
-        if line_out is not None:
-            prefix = f"{'SUBSEQUENT STDOUT:':<{ERROR_PREFIX_WIDTH}}"
-            line_text = f"{prefix}{repr(line_out)}"
+    if reason != "Program produced unexpected extra output after completion.":
+        if mismatched_line:
+            prefix = f"{'MISMATCHED LINE:':<{ERROR_PREFIX_WIDTH}}"
+            line_text = f"{prefix}{repr(mismatched_line)}"
             log_lines.append(line_text)
             print_warning(line_text)
             lines_shown += 1
+        
+        # Drain any lines already in the partial buffers
+        while '\n' in partial_stdout and lines_shown < post_error_lines:
+            line, partial_stdout = partial_stdout.split('\n', 1)
+            prefix = f"{'SUBSEQUENT STDOUT:':<{ERROR_PREFIX_WIDTH}}"
+            line_text = f"{prefix}{repr(line + chr(10))}"
+            log_lines.append(line_text)
+            print_warning(line_text)
+            lines_shown += 1
+        
+        while '\n' in partial_stderr and lines_shown < post_error_lines:
+            line, partial_stderr = partial_stderr.split('\n', 1)
+            prefix = f"{'SUBSEQUENT STDERR:':<{ERROR_PREFIX_WIDTH}}"
+            line_text = f"{prefix}{repr(line + chr(10))}"
+            log_lines.append(line_text)
+            print_warning(line_text)
+            lines_shown += 1
+
+        # Drain subsequent output from the process itself
+        start_time = time.monotonic()
+        while lines_shown < post_error_lines and time.monotonic() - start_time < timeout and proc.poll() is None:
+            if expected_actions and expected_actions[0][0] == '<':
+                wait_text = "(Stopping output display as program is expected to wait for input next)"
+                log_lines.append(wait_text)
+                print_header(wait_text, AnsiColors.BLUE, bold=False)
+                break
+
+            line_out, partial_stdout, partial_stderr = read_line_from_process(
+                proc, sel, True, partial_stdout, partial_stderr, 0.1, MAX_CAPTURE_CHARS
+            )
+            if line_out is not None:
+                prefix = f"{'SUBSEQUENT STDOUT:':<{ERROR_PREFIX_WIDTH}}"
+                line_text = f"{prefix}{repr(line_out)}"
+                log_lines.append(line_text)
+                print_warning(line_text)
+                lines_shown += 1
+                if lines_shown >= post_error_lines: break
+
             if lines_shown >= post_error_lines: break
 
-        if lines_shown >= post_error_lines: break
-
-        line_err, partial_stdout, partial_stderr = read_line_from_process(proc, sel, False, partial_stdout, partial_stderr, 0.1)
-        if line_err is not None:
-            prefix = f"{'SUBSEQUENT STDERR:':<{ERROR_PREFIX_WIDTH}}"
-            line_text = f"{prefix}{repr(line_err)}"
-            log_lines.append(line_text)
-            print_warning(line_text)
-            lines_shown += 1
+            line_err, partial_stdout, partial_stderr = read_line_from_process(
+                proc, sel, False, partial_stdout, partial_stderr, 0.1, MAX_CAPTURE_CHARS
+            )
+            if line_err is not None:
+                prefix = f"{'SUBSEQUENT STDERR:':<{ERROR_PREFIX_WIDTH}}"
+                line_text = f"{prefix}{repr(line_err)}"
+                log_lines.append(line_text)
+                print_warning(line_text)
+                lines_shown += 1
 
     # Drain any remaining output from exited process
     if proc.poll() is not None:
-        partial_stdout, partial_stderr = drain_process_output(proc, sel, partial_stdout, partial_stderr)
+        partial_stdout, partial_stderr = drain_process_output(
+            proc, sel, partial_stdout, partial_stderr, MAX_CAPTURE_CHARS
+        )
 
     # Handle the "extra output" case cleanly
     if reason == "Program produced unexpected extra output after completion.":
-        if partial_stdout:
-            extra_out_header = "\n--- EXTRA STDOUT ---"
-            log_lines.append(extra_out_header)
-            print_warning(extra_out_header)
-            log_lines.append(repr(partial_stdout))
-            print_warning(repr(partial_stdout))
-        if partial_stderr:
-            extra_err_header = "\n--- EXTRA STDERR ---"
-            log_lines.append(extra_err_header)
-            print_warning(extra_err_header)
-            log_lines.append(repr(partial_stderr))
-            print_warning(repr(partial_stderr))
+        print_capped_lines("EXTRA STDOUT", partial_stdout)
+        print_capped_lines("EXTRA STDERR", partial_stderr)
     elif lines_shown == 0:
         no_output_text = "(No further output from program before timeout or exit)"
         log_lines.append(no_output_text)
