@@ -7,7 +7,7 @@ cd "$SCRIPT_DIR"
 
 if [ ! -f "$SCRIPT_DIR/codegrinder.proto" ]; then
     echo "Missing codegrinder.proto in $SCRIPT_DIR"
-    echo "Expected symlink: ln -s ../rpc/codegrinder.proto pyserver/codegrinder.proto"
+    echo "Expected symlink: ln -s ../rpc/codegrinder.proto pycli/codegrinder.proto"
     exit 1
 fi
 
