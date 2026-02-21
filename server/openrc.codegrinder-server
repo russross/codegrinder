@@ -1,12 +1,12 @@
 #!/sbin/openrc-run
 
-name="codegrinder-pyserver"
+name="codegrinder-server"
 description="CodeGrinder Python gRPC/LTI server"
 
 cg_user="russ"
 cg_group="russ"
 codegrinder_root="/home/russ/codegrinder"
-workdir="${codegrinder_root}/pyserver"
+workdir="${codegrinder_root}/server"
 config_path="${codegrinder_root}/config.json"
 grpc_bind="127.0.0.1:8080"
 http_bind="127.0.0.1:8081"
@@ -35,7 +35,7 @@ stop() {
     local legacy_uv
     local legacy_logger
     legacy_uv="/usr/bin/uv run python main.py --config ${config_path} --bind ${grpc_bind} --http-bind ${http_bind}"
-    legacy_logger="/usr/bin/logger -t codegrinder-pyserver"
+    legacy_logger="/usr/bin/logger -t codegrinder-server"
 
     start-stop-daemon --stop --pidfile "${pidfile}" --retry TERM/30/KILL/5
     local rc=$?

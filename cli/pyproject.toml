@@ -1,5 +1,5 @@
 [project]
-name = "pycli"
+name = "cli"
 version = "0.1.0"
 description = "Python CLI for CodeGrinder"
 requires-python = ">=3.13"

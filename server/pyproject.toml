@@ -1,5 +1,5 @@
 [project]
-name = "pyserver"
+name = "server"
 version = "0.1.0"
 description = "Python port scaffold for CodeGrinder server"
 requires-python = ">=3.13"

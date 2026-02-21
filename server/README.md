@@ -1,6 +1,6 @@
-# pyserver deployment (Alpine + OpenRC, single-user host, standalone HTTP-01)
+# server deployment (Alpine + OpenRC, single-user host, standalone HTTP-01)
 
-This setup runs `pyserver` as your normal account (`russ`) on a dedicated server, with all CodeGrinder state under:
+This setup runs `server` as your normal account (`russ`) on a dedicated server, with all CodeGrinder state under:
 
 `CODEGRINDEROOT=/home/russ/codegrinder`
 
@@ -35,43 +35,43 @@ Expected runtime files:
 - DB: `$CODEGRINDEROOT/db/codegrinder.db`
 - TLS: `$CODEGRINDEROOT/certs/letsencrypt/live/mud.russross.com/...`
 
-## 3. Create pyserver config
+## 3. Create server config
 
 Start from the checked-in template:
 
 ```sh
-cp /home/russ/codegrinder/pyserver/config.example.json /home/russ/codegrinder/config.json
+cp /home/russ/codegrinder/server/config.example.json /home/russ/codegrinder/config.json
 ```
 
 Set secrets in `/home/russ/codegrinder/config.json` (`daycareSecret`, `ltiSecret`, `sessionSecret`) before starting the service.
-Set `containerEngine` to `doas podman` for rootful Podman execution from an unprivileged pyserver process. Daycare containers are launched unprivileged (`--user 1001:1001`, dropped capabilities, `no-new-privileges`).
+Set `containerEngine` to `doas podman` for rootful Podman execution from an unprivileged server process. Daycare containers are launched unprivileged (`--user 1001:1001`, dropped capabilities, `no-new-privileges`).
 When using Podman, unqualified image names (for example `codegrinder/riscv`) are automatically run as `localhost/codegrinder/riscv` for compatibility with Podman local image resolution.
 Daycare always runs containers with `--pull=never` and only tries local image candidates, so it will not trigger remote image pulls.
 
 ## 4. Sync Python environment
 
-From `pyserver/`:
+From `server/`:
 
 ```sh
-cd /home/russ/codegrinder/pyserver
+cd /home/russ/codegrinder/server
 uv sync
 ```
 
-## 5. OpenRC service for pyserver (daemon mode, syslog logging)
+## 5. OpenRC service for server (daemon mode, syslog logging)
 
-This repo includes `openrc.codegrinder-pyserver`.
+This repo includes `openrc.codegrinder-server`.
 
 Install and start it:
 
 ```sh
-doas cp /home/russ/codegrinder/pyserver/openrc.codegrinder-pyserver /etc/init.d/codegrinder-pyserver
-doas chmod 755 /etc/init.d/codegrinder-pyserver
-doas rc-update add codegrinder-pyserver default
-doas rc-service codegrinder-pyserver start
-doas rc-service codegrinder-pyserver status
+doas cp /home/russ/codegrinder/server/openrc.codegrinder-server /etc/init.d/codegrinder-server
+doas chmod 755 /etc/init.d/codegrinder-server
+doas rc-update add codegrinder-server default
+doas rc-service codegrinder-server start
+doas rc-service codegrinder-server status
 ```
 
-Logs go to system logger with tag `codegrinder-pyserver`.
+Logs go to system logger with tag `codegrinder-server`.
 
 ## 6. First TLS certificate (http-01 on port 80)
 
@@ -102,7 +102,7 @@ This repo includes `nginx.codegrinder.conf` with:
 Install and start nginx:
 
 ```sh
-doas cp /home/russ/codegrinder/pyserver/nginx.codegrinder.conf /etc/nginx/http.d/codegrinder.conf
+doas cp /home/russ/codegrinder/server/nginx.codegrinder.conf /etc/nginx/http.d/codegrinder.conf
 doas nginx -t
 doas rc-update add nginx default
 doas rc-service nginx start
@@ -115,7 +115,7 @@ This repo includes `certbot-renew-codegrinder`.
 Install script and schedule it in root crontab:
 
 ```sh
-doas cp /home/russ/codegrinder/pyserver/certbot-renew-codegrinder /usr/local/sbin/certbot-renew-codegrinder
+doas cp /home/russ/codegrinder/server/certbot-renew-codegrinder /usr/local/sbin/certbot-renew-codegrinder
 doas chmod 755 /usr/local/sbin/certbot-renew-codegrinder
 doas crontab -e
 ```
@@ -132,7 +132,7 @@ When a cert is actually renewed, the script reloads nginx automatically.
 ## 9. Foreground dev run (console logs)
 
 ```sh
-cd /home/russ/codegrinder/pyserver
+cd /home/russ/codegrinder/server
 CODEGRINDERROOT=/home/russ/codegrinder \
 uv run python main.py \
   --config /home/russ/codegrinder/config.json \
@@ -145,7 +145,7 @@ This mode is for local testing and prints logs directly to your terminal.
 ## 10. Verify end-to-end
 
 ```sh
-doas rc-service codegrinder-pyserver status
+doas rc-service codegrinder-server status
 doas rc-service nginx status
 ss -lnt | grep -E '(:443|:8080|:8081)'
 curl -I https://mud.russross.com/version

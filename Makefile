@@ -1,98 +1,99 @@
-CODEGRINDERROOT ?= $(HOME)/codegrinder
-GOPATH := $(shell go env GOPATH)
+ROOT_DIR := $(CURDIR)
+PROTO_DIR := $(ROOT_DIR)/protocol
+PROTO_FILE := $(PROTO_DIR)/codegrinder.proto
+SERVER_DIR := server
+CLI_DIR := cli
+SERVER_OUT_DIR := $(ROOT_DIR)/server
+CLI_OUT_DIR := $(ROOT_DIR)/cli
 
-# --------------------------------------------------------------------
-# Sources
-# --------------------------------------------------------------------
-PROTO_SOURCES   := $(wildcard rpc/*.proto)
-PROTO_GENERATED := $(PROTO_SOURCES:.proto=.pb.go) \
-                   $(PROTO_SOURCES:.proto=_grpc.pb.go)
+.PHONY: all setup proto proto-server proto-cli build test clean
 
-SERVER_SOURCES  := $(wildcard server/*.go types/*.go rpc/*.go)
-CLI_SOURCES     := $(wildcard cli/*.go types/*.go rpc/*.go)
+all: build
 
-# --------------------------------------------------------------------
-# Top-level targets
-# --------------------------------------------------------------------
-.PHONY: all server grind clean
+setup:
+	@missing=0; \
+	for tool in uv python; do \
+		if ! command -v $$tool >/dev/null 2>&1; then \
+			echo "Missing tool: $$tool"; \
+			missing=1; \
+		fi; \
+	done; \
+	if [ $$missing -ne 0 ]; then \
+		echo "One or more required tools are missing. Skipping dependency setup."; \
+		exit 0; \
+	fi
+	uv sync --directory $(SERVER_DIR) --group dev
+	uv sync --directory $(CLI_DIR) --group dev
 
-server: $(GOPATH)/bin/server
+proto: proto-server proto-cli
 
-all: server grind-linux-amd64 grind-linux-arm \
-     grind-linux-arm64 grind-linux-riscv64 \
-     grind-darwin-amd64 grind-darwin-arm64 \
-     grind-windows-amd64
+proto-server: $(PROTO_FILE)
+	@missing=0; \
+	for tool in uv; do \
+		if ! command -v $$tool >/dev/null 2>&1; then \
+			echo "Missing tool: $$tool"; \
+			missing=1; \
+		fi; \
+	done; \
+	if [ $$missing -ne 0 ]; then \
+		echo "Skipping proto generation for $(SERVER_DIR)."; \
+		exit 0; \
+	fi
+	@proto_include="$$(uv run --directory $(SERVER_DIR) python -c 'import pathlib, grpc_tools; print(pathlib.Path(grpc_tools.__file__).with_name("_proto"))' 2>/dev/null || true)"; \
+	if [ -z "$$proto_include" ]; then \
+		echo "Missing grpcio-tools in $(SERVER_DIR). Run: make setup"; \
+		exit 1; \
+	fi; \
+	uv run --directory $(SERVER_DIR) python -m grpc_tools.protoc \
+		-I $(PROTO_DIR) \
+		-I "$$proto_include" \
+		--python_out=$(SERVER_OUT_DIR) \
+		--pyi_out=$(SERVER_OUT_DIR) \
+		--grpc_python_out=$(SERVER_OUT_DIR) \
+		$(PROTO_FILE)
 
-grind: grind-linux-amd64
+proto-cli: $(PROTO_FILE)
+	@missing=0; \
+	for tool in uv; do \
+		if ! command -v $$tool >/dev/null 2>&1; then \
+			echo "Missing tool: $$tool"; \
+			missing=1; \
+		fi; \
+	done; \
+	if [ $$missing -ne 0 ]; then \
+		echo "Skipping proto generation for $(CLI_DIR)."; \
+		exit 0; \
+	fi
+	@proto_include="$$(uv run --directory $(CLI_DIR) python -c 'import pathlib, grpc_tools; print(pathlib.Path(grpc_tools.__file__).with_name("_proto"))' 2>/dev/null || true)"; \
+	if [ -z "$$proto_include" ]; then \
+		echo "Missing grpcio-tools in $(CLI_DIR). Run: make setup"; \
+		exit 1; \
+	fi; \
+	uv run --directory $(CLI_DIR) python -m grpc_tools.protoc \
+		-I $(PROTO_DIR) \
+		-I "$$proto_include" \
+		--python_out=$(CLI_OUT_DIR) \
+		--pyi_out=$(CLI_OUT_DIR) \
+		--grpc_python_out=$(CLI_OUT_DIR) \
+		$(PROTO_FILE)
+
+build: proto
+
+test: proto
+	uv run --directory $(SERVER_DIR) python -m pytest
+	uv run --directory $(CLI_DIR) python -m pytest
 
 clean:
-	rm -f $(PROTO_GENERATED)
-	rm -f $(GOPATH)/bin/server
-	rm -f $(CODEGRINDERROOT)/www/grind.*
-
-# --------------------------------------------------------------------
-# Proto generation
-# --------------------------------------------------------------------
-$(PROTO_GENERATED): $(PROTO_SOURCES)
-	protoc --proto_path=. --proto_path=/usr/include \
-	    --go_out=. --go_opt=module=github.com/russross/codegrinder \
-	    --go-grpc_out=. --go-grpc_opt=module=github.com/russross/codegrinder $<
-
-# --------------------------------------------------------------------
-# Server build
-# --------------------------------------------------------------------
-$(GOPATH)/bin/server: $(SERVER_SOURCES) $(PROTO_GENERATED)
-	@echo building codegrinder server
-	go install -tags netgo github.com/russross/codegrinder/server
-
-# --------------------------------------------------------------------
-# CLI builds for multiple platforms
-# --------------------------------------------------------------------
-$(CODEGRINDERROOT)/www/grind.linux_amd64: $(CLI_SOURCES) $(PROTO_GENERATED)
-	@echo building grind for linux amd64
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go install -tags netgo github.com/russross/codegrinder/cli
-	mv $(GOPATH)/bin/cli $@
-
-grind-linux-amd64: $(CODEGRINDERROOT)/www/grind.linux_amd64
-
-$(CODEGRINDERROOT)/www/grind.linux_arm: $(CLI_SOURCES) $(PROTO_GENERATED)
-	@echo building grind for linux arm32
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm go install -tags netgo github.com/russross/codegrinder/cli
-	mv $(GOPATH)/bin/linux_arm/cli $@
-
-grind-linux-arm: $(CODEGRINDERROOT)/www/grind.linux_arm
-
-$(CODEGRINDERROOT)/www/grind.linux_arm64: $(CLI_SOURCES) $(PROTO_GENERATED)
-	@echo building grind for linux arm64
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go install -tags netgo github.com/russross/codegrinder/cli
-	mv $(GOPATH)/bin/linux_arm64/cli $@
-
-grind-linux-arm64: $(CODEGRINDERROOT)/www/grind.linux_arm64
-
-$(CODEGRINDERROOT)/www/grind.linux_riscv64: $(CLI_SOURCES) $(PROTO_GENERATED)
-	@echo building grind for linux riscv64
-	CGO_ENABLED=0 GOOS=linux GOARCH=riscv64 go install -tags netgo github.com/russross/codegrinder/cli
-	mv $(GOPATH)/bin/linux_riscv64/cli $@
-
-grind-linux-riscv64: $(CODEGRINDERROOT)/www/grind.linux_riscv64
-
-$(CODEGRINDERROOT)/www/grind.darwin_amd64: $(CLI_SOURCES) $(PROTO_GENERATED)
-	@echo building grind for darwin amd64
-	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go install -tags netgo github.com/russross/codegrinder/cli
-	mv $(GOPATH)/bin/darwin_amd64/cli $@
-
-grind-darwin-amd64: $(CODEGRINDERROOT)/www/grind.darwin_amd64
-
-$(CODEGRINDERROOT)/www/grind.darwin_arm64: $(CLI_SOURCES) $(PROTO_GENERATED)
-	@echo building grind for darwin arm64
-	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go install -tags netgo github.com/russross/codegrinder/cli
-	mv $(GOPATH)/bin/darwin_arm64/cli $@
-
-grind-darwin-arm64: $(CODEGRINDERROOT)/www/grind.darwin_arm64
-
-$(CODEGRINDERROOT)/www/grind.exe: $(CLI_SOURCES) $(PROTO_GENERATED)
-	@echo building grind for windows amd64
-	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go install -tags netgo github.com/russross/codegrinder/cli
-	mv $(GOPATH)/bin/windows_amd64/cli.exe $@
-
-grind-windows-amd64: $(CODEGRINDERROOT)/www/grind.exe
+	rm -f $(SERVER_DIR)/codegrinder_pb2.py $(SERVER_DIR)/codegrinder_pb2.pyi $(SERVER_DIR)/codegrinder_pb2_grpc.py
+	rm -f $(CLI_DIR)/codegrinder_pb2.py $(CLI_DIR)/codegrinder_pb2.pyi $(CLI_DIR)/codegrinder_pb2_grpc.py
+	rm -f $(SERVER_DIR)/.coverage $(CLI_DIR)/.coverage
+	rm -rf $(SERVER_DIR)/htmlcov $(CLI_DIR)/htmlcov
+	rm -rf $(SERVER_DIR)/.pytest_cache $(CLI_DIR)/.pytest_cache
+	rm -rf $(SERVER_DIR)/.ty $(CLI_DIR)/.ty
+	rm -rf $(SERVER_DIR)/.ty_cache $(CLI_DIR)/.ty_cache
+	rm -rf $(SERVER_DIR)/.mypy_cache $(CLI_DIR)/.mypy_cache
+	rm -rf $(SERVER_DIR)/.ruff_cache $(CLI_DIR)/.ruff_cache
+	find $(SERVER_DIR) -type d -name '__pycache__' -prune -exec rm -rf {} +
+	find $(CLI_DIR) -type d -name '__pycache__' -prune -exec rm -rf {} +
+	find $(SERVER_DIR) -type d -name '*.egg-info' -prune -exec rm -rf {} +
+	find $(CLI_DIR) -type d -name '*.egg-info' -prune -exec rm -rf {} +
