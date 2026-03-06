@@ -13,12 +13,20 @@ class Config:
 
 @dataclass(slots=True)
 class ProblemInfo:
-    id: int
+    problem_id: str
     step: int
+    total_steps: int
+
+
+@dataclass(slots=True)
+class AssignmentRef:
+    user_id: str
+    course_id: str
+    problem_set_id: str
 
 
 @dataclass(slots=True)
 class DotFileInfo:
-    assignment_id: int
+    assignment_ref: AssignmentRef
     problems: dict[str, ProblemInfo]
     path: str

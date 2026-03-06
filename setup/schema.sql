@@ -1,287 +1,366 @@
 CREATE TABLE problem_types (
-    name                    text NOT NULL,
-    image                   text NOT NULL,
+    problem_type            text NOT NULL,
+    container               text NOT NULL,
 
-    PRIMARY KEY (name)
-);
+    PRIMARY KEY (problem_type),
+    CHECK (trim(problem_type) = problem_type AND length(problem_type) > 0),
+    CHECK (trim(container) = container AND length(container) > 0)
+) WITHOUT ROWID;
 
 CREATE TABLE problem_type_actions (
     problem_type            text NOT NULL,
     action                  text NOT NULL,
     command                 text NOT NULL,
     parser                  text CHECK(parser IS NULL OR parser IN ('xunit', 'check')),
-    message                 text NOT NULL,
-    interactive             boolean NOT NULL,
 
     max_cpu                 integer NOT NULL,
-    max_session             integer NOT NULL,
-    max_timeout             integer NOT NULL,
     max_fd                  integer NOT NULL,
     max_file_size           integer NOT NULL,
     max_memory              integer NOT NULL,
     max_threads             integer NOT NULL,
 
     PRIMARY KEY (problem_type, action),
-    FOREIGN KEY (problem_type) REFERENCES problem_types (name) ON DELETE CASCADE ON UPDATE CASCADE
-);
+    FOREIGN KEY (problem_type) REFERENCES problem_types (problem_type) ON DELETE CASCADE ON UPDATE CASCADE,
+    CHECK (trim(problem_type) = problem_type AND length(problem_type) > 0),
+    CHECK (trim(action) = action AND length(action) > 0),
+    CHECK (trim(command) = command AND length(command) > 0),
+    CHECK (parser IS NULL OR trim(parser) = parser),
+    CHECK (max_cpu > 0),
+    CHECK (max_fd > 0),
+    CHECK (max_file_size > 0),
+    CHECK (max_memory >= 0),
+    CHECK (max_threads > 0)
+) WITHOUT ROWID;
 
 CREATE TABLE problems (
-    id                      integer PRIMARY KEY,
-    unique_id               text NOT NULL,
-    note                    text NOT NULL,
-    tags                    text NOT NULL,
-    options                 text NOT NULL,
-    created_at              datetime NOT NULL,
-    updated_at              datetime NOT NULL
-);
-CREATE UNIQUE INDEX problems_unique_id ON problems (unique_id);
+    problem_id              text NOT NULL,
+    problem_note            text NOT NULL,
+    problem_tags            text NOT NULL,
+    problem_options         text NOT NULL,
+
+    problem_created_at      datetime NOT NULL,
+    problem_updated_at      datetime NOT NULL,
+
+    PRIMARY KEY (problem_id),
+    CHECK (trim(problem_id) = problem_id AND length(problem_id) > 0),
+    CHECK (trim(problem_note) = problem_note),
+    CHECK (json_valid(problem_tags) AND json_type(problem_tags) = 'array'),
+    CHECK (json_valid(problem_options) AND json_type(problem_options) = 'array'),
+    CHECK (problem_created_at <= problem_updated_at)
+) WITHOUT ROWID;
 
 CREATE TABLE problem_steps (
-    problem_id              integer NOT NULL,
-    step                    integer NOT NULL,
+    problem_id              text NOT NULL,
+    step_number             integer NOT NULL,
     problem_type            text NOT NULL,
-    note                    text NOT NULL,
-    instructions            text NOT NULL,
-    weight                  real NOT NULL,
-    whitelist               text NOT NULL,
+    step_note               text NOT NULL,
+    step_instructions       text NOT NULL,
+    step_weight             integer NOT NULL,
 
-    PRIMARY KEY (problem_id, step),
-    FOREIGN KEY (problem_id) REFERENCES problems (id) ON DELETE CASCADE ON UPDATE CASCADE,
-    FOREIGN KEY (problem_type) REFERENCES problem_types (name) ON DELETE RESTRICT ON UPDATE CASCADE
-);
+    PRIMARY KEY (problem_id, step_number),
+    FOREIGN KEY (problem_id) REFERENCES problems (problem_id) ON DELETE CASCADE ON UPDATE CASCADE,
+    FOREIGN KEY (problem_type) REFERENCES problem_types (problem_type) ON DELETE RESTRICT ON UPDATE CASCADE,
+    CHECK (trim(problem_type) = problem_type AND length(problem_type) > 0),
+    CHECK (trim(step_note) = step_note),
+    CHECK (trim(step_instructions) = step_instructions),
+    CHECK (step_number >= 1),
+    CHECK (step_weight > 0),
+    CHECK (typeof(step_weight) = 'integer')
+) WITHOUT ROWID;
 CREATE INDEX problem_steps_problem_type ON problem_steps (problem_type);
 
 CREATE TABLE problem_step_files (
-    problem_id              integer NOT NULL,
-    step                    integer NOT NULL,
+    problem_id              text NOT NULL,
+    step_number             integer NOT NULL,
     path                    text NOT NULL,
     content                 blob NOT NULL,
 
-    PRIMARY KEY (problem_id, step, path),
-    FOREIGN KEY (problem_id, step) REFERENCES problem_steps (problem_id, step) ON DELETE CASCADE ON UPDATE CASCADE
+    PRIMARY KEY (problem_id, step_number, path),
+    FOREIGN KEY (problem_id, step_number) REFERENCES problem_steps (problem_id, step_number) ON DELETE CASCADE ON UPDATE CASCADE,
+    CHECK (trim(path) = path AND length(path) > 0)
 ) WITHOUT ROWID;
 
 CREATE TABLE problem_step_solution_files (
-    problem_id              integer NOT NULL,
-    step                    integer NOT NULL,
+    problem_id              text NOT NULL,
+    step_number             integer NOT NULL,
     path                    text NOT NULL,
     content                 blob NOT NULL,
 
-    PRIMARY KEY (problem_id, step, path),
-    FOREIGN KEY (problem_id, step) REFERENCES problem_steps (problem_id, step) ON DELETE CASCADE ON UPDATE CASCADE
+    PRIMARY KEY (problem_id, step_number, path),
+    FOREIGN KEY (problem_id, step_number) REFERENCES problem_steps (problem_id, step_number) ON DELETE CASCADE ON UPDATE CASCADE,
+    CHECK (trim(path) = path AND length(path) > 0)
 ) WITHOUT ROWID;
 
 CREATE TABLE problem_sets (
-    id                      integer PRIMARY KEY,
-    unique_id               text NOT NULL,
-    note                    text NOT NULL,
-    tags                    text NOT NULL,
-    created_at              datetime NOT NULL,
-    updated_at              datetime NOT NULL
-);
-CREATE UNIQUE INDEX problem_sets_unique_id ON problem_sets (unique_id);
+    problem_set_id          text NOT NULL,
+    problem_set_note        text NOT NULL,
+    problem_set_tags        text NOT NULL,
+
+    problem_set_created_at  datetime NOT NULL,
+    problem_set_updated_at  datetime NOT NULL,
+
+    PRIMARY KEY (problem_set_id),
+    CHECK (trim(problem_set_id) = problem_set_id AND length(problem_set_id) > 0),
+    CHECK (trim(problem_set_note) = problem_set_note),
+    CHECK (json_valid(problem_set_tags) AND json_type(problem_set_tags) = 'array'),
+    CHECK (problem_set_created_at <= problem_set_updated_at)
+) WITHOUT ROWID;
 
 CREATE TABLE problem_set_problems (
-    problem_set_id          integer NOT NULL,
-    problem_id              integer NOT NULL,
-    weight                  real NOT NULL,
+    problem_set_id          text NOT NULL,
+    problem_id              text NOT NULL,
+    problem_weight          integer NOT NULL,
 
     PRIMARY KEY (problem_set_id, problem_id),
-    FOREIGN KEY (problem_set_id) REFERENCES problem_sets (id) ON DELETE CASCADE ON UPDATE CASCADE,
-    FOREIGN KEY (problem_id) REFERENCES problems (id) ON DELETE CASCADE ON UPDATE CASCADE
-);
+    FOREIGN KEY (problem_set_id) REFERENCES problem_sets (problem_set_id) ON DELETE CASCADE ON UPDATE CASCADE,
+    FOREIGN KEY (problem_id) REFERENCES problems (problem_id) ON DELETE CASCADE ON UPDATE CASCADE,
+    CHECK (problem_weight > 0),
+    CHECK (typeof(problem_weight) = 'integer')
+) WITHOUT ROWID;
 CREATE INDEX problem_set_problems_problem_id ON problem_set_problems (problem_id);
 
-CREATE TABLE courses (
-    id                      integer PRIMARY KEY,
-    name                    text NOT NULL,
-    lti_label               text NOT NULL,
-    lti_id                  text NOT NULL,
-    canvas_id               integer NOT NULL,
-    created_at              datetime NOT NULL,
-    updated_at              datetime NOT NULL
-);
-CREATE UNIQUE INDEX courses_lti_id ON courses (lti_id);
-CREATE UNIQUE INDEX courses_canvas_id ON courses (canvas_id);
-
 CREATE TABLE users (
-    id                      integer PRIMARY KEY,
-    name                    text NOT NULL,
-    email                   text NOT NULL,
-    lti_id                  text NOT NULL,
-    lti_image_url           text,
-    canvas_login            text NOT NULL,
-    canvas_id               integer NOT NULL,
-    author                  boolean NOT NULL,
-    admin                   boolean NOT NULL,
-    created_at              datetime NOT NULL,
-    updated_at              datetime NOT NULL,
-    last_signed_in_at       datetime NOT NULL
-);
-CREATE UNIQUE INDEX users_lti_id ON users (lti_id);
-CREATE UNIQUE INDEX users_canvas_login ON users (canvas_login);
-CREATE UNIQUE INDEX users_canvas_id ON users (canvas_id);
+    user_id                 text NOT NULL,
+    user_name               text NOT NULL,
+    user_login              text NOT NULL,
+
+    PRIMARY KEY (user_id),
+    UNIQUE (user_login),
+    CHECK (trim(user_id) = user_id AND length(user_id) > 0),
+    CHECK (trim(user_name) = user_name AND length(user_name) > 0),
+    CHECK (trim(user_login) = user_login AND length(user_login) > 0)
+) WITHOUT ROWID;
+
+CREATE TABLE authors (
+    user_id                 text NOT NULL,
+
+    PRIMARY KEY (user_id),
+    FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE ON UPDATE CASCADE,
+    CHECK (trim(user_id) = user_id AND length(user_id) > 0)
+) WITHOUT ROWID;
+
+CREATE TABLE courses (
+    course_id               text NOT NULL,
+    course_name             text NOT NULL,
+
+    PRIMARY KEY (course_id),
+    CHECK (trim(course_id) = course_id AND length(course_id) > 0),
+    CHECK (trim(course_name) = course_name AND length(course_name) > 0)
+) WITHOUT ROWID;
+
+CREATE TABLE user_courses (
+    user_id                 text NOT NULL,
+    course_id               text NOT NULL,
+    course_roles            text NOT NULL,
+    is_instructor           boolean GENERATED ALWAYS AS (
+        CASE
+            WHEN instr(',' || replace(course_roles, ' ', '') || ',', ',Instructor,') > 0
+                OR instr(',' || replace(course_roles, ' ', '') || ',', ',urn:lti:role:ims/lis/TeachingAssistant,') > 0
+            THEN 1
+            ELSE 0
+        END
+    ) STORED,
+
+    PRIMARY KEY (user_id, course_id),
+    FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE ON UPDATE CASCADE,
+    FOREIGN KEY (course_id) REFERENCES courses (course_id) ON DELETE CASCADE ON UPDATE CASCADE,
+    CHECK (trim(course_roles) = course_roles AND length(course_roles) > 0)
+) WITHOUT ROWID;
 
 CREATE TABLE assignments (
-    id                      integer PRIMARY KEY,
-    course_id               integer NOT NULL,
-    problem_set_id          integer NOT NULL,
-    user_id                 integer NOT NULL,
-    roles                   text NOT NULL,
-    instructor              boolean NOT NULL,
+    user_id                 text NOT NULL,
+    course_id               text NOT NULL,
+    problem_set_id          text NOT NULL,
+
     restricted              boolean NOT NULL,
-    raw_scores              text NOT NULL,
-    score                   real,
     grade_id                text,
-    lti_id                  text NOT NULL,
-    canvas_title            text NOT NULL,
-    canvas_id               integer NOT NULL,
-    canvas_api_domain       text NOT NULL,
     outcome_url             text NOT NULL,
-    outcome_ext_url         text NOT NULL,
     outcome_ext_accepted    text NOT NULL,
-    finished_url            text NOT NULL,
     consumer_key            text NOT NULL,
+
     unlock_at               datetime,
     due_at                  datetime,
     lock_at                 datetime,
-    created_at              datetime NOT NULL,
-    updated_at              datetime NOT NULL,
 
-    FOREIGN KEY (course_id) REFERENCES courses (id) ON DELETE CASCADE ON UPDATE CASCADE,
-    FOREIGN KEY (problem_set_id) REFERENCES problem_sets (id) ON DELETE CASCADE ON UPDATE CASCADE,
-    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE ON UPDATE CASCADE
-);
-CREATE UNIQUE INDEX assignments_unique_user ON assignments (user_id, lti_id);
-CREATE UNIQUE INDEX assignments_grade_id ON assignments (grade_id);
-CREATE INDEX assignments_instructor_lti_id ON assignments (instructor, lti_id);
-CREATE INDEX assignments_course_id_problem_set_id ON assignments (course_id, problem_set_id);
-CREATE INDEX assignments_user_id_problem_set_id ON assignments (user_id, problem_set_id);
-CREATE INDEX assignments_problem_set_id ON assignments (problem_set_id);
+    PRIMARY KEY (user_id, course_id, problem_set_id),
+    FOREIGN KEY (user_id, course_id) REFERENCES user_courses (user_id, course_id) ON DELETE CASCADE ON UPDATE CASCADE,
+    FOREIGN KEY (problem_set_id) REFERENCES problem_sets (problem_set_id) ON DELETE CASCADE ON UPDATE CASCADE,
+    UNIQUE (grade_id),
+    CHECK (restricted IN (0, 1)),
+    CHECK (grade_id IS NULL OR (trim(grade_id) = grade_id AND length(grade_id) > 0)),
+    CHECK (trim(outcome_url) = outcome_url AND length(outcome_url) > 0),
+    CHECK (trim(outcome_ext_accepted) = outcome_ext_accepted AND length(outcome_ext_accepted) > 0),
+    CHECK (trim(consumer_key) = consumer_key AND length(consumer_key) > 0),
+    CHECK (unlock_at IS NULL OR due_at IS NULL OR unlock_at <= due_at),
+    CHECK (due_at IS NULL OR lock_at IS NULL OR due_at <= lock_at)
+) WITHOUT ROWID;
+
+CREATE INDEX assignments_course_problem_set ON assignments (course_id, problem_set_id);
+CREATE INDEX assignments_user_problem_set ON assignments (user_id, problem_set_id);
+CREATE INDEX assignments_problem_set ON assignments (problem_set_id);
 
 CREATE TABLE commits (
-    id                      integer PRIMARY KEY,
-    assignment_id           integer NOT NULL,
-    problem_id              integer NOT NULL,
-    step                    integer NOT NULL,
-    action                  text,
-    note                    text,
+    user_id                 text NOT NULL,
+    course_id               text NOT NULL,
+    problem_set_id          text NOT NULL,
+    problem_id              text NOT NULL,
+    step_number             integer NOT NULL,
+    action                  text NOT NULL,
+    note                    text NOT NULL,
     transcript              text NOT NULL,
     report_card             text NOT NULL,
     score                   real,
-    created_at              datetime NOT NULL,
-    updated_at              datetime NOT NULL,
 
-    FOREIGN KEY (assignment_id) REFERENCES assignments (id) ON DELETE CASCADE ON UPDATE CASCADE,
-    FOREIGN KEY (problem_id, step) REFERENCES problem_steps (problem_id, step) ON DELETE CASCADE ON UPDATE CASCADE
-);
-CREATE UNIQUE INDEX commits_unique_assignment_problem_step ON commits (assignment_id, problem_id, step);
-CREATE INDEX commits_problem_id_step ON commits (problem_id, step);
+    commit_created_at       datetime NOT NULL,
+    commit_updated_at       datetime NOT NULL,
+
+    PRIMARY KEY (user_id, course_id, problem_set_id, problem_id, step_number),
+    FOREIGN KEY (user_id, course_id, problem_set_id) REFERENCES assignments (user_id, course_id, problem_set_id) ON DELETE CASCADE ON UPDATE CASCADE,
+    FOREIGN KEY (problem_id, step_number) REFERENCES problem_steps (problem_id, step_number) ON DELETE CASCADE ON UPDATE CASCADE,
+    CHECK (step_number >= 1),
+    CHECK (trim(action) = action),
+    CHECK (trim(note) = note),
+    CHECK (json_valid(transcript) AND json_type(transcript) = 'array'),
+    CHECK (json_valid(report_card) AND json_type(report_card) IN ('object', 'null')),
+    CHECK (score IS NULL OR (score >= 0.0 AND score <= 1.0)),
+    CHECK (commit_created_at <= commit_updated_at)
+) WITHOUT ROWID;
+CREATE INDEX commits_problem_step ON commits (problem_id, step_number);
 
 CREATE TABLE commit_files (
-    commit_id               integer NOT NULL,
+    user_id                 text NOT NULL,
+    course_id               text NOT NULL,
+    problem_set_id          text NOT NULL,
+    problem_id              text NOT NULL,
+    step_number             integer NOT NULL,
     path                    text NOT NULL,
     content                 blob NOT NULL,
 
-    PRIMARY KEY (commit_id, path),
-    FOREIGN KEY (commit_id) REFERENCES commits (id) ON DELETE CASCADE ON UPDATE CASCADE
+    PRIMARY KEY (user_id, course_id, problem_set_id, problem_id, step_number, path),
+    FOREIGN KEY (user_id, course_id, problem_set_id, problem_id, step_number)
+        REFERENCES commits (user_id, course_id, problem_set_id, problem_id, step_number)
+        ON DELETE CASCADE ON UPDATE CASCADE
+    CHECK (trim(path) = path AND length(path) > 0)
 ) WITHOUT ROWID;
 
-CREATE VIEW assts AS
-    SELECT
-        courses.name AS course_name,
-        unique_id, note,
-        canvas_title, score,
-        users.name AS user_name, email,
-        assignments.id AS assignment_id
-    FROM assignments
-    JOIN courses ON assignments.course_id = courses.id
-    JOIN problem_sets ON assignments.problem_set_id = problem_sets.id
-    JOIN users ON assignments.user_id = users.id;
-
 CREATE VIEW user_problem_sets AS
-    SELECT DISTINCT assignments.user_id, problem_sets.id AS problem_set_id
+    SELECT DISTINCT assignments.user_id, assignments.problem_set_id
     FROM assignments
-    JOIN problem_sets ON assignments.problem_set_id = problem_sets.id
-    WHERE assignments.problem_set_id IS NOT NULL
     UNION
-    SELECT DISTINCT instructors.id AS user_id, assignments.problem_set_id AS problem_set_id
-    FROM users AS instructors
-    JOIN assignments AS instructors_assignments ON instructors.id = instructors_assignments.user_id
-    JOIN courses ON instructors_assignments.course_id = courses.id
-    JOIN assignments ON courses.id = assignments.course_id
-    WHERE instructors_assignments.instructor
-    AND assignments.problem_set_id IS NOT NULL
-    AND instructors_assignments.problem_set_id IS NOT NULL;
+    SELECT DISTINCT instructors.user_id, assignments.problem_set_id
+    FROM user_courses AS instructors
+    JOIN assignments ON instructors.course_id = assignments.course_id
+    WHERE instructors.is_instructor;
 
 CREATE VIEW user_problems AS
-    SELECT DISTINCT assignments.user_id, problem_set_problems.problem_id
-    FROM assignments
-    JOIN problem_sets ON assignments.problem_set_id = problem_sets.id
-    JOIN problem_set_problems ON problem_sets.id = problem_set_problems.problem_set_id
-    WHERE assignments.problem_set_id IS NOT NULL
-    UNION
-    SELECT DISTINCT instructors.id AS user_id, problem_set_problems.problem_id
-    FROM users AS instructors
-    JOIN assignments AS instructors_assignments ON instructors.id = instructors_assignments.user_id
-    JOIN courses ON instructors_assignments.course_id = courses.id
-    JOIN assignments ON courses.id = assignments.course_id
-    JOIN problem_sets ON assignments.problem_set_id = problem_sets.id
-    JOIN problem_set_problems ON problem_sets.id = problem_set_problems.problem_id
-    WHERE instructors_assignments.instructor
-    AND assignments.problem_set_id IS NOT NULL
-    AND instructors_assignments.problem_set_id IS NOT NULL;
+    SELECT DISTINCT user_problem_sets.user_id, problem_set_problems.problem_id
+    FROM user_problem_sets
+    NATURAL JOIN problem_set_problems;
 
 CREATE VIEW user_users AS
-    SELECT DISTINCT instructors.id AS user_id, users.id AS other_user_id
-    FROM users AS instructors
-    JOIN assignments AS instructors_assignments ON instructors.id = instructors_assignments.user_id
-    JOIN courses ON instructors_assignments.course_id = courses.id
-    JOIN assignments ON courses.id = assignments.course_id
-    JOIN users ON assignments.user_id = users.id
-    WHERE instructors_assignments.instructor
+    SELECT DISTINCT instructors.user_id AS viewer_user_id, assignments.user_id AS other_user_id
+    FROM user_courses AS instructors
+    JOIN assignments ON instructors.course_id = assignments.course_id
+    WHERE instructors.is_instructor
     UNION
-    SELECT id as user_id, id AS other_user_id
-    FROM users;
+    SELECT user_id AS viewer_user_id, user_id AS other_user_id FROM users;
 
 CREATE VIEW user_assignments AS
-    SELECT user_id, assignment_id, MIN(restricted) AS restricted
+    SELECT viewer_user_id, asst_user_id AS assignment_user_id, course_id, problem_set_id, MIN(restricted) AS restricted
     FROM (
-        -- student-facing: their own assignment with stored restriction
-        SELECT user_id, id AS assignment_id, restricted
+        SELECT assignments.user_id AS viewer_user_id, assignments.user_id AS asst_user_id, assignments.course_id, assignments.problem_set_id, assignments.restricted
         FROM assignments
         UNION ALL
-        -- instructor-facing: all assignments in courses they instruct, never restricted
-        SELECT instructors_assignments.user_id, assignments.id AS assignment_id, 0 AS restricted
+        SELECT instructors.user_id AS viewer_user_id, assignments.user_id AS asst_user_id, assignments.course_id, assignments.problem_set_id, 0 AS restricted
         FROM assignments
-        JOIN assignments AS instructors_assignments
-            ON instructors_assignments.course_id = assignments.course_id
-            AND instructors_assignments.instructor
+        JOIN user_courses AS instructors
+            ON instructors.course_id = assignments.course_id
+            AND instructors.is_instructor
     )
-    GROUP BY user_id, assignment_id;
+    GROUP BY viewer_user_id, asst_user_id, course_id, problem_set_id;
 
 CREATE VIEW assignment_search_fields AS
-    SELECT assignments.id AS assignment_id,
-        assignments.canvas_title || ',' ||
-        courses.name || ',' ||
-        users.name || ',' || users.email || ',' ||
-        problem_sets.unique_id || ',' || problem_sets.note || ',' || problem_sets.tags AS search_text
+    SELECT
+        assignments.user_id,
+        assignments.course_id,
+        assignments.problem_set_id,
+        courses.course_name || ',' ||
+        users.user_name || ',' || users.user_login || ',' ||
+        problem_sets.problem_set_id || ',' || problem_sets.problem_set_note || ',' || problem_sets.problem_set_tags AS search_text
     FROM assignments
-    JOIN courses ON assignments.course_id = courses.id
-    JOIN users ON assignments.user_id = users.id
-    JOIN problem_sets ON assignments.problem_set_id = problem_sets.id
-    WHERE assignments.problem_set_id IS NOT NULL;
+    NATURAL JOIN courses
+    NATURAL JOIN users
+    NATURAL JOIN problem_sets;
+
+CREATE VIEW assignment_scores AS
+WITH problem_step_scores AS (
+    SELECT
+        assignments.user_id,
+        assignments.course_id,
+        assignments.problem_set_id,
+        problem_set_problems.problem_id,
+        CAST(problem_set_problems.problem_weight AS REAL) AS problem_weight,
+        problem_steps.step_number,
+        CAST(problem_steps.step_weight AS REAL) AS step_weight,
+        commits.score AS commit_score
+    FROM assignments
+    NATURAL JOIN problem_set_problems
+    NATURAL JOIN problem_steps
+    NATURAL LEFT JOIN commits
+),
+problem_scores AS (
+    SELECT
+        user_id,
+        course_id,
+        problem_set_id,
+        problem_id,
+        problem_weight,
+        CASE
+            WHEN SUM(step_weight) <= 0 THEN 0.0
+            ELSE SUM(COALESCE(commit_score, 0.0) * step_weight) / CAST(SUM(step_weight) AS REAL)
+        END AS problem_score
+    FROM problem_step_scores
+    GROUP BY user_id, course_id, problem_set_id, problem_id, problem_weight
+)
+SELECT
+    user_id,
+    course_id,
+    problem_set_id,
+    CASE
+        WHEN SUM(problem_weight) <= 0 THEN 0.0
+        ELSE SUM(problem_score * problem_weight) / CAST(SUM(problem_weight) AS REAL)
+    END AS assignment_score
+FROM problem_scores
+GROUP BY user_id, course_id, problem_set_id;
+
+CREATE VIEW problem_step_whitelist AS
+SELECT
+    problem_steps.problem_id,
+    problem_steps.step_number,
+    COALESCE(
+        (
+            SELECT json_group_object(paths.path, 1)
+            FROM (
+                SELECT DISTINCT problem_step_files.path
+                FROM problem_step_files
+                WHERE problem_step_files.problem_id = problem_steps.problem_id
+                    AND problem_step_files.step_number <= problem_steps.step_number
+                ORDER BY problem_step_files.path
+            ) AS paths
+        ),
+        '{}'
+    ) AS whitelist
+FROM problem_steps;
 
 CREATE VIEW problem_set_search_fields AS
-    SELECT problem_sets.id AS problem_set_id,
-        problem_sets.unique_id || ',' ||
-        problem_sets.note || ',' ||
-        problem_sets.tags || ',' ||
-        group_concat(problems.unique_id, ',') || ',' ||
-        group_concat(problems.note, ',') || ',' ||
-        group_concat(problems.tags, ',')
-        AS search_text
+    SELECT problem_sets.problem_set_id,
+        problem_sets.problem_set_id || ',' ||
+        problem_sets.problem_set_note || ',' ||
+        problem_sets.problem_set_tags || ',' ||
+        group_concat(problems.problem_id, ',') || ',' ||
+        group_concat(problems.problem_note, ',') || ',' ||
+        group_concat(problems.problem_tags, ',')
     FROM problem_sets
-    JOIN problem_set_problems ON problem_sets.id = problem_set_problems.problem_set_id
-    JOIN problems ON problem_set_problems.problem_id = problems.id
-    GROUP BY problem_sets.id;
+    NATURAL JOIN problem_set_problems
+    NATURAL JOIN problems
+    GROUP BY problem_sets.problem_set_id;

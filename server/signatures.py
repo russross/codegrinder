@@ -4,7 +4,8 @@ import base64
 import hmac
 from datetime import UTC, datetime
 from hashlib import sha256
-from urllib.parse import urlencode
+
+import codegrinder_pb2 as pb
 
 
 def escape(value: str) -> str:
@@ -34,6 +35,32 @@ def encode_params(values: dict[str, list[str]]) -> bytes:
 def hmac_sha256_base64(secret: str, payload: bytes) -> str:
     mac = hmac.new(secret.encode("utf-8"), payload, sha256)
     return base64.b64encode(mac.digest()).decode("ascii")
+
+
+def sign_blob(secret: str, payload: bytes) -> str:
+    return hmac_sha256_base64(secret, payload)
+
+
+def verify_blob_signature(secret: str, payload: bytes, signature: str) -> None:
+    expected = sign_blob(secret, payload)
+    if not hmac.compare_digest(expected, signature):
+        raise ValueError("grading commit signature mismatch")
+
+
+def encode_signed_grading_commit(commit: pb.GradingCommit, secret: str) -> pb.SignedGradingCommit:
+    payload = commit.SerializeToString()
+    return pb.SignedGradingCommit(commit=payload, signature=sign_blob(secret, payload))
+
+
+def decode_signed_grading_commit(envelope: pb.SignedGradingCommit, secret: str) -> pb.GradingCommit:
+    if envelope.commit == b"":
+        raise ValueError("signed grading commit must include encoded commit bytes")
+    if envelope.signature == "":
+        raise ValueError("signed grading commit must include a signature")
+    verify_blob_signature(secret, envelope.commit, envelope.signature)
+    commit = pb.GradingCommit()
+    commit.ParseFromString(envelope.commit)
+    return commit
 
 
 def compute_daycare_registration_signature(

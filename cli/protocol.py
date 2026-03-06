@@ -4,7 +4,7 @@ import base64
 import hashlib
 import hmac
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC
 from typing import Any
 from urllib.parse import quote
 

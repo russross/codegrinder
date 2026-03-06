@@ -66,100 +66,77 @@ def _json_load(raw: Any, fallback: Any) -> Any:
 
 def user_row_to_pb(row: Any) -> pb.User:
     return pb.User(
-        id=int(row["id"]),
-        name=str(row["name"]),
-        email=str(row["email"]),
-        lti_id=str(row["lti_id"]),
-        image_url=str(row["lti_image_url"] or ""),
-        canvas_login=str(row["canvas_login"] or ""),
-        canvas_id=int(row["canvas_id"] or 0),
-        author=bool(row["author"]),
-        admin=bool(row["admin"]),
-        created_at=to_timestamp(row["created_at"]),
-        updated_at=to_timestamp(row["updated_at"]),
-        last_signed_in_at=to_timestamp(row["last_signed_in_at"]),
+        user_id=str(row["user_id"]),
+        user_name=str(row["user_name"]),
+        user_login=str(row["user_login"]),
+        author=bool(row["author"]) if "author" in row.keys() else False,
     )
 
 
 def course_row_to_pb(row: Any) -> pb.Course:
     return pb.Course(
-        id=int(row["id"]),
-        name=str(row["name"]),
-        label=str(row["lti_label"]),
-        lti_id=str(row["lti_id"]),
-        canvas_id=int(row["canvas_id"] or 0),
-        created_at=to_timestamp(row["created_at"]),
-        updated_at=to_timestamp(row["updated_at"]),
+        course_id=str(row["course_id"]),
+        course_name=str(row["course_name"]),
     )
 
 
 def assignment_row_to_pb(row: Any) -> pb.Assignment:
-    loaded_scores = _json_load(row["raw_scores"], {})
-    raw_scores = loaded_scores if isinstance(loaded_scores, dict) else {}
-    mapped: dict[str, pb.ScoreList] = {}
-    for key, values in raw_scores.items():
-        score_values: list[float] = []
-        if isinstance(values, list):
-            for value in values:
-                try:
-                    score_values.append(float(value))
-                except (TypeError, ValueError):
-                    continue
-        mapped[str(key)] = pb.ScoreList(scores=score_values)
-
     return pb.Assignment(
-        id=int(row["id"]),
-        course_id=int(row["course_id"]),
-        problem_set_id=int(row["problem_set_id"] or 0),
-        user_id=int(row["user_id"]),
-        roles=str(row["roles"] or ""),
-        instructor=bool(row["instructor"]),
-        raw_scores=mapped,
-        score=float(row["score"] or 0.0),
+        user_id=str(row["user_id"]),
+        course_id=str(row["course_id"]),
+        problem_set_id=str(row["problem_set_id"] or ""),
+        restricted=bool(row["restricted"]),
         grade_id=str(row["grade_id"] or ""),
-        lti_id=str(row["lti_id"] or ""),
-        canvas_title=str(row["canvas_title"] or ""),
-        canvas_id=int(row["canvas_id"] or 0),
-        canvas_api_domain=str(row["canvas_api_domain"] or ""),
         outcome_url=str(row["outcome_url"] or ""),
-        outcome_ext_url=str(row["outcome_ext_url"] or ""),
         outcome_ext_accepted=str(row["outcome_ext_accepted"] or ""),
-        finished_url=str(row["finished_url"] or ""),
         consumer_key=str(row["consumer_key"] or ""),
         unlock_at=to_timestamp(row["unlock_at"]),
         due_at=to_timestamp(row["due_at"]),
         lock_at=to_timestamp(row["lock_at"]),
-        created_at=to_timestamp(row["created_at"]),
-        updated_at=to_timestamp(row["updated_at"]),
+    )
+
+
+def assignment_list_item_row_to_pb(row: Any) -> pb.AssignmentListItem:
+    return pb.AssignmentListItem(
+        assignment=pb.AssignmentKey(
+            user_id=str(row["user_id"]),
+            course_id=str(row["course_id"]),
+            problem_set_id=str(row["problem_set_id"] or ""),
+        ),
+        problem_set_note=str(row["problem_set_note"] or ""),
+        unlock_at=to_timestamp(row["unlock_at"]),
+        due_at=to_timestamp(row["due_at"]),
+        lock_at=to_timestamp(row["lock_at"]),
+        course_name=str(row["course_name"] or ""),
+        user_name=str(row["user_name"] or ""),
+        user_login=str(row["user_login"] or ""),
     )
 
 
 def problem_set_row_to_pb(row: Any) -> pb.ProblemSet:
-    loaded_tags = _json_load(row["tags"], [])
+    loaded_tags = _json_load(row["problem_set_tags"], [])
     tags = loaded_tags if isinstance(loaded_tags, list) else []
     return pb.ProblemSet(
-        id=int(row["id"]),
-        unique=str(row["unique_id"]),
-        note=str(row["note"]),
-        tags=[str(x) for x in tags],
-        created_at=to_timestamp(row["created_at"]),
-        updated_at=to_timestamp(row["updated_at"]),
+        problem_set_id=str(row["problem_set_id"]),
+        problem_set_note=str(row["problem_set_note"]),
+        problem_set_tags=[str(x) for x in tags],
+        created_at=to_timestamp(row["problem_set_created_at"]),
+        updated_at=to_timestamp(row["problem_set_updated_at"]),
     )
 
 
 def problem_row_to_pb(row: Any) -> pb.Problem:
-    loaded_tags = _json_load(row["tags"], [])
+    loaded_tags = _json_load(row["problem_tags"], [])
     tags = loaded_tags if isinstance(loaded_tags, list) else []
-    loaded_options = _json_load(row["options"], [])
+    loaded_options = _json_load(row["problem_options"], [])
     options = loaded_options if isinstance(loaded_options, list) else []
     return pb.Problem(
-        id=int(row["id"]),
-        unique=str(row["unique_id"]),
-        note=str(row["note"]),
-        tags=[str(x) for x in tags],
-        options=[str(x) for x in options],
-        created_at=to_timestamp(row["created_at"]),
-        updated_at=to_timestamp(row["updated_at"]),
+        problem_id=str(row["problem_id"]),
+        problem_note=str(row["problem_note"]),
+        problem_tags=[str(x) for x in tags],
+        problem_options=[str(x) for x in options],
+        created_at=to_timestamp(row["problem_created_at"]),
+        updated_at=to_timestamp(row["problem_updated_at"]),
     )
 
 
@@ -167,21 +144,21 @@ def problem_step_row_to_pb(row: Any) -> pb.ProblemStep:
     loaded_whitelist = _json_load(row["whitelist"], {})
     whitelist = loaded_whitelist if isinstance(loaded_whitelist, dict) else {}
     return pb.ProblemStep(
-        problem_id=int(row["problem_id"]),
-        step=int(row["step"]),
+        problem_id=str(row["problem_id"]),
+        step=int(row["step_number"]),
         problem_type=str(row["problem_type"]),
-        note=str(row["note"]),
-        instructions=str(row["instructions"]),
-        weight=float(row["weight"]),
+        note=str(row["step_note"]),
+        instructions=str(row["step_instructions"]),
+        weight=float(row["step_weight"]),
         whitelist={str(k): bool(v) for k, v in whitelist.items()},
     )
 
 
 def problem_set_problem_row_to_pb(row: Any) -> pb.ProblemSetProblem:
     return pb.ProblemSetProblem(
-        problem_set_id=int(row["problem_set_id"]),
-        problem_id=int(row["problem_id"]),
-        weight=float(row["weight"]),
+        problem_set_id=str(row["problem_set_id"]),
+        problem_id=str(row["problem_id"]),
+        weight=float(row["problem_weight"]),
     )
 
 
@@ -286,17 +263,21 @@ def commit_row_to_pb(row: Any, files: dict[str, bytes]) -> pb.Commit:
     ]
     rc = report_card_from_json(row["report_card"])
     commit = pb.Commit(
-        id=int(row["id"]),
-        assignment_id=int(row["assignment_id"]),
-        problem_id=int(row["problem_id"]),
-        step=int(row["step"]),
+        id=0,
+        assignment=pb.AssignmentKey(
+            user_id=str(row["user_id"]),
+            course_id=str(row["course_id"]),
+            problem_set_id=str(row["problem_set_id"]),
+        ),
+        problem_id=str(row["problem_id"]),
+        step=int(row["step_number"]),
         action=str(row["action"] or ""),
         note=str(row["note"] or ""),
         files=files,
         transcript=transcript,
         score=float(row["score"] or 0.0),
-        created_at=to_timestamp(row["created_at"]),
-        updated_at=to_timestamp(row["updated_at"]),
+        created_at=to_timestamp(row["commit_created_at"]),
+        updated_at=to_timestamp(row["commit_updated_at"]),
     )
     if rc is not None:
         commit.report_card.CopyFrom(rc)

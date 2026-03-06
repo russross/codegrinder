@@ -322,21 +322,21 @@ class LTIService:
 
         now = self._now()
         with transaction(self._conn) as tx:
-            problem_set_id = 0
+            problem_set_id = ""
             if unique != BOOTSTRAP_ASSIGNMENT_NAME:
-                row = tx.execute("SELECT id FROM problem_sets WHERE unique_id = ?", (unique,)).fetchone()
+                row = tx.execute("SELECT problem_set_id FROM problem_sets WHERE problem_set_id = ?", (unique,)).fetchone()
                 if row is None:
                     raise LTIError(HTTPStatus.NOT_FOUND, "problem set not found")
-                problem_set_id = int(row["id"])
+                problem_set_id = str(row["problem_set_id"])
 
             course_id, course_label = self._get_update_course(tx, form, now)
             user_id = self._get_update_user(tx, form, now)
-            assignment_id = 0
+            self._get_update_user_course(tx, form, user_id, course_id)
+            assignment_key = ""
             if unique != BOOTSTRAP_ASSIGNMENT_NAME:
-                assignment_id = self._get_update_assignment(
+                assignment_key = self._get_update_assignment(
                     tx=tx,
                     form=form,
-                    now=now,
                     course_id=course_id,
                     user_id=user_id,
                     problem_set_id=problem_set_id,
@@ -347,7 +347,7 @@ class LTIService:
         cookie_value = encode_session(session, self._config.session_secret)
         set_cookie = _build_set_cookie(cookie_value, session.expires_at, now)
         key = self._logins.insert(user_id, now)
-        location = f"/{ui}/?assignment={assignment_id}&session={key}&course={quote_plus(course_label)}"
+        location = f"/{ui}/?assignment={quote_plus(assignment_key)}&session={key}&course={quote_plus(course_label)}"
         return LTIResponse(
             status=HTTPStatus.SEE_OTHER,
             content_type="text/plain; charset=utf-8",
@@ -356,89 +356,74 @@ class LTIService:
             set_cookie=set_cookie,
         )
 
-    def _get_update_user(self, tx: sqlite3.Connection, form: dict[str, list[str]], now: datetime) -> int:
-        row = tx.execute("SELECT * FROM users WHERE lti_id = ?", (_form_first(form, "user_id"),)).fetchone()
-        name = _form_first(form, "lis_person_name_full")
-        email = _form_first(form, "lis_person_contact_email_primary")
-        lti_id = _form_first(form, "user_id")
-        image = _form_first(form, "user_image")
-        canvas_login = _form_first(form, "custom_canvas_user_login_id")
-        canvas_id = _form_int(form, "custom_canvas_user_id")
-        now_sql = _to_sql_dt(now)
+    def _get_update_user(self, tx: sqlite3.Connection, form: dict[str, list[str]], _now: datetime) -> str:
+        user_id = _form_first(form, "user_id")
+        row = tx.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
+        user_name = _form_first(form, "lis_person_name_full")
+        user_login = _form_first(form, "custom_canvas_user_login_id")
         if row is None:
-            cur = tx.execute(
-                "INSERT INTO users(name, email, lti_id, lti_image_url, canvas_login, canvas_id, author, admin, created_at, updated_at, last_signed_in_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?)",
-                (name, email, lti_id, image, canvas_login, canvas_id, now_sql, now_sql, now_sql),
+            tx.execute(
+                "INSERT INTO users(user_id, user_name, user_login) VALUES (?, ?, ?)",
+                (user_id, user_name, user_login),
             )
-            return _required_lastrowid(cur.lastrowid)
+            return user_id
 
         changed = (
-            str(row["name"]) != name
-            or str(row["email"]) != email
-            or str(row["lti_id"]) != lti_id
-            or str(row["lti_image_url"] or "") != image
-            or str(row["canvas_login"]) != canvas_login
-            or int(row["canvas_id"]) != canvas_id
-        )
-        updated_at = now_sql if changed else row["updated_at"]
-        tx.execute(
-            "UPDATE users SET name = ?, email = ?, lti_id = ?, lti_image_url = ?, canvas_login = ?, canvas_id = ?, updated_at = ?, last_signed_in_at = ? WHERE id = ?",
-            (name, email, lti_id, image, canvas_login, canvas_id, updated_at, now_sql, int(row["id"])),
-        )
-        return int(row["id"])
-
-    def _get_update_course(self, tx: sqlite3.Connection, form: dict[str, list[str]], now: datetime) -> tuple[int, str]:
-        row = tx.execute("SELECT * FROM courses WHERE lti_id = ?", (_form_first(form, "context_id"),)).fetchone()
-        name = _form_first(form, "context_title")
-        label = _form_first(form, "context_label")
-        lti_id = _form_first(form, "context_id")
-        canvas_id = _form_int(form, "custom_canvas_course_id")
-        now_sql = _to_sql_dt(now)
-        if row is None:
-            cur = tx.execute(
-                "INSERT INTO courses(name, lti_label, lti_id, canvas_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (name, label, lti_id, canvas_id, now_sql, now_sql),
-            )
-            return _required_lastrowid(cur.lastrowid), label
-
-        changed = (
-            str(row["name"]) != name
-            or str(row["lti_label"]) != label
-            or str(row["lti_id"]) != lti_id
-            or int(row["canvas_id"]) != canvas_id
+            str(row["user_name"]) != user_name
+            or str(row["user_login"]) != user_login
         )
         if changed:
+            tx.execute("UPDATE users SET user_name = ?, user_login = ? WHERE user_id = ?", (user_name, user_login, user_id))
+        return user_id
+
+    def _get_update_course(self, tx: sqlite3.Connection, form: dict[str, list[str]], _now: datetime) -> tuple[str, str]:
+        course_id = _form_first(form, "context_id")
+        row = tx.execute("SELECT * FROM courses WHERE course_id = ?", (course_id,)).fetchone()
+        course_name = _form_first(form, "context_title")
+        course_label = _form_first(form, "context_label")
+        if row is None:
+            tx.execute("INSERT INTO courses(course_id, course_name) VALUES (?, ?)", (course_id, course_name))
+            return course_id, course_label
+
+        changed = str(row["course_name"]) != course_name
+        if changed:
+            tx.execute("UPDATE courses SET course_name = ? WHERE course_id = ?", (course_name, course_id))
+        return course_id, course_label
+
+    def _get_update_user_course(
+        self,
+        tx: sqlite3.Connection,
+        form: dict[str, list[str]],
+        user_id: str,
+        course_id: str,
+    ) -> None:
+        roles = _form_first(form, "roles")
+        row = tx.execute("SELECT * FROM user_courses WHERE user_id = ? AND course_id = ?", (user_id, course_id)).fetchone()
+        if row is None:
             tx.execute(
-                "UPDATE courses SET name = ?, lti_label = ?, lti_id = ?, canvas_id = ?, updated_at = ? WHERE id = ?",
-                (name, label, lti_id, canvas_id, now_sql, int(row["id"])),
+                "INSERT INTO user_courses(user_id, course_id, course_roles) VALUES (?, ?, ?)",
+                (user_id, course_id, roles),
             )
-        return int(row["id"]), label
+            return
+        if str(row["course_roles"]) != roles:
+            tx.execute("UPDATE user_courses SET course_roles = ? WHERE user_id = ? AND course_id = ?", (roles, user_id, course_id))
 
     def _get_update_assignment(
         self,
         tx: sqlite3.Connection,
         form: dict[str, list[str]],
-        now: datetime,
-        course_id: int,
-        user_id: int,
-        problem_set_id: int,
+        course_id: str,
+        user_id: str,
+        problem_set_id: str,
         restricted: bool,
-    ) -> int:
-        resource_link_id = _form_first(form, "resource_link_id")
+    ) -> str:
         row = tx.execute(
-            "SELECT * FROM assignments WHERE course_id = ? AND lti_id = ? AND user_id = ?",
-            (course_id, resource_link_id, user_id),
+            "SELECT * FROM assignments WHERE user_id = ? AND course_id = ? AND problem_set_id = ?",
+            (user_id, course_id, problem_set_id),
         ).fetchone()
-        roles = _form_first(form, "roles")
         person_sourced_id = _form_first(form, "lis_result_sourcedid")
-        canvas_title = _form_first(form, "custom_canvas_assignment_title")
-        canvas_id = _form_int(form, "custom_canvas_assignment_id")
-        canvas_domain = _form_first(form, "custom_canvas_api_domain")
         outcome_url = _form_first(form, "lis_outcome_service_url")
-        outcome_ext_url = _form_first(form, "ext_ims_lis_basic_outcome_url")
         outcome_ext_accepted = _form_first(form, "ext_outcome_data_values_accepted")
-        finished_url = _form_first(form, "launch_presentation_return_url")
         consumer_key = _form_first(form, "oauth_consumer_key")
         unlock_raw = _form_first(form, "custom_canvas_assignment_unlock_at")
         due_raw = _form_first(form, "custom_canvas_assignment_due_at")
@@ -447,93 +432,62 @@ class LTIService:
         unlock_dt = _parse_canvas_datetime(unlock_raw)
         due_dt = _parse_canvas_datetime(due_raw)
         lock_dt = _parse_canvas_datetime(lock_raw)
-        instructor = _is_instructor_role(roles)
-
-        now_sql = _to_sql_dt(now)
         if row is None:
             grade_id = person_sourced_id if person_sourced_id != "" else None
-            cur = tx.execute(
-                "INSERT INTO assignments(course_id, problem_set_id, user_id, roles, instructor, restricted, raw_scores, score, grade_id, lti_id, canvas_title, canvas_id, canvas_api_domain, outcome_url, outcome_ext_url, outcome_ext_accepted, finished_url, consumer_key, unlock_at, due_at, lock_at, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, 0.0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            tx.execute(
+                "INSERT INTO assignments(user_id, course_id, problem_set_id, restricted, grade_id, outcome_url, outcome_ext_accepted, consumer_key, unlock_at, due_at, lock_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
+                    user_id,
                     course_id,
                     problem_set_id,
-                    user_id,
-                    roles,
-                    1 if instructor else 0,
                     1 if restricted else 0,
-                    json.dumps({}),
                     grade_id,
-                    resource_link_id,
-                    canvas_title,
-                    canvas_id,
-                    canvas_domain,
                     outcome_url,
-                    outcome_ext_url,
                     outcome_ext_accepted,
-                    finished_url,
                     consumer_key,
                     _to_sql_dt(unlock_dt),
                     _to_sql_dt(due_dt),
                     _to_sql_dt(lock_dt),
-                    now_sql,
-                    now_sql,
                 ),
             )
-            return _required_lastrowid(cur.lastrowid)
+            return f"{user_id}:{course_id}:{problem_set_id}"
 
         old_grade_id = str(row["grade_id"] or "")
         new_grade_id = person_sourced_id if person_sourced_id != "" else old_grade_id
         changed = (
-            int(row["course_id"]) != course_id
-            or int(row["problem_set_id"]) != problem_set_id
-            or int(row["user_id"]) != user_id
-            or str(row["roles"]) != roles
+            str(row["course_id"]) != course_id
+            or str(row["problem_set_id"]) != problem_set_id
+            or str(row["user_id"]) != user_id
             or bool(row["restricted"]) != restricted
             or (person_sourced_id != "" and old_grade_id != person_sourced_id)
-            or str(row["lti_id"]) != resource_link_id
-            or str(row["canvas_title"]) != canvas_title
-            or int(row["canvas_id"]) != canvas_id
-            or str(row["canvas_api_domain"]) != canvas_domain
             or str(row["outcome_url"]) != outcome_url
-            or str(row["outcome_ext_url"]) != outcome_ext_url
             or str(row["outcome_ext_accepted"]) != outcome_ext_accepted
-            or str(row["finished_url"]) != finished_url
             or str(row["consumer_key"]) != consumer_key
             or _date_mismatch(row["unlock_at"], unlock_raw)
             or _date_mismatch(row["due_at"], due_raw)
             or _date_mismatch(row["lock_at"], lock_raw)
         )
 
-        new_instructor = bool(row["instructor"]) or instructor
-        if changed or new_instructor != bool(row["instructor"]):
+        if changed:
             tx.execute(
-                "UPDATE assignments SET course_id = ?, problem_set_id = ?, user_id = ?, roles = ?, instructor = ?, restricted = ?, grade_id = ?, lti_id = ?, canvas_title = ?, canvas_id = ?, canvas_api_domain = ?, outcome_url = ?, outcome_ext_url = ?, outcome_ext_accepted = ?, finished_url = ?, consumer_key = ?, unlock_at = ?, due_at = ?, lock_at = ?, updated_at = ? WHERE id = ?",
+                "UPDATE assignments SET restricted = ?, grade_id = ?, outcome_url = ?, outcome_ext_accepted = ?, consumer_key = ?, unlock_at = ?, due_at = ?, lock_at = ? "
+                "WHERE user_id = ? AND course_id = ? AND problem_set_id = ?",
                 (
-                    course_id,
-                    problem_set_id,
-                    user_id,
-                    roles,
-                    1 if new_instructor else 0,
                     1 if restricted else 0,
                     new_grade_id if new_grade_id != "" else None,
-                    resource_link_id,
-                    canvas_title,
-                    canvas_id,
-                    canvas_domain,
                     outcome_url,
-                    outcome_ext_url,
                     outcome_ext_accepted,
-                    finished_url,
                     consumer_key,
                     _to_sql_dt(unlock_dt),
                     _to_sql_dt(due_dt),
                     _to_sql_dt(lock_dt),
-                    now_sql,
-                    int(row["id"]),
+                    user_id,
+                    course_id,
+                    problem_set_id,
                 ),
             )
-        return int(row["id"])
+        return f"{user_id}:{course_id}:{problem_set_id}"
 
 
 class _LTIHandler(BaseHTTPRequestHandler):

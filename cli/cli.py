@@ -1,27 +1,23 @@
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import os
 import subprocess
 import sys
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar
 
 import codegrinder_pb2 as pb
-import grpc
 
 from errors import CliError, fail
 from gcfg import GcfgSection, get_all_values, get_first_section, get_last_value, get_sections, parse_gcfg
 from helpers import (
-    CONFIG_FILE,
     Session,
     check_version,
     clean_error,
-    config_dir,
     course_directory,
     dashes,
     dump_message,
@@ -34,11 +30,10 @@ from helpers import (
     plural,
     program_name,
     save_dotfile,
-    setup,
     update_files,
     write_config,
 )
-from models import Config, DotFileInfo, ProblemInfo
+from models import AssignmentRef, Config, DotFileInfo, ProblemInfo
 from protocol import dump_event, dump_transcript
 from version import CURRENT_VERSION
 
@@ -89,6 +84,18 @@ def _set_proto_timestamp(target: object, now) -> None:
     setattr(target, "nanos", nanos)
 
 
+def _assignment_key(assignment: pb.Assignment) -> pb.AssignmentKey:
+    return pb.AssignmentKey(
+        user_id=assignment.user_id,
+        course_id=assignment.course_id,
+        problem_set_id=assignment.problem_set_id,
+    )
+
+
+def _assignment_key_eq(a: pb.AssignmentKey, b: pb.AssignmentKey) -> bool:
+    return a.user_id == b.user_id and a.course_id == b.course_id and a.problem_set_id == b.problem_set_id
+
+
 def _usage_error(parser: argparse.ArgumentParser) -> None:
     parser.print_help()
     raise CliError("", exit_code=1)
@@ -124,7 +131,7 @@ def command_login(args: argparse.Namespace) -> None:
         if not response.HasField("user"):
             fail("failed to fetch user: empty response")
         write_config(config)
-        print(f"login successful; welcome {response.user.name}")
+        print(f"login successful; welcome {response.user.user_name}")
     except CliError:
         raise
     except Exception as exc:
@@ -144,51 +151,52 @@ def command_list(args: argparse.Namespace) -> None:
     with managed_session(config) as session:
         response = _rpc_call(
             config,
-            "ListProblems",
-            session.stub.ListProblems,
-            pb.ListProblemsRequest(),
+            "ListAssignments",
+            session.stub.ListAssignments,
+            pb.ListAssignmentsRequest(include_student_context=False),
             grpc_metadata(config.cookie),
         )
-        assignments = list(response.assignments)
-        if not assignments:
+        items = list(response.items)
+        if not items:
             fail("no assignments found\nyou must start each assignment through Canvas before you can access it here")
 
-        courses = {course.id: course for course in response.courses}
-        problem_sets = {ps.id: ps for ps in response.problem_sets}
+        items = sorted(
+            items,
+            key=lambda item: (
+                item.assignment.course_id,
+                item.due_at.seconds if item.HasField("due_at") else 0,
+                item.lock_at.seconds if item.HasField("lock_at") else 0,
+                item.assignment.user_id,
+                item.assignment.problem_set_id,
+            ),
+        )
+        longest_idx = len(str(len(items)))
+        longest_ps = max(len(item.assignment.problem_set_id) for item in items)
 
-        longest_id = max(len(str(a.id)) for a in assignments)
-        longest_name = max(len(a.canvas_title) for a in assignments)
-
-        current_course_id = -1
-        for assignment in assignments:
+        current_course_id = ""
+        for idx, item in enumerate(items, start=1):
+            assignment = item.assignment
             if assignment.course_id != current_course_id:
-                if current_course_id != -1:
+                if current_course_id != "":
                     print()
                 current_course_id = assignment.course_id
-                course = courses[current_course_id]
-                print(course.name)
-                print(dashes(len(course.name)))
+                print(item.course_name)
+                print(dashes(len(item.course_name)))
 
-            course = courses[assignment.course_id]
-            problem_set = problem_sets[assignment.problem_set_id]
-            print(
-                f"id:{assignment.id:<{longest_id}} "
-                f"{assignment.canvas_title:<{longest_name}} "
-                f"{assignment.score * 100:3.0f}% "
-                f"({course_directory(course.label)}/{problem_set.unique})"
-            )
+            pset_label = assignment.problem_set_id
+            print(f"{idx:>{longest_idx}}. {pset_label:<{longest_ps}} ({course_directory(item.course_name)}/{pset_label})")
 
 
 def _build_commit_from_disk(
     problem_dir: Path,
-    step: pb.ProblemStep,
-    assignment_id: int,
-    problem_id: int,
+    student_owned_paths: list[str],
+    assignment: pb.AssignmentKey,
+    problem_id: str,
     step_num: int,
 ) -> pb.Commit:
     files: dict[str, bytes] = {}
     missing: list[str] = []
-    for name in step.whitelist:
+    for name in student_owned_paths:
         path = problem_dir / Path(name)
         if not path.exists():
             missing.append(name)
@@ -202,7 +210,7 @@ def _build_commit_from_disk(
     now = grpc_time_now()
     commit = pb.Commit(
         id=0,
-        assignment_id=assignment_id,
+        assignment=assignment,
         problem_id=problem_id,
         step=step_num,
         files=files,
@@ -219,7 +227,13 @@ def gather_student(config: Config, session: Session, start_dir: Path) -> tuple[p
         config,
         "GetAssignment",
         session.stub.GetAssignment,
-        pb.GetAssignmentRequest(assignment_id=dotfile.assignment_id),
+        pb.GetAssignmentRequest(
+            assignment=pb.AssignmentKey(
+                user_id=dotfile.assignment_ref.user_id,
+                course_id=dotfile.assignment_ref.course_id,
+                problem_set_id=dotfile.assignment_ref.problem_set_id,
+            )
+        ),
         grpc_metadata(config.cookie),
     )
     assignment = assignment_resp.assignment
@@ -241,16 +255,34 @@ def gather_student(config: Config, session: Session, start_dir: Path) -> tuple[p
         config,
         "GetProblem",
         session.stub.GetProblem,
-        pb.GetProblemRequest(problem_id=info.id),
+        pb.GetProblemRequest(problem_id=info.problem_id),
         grpc_metadata(config.cookie),
     )
     problem = problem_resp.problem
+
+    step_files_resp = _rpc_call(
+        config,
+        "GetProblemStepFiles",
+        session.stub.GetProblemStepFiles,
+        pb.GetProblemStepFilesRequest(
+            assignment=_assignment_key(assignment),
+            problem_id=problem.problem_id,
+            step_number=info.step,
+            reset_to_step_start=False,
+        ),
+        grpc_metadata(config.cookie),
+    )
+    system_files = {
+        str(Path(entry.path)): entry.content
+        for entry in step_files_resp.system_owned_files
+    }
+    update_files(problem_dir, system_files, None, True)
 
     step_resp = _rpc_call(
         config,
         "GetProblemStep",
         session.stub.GetProblemStep,
-        pb.GetProblemStepRequest(problem_id=problem.id, step=info.step),
+        pb.GetProblemStepRequest(problem_id=problem.problem_id, step=info.step),
         grpc_metadata(config.cookie),
     )
     step = step_resp.problem_step
@@ -259,7 +291,7 @@ def gather_student(config: Config, session: Session, start_dir: Path) -> tuple[p
         config,
         "GetProblemType",
         session.stub.GetProblemType,
-        pb.GetProblemTypeRequest(name=step.problem_type),
+        pb.GetProblemTypeRequest(problem_type=step.problem_type),
         grpc_metadata(config.cookie),
     )
     problem_type = type_resp.problem_type
@@ -273,94 +305,34 @@ def gather_student(config: Config, session: Session, start_dir: Path) -> tuple[p
     step_files[str(Path("doc") / "index.html")] = step.instructions.encode("utf-8")
     update_files(problem_dir, step_files, None, True)
 
-    commit = _build_commit_from_disk(problem_dir, step, dotfile.assignment_id, info.id, info.step)
-    return problem_type, problem, step, assignment, commit, dotfile, problem_dir
-
-
-def _fetch_problem_type(config: Config, session: Session, cache: dict[str, pb.ProblemType], name: str) -> pb.ProblemType:
-    if name not in cache:
-        response = _rpc_call(
-            config,
-            "GetProblemType",
-            session.stub.GetProblemType,
-            pb.GetProblemTypeRequest(name=name),
-            grpc_metadata(config.cookie),
-        )
-        cache[name] = response.problem_type
-    return cache[name]
-
-
-def next_step(
-    config: Config,
-    session: Session,
-    directory: Path,
-    info: ProblemInfo,
-    problem: pb.Problem,
-    commit: pb.Commit,
-    types_cache: dict[str, pb.ProblemType],
-) -> bool:
-    print(f"step {commit.step} passed")
-
-    try:
-        new_step_resp = _rpc_call(
-            config,
-            "GetProblemStep",
-            session.stub.GetProblemStep,
-            pb.GetProblemStepRequest(problem_id=problem.id, step=commit.step + 1),
-            grpc_metadata(config.cookie),
-        )
-    except CliError:
-        print("you have completed all steps for this problem")
-        return False
-
-    old_step_resp = _rpc_call(
-        config,
-        "GetProblemStep",
-        session.stub.GetProblemStep,
-        pb.GetProblemStepRequest(problem_id=problem.id, step=commit.step),
-        grpc_metadata(config.cookie),
+    commit = _build_commit_from_disk(
+        problem_dir,
+        [str(Path(entry.path)) for entry in step_files_resp.student_owned_files],
+        pb.AssignmentKey(
+            user_id=dotfile.assignment_ref.user_id,
+            course_id=dotfile.assignment_ref.course_id,
+            problem_set_id=dotfile.assignment_ref.problem_set_id,
+        ),
+        info.problem_id,
+        info.step,
     )
-
-    new_step = new_step_resp.problem_step
-    old_step = old_step_resp.problem_step
-    print(f"moving to step {new_step.step}")
-
-    old_type = _fetch_problem_type(config, session, types_cache, old_step.problem_type)
-    new_type = _fetch_problem_type(config, session, types_cache, new_step.problem_type)
-
-    files: dict[str, bytes] = {}
-    for name, contents in commit.files.items():
-        files[str(Path(name))] = contents
-    for name, contents in new_step.files.items():
-        files[str(Path(name))] = contents
-    files[str(Path("doc") / "index.html")] = new_step.instructions.encode("utf-8")
-
-    for name, contents in new_type.files.items():
-        path_name = str(Path(name))
-        if path_name in files:
-            print(f"warning: problem type file is overwriting problem file: {name}")
-        files[path_name] = contents
-
-    old_files: set[str] = {str(Path(name)) for name in old_type.files}
-    old_files.update(str(Path(name)) for name in old_step.files)
-
-    update_files(directory, files, old_files, False)
-    info.step += 1
-    return True
+    return problem_type, problem, step, assignment, commit, dotfile, problem_dir
 
 
 def handle_daycare_stream(
     config: Config,
     session: Session,
-    bundle: pb.CommitBundle,
+    bundle: pb.SignedGradingCommit,
     args: list[str],
     directory: Path,
     process_events: bool,
-) -> pb.CommitBundle | None:
+) -> pb.SignedGradingCommit | None:
+    parsed = pb.GradingCommit()
+    parsed.ParseFromString(bundle.commit)
     request = pb.DaycareRequest(
-        commit_bundle=bundle,
-        problem_type=bundle.problem_type.name,
-        action=bundle.commit.action,
+        commit=bundle,
+        problem_type=parsed.problem_type.problem_type,
+        action=parsed.commit.action,
         args=args,
     )
     dump_message(config, "Daycare", True, request)
@@ -374,9 +346,9 @@ def handle_daycare_stream(
         if reply.error:
             dump_message(config, "Daycare Error", False, reply.error)
             raise CliError(f"server returned an error: {reply.error}")
-        if reply.HasField("commit_bundle"):
-            dump_message(config, "Daycare CommitBundle", False, reply.commit_bundle)
-            return reply.commit_bundle
+        if reply.HasField("commit"):
+            dump_message(config, "Daycare Commit", False, reply.commit)
+            return reply.commit
         if reply.HasField("event"):
             event = reply.event
             dump_message(config, "Daycare Event", False, event)
@@ -397,135 +369,63 @@ def handle_daycare_stream(
 
 
 def get_assignment(config: Config, session: Session, assignment: pb.Assignment, root_dir: Path, pretty_root: str) -> Path:
-    course_resp = _rpc_call(
+    info_resp = _rpc_call(
         config,
-        "GetCourse",
-        session.stub.GetCourse,
-        pb.GetCourseRequest(course_id=assignment.course_id),
+        "GetAssignmentInfo",
+        session.stub.GetAssignmentInfo,
+        pb.GetAssignmentInfoRequest(assignment=_assignment_key(assignment)),
         grpc_metadata(config.cookie),
     )
-    course = course_resp.course
-
-    pset_resp = _rpc_call(
-        config,
-        "GetProblemSet",
-        session.stub.GetProblemSet,
-        pb.GetProblemSetRequest(problem_set_id=assignment.problem_set_id),
-        grpc_metadata(config.cookie),
-    )
-    problem_set = pset_resp.problem_set
-
-    psps_resp = _rpc_call(
-        config,
-        "GetProblemSetProblems",
-        session.stub.GetProblemSetProblems,
-        pb.GetProblemSetProblemsRequest(problem_set_id=assignment.problem_set_id),
-        grpc_metadata(config.cookie),
-    )
-
-    commits: dict[str, pb.Commit | None] = {}
-    problems: dict[str, pb.Problem] = {}
-    steps: dict[str, pb.ProblemStep] = {}
-    types_cache: dict[str, pb.ProblemType] = {}
-    problem_steps: dict[str, int] = {}
-
-    for entry in psps_resp.problem_set_problems:
-        problem_resp = _rpc_call(
-            config,
-            "GetProblem",
-            session.stub.GetProblem,
-            pb.GetProblemRequest(problem_id=entry.problem_id),
-            grpc_metadata(config.cookie),
-        )
-        problem = problem_resp.problem
-        problems[problem.unique] = problem
-
-        try:
-            commit_resp = _rpc_call(
-                config,
-                "GetAssignmentProblemCommitLast",
-                session.stub.GetAssignmentProblemCommitLast,
-                pb.GetAssignmentProblemCommitLastRequest(assignment_id=assignment.id, problem_id=problem.id),
-                grpc_metadata(config.cookie),
-            )
-            commit = commit_resp.commit
-            problem_steps[problem.unique] = int(commit.step)
-        except CliError:
-            commit = None
-            problem_steps[problem.unique] = 1
-
-        step_resp = _rpc_call(
-            config,
-            "GetProblemStep",
-            session.stub.GetProblemStep,
-            pb.GetProblemStepRequest(problem_id=problem.id, step=problem_steps[problem.unique]),
-            grpc_metadata(config.cookie),
-        )
-        step = step_resp.problem_step
-        commits[problem.unique] = commit
-        steps[problem.unique] = step
-        if step.problem_type not in types_cache:
-            type_resp = _rpc_call(
-                config,
-                "GetProblemType",
-                session.stub.GetProblemType,
-                pb.GetProblemTypeRequest(name=step.problem_type),
-                grpc_metadata(config.cookie),
-            )
-            types_cache[step.problem_type] = type_resp.problem_type
-
-    infos: dict[str, ProblemInfo] = {
-        unique: ProblemInfo(id=problem.id, step=problem_steps[unique])
-        for unique, problem in problems.items()
-    }
-
-    root_dir = root_dir / course_directory(course.label) / problem_set.unique
-    pretty_full = str(Path(pretty_root) / course_directory(course.label) / problem_set.unique)
+    root_dir = root_dir / course_directory(info_resp.course_name) / info_resp.assignment.problem_set_id
+    pretty_full = str(Path(pretty_root) / course_directory(info_resp.course_name) / info_resp.assignment.problem_set_id)
     if root_dir.exists():
         fail(f"directory {pretty_full} already exists\ndelete it first if you want to re-download the assignment")
 
     print(f"unpacking problem set in {pretty_full}")
 
-    most_recent = grpc_time_now().replace(year=1970)
     change_to = root_dir
-    for unique in list(steps.keys()):
-        commit = commits[unique]
-        problem = problems[unique]
-        step = steps[unique]
-
-        target = root_dir if len(steps) == 1 else root_dir / unique
-        if len(steps) > 1:
-            if step.step > 1:
-                print(f"unpacking problem {unique} step {step.step}")
+    infos: dict[str, ProblemInfo] = {}
+    total_problems = len(info_resp.problems)
+    for problem_info in info_resp.problems:
+        infos[problem_info.problem_id] = ProblemInfo(
+            problem_id=problem_info.problem_id,
+            step=int(problem_info.current_step_number),
+            total_steps=int(problem_info.total_steps),
+        )
+        target = root_dir if total_problems == 1 else root_dir / problem_info.problem_id
+        if total_problems > 1:
+            if problem_info.current_step_number > 1:
+                print(f"unpacking problem {problem_info.problem_id} step {problem_info.current_step_number}")
             else:
-                print(f"unpacking problem {unique}")
-        elif step.step > 1:
-            print(f"unpacking step {step.step}")
+                print(f"unpacking problem {problem_info.problem_id}")
+        elif problem_info.current_step_number > 1:
+            print(f"unpacking step {problem_info.current_step_number}")
 
-        files: dict[str, bytes] = {str(Path(name)): contents for name, contents in step.files.items()}
-        files[str(Path("doc") / "index.html")] = step.instructions.encode("utf-8")
-
-        if commit is not None:
-            updated = commit.updated_at.ToDatetime()
-            if updated > most_recent:
-                most_recent = updated
-                change_to = target
-            for name, contents in commit.files.items():
-                files[str(Path(name))] = contents
-
-        for name, contents in types_cache[step.problem_type].files.items():
-            path_name = str(Path(name))
-            if path_name in files:
-                print(f"warning: problem type file is overwriting problem file: {target / Path(name)}")
-            files[path_name] = contents
-
+        files_resp = _rpc_call(
+            config,
+            "GetProblemStepFiles",
+            session.stub.GetProblemStepFiles,
+            pb.GetProblemStepFilesRequest(
+                assignment=_assignment_key(assignment),
+                problem_id=problem_info.problem_id,
+                step_number=problem_info.current_step_number,
+                reset_to_step_start=False,
+            ),
+            grpc_metadata(config.cookie),
+        )
+        files: dict[str, bytes] = {}
+        for entry in files_resp.system_owned_files:
+            files[str(Path(entry.path))] = entry.content
+        for entry in files_resp.student_owned_files:
+            files[str(Path(entry.path))] = entry.content
         update_files(target, files, None, False)
 
-        if commit is not None and commit.HasField("report_card") and commit.report_card.passed and commit.score == 1.0:
-            next_step(config, session, target, infos[unique], problem, commit, types_cache)
-
     dotfile = DotFileInfo(
-        assignment_id=assignment.id,
+        assignment_ref=AssignmentRef(
+            user_id=info_resp.assignment.user_id,
+            course_id=info_resp.assignment.course_id,
+            problem_set_id=info_resp.assignment.problem_set_id,
+        ),
         problems=infos,
         path=str(root_dir / ".grind"),
     )
@@ -558,49 +458,59 @@ def command_get(args: argparse.Namespace) -> None:
     with managed_session(config) as session:
         assignment: pb.Assignment
         if name.isdigit() and int(name) > 0:
-            response = _rpc_call(
+            asst_resp = _rpc_call(
                 config,
-                "GetAssignment",
-                session.stub.GetAssignment,
-                pb.GetAssignmentRequest(assignment_id=int(name)),
+                "GetAssignments",
+                session.stub.GetAssignments,
+                pb.GetAssignmentsRequest(search=[]),
                 grpc_metadata(config.cookie),
             )
-            assignment = response.assignment
+            ordered = sorted(
+                list(asst_resp.assignments),
+                key=lambda a: (
+                    a.course_id,
+                    a.due_at.seconds if a.HasField("due_at") else 0,
+                    a.lock_at.seconds if a.HasField("lock_at") else 0,
+                    a.user_id,
+                    a.problem_set_id,
+                ),
+            )
+            idx = int(name)
+            if idx < 1 or idx > len(ordered):
+                fail(f"assignment number {idx} not found; run '{program_name()} list' to refresh numbering")
+            assignment = ordered[idx - 1]
         else:
             parts = name.split("/")
             if len(parts) != 2:
                 fail(
                     "unknown assignment identifier\n"
-                    f"   run '{program_name()} get [id]'\n"
-                    f"   or  '{program_name()} get [course/problem-id]'\n"
-                    f"   [id] and [course/problem-id] can be found using '{program_name()} list'"
+                    f"   run '{program_name()} get [number]'\n"
+                    f"   or  '{program_name()} get [course/problem-id]'"
                 )
-            search_terms = [parts[0], parts[1]]
+            course_term, pset_term = parts
             response = _rpc_call(
                 config,
                 "GetAssignments",
                 session.stub.GetAssignments,
-                pb.GetAssignmentsRequest(search=search_terms),
+                pb.GetAssignmentsRequest(search=[course_term, pset_term]),
                 grpc_metadata(config.cookie),
             )
             matches = list(response.assignments)
             if not matches:
                 fail(
                     "no matching assignment found\n"
-                    f"   run '{program_name()} get [id]'\n"
-                    f"   or  '{program_name()} get [course/problem-id]'\n"
-                    f"   [id] and [course/problem-id] can be found using '{program_name()} list'"
+                    f"   run '{program_name()} get [number]'\n"
+                    f"   or  '{program_name()} get [course/problem-id]'"
                 )
             if len(matches) != 1:
                 fail(
                     "found more than one matching assignment\n"
-                    f"   run '{program_name()} get [id]' instead\n"
-                    f"   [id] can be found using '{program_name()} list'"
+                    f"   run '{program_name()} get [number]' instead"
                 )
             assignment = matches[0]
 
-        if assignment.user_id != session.user.id:
-            fail(f"you do not have an assignment with number {assignment.id}")
+        if assignment.user_id != session.user.user_id:
+            fail("you do not have access to that assignment")
         get_assignment(config, session, assignment, root_dir, pretty_root)
 
 
@@ -615,15 +525,15 @@ def command_sync(args: argparse.Namespace) -> None:
         _, problem, _, _, commit, _, _ = gather_student(config, session, Path("."))
         commit.action = ""
         commit.note = "grind sync"
-        unsigned = pb.CommitBundle(user_id=session.user.id, commit=commit)
+        unsigned = pb.GradingCommit(user_id=session.user.user_id, commit=commit)
         _rpc_call(
             config,
-            "PostCommitBundlesUnsigned",
-            session.stub.PostCommitBundlesUnsigned,
-            pb.PostCommitBundlesUnsignedRequest(bundle=unsigned),
+            "SaveUngradedCommit",
+            session.stub.SaveUngradedCommit,
+            pb.SaveUngradedCommitRequest(commit=unsigned),
             grpc_metadata(config.cookie),
         )
-        print(f"problem {problem.unique} step {commit.step} synced")
+        print(f"problem {problem.problem_id} step {commit.step} synced")
 
 
 def command_grade(args: argparse.Namespace) -> None:
@@ -636,47 +546,83 @@ def command_grade(args: argparse.Namespace) -> None:
 
     with managed_session(config) as session:
         _, problem, _, _, commit, dotfile, _ = gather_student(config, session, Path("."))
+        info = dotfile.problems.get(problem.problem_id)
+        if info is None:
+            fail(f"unable to find problem info for {problem.problem_id}")
+        current_files_resp = _rpc_call(
+            config,
+            "GetProblemStepFiles",
+            session.stub.GetProblemStepFiles,
+            pb.GetProblemStepFilesRequest(
+                assignment=commit.assignment,
+                problem_id=problem.problem_id,
+                step_number=info.step,
+                reset_to_step_start=False,
+            ),
+            grpc_metadata(config.cookie),
+        )
         commit.action = "grade"
         commit.note = "grind grade"
-        unsigned = pb.CommitBundle(user_id=session.user.id, commit=commit)
+        unsigned = pb.GradingCommit(user_id=session.user.user_id, commit=commit)
 
         signed_resp = _rpc_call(
             config,
-            "PostCommitBundlesUnsigned",
-            session.stub.PostCommitBundlesUnsigned,
-            pb.PostCommitBundlesUnsignedRequest(bundle=unsigned),
+            "SaveUngradedCommit",
+            session.stub.SaveUngradedCommit,
+            pb.SaveUngradedCommitRequest(commit=unsigned),
             grpc_metadata(config.cookie),
         )
-        signed = signed_resp.bundle
-        if not signed.hostname:
+        signed = signed_resp.commit
+        signed_commit = pb.GradingCommit()
+        signed_commit.ParseFromString(signed.commit)
+        if not signed_commit.hostname:
             fail("server was unable to find a suitable daycare, unable to grade")
 
-        print(f"submitting {problem.unique} step {commit.step} for grading")
+        print(f"submitting {problem.problem_id} step {commit.step} for grading")
         graded = handle_daycare_stream(config, session, signed, [], Path(""), False)
         if graded is None:
             fail("the server ended the connection without sending a report card")
 
-        to_save = pb.CommitBundle(
-            hostname=graded.hostname,
-            user_id=graded.user_id,
-            commit=graded.commit,
-            commit_signature=graded.commit_signature,
-        )
-
         saved_resp = _rpc_call(
             config,
-            "PostCommitBundlesSigned",
-            session.stub.PostCommitBundlesSigned,
-            pb.PostCommitBundlesSignedRequest(bundle=to_save),
+            "SaveGradedCommit",
+            session.stub.SaveGradedCommit,
+            pb.SaveGradedCommitRequest(commit=graded),
             grpc_metadata(config.cookie),
         )
-        saved_commit = saved_resp.bundle.commit
+        saved = pb.GradingCommit()
+        saved.ParseFromString(saved_resp.commit.commit)
+        saved_commit = saved.commit
 
         if saved_commit.HasField("report_card") and saved_commit.report_card.passed and saved_commit.score == 1.0:
-            info = dotfile.problems.get(problem.unique)
-            if info is None:
-                fail(f"unable to find problem info for {problem.unique}")
-            if next_step(config, session, Path("."), info, problem, saved_commit, {}):
+            print(f"step {saved_commit.step} passed")
+            if info.step >= info.total_steps:
+                print("you have completed all steps for this problem")
+            else:
+                next_step_number = info.step + 1
+                print(f"moving to step {next_step_number}")
+                new_files_resp = _rpc_call(
+                    config,
+                    "GetProblemStepFiles",
+                    session.stub.GetProblemStepFiles,
+                    pb.GetProblemStepFilesRequest(
+                        assignment=commit.assignment,
+                        problem_id=problem.problem_id,
+                        step_number=next_step_number,
+                        reset_to_step_start=False,
+                    ),
+                    grpc_metadata(config.cookie),
+                )
+                files: dict[str, bytes] = {}
+                for entry in new_files_resp.system_owned_files:
+                    files[str(Path(entry.path))] = entry.content
+                for entry in new_files_resp.student_owned_files:
+                    files[str(Path(entry.path))] = entry.content
+                old_paths: set[str] = {str(Path(entry.path)) for entry in current_files_resp.system_owned_files}
+                old_paths.update(str(Path(entry.path)) for entry in current_files_resp.student_owned_files)
+                update_files(Path("."), files, old_paths, False)
+                info.step = next_step_number
+                info.total_steps = int(new_files_resp.total_steps)
                 save_dotfile(dotfile)
         else:
             print(f"  solution for step {saved_commit.step} failed")
@@ -706,27 +652,29 @@ def command_action(args: argparse.Namespace) -> None:
         commit.note = "grind action " + action
 
         if action not in problem_type.actions:
-            print(f"available actions for problem type {problem_type.name}:")
+            print(f"available actions for problem type {problem_type.problem_type}:")
             for name in sorted(problem_type.actions):
                 if name == "grade":
                     continue
                 print(f"   {name}")
             fail(f"use '{program_name()} action [action]' to initiate an action")
 
-        unsigned = pb.CommitBundle(user_id=session.user.id, commit=commit)
+        unsigned = pb.GradingCommit(user_id=session.user.user_id, commit=commit)
         signed_resp = _rpc_call(
             config,
-            "PostCommitBundlesUnsigned",
-            session.stub.PostCommitBundlesUnsigned,
-            pb.PostCommitBundlesUnsignedRequest(bundle=unsigned),
+            "SaveUngradedCommit",
+            session.stub.SaveUngradedCommit,
+            pb.SaveUngradedCommitRequest(commit=unsigned),
             grpc_metadata(config.cookie),
         )
-        signed = signed_resp.bundle
+        signed = signed_resp.commit
+        signed_commit = pb.GradingCommit()
+        signed_commit.ParseFromString(signed.commit)
 
-        if not signed.hostname:
+        if not signed_commit.hostname:
             fail("server was unable to find a suitable daycare, unable to run action")
 
-        print(f"starting interactive session for {problem.unique} step {commit.step}")
+        print(f"starting interactive session for {problem.problem_id} step {commit.step}")
         handle_daycare_stream(config, session, signed, [], Path("."), True)
 
 
@@ -736,58 +684,58 @@ def command_reset(args: argparse.Namespace) -> None:
     config.api_dump = bool(args.api_dump)
 
     with managed_session(config) as session:
-        problem_type, problem, step, assignment, _, dotfile, problem_dir = gather_student(config, session, Path("."))
-        info = dotfile.problems[problem.unique]
+        _, problem, _, assignment, _, dotfile, problem_dir = gather_student(config, session, Path("."))
+        info = dotfile.problems[problem.problem_id]
+        reset_files_resp = _rpc_call(
+            config,
+            "GetProblemStepFiles",
+            session.stub.GetProblemStepFiles,
+            pb.GetProblemStepFilesRequest(
+                assignment=_assignment_key(assignment),
+                problem_id=problem.problem_id,
+                step_number=info.step,
+                reset_to_step_start=True,
+            ),
+            grpc_metadata(config.cookie),
+        )
 
         listed: set[str] = set()
         for requested in args.reset_args:
             found = False
             clean = str(Path(requested))
-            for entry in step.whitelist:
-                entry_path = str(Path(entry))
+            for entry in reset_files_resp.student_owned_files:
+                entry_path = str(Path(entry.path))
                 if clean == entry_path or (Path(clean).name == clean and Path(clean).name == Path(entry_path).name):
-                    listed.add(entry)
+                    listed.add(entry_path)
                     found = True
             if not found:
                 fail(f"no file matching {requested!r} in the list of student files for this step")
 
-        files: dict[str, bytes] = {}
-
-        if info.step > 1:
-            commit_resp = _rpc_call(
-                config,
-                "GetAssignmentProblemStepCommitLast",
-                session.stub.GetAssignmentProblemStepCommitLast,
-                pb.GetAssignmentProblemStepCommitLastRequest(
-                    assignment_id=assignment.id,
-                    problem_id=problem.id,
-                    step=info.step - 1,
-                ),
-                grpc_metadata(config.cookie),
-            )
-            for name, contents in commit_resp.commit.files.items():
-                files[str(Path(name))] = contents
-
-        for name, contents in step.files.items():
-            files[str(Path(name))] = contents
-        files[str(Path("doc") / "index.html")] = step.instructions.encode("utf-8")
-        for name, contents in problem_type.files.items():
-            files[str(Path(name))] = contents
+        files: dict[str, bytes] = {
+            str(Path(entry.path)): entry.content
+            for entry in reset_files_resp.system_owned_files
+        }
+        expected_student: dict[str, bytes] = {
+            str(Path(entry.path)): entry.content
+            for entry in reset_files_resp.student_owned_files
+        }
+        for path_name, contents in expected_student.items():
+            files[path_name] = contents
 
         found_mod = False
-        for name in step.whitelist:
-            path_name = str(Path(name))
-            expected = files.get(path_name)
+        for entry in reset_files_resp.student_owned_files:
+            path_name = str(Path(entry.path))
+            expected = expected_student.get(path_name)
             if expected is None:
-                fail(f"cannot find file {name!r} in the step but it is on the whitelist")
-            on_disk = problem_dir / Path(name)
+                fail(f"cannot find file {path_name!r} in the step but it is on the whitelist")
+            on_disk = problem_dir / Path(path_name)
             if not on_disk.exists():
                 found_mod = True
                 continue
             if on_disk.read_bytes() != expected:
                 found_mod = True
-                if name not in listed:
-                    print(f"file {name} has been modified")
+                if path_name not in listed:
+                    print(f"file {path_name} has been modified")
                     del files[path_name]
 
         update_files(problem_dir, files, None, True)
@@ -810,65 +758,35 @@ def command_problem(args: argparse.Namespace) -> None:
     config.api_dump = bool(args.api_dump)
 
     with managed_session(config) as session:
-        psets_resp = _rpc_call(
+        catalog_resp = _rpc_call(
             config,
-            "GetProblemSets",
-            session.stub.GetProblemSets,
-            pb.GetProblemSetsRequest(search=args.problem_args),
+            "SearchProblemCatalog",
+            session.stub.SearchProblemCatalog,
+            pb.SearchProblemCatalogRequest(search=args.problem_args),
             grpc_metadata(config.cookie),
         )
-        problem_sets = sorted(psets_resp.problem_sets, key=lambda ps: ps.unique.lower())
+        problem_sets = sorted(catalog_resp.problem_sets, key=lambda ps: ps.problem_set_id.lower())
         if not problem_sets:
             fail("no problem sets found matching the terms you gave")
-
-        problems: dict[int, pb.Problem] = {}
-        problem_steps: dict[int, list[pb.ProblemStep]] = {}
 
         for index, pset in enumerate(problem_sets):
             if index > 0:
                 print()
-            print(pset.note)
+            print(pset.problem_set_note)
 
-            psps_resp = _rpc_call(
-                config,
-                "GetProblemSetProblems",
-                session.stub.GetProblemSetProblems,
-                pb.GetProblemSetProblemsRequest(problem_set_id=pset.id),
-                grpc_metadata(config.cookie),
-            )
-            for psp in psps_resp.problem_set_problems:
-                if psp.problem_id not in problems:
-                    problem_resp = _rpc_call(
-                        config,
-                        "GetProblem",
-                        session.stub.GetProblem,
-                        pb.GetProblemRequest(problem_id=psp.problem_id),
-                        grpc_metadata(config.cookie),
-                    )
-                    problems[psp.problem_id] = problem_resp.problem
-
-                if psp.problem_id not in problem_steps:
-                    steps_resp = _rpc_call(
-                        config,
-                        "GetProblemSteps",
-                        session.stub.GetProblemSteps,
-                        pb.GetProblemStepsRequest(problem_id=psp.problem_id),
-                        grpc_metadata(config.cookie),
-                    )
-                    problem_steps[psp.problem_id] = list(steps_resp.problem_steps)
-
-                problem = problems[psp.problem_id]
-                if psp.weight == 1.0:
-                    print(f"  * {problem.note} ({problem.unique})")
+            for problem in pset.problems:
+                if problem.problem_weight == 1:
+                    print(f"  * {problem.problem_note} ({problem.problem_id})")
                 else:
-                    print(f"  * {problem.note} ({problem.unique}, weight {psp.weight:.2f})")
-                for n, step in enumerate(problem_steps[psp.problem_id], start=1):
-                    text = step.note.replace("\n", "\n       ")
-                    suffix = "" if step.weight == 1.0 else f" (weight {step.weight:.2f})"
+                    print(f"  * {problem.problem_note} ({problem.problem_id}, weight {problem.problem_weight})")
+                for step in problem.steps:
+                    text = step.step_note.replace("\n", "\n       ")
+                    suffix = "" if step.step_weight == 1 else f" (weight {step.step_weight})"
+                    n = int(step.step_number)
                     print(f"    {n}. {text}{suffix}")
 
             print()
-            print(f"  → https://{config.host}/lti/problem_sets/cli/{pset.unique}")
+            print(f"  → https://{config.host}/lti/problem_sets/cli/{pset.problem_set_id}")
 
 
 def command_solve(args: argparse.Namespace) -> None:
@@ -908,10 +826,10 @@ def command_type(args: argparse.Namespace) -> None:
             )
             if not response.problem_types:
                 fail("no problem types found")
-            width = max(len(pt.name) for pt in response.problem_types)
+            width = max(len(pt.problem_type) for pt in response.problem_types)
             for problem_type in response.problem_types:
                 actions = ", ".join(problem_type.actions.keys())
-                print(f"    {problem_type.name:<{width}}  actions: {actions}")
+                print(f"    {problem_type.problem_type:<{width}}  actions: {actions}")
             return
 
         directory = Path(".")
@@ -933,7 +851,7 @@ def command_type(args: argparse.Namespace) -> None:
             config,
             "GetProblemType",
             session.stub.GetProblemType,
-            pb.GetProblemTypeRequest(name=problem_type_name),
+            pb.GetProblemTypeRequest(problem_type=problem_type_name),
             grpc_metadata(config.cookie),
         )
         problem_type = response.problem_type
@@ -962,88 +880,62 @@ def command_student(args: argparse.Namespace) -> None:
     config.api_dump = bool(args.api_dump)
 
     with managed_session(config) as session:
-        if len(args.student_args) == 1 and args.student_args[0].isdigit() and int(args.student_args[0]) > 0:
-            download_student_assignment(config, session, int(args.student_args[0]), None)
-            return
-
         response = _rpc_call(
             config,
-            "GetAssignments",
-            session.stub.GetAssignments,
-            pb.GetAssignmentsRequest(search=args.student_args),
+            "ListAssignments",
+            session.stub.ListAssignments,
+            pb.ListAssignmentsRequest(search=args.student_args, include_student_context=True),
             grpc_metadata(config.cookie),
         )
-        assignments = sorted(
-            response.assignments,
-            key=lambda a: (a.user_id, a.updated_at.ToDatetime()),
+        items = sorted(
+            response.items,
+            key=lambda item: (
+                item.assignment.user_id,
+                item.assignment.course_id,
+                item.due_at.seconds if item.HasField("due_at") else 0,
+                item.assignment.problem_set_id,
+            ),
         )
-        if not assignments:
+        if not items:
             fail("no assignments found matching the terms you gave")
 
-        users: dict[int, pb.User] = {}
-        courses: dict[int, pb.Course] = {}
-        longest_id = max(len(str(a.id)) for a in assignments)
-        longest_name = max(len(a.canvas_title) for a in assignments)
+        user_ids = {item.assignment.user_id for item in items}
+        longest_num = len(str(len(items)))
 
-        for assignment in assignments:
-            if assignment.user_id not in users:
-                user_resp = _rpc_call(
-                    config,
-                    "GetUser",
-                    session.stub.GetUser,
-                    pb.GetUserRequest(user_id=assignment.user_id),
-                    grpc_metadata(config.cookie),
-                )
-                users[assignment.user_id] = user_resp.user
-            if assignment.course_id not in courses:
-                course_resp = _rpc_call(
-                    config,
-                    "GetCourse",
-                    session.stub.GetCourse,
-                    pb.GetCourseRequest(course_id=assignment.course_id),
-                    grpc_metadata(config.cookie),
-                )
-                courses[assignment.course_id] = course_resp.course
-
-        prev_user_id = -1
-        for assignment in assignments:
-            user = users[assignment.user_id]
-            if user.id != prev_user_id:
-                if prev_user_id != -1:
+        prev_user_id = ""
+        for idx, item in enumerate(items, start=1):
+            assignment = item.assignment
+            if assignment.user_id != prev_user_id:
+                if prev_user_id != "":
                     print()
-                prev_user_id = user.id
-                print(f"{user.name} ({user.email})")
-                print(dashes(len(user.name) + len(user.email) + len(" ()")))
+                prev_user_id = assignment.user_id
+                print(f"{item.user_name} ({item.user_login})")
+                print(dashes(len(item.user_name) + len(item.user_login) + len(" ()")))
 
-            when = assignment.updated_at.ToDatetime().strftime("%d %b %y %H:%M UTC")
-            print(
-                f"id:{assignment.id:<{longest_id}} "
-                f"{assignment.canvas_title:<{longest_name}} "
-                f"{assignment.score * 100:3.0f}% "
-                f"({courses[assignment.course_id].name})  [{when}]"
-            )
+            when = item.due_at.ToDatetime().strftime("%d %b %y %H:%M UTC") if item.HasField("due_at") else "no due date"
+            print(f"{idx:>{longest_num}}. {assignment.problem_set_id} ({item.course_name}) [{when}]")
         print()
 
-        if len(users) == 1:
-            most_recent = assignments[-1]
-            download_student_assignment(config, session, most_recent.id, most_recent)
+        if len(user_ids) == 1:
+            most_recent = items[-1]
+            download_student_assignment(config, session, most_recent.assignment, None)
         else:
             fail(
                 "the search found assignments for more than one user\n"
-                f"   either pick the correct assignment id from the list\n"
-                f"   and run '{program_name()} student [id]'\n"
+                f"   either pick the correct assignment number from the list\n"
+                f"   and run '{program_name()} student [number]'\n"
                 "   or repeat the search with additional terms\n"
                 "   to narrow the results"
             )
 
 
-def download_student_assignment(config: Config, session: Session, assignment_id: int, assignment: pb.Assignment | None) -> None:
+def download_student_assignment(config: Config, session: Session, assignment_key: pb.AssignmentKey, assignment: pb.Assignment | None) -> None:
     if assignment is None:
         response = _rpc_call(
             config,
             "GetAssignment",
             session.stub.GetAssignment,
-            pb.GetAssignmentRequest(assignment_id=assignment_id),
+            pb.GetAssignmentRequest(assignment=assignment_key),
             grpc_metadata(config.cookie),
         )
         assignment = response.assignment
@@ -1056,7 +948,7 @@ def download_student_assignment(config: Config, session: Session, assignment_id:
         grpc_metadata(config.cookie),
     )
     user = user_resp.user
-    print(f"[{user.name}] asst {assignment.id} @ {assignment.score * 100:.0f}% '{assignment.canvas_title}'")
+    print(f"[{user.user_name}] assignment {assignment.course_id}/{assignment.problem_set_id}")
 
     root_dir = Path("/tmp") / f"grind-tmp.{os.getpid()}"
     root_dir.mkdir(mode=0o700, exist_ok=False)
@@ -1185,10 +1077,10 @@ def find_problem_cfg(now, start_dir: Path) -> tuple[Path, Path, int, pb.Problem 
 
     cfg = parse_problem_cfg(directory / PROBLEM_CONFIG_NAME)
     problem = pb.Problem(
-        unique=cfg.unique,
-        note=cfg.note,
-        tags=cfg.tags,
-        options=cfg.options,
+        problem_id=cfg.unique,
+        problem_note=cfg.note,
+        problem_tags=cfg.tags,
+        problem_options=cfg.options,
     )
     _set_proto_timestamp(problem.created_at, now)
     _set_proto_timestamp(problem.updated_at, now)
@@ -1236,7 +1128,7 @@ def gather_author(
             "  into the main directory and delete the '1' directory"
         )
 
-    if directory.name != problem.unique:
+    if directory.name != problem.problem_id:
         fail("the problem directory name must match the problem unique ID")
 
     problem_types: dict[str, pb.ProblemType] = {}
@@ -1246,7 +1138,7 @@ def gather_author(
                 config,
                 "GetProblemType",
                 session.stub.GetProblemType,
-                pb.GetProblemTypeRequest(name=step.problem_type),
+                pb.GetProblemTypeRequest(problem_type=step.problem_type),
                 grpc_metadata(config.cookie),
             )
             problem_types[step.problem_type] = response.problem_type
@@ -1257,40 +1149,40 @@ def gather_author(
         config,
         "GetProblems",
         session.stub.GetProblems,
-        pb.GetProblemsRequest(unique=problem.unique),
+        pb.GetProblemsRequest(unique=problem.problem_id),
         grpc_metadata(config.cookie),
     )
     existing = list(existing_resp.problems)
     if len(existing) == 0:
         if is_update:
-            fail(f"you specified --update, but no existing problem with unique ID {problem.unique!r} was found")
+            fail(f"you specified --update, but no existing problem with unique ID {problem.problem_id!r} was found")
         existing_sets_resp = _rpc_call(
             config,
             "GetProblemSets",
             session.stub.GetProblemSets,
-            pb.GetProblemSetsRequest(unique=problem.unique),
+            pb.GetProblemSetsRequest(unique=problem.problem_id),
             grpc_metadata(config.cookie),
         )
         existing_sets = list(existing_sets_resp.problem_sets)
         if len(existing_sets) > 1:
-            fail(f"error: server found multiple problem sets with matching unique ID {problem.unique!r}")
+            fail(f"error: server found multiple problem sets with matching unique ID {problem.problem_id!r}")
         if len(existing_sets) == 1:
             fail(
-                f"problem set {existing_sets[0].id} already exists with unique ID {existing_sets[0].unique!r}\n"
+                f"problem set {existing_sets[0].problem_set_id} already exists with matching ID\n"
                 "  this would prevent creating a problem set containing just this problem with matching id"
             )
-        print(f"unique ID is {problem.unique!r}")
+        print(f"problem ID is {problem.problem_id!r}")
         print("  this problem is new--no existing problem has the same unique ID")
     elif len(existing) == 1:
         if action == "" and not is_update:
-            fail(f"you did not specify --update, but a problem already exists with unique ID {problem.unique!r}")
-        print(f"unique ID is {problem.unique!r}")
-        print(f"  this is an update of problem {existing[0].id}")
-        print(f"  ({existing[0].note!r})")
-        problem.id = existing[0].id
+            fail(f"you did not specify --update, but a problem already exists with unique ID {problem.problem_id!r}")
+        print(f"problem ID is {problem.problem_id!r}")
+        print(f"  this is an update of problem {existing[0].problem_id}")
+        print(f"  ({existing[0].problem_note!r})")
+        problem.problem_id = existing[0].problem_id
         problem.created_at.CopyFrom(existing[0].created_at)
     else:
-        fail(f"error: server found multiple problems with matching unique ID {problem.unique!r}")
+        fail(f"error: server found multiple problems with matching unique ID {problem.problem_id!r}")
 
     whitelist: dict[str, bool] = {}
     for idx, step in enumerate(steps, start=1):
@@ -1407,7 +1299,7 @@ def gather_author(
             fail("to run an action, you must be in a step directory")
         problem_type = problem_types[steps[0].problem_type if single else steps[step_num - 1].problem_type]
         if action not in problem_type.actions:
-            fail(f"action {action!r} does not exist for problem type {problem_type.name}")
+            fail(f"action {action!r} does not exist for problem type {problem_type.problem_type}")
 
     return unsigned, step_dir, step_num
 
@@ -1417,14 +1309,14 @@ def create_problem_set(config: Config, session: Session, path: Path, is_update: 
     cfg = parse_problem_set_cfg(path)
 
     problem_set = pb.ProblemSet(
-        unique=cfg.unique,
-        note=cfg.note,
-        tags=cfg.tags,
+        problem_set_id=cfg.unique,
+        problem_set_note=cfg.note,
+        problem_set_tags=cfg.tags,
     )
     _set_proto_timestamp(problem_set.created_at, now)
     _set_proto_timestamp(problem_set.updated_at, now)
 
-    if path.name != problem_set.unique + ".cfg":
+    if path.name != problem_set.problem_set_id + ".cfg":
         fail("the problem set file name must match the problem set unique ID")
 
     bundle = pb.ProblemSetBundle(problem_set=problem_set)
@@ -1433,25 +1325,25 @@ def create_problem_set(config: Config, session: Session, path: Path, is_update: 
         config,
         "GetProblemSets",
         session.stub.GetProblemSets,
-        pb.GetProblemSetsRequest(unique=problem_set.unique),
+        pb.GetProblemSetsRequest(unique=problem_set.problem_set_id),
         grpc_metadata(config.cookie),
     )
     existing = list(existing_resp.problem_sets)
     if len(existing) == 0:
         if is_update:
-            fail(f"you specified --update, but no existing problem set with unique ID {problem_set.unique!r} was found")
-        print(f"unique ID is {problem_set.unique!r}")
+            fail(f"you specified --update, but no existing problem set with unique ID {problem_set.problem_set_id!r} was found")
+        print(f"problem set ID is {problem_set.problem_set_id!r}")
         print("  this problem set is new--no existing problem set has the same unique ID")
     elif len(existing) == 1:
         if not is_update:
-            fail(f"you did not specify --update, but a problem set already exists with unique ID {problem_set.unique!r}")
-        print(f"unique ID is {problem_set.unique!r}")
-        print(f"  this is an update of problem set {existing[0].id}")
-        print(f"  ({existing[0].note!r})")
-        problem_set.id = existing[0].id
+            fail(f"you did not specify --update, but a problem set already exists with unique ID {problem_set.problem_set_id!r}")
+        print(f"problem set ID is {problem_set.problem_set_id!r}")
+        print(f"  this is an update of problem set {existing[0].problem_set_id}")
+        print(f"  ({existing[0].problem_set_note!r})")
+        problem_set.problem_set_id = existing[0].problem_set_id
         problem_set.created_at.CopyFrom(existing[0].created_at)
     else:
-        fail(f"error: server found multiple problems with matching unique ID {problem_set.unique!r}")
+        fail(f"error: server found multiple problems with matching unique ID {problem_set.problem_set_id!r}")
 
     if not cfg.problems:
         fail("a problem set must contain at least one problem")
@@ -1470,10 +1362,10 @@ def create_problem_set(config: Config, session: Session, path: Path, is_update: 
         if len(problems) != 1:
             fail(f"error: server found multiple problems with matching unique ID {unique!r}")
         bundle.problem_set_problems.append(
-            pb.ProblemSetProblem(problem_id=problems[0].id, weight=weight if weight > 0.0 else 1.0)
+            pb.ProblemSetProblem(problem_id=problems[0].problem_id, weight=weight if weight > 0.0 else 1.0)
         )
 
-    if bundle.problem_set.id == 0:
+    if len(existing) == 0:
         final = _rpc_call(
             config,
             "PostProblemSetBundle",
@@ -1481,7 +1373,7 @@ def create_problem_set(config: Config, session: Session, path: Path, is_update: 
             pb.PostProblemSetBundleRequest(bundle=bundle),
             grpc_metadata(config.cookie),
         )
-        print(f"problem set {final.bundle.problem_set.unique!r} created and ready to use")
+        print(f"problem set {final.bundle.problem_set.problem_set_id!r} created and ready to use")
     else:
         final = _rpc_call(
             config,
@@ -1490,7 +1382,7 @@ def create_problem_set(config: Config, session: Session, path: Path, is_update: 
             pb.PutProblemSetBundleRequest(bundle=bundle),
             grpc_metadata(config.cookie),
         )
-        print(f"problem set {final.bundle.problem_set.unique!r} saved and ready to use")
+        print(f"problem set {final.bundle.problem_set.problem_set_id!r} saved and ready to use")
 
 
 def command_create(args: argparse.Namespace) -> None:
@@ -1517,7 +1409,7 @@ def command_create(args: argparse.Namespace) -> None:
             fail("you specified --update, which is not valid when running an action")
 
         unsigned, step_dir, step_num = gather_author(config, session, now, is_update, action, Path("."))
-        unsigned.user_id = session.user.id
+        unsigned.user_id = session.user.user_id
 
         signed_resp = _rpc_call(
             config,
@@ -1536,55 +1428,35 @@ def command_create(args: argparse.Namespace) -> None:
                 fail("to use --action, you must run from within a step directory")
             print(f"running interactive session for action {action!r} on step {step_num}")
 
-            unvalidated = pb.CommitBundle(
-                problem_type=signed.problem_types[signed.problem_steps[step_num - 1].problem_type],
-                problem_type_signature=signed.problem_type_signatures[signed.problem_steps[step_num - 1].problem_type],
-                problem=signed.problem,
-                problem_steps=signed.problem_steps,
-                problem_signature=signed.problem_signature,
-                hostname=signed.hostname,
-                user_id=signed.user_id,
-                commit=signed.commits[step_num - 1],
-                commit_signature=signed.commit_signatures[step_num - 1],
-            )
-            handle_daycare_stream(config, session, unvalidated, [], step_dir, True)
+            handle_daycare_stream(config, session, signed.signed_grading_commits[step_num - 1], [], step_dir, True)
             return
 
         for n in range(len(signed.problem_steps)):
             print(f"validating solution for step {n + 1}")
-            unvalidated = pb.CommitBundle(
-                problem_type=signed.problem_types[signed.problem_steps[n].problem_type],
-                problem_type_signature=signed.problem_type_signatures[signed.problem_steps[n].problem_type],
-                problem=signed.problem,
-                problem_steps=signed.problem_steps,
-                problem_signature=signed.problem_signature,
-                hostname=signed.hostname,
-                user_id=signed.user_id,
-                commit=signed.commits[n],
-                commit_signature=signed.commit_signatures[n],
-            )
-            validated = handle_daycare_stream(config, session, unvalidated, [], Path(""), False)
+            validated = handle_daycare_stream(config, session, signed.signed_grading_commits[n], [], Path(""), False)
             if validated is None:
                 fail("the server ended the connection without sending a report card")
+            validated_commit = pb.GradingCommit()
+            validated_commit.ParseFromString(validated.commit)
             print("  finished validating solution")
-            if not validated.commit.HasField("report_card") or validated.commit.score != 1.0 or not validated.commit.report_card.passed:
-                note = validated.commit.report_card.note if validated.commit.HasField("report_card") else ""
+            if (
+                not validated_commit.commit.HasField("report_card")
+                or validated_commit.commit.score != 1.0
+                or not validated_commit.commit.report_card.passed
+            ):
+                note = (
+                    validated_commit.commit.report_card.note if validated_commit.commit.HasField("report_card") else ""
+                )
                 print(f"  solution for step {n + 1} failed: {note}")
-                print(dump_transcript(validated.commit), end="")
+                print(dump_transcript(validated_commit.commit), end="")
                 fail("please fix solution and try again")
 
-            signed.problem_types[validated.problem_type.name].CopyFrom(validated.problem_type)
-            signed.problem_type_signatures[validated.problem_type.name] = validated.problem_type_signature
-            signed.problem.CopyFrom(validated.problem)
-            del signed.problem_steps[:]
-            signed.problem_steps.extend(validated.problem_steps)
-            signed.problem_signature = validated.problem_signature
-            signed.commits[n].CopyFrom(validated.commit)
-            signed.commit_signatures[n] = validated.commit_signature
+            signed.commits[n].CopyFrom(validated_commit.commit)
+            signed.signed_grading_commits[n].CopyFrom(validated)
 
         print("problem and solution confirmed successfully")
 
-        if signed.problem.id == 0:
+        if not is_update:
             final_resp = _rpc_call(
                 config,
                 "PostProblemBundleConfirmed",
@@ -1593,17 +1465,17 @@ def command_create(args: argparse.Namespace) -> None:
                 grpc_metadata(config.cookie),
             )
             final = final_resp.bundle
-            print(f"problem {final.problem.unique!r} created and ready to use")
+            print(f"problem {final.problem.problem_id!r} created and ready to use")
         else:
             final_resp = _rpc_call(
                 config,
                 "PutProblemBundle",
                 session.stub.PutProblemBundle,
-                pb.PutProblemBundleRequest(problem_id=signed.problem.id, bundle=signed),
+                pb.PutProblemBundleRequest(problem_id=signed.problem.problem_id, bundle=signed),
                 grpc_metadata(config.cookie),
             )
             final = final_resp.bundle
-            print(f"problem {final.problem.unique!r} saved and ready to use")
+            print(f"problem {final.problem.problem_id!r} saved and ready to use")
 
 
 def _build_parser() -> argparse.ArgumentParser:

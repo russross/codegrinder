@@ -22,15 +22,14 @@ class _FakeResponse:
 class GradePassbackTests(unittest.TestCase):
     def test_save_grade_posts_signed_request(self) -> None:
         target = GradePassbackTarget(
-            assignment_id=1,
-            user_id=7,
+            user_id="u-7",
+            course_id="c-1",
+            problem_set_id="ps-1",
             grade_id="grade-1",
             outcome_url="https://canvas.invalid/outcome",
-            outcome_ext_url="",
             outcome_ext_accepted="text",
             consumer_key="consumer-1",
             score=0.75,
-            canvas_title="A1",
         )
         captured: dict[str, object] = {}
 
@@ -54,15 +53,14 @@ class GradePassbackTests(unittest.TestCase):
 
     def test_save_grade_skips_missing_lti_fields(self) -> None:
         target = GradePassbackTarget(
-            assignment_id=1,
-            user_id=7,
+            user_id="u-7",
+            course_id="c-1",
+            problem_set_id="ps-1",
             grade_id="",
             outcome_url="",
-            outcome_ext_url="",
             outcome_ext_accepted="",
             consumer_key="consumer-1",
             score=0.0,
-            canvas_title="A1",
         )
         with patch("grade_passback.urlrequest.urlopen") as mocked:
             save_grade(target, "ignored", "lti-secret")

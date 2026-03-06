@@ -9,113 +9,86 @@ import "google/protobuf/duration.proto";
 
 // User represents a single user as defined by LTI.
 message User {
-  int64 id = 1;
-  string name = 2;
-  string email = 3;
-  string lti_id = 4;
-  string image_url = 5;
-  string canvas_login = 6;
-  int64 canvas_id = 7;
-  bool author = 8;
-  bool admin = 9;
-  google.protobuf.Timestamp created_at = 10;
-  google.protobuf.Timestamp updated_at = 11;
-  google.protobuf.Timestamp last_signed_in_at = 12;
+  string user_id = 1;
+  string user_name = 2;
+  string user_login = 3;
+  bool author = 4;
 }
 
 // Course represents a single instance of a course as defined by LTI.
 message Course {
-  int64 id = 1;
-  string name = 2;
-  string label = 3;
-  string lti_id = 4;
-  int64 canvas_id = 5;
-  google.protobuf.Timestamp created_at = 6;
-  google.protobuf.Timestamp updated_at = 7;
+  string course_id = 1;
+  string course_name = 2;
 }
 
-// ScoreList represents a list of scores for a major category
-message ScoreList {
-  repeated double scores = 1;
+// AssignmentKey is the natural key for one assignment.
+message AssignmentKey {
+  string user_id = 1;
+  string course_id = 2;
+  string problem_set_id = 3;
 }
 
 // Assignment represents a single instance of a problem set for a student in a course.
 message Assignment {
-  int64 id = 1;
-  int64 course_id = 2;
-  int64 problem_set_id = 3;
-  int64 user_id = 4;
-  string roles = 5;
-  bool instructor = 6;
-  map<string, ScoreList> raw_scores = 7;
-  double score = 8;
-  string grade_id = 9;
-  string lti_id = 10;
-  string canvas_title = 11;
-  int64 canvas_id = 12;
-  string canvas_api_domain = 13;
-  string outcome_url = 14;
-  string outcome_ext_url = 15;
-  string outcome_ext_accepted = 16;
-  string finished_url = 17;
-  string consumer_key = 18;
-  google.protobuf.Timestamp unlock_at = 19;
-  google.protobuf.Timestamp due_at = 20;
-  google.protobuf.Timestamp lock_at = 21;
-  google.protobuf.Timestamp created_at = 22;
-  google.protobuf.Timestamp updated_at = 23;
+  string user_id = 1;
+  string course_id = 2;
+  string problem_set_id = 3;
+  bool restricted = 4;
+  string grade_id = 5;
+  string outcome_url = 6;
+  string outcome_ext_accepted = 7;
+  string consumer_key = 8;
+  google.protobuf.Timestamp unlock_at = 9;
+  google.protobuf.Timestamp due_at = 10;
+  google.protobuf.Timestamp lock_at = 11;
 }
 
 // ProblemSet represents a set of problems.
 message ProblemSet {
-   int64 id = 1;
-   string unique = 2;
-   string note = 3;
-   repeated string tags = 4;
-   google.protobuf.Timestamp created_at = 5;
-   google.protobuf.Timestamp updated_at = 6;
+   string problem_set_id = 1;
+   string problem_set_note = 2;
+   repeated string problem_set_tags = 3;
+   google.protobuf.Timestamp created_at = 4;
+   google.protobuf.Timestamp updated_at = 5;
 }
 
 // ProblemType defines one type of problem.
 message ProblemType {
-   string name = 1;
-   string image = 2;
+   string problem_type = 1;
+   string container = 2;
    map<string, bytes> files = 3;
    map<string, ProblemTypeAction> actions = 4;
 }
 
-// ProblemTypeAction defines the labels, parser, interactivity, and handler for a
+// ProblemTypeAction defines parser/command and execution limits for a
 // single problem type action.
 message ProblemTypeAction {
    string problem_type = 1;
    string action = 2;
    string command = 3;
    string parser = 4;
-   string message = 5;
-   bool interactive = 6;
    int64 max_cpu = 7;
-   int64 max_session = 8;
-   int64 max_timeout = 9;
    int64 max_fd = 10;
    int64 max_file_size = 11;
    int64 max_memory = 12;
    int64 max_threads = 13;
+   reserved 5, 6, 8, 9;
+   reserved "message", "interactive", "max_session", "max_timeout";
 }
 
 // Problem represents a single problem.
 message Problem {
-   int64 id = 1;
-   string unique = 2;
-   string note = 3;
-   repeated string tags = 4;
-   repeated string options = 5;
-   google.protobuf.Timestamp created_at = 6;
-   google.protobuf.Timestamp updated_at = 7;
+   string problem_id = 1;
+   string problem_note = 2;
+   repeated string problem_tags = 3;
+   repeated string problem_options = 4;
+   google.protobuf.Timestamp created_at = 5;
+   google.protobuf.Timestamp updated_at = 6;
 }
 
 // ProblemStep represents a single step of a problem.
 message ProblemStep {
-   int64 problem_id = 1;
+   string problem_id = 1;
    int64 step = 2;
    string problem_type = 3;
    string note = 4;
@@ -128,8 +101,8 @@ message ProblemStep {
 
 // ProblemSetProblem represents a problem in a problem set.
 message ProblemSetProblem {
-   int64 problem_set_id = 1;
-   int64 problem_id = 2;
+   string problem_set_id = 1;
+   string problem_id = 2;
    double weight = 3;
 }
 
@@ -167,8 +140,8 @@ message EventMessage {
 // Commit defines an attempt at solving one step of a Problem.
 message Commit {
    int64 id = 1;
-   int64 assignment_id = 2;
-   int64 problem_id = 3;
+   AssignmentKey assignment = 2;
+   string problem_id = 3;
    int64 step = 4;
    string action = 5;
    string note = 6;
@@ -188,9 +161,10 @@ message ProblemBundle {
    repeated ProblemStep problem_steps = 4;
    string problem_signature = 5;
    string hostname = 6;
-   int64 user_id = 7;
+   string user_id = 7;
    repeated Commit commits = 8;
    repeated string commit_signatures = 9;
+   repeated SignedGradingCommit signed_grading_commits = 10;
 }
 
 // ProblemSetBundle represents a bundle of problem set data.
@@ -199,23 +173,25 @@ message ProblemSetBundle {
    repeated ProblemSetProblem problem_set_problems = 2;
 }
 
-// CommitBundle represents a bundle of commit data.
-message CommitBundle {
+// GradingCommit represents one commit together with the grading context daycare needs.
+message GradingCommit {
     ProblemType problem_type = 1;
-    string problem_type_signature = 2;
-    Problem problem = 3;
-    repeated ProblemStep problem_steps = 4;
-    string problem_signature = 5;
-    string action = 6;
-    string hostname = 7;
-    int64 user_id = 8;
-    Commit commit = 9;
-    string commit_signature = 10;
+    Problem problem = 2;
+    repeated ProblemStep problem_steps = 3;
+    string hostname = 4;
+    string user_id = 5;
+    Commit commit = 6;
+}
+
+// SignedGradingCommit carries an encoded grading commit plus its signature.
+message SignedGradingCommit {
+    bytes commit = 1;
+    string signature = 2;
 }
 
 // DaycareRequest represents a request for the daycare service.
 message DaycareRequest {
-    CommitBundle commit_bundle = 1;
+    SignedGradingCommit commit = 1;
     string problem_type = 2;
     string action = 3;
     repeated string args = 4;
@@ -226,7 +202,7 @@ message DaycareResponse {
     oneof response {
         EventMessage event = 1;
         string error = 2;
-        CommitBundle commit_bundle = 3;
+        SignedGradingCommit commit = 3;
     }
 }
 
@@ -245,8 +221,10 @@ service CodeGrinderService {
    rpc Hello(HelloRequest) returns (HelloResponse);
    // ListProblems retrieves all problems and related data for the authenticated user
    rpc ListProblems(ListProblemsRequest) returns (ListProblemsResponse);
-   // GetVersion retrieves version information
-   rpc GetVersion(GetVersionRequest) returns (GetVersionResponse);
+   // ListAssignments retrieves assignment-focused list rows for list/student flows.
+   rpc ListAssignments(ListAssignmentsRequest) returns (ListAssignmentsResponse);
+   // SearchProblemCatalog retrieves problem sets with nested problem and step summaries.
+   rpc SearchProblemCatalog(SearchProblemCatalogRequest) returns (SearchProblemCatalogResponse);
    // GetProblemTypes retrieves all problem types
    rpc GetProblemTypes(GetProblemTypesRequest) returns (GetProblemTypesResponse);
    // GetProblemType retrieves a specific problem type
@@ -261,36 +239,20 @@ service CodeGrinderService {
    rpc GetProblemStep(GetProblemStepRequest) returns (GetProblemStepResponse);
    // GetProblemSets retrieves problem sets with optional filters
    rpc GetProblemSets(GetProblemSetsRequest) returns (GetProblemSetsResponse);
-   // GetProblemSet retrieves a specific problem set
-   rpc GetProblemSet(GetProblemSetRequest) returns (GetProblemSetResponse);
    // GetProblemSetProblems retrieves problems in a problem set
    rpc GetProblemSetProblems(GetProblemSetProblemsRequest) returns (GetProblemSetProblemsResponse);
-   // GetCourses retrieves courses with optional filters
-   rpc GetCourses(GetCoursesRequest) returns (GetCoursesResponse);
    // GetCourse retrieves a specific course
    rpc GetCourse(GetCourseRequest) returns (GetCourseResponse);
-   // GetUsers retrieves users with optional filters
-   rpc GetUsers(GetUsersRequest) returns (GetUsersResponse);
-   // GetUserMe retrieves the current user
-   rpc GetUserMe(GetUserMeRequest) returns (GetUserMeResponse);
-   // GetUserSession trades a session key for a cookie
-   rpc GetUserSession(GetUserSessionRequest) returns (GetUserSessionResponse);
    // GetUser retrieves a specific user
    rpc GetUser(GetUserRequest) returns (GetUserResponse);
-   // GetCourseUsers retrieves users in a course
-   rpc GetCourseUsers(GetCourseUsersRequest) returns (GetCourseUsersResponse);
-   // GetUserAssignments retrieves assignments for a user
-   rpc GetUserAssignments(GetUserAssignmentsRequest) returns (GetUserAssignmentsResponse);
-   // GetCourseUserAssignments retrieves assignments for a user in a course
-   rpc GetCourseUserAssignments(GetCourseUserAssignmentsRequest) returns (GetCourseUserAssignmentsResponse);
    // GetAssignments retrieves assignments with optional filters
    rpc GetAssignments(GetAssignmentsRequest) returns (GetAssignmentsResponse);
    // GetAssignment retrieves a specific assignment
    rpc GetAssignment(GetAssignmentRequest) returns (GetAssignmentResponse);
-   // GetAssignmentProblemCommitLast retrieves the last commit for a problem in an assignment
-   rpc GetAssignmentProblemCommitLast(GetAssignmentProblemCommitLastRequest) returns (GetAssignmentProblemCommitLastResponse);
-   // GetAssignmentProblemStepCommitLast retrieves the last commit for a step in an assignment
-   rpc GetAssignmentProblemStepCommitLast(GetAssignmentProblemStepCommitLastRequest) returns (GetAssignmentProblemStepCommitLastResponse);
+   // GetAssignmentInfo retrieves assignment metadata and per-problem step progress.
+   rpc GetAssignmentInfo(GetAssignmentInfoRequest) returns (GetAssignmentInfoResponse);
+   // GetProblemStepFiles retrieves system-owned and student-owned files for one step.
+   rpc GetProblemStepFiles(GetProblemStepFilesRequest) returns (GetProblemStepFilesResponse);
    // PostProblemBundleUnconfirmed handles unconfirmed problem bundle
    rpc PostProblemBundleUnconfirmed(PostProblemBundleUnconfirmedRequest) returns (PostProblemBundleUnconfirmedResponse);
    // PostProblemBundleConfirmed handles confirmed problem bundle
@@ -301,11 +263,11 @@ service CodeGrinderService {
    rpc PostProblemSetBundle(PostProblemSetBundleRequest) returns (PostProblemSetBundleResponse);
    // PutProblemSetBundle handles updating problem set bundle
    rpc PutProblemSetBundle(PutProblemSetBundleRequest) returns (PutProblemSetBundleResponse);
-   // PostCommitBundlesUnsigned handles unsigned commit bundle
-   rpc PostCommitBundlesUnsigned(PostCommitBundlesUnsignedRequest) returns (PostCommitBundlesUnsignedResponse);
-    // PostCommitBundlesSigned handles signed commit bundle
-    rpc PostCommitBundlesSigned(PostCommitBundlesSignedRequest) returns (PostCommitBundlesSignedResponse);
-    // Daycare handles streaming daycare requests
+   // SaveUngradedCommit handles an ungraded commit before daycare processing.
+   rpc SaveUngradedCommit(SaveUngradedCommitRequest) returns (SaveUngradedCommitResponse);
+   // SaveGradedCommit handles a graded commit returned by daycare.
+   rpc SaveGradedCommit(SaveGradedCommitRequest) returns (SaveGradedCommitResponse);
+   // Daycare handles streaming daycare requests
    rpc Daycare(DaycareRequest) returns (stream DaycareResponse);
 }
 
@@ -334,13 +296,62 @@ message ListProblemsResponse {
    repeated ProblemSet problem_sets = 4;
 }
 
-// Request for GetVersion
-message GetVersionRequest {
+// Request for ListAssignments
+message ListAssignmentsRequest {
+  string session_cookie = 1;
+  repeated string search = 2;
+  bool include_student_context = 3;
 }
 
-// Response for GetVersion
-message GetVersionResponse {
-   Version version = 1;
+// AssignmentListItem returns assignment list data shaped for list/student commands.
+message AssignmentListItem {
+  AssignmentKey assignment = 1;
+  string problem_set_note = 2;
+  google.protobuf.Timestamp unlock_at = 3;
+  google.protobuf.Timestamp due_at = 4;
+  google.protobuf.Timestamp lock_at = 5;
+  string course_name = 6;
+  string user_name = 7;
+  string user_login = 8;
+}
+
+// Response for ListAssignments
+message ListAssignmentsResponse {
+  repeated AssignmentListItem items = 1;
+}
+
+// Request for SearchProblemCatalog
+message SearchProblemCatalogRequest {
+  string session_cookie = 1;
+  repeated string search = 2;
+}
+
+// ProblemCatalogStep summarizes one step for catalog display.
+message ProblemCatalogStep {
+  int64 step_number = 1;
+  string step_note = 2;
+  int64 step_weight = 3;
+}
+
+// ProblemCatalogProblem summarizes one problem and its steps for a problem set.
+message ProblemCatalogProblem {
+  string problem_id = 1;
+  string problem_note = 2;
+  int64 problem_weight = 3;
+  repeated ProblemCatalogStep steps = 4;
+}
+
+// ProblemCatalogSet summarizes one problem set for search results.
+message ProblemCatalogSet {
+  string problem_set_id = 1;
+  string problem_set_note = 2;
+  repeated string problem_set_tags = 3;
+  repeated ProblemCatalogProblem problems = 4;
+}
+
+// Response for SearchProblemCatalog
+message SearchProblemCatalogResponse {
+  repeated ProblemCatalogSet problem_sets = 1;
 }
 
 // Request for GetProblemTypes
@@ -356,7 +367,7 @@ message GetProblemTypesResponse {
 // Request for GetProblemType
 message GetProblemTypeRequest {
    string session_cookie = 1;
-   string name = 2;
+   string problem_type = 2;
 }
 
 // Response for GetProblemType
@@ -380,7 +391,7 @@ message GetProblemsResponse {
 // Request for GetProblem
 message GetProblemRequest {
    string session_cookie = 1;
-   int64 problem_id = 2;
+   string problem_id = 2;
 }
 
 // Response for GetProblem
@@ -391,7 +402,7 @@ message GetProblemResponse {
 // Request for GetProblemSteps
 message GetProblemStepsRequest {
    string session_cookie = 1;
-   int64 problem_id = 2;
+   string problem_id = 2;
 }
 
 // Response for GetProblemSteps
@@ -402,7 +413,7 @@ message GetProblemStepsResponse {
 // Request for GetProblemStep
 message GetProblemStepRequest {
    string session_cookie = 1;
-   int64 problem_id = 2;
+   string problem_id = 2;
    int64 step = 3;
 }
 
@@ -424,21 +435,10 @@ message GetProblemSetsResponse {
    repeated ProblemSet problem_sets = 1;
 }
 
-// Request for GetProblemSet
-message GetProblemSetRequest {
-   string session_cookie = 1;
-   int64 problem_set_id = 2;
-}
-
-// Response for GetProblemSet
-message GetProblemSetResponse {
-   ProblemSet problem_set = 1;
-}
-
 // Request for GetProblemSetProblems
 message GetProblemSetProblemsRequest {
    string session_cookie = 1;
-   int64 problem_set_id = 2;
+   string problem_set_id = 2;
 }
 
 // Response for GetProblemSetProblems
@@ -446,22 +446,10 @@ message GetProblemSetProblemsResponse {
    repeated ProblemSetProblem problem_set_problems = 1;
 }
 
-// Request for GetCourses
-message GetCoursesRequest {
-   string session_cookie = 1;
-   string lti_label = 2;
-   string name = 3;
-}
-
-// Response for GetCourses
-message GetCoursesResponse {
-   repeated Course courses = 1;
-}
-
 // Request for GetCourse
 message GetCourseRequest {
    string session_cookie = 1;
-   int64 course_id = 2;
+   string course_id = 2;
 }
 
 // Response for GetCourse
@@ -469,83 +457,15 @@ message GetCourseResponse {
    Course course = 1;
 }
 
-// Request for GetUsers
-message GetUsersRequest {
-   string session_cookie = 1;
-   string name = 2;
-   string email = 3;
-   string instructor = 4;
-   string admin = 5;
-}
-
-// Response for GetUsers
-message GetUsersResponse {
-   repeated User users = 1;
-}
-
-// Request for GetUserMe
-message GetUserMeRequest {
-   string session_cookie = 1;
-}
-
-// Response for GetUserMe
-message GetUserMeResponse {
-   User user = 1;
-}
-
-// Request for GetUserSession
-message GetUserSessionRequest {
-   string key = 1;
-}
-
-// Response for GetUserSession
-message GetUserSessionResponse {
-   string cookie = 1;
-}
-
 // Request for GetUser
 message GetUserRequest {
    string session_cookie = 1;
-   int64 user_id = 2;
+   string user_id = 2;
 }
 
 // Response for GetUser
 message GetUserResponse {
    User user = 1;
-}
-
-// Request for GetCourseUsers
-message GetCourseUsersRequest {
-   string session_cookie = 1;
-   int64 course_id = 2;
-}
-
-// Response for GetCourseUsers
-message GetCourseUsersResponse {
-   repeated User users = 1;
-}
-
-// Request for GetUserAssignments
-message GetUserAssignmentsRequest {
-   string session_cookie = 1;
-   int64 user_id = 2;
-}
-
-// Response for GetUserAssignments
-message GetUserAssignmentsResponse {
-   repeated Assignment assignments = 1;
-}
-
-// Request for GetCourseUserAssignments
-message GetCourseUserAssignmentsRequest {
-   string session_cookie = 1;
-   int64 course_id = 2;
-   int64 user_id = 3;
-}
-
-// Response for GetCourseUserAssignments
-message GetCourseUserAssignmentsResponse {
-   repeated Assignment assignments = 1;
 }
 
 // Request for GetAssignments
@@ -562,7 +482,7 @@ message GetAssignmentsResponse {
 // Request for GetAssignment
 message GetAssignmentRequest {
    string session_cookie = 1;
-   int64 assignment_id = 2;
+   AssignmentKey assignment = 2;
 }
 
 // Response for GetAssignment
@@ -570,29 +490,49 @@ message GetAssignmentResponse {
    Assignment assignment = 1;
 }
 
-// Request for GetAssignmentProblemCommitLast
-message GetAssignmentProblemCommitLastRequest {
+// Request for GetAssignmentInfo
+message GetAssignmentInfoRequest {
    string session_cookie = 1;
-   int64 assignment_id = 2;
-   int64 problem_id = 3;
+   AssignmentKey assignment = 2;
 }
 
-// Response for GetAssignmentProblemCommitLast
-message GetAssignmentProblemCommitLastResponse {
-   Commit commit = 1;
+// AssignmentProblemInfo reports one problem's progress in the assignment.
+message AssignmentProblemInfo {
+   string problem_id = 1;
+   string problem_note = 2;
+   int64 current_step_number = 3;
+   int64 total_steps = 4;
 }
 
-// Request for GetAssignmentProblemStepCommitLast
-message GetAssignmentProblemStepCommitLastRequest {
+// Response for GetAssignmentInfo
+message GetAssignmentInfoResponse {
+   AssignmentKey assignment = 1;
+   string problem_set_note = 2;
+   string course_name = 3;
+   repeated AssignmentProblemInfo problems = 4;
+}
+
+// Request for GetProblemStepFiles
+message GetProblemStepFilesRequest {
    string session_cookie = 1;
-   int64 assignment_id = 2;
-   int64 problem_id = 3;
-   int64 step = 4;
+   AssignmentKey assignment = 2;
+   string problem_id = 3;
+   int64 step_number = 4; // 0 means use the student's current step for this problem.
+   bool reset_to_step_start = 5;
 }
 
-// Response for GetAssignmentProblemStepCommitLast
-message GetAssignmentProblemStepCommitLastResponse {
-   Commit commit = 1;
+// ProblemStepFileBlob is one file path/content pair.
+message ProblemStepFileBlob {
+   string path = 1;
+   bytes content = 2;
+}
+
+// Response for GetProblemStepFiles
+message GetProblemStepFilesResponse {
+   int64 step_number = 1;
+   int64 total_steps = 2;
+   repeated ProblemStepFileBlob system_owned_files = 3;
+   repeated ProblemStepFileBlob student_owned_files = 4;
 }
 
 // Request for PostProblemBundleUnconfirmed
@@ -620,7 +560,7 @@ message PostProblemBundleConfirmedResponse {
 // Request for PutProblemBundle
 message PutProblemBundleRequest {
    string session_cookie = 1;
-   int64 problem_id = 2;
+   string problem_id = 2;
    ProblemBundle bundle = 3;
 }
 
@@ -651,24 +591,24 @@ message PutProblemSetBundleResponse {
    ProblemSetBundle bundle = 1;
 }
 
-// Request for PostCommitBundlesUnsigned
-message PostCommitBundlesUnsignedRequest {
+// Request for SaveUngradedCommit
+message SaveUngradedCommitRequest {
    string session_cookie = 1;
-   CommitBundle bundle = 2;
+   GradingCommit commit = 2;
 }
 
-// Response for PostCommitBundlesUnsigned
-message PostCommitBundlesUnsignedResponse {
-   CommitBundle bundle = 1;
+// Response for SaveUngradedCommit
+message SaveUngradedCommitResponse {
+   SignedGradingCommit commit = 1;
 }
 
-// Request for PostCommitBundlesSigned
-message PostCommitBundlesSignedRequest {
+// Request for SaveGradedCommit
+message SaveGradedCommitRequest {
    string session_cookie = 1;
-   CommitBundle bundle = 2;
+   SignedGradingCommit commit = 2;
 }
 
-// Response for PostCommitBundlesSigned
-message PostCommitBundlesSignedResponse {
-   CommitBundle bundle = 1;
+// Response for SaveGradedCommit
+message SaveGradedCommitResponse {
+   SignedGradingCommit commit = 1;
 }

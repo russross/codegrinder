@@ -7,7 +7,7 @@ import unittest
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
-from typing import Sequence, cast
+from typing import cast
 
 import grpc
 
@@ -22,11 +22,7 @@ from daycare import (
     gather_files_and_step,
     stream_nanny_events,
 )
-from mutations import (
-    compute_commit_signature,
-    compute_problem_signature,
-    compute_problem_type_signature,
-)
+from signatures import decode_signed_grading_commit, encode_signed_grading_commit
 
 
 def _tar_bytes(files: dict[str, bytes]) -> bytes:
@@ -148,33 +144,28 @@ def _build_signed_request(
         action=action,
         command="run-tests",
         parser=parser,
-        message="m",
-        interactive=False,
         max_cpu=10,
-        max_session=30,
-        max_timeout=30,
         max_fd=128,
         max_file_size=2,
         max_memory=128,
         max_threads=16,
     )
     ptype = pb.ProblemType(
-        name="python3unittest",
-        image="img",
+        problem_type="python3unittest",
+        container="img",
         files={"Makefile": b"all:\n\t@echo ok\n"},
         actions={action: action_entry},
     )
     problem = pb.Problem(
-        id=7,
-        unique="prob-7",
-        note="problem note",
-        tags=["tag"],
-        options=[],
+        problem_id="prob-7",
+        problem_note="problem note",
+        problem_tags=["tag"],
+        problem_options=[],
         created_at=now,
         updated_at=now,
     )
     step = pb.ProblemStep(
-        problem_id=7,
+        problem_id="prob-7",
         step=1,
         problem_type="python3unittest",
         note="step note",
@@ -184,8 +175,8 @@ def _build_signed_request(
         whitelist={"main.py": True},
     )
     commit = pb.Commit(
-        assignment_id=5,
-        problem_id=7,
+        assignment=pb.AssignmentKey(user_id="123", course_id="c-1", problem_set_id="ps-1"),
+        problem_id="prob-7",
         step=1,
         action=action,
         note="",
@@ -194,22 +185,16 @@ def _build_signed_request(
         created_at=now,
         updated_at=now,
     )
-    type_sig = compute_problem_type_signature(ptype, daycare_secret)
-    problem_sig = compute_problem_signature(problem, [step], daycare_secret)
-    commit_sig = compute_commit_signature(commit, type_sig, problem_sig, hostname, 123, daycare_secret)
-    bundle = pb.CommitBundle(
+    bundle = pb.GradingCommit(
         problem_type=ptype,
-        problem_type_signature=type_sig,
         problem=problem,
         problem_steps=[step],
-        problem_signature=problem_sig,
         hostname=hostname,
-        user_id=123,
+        user_id="123",
         commit=commit,
-        commit_signature=commit_sig,
     )
     return pb.DaycareRequest(
-        commit_bundle=bundle,
+        commit=encode_signed_grading_commit(bundle, daycare_secret),
         problem_type="python3unittest",
         action=action,
         args=[],
@@ -217,7 +202,7 @@ def _build_signed_request(
 
 
 class DaycareTests(unittest.TestCase):
-    def test_stream_requires_commit_bundle(self) -> None:
+    def test_stream_requires_commit(self) -> None:
         runner = _FakeRunner()
         runtime = _build_runtime(runner)
         with self.assertRaises(_AbortError) as err:
@@ -260,8 +245,8 @@ class DaycareTests(unittest.TestCase):
         req = _build_signed_request()
         responses = list(runtime.stream(req, cast(grpc.ServicerContext, _FakeContext())))
         self.assertGreaterEqual(len(responses), 1)
-        self.assertEqual(responses[-1].WhichOneof("response"), "commit_bundle")
-        self.assertEqual(responses[-1].commit_bundle.commit.score, 1.0)
+        self.assertEqual(responses[-1].WhichOneof("response"), "commit")
+        self.assertEqual(decode_signed_grading_commit(responses[-1].commit, "daycare-secret").commit.score, 1.0)
 
         run_indices = [i for i, call in enumerate(runner.calls) if _command_key(call) == "run"]
         rm_name_indices = [
@@ -296,7 +281,7 @@ class DaycareTests(unittest.TestCase):
         runtime = _build_runtime(runner)
         req = _build_signed_request()
         responses = list(runtime.stream(req, cast(grpc.ServicerContext, _FakeContext())))
-        self.assertEqual(responses[-1].WhichOneof("response"), "commit_bundle")
+        self.assertEqual(responses[-1].WhichOneof("response"), "commit")
         cleanup_calls = [
             call
             for call in runner.calls
@@ -326,7 +311,7 @@ class DaycareTests(unittest.TestCase):
         runner.plan_error("stop", "simulated stop failure")
         req = _build_signed_request()
         responses = list(runtime.stream(req, cast(grpc.ServicerContext, _FakeContext())))
-        self.assertEqual(responses[-1].WhichOneof("response"), "commit_bundle")
+        self.assertEqual(responses[-1].WhichOneof("response"), "commit")
         cleanup_calls = [
             call
             for call in runner.calls
@@ -334,14 +319,14 @@ class DaycareTests(unittest.TestCase):
         ]
         self.assertEqual([_command_key(call) for call in cleanup_calls], ["stop", "wait", "rm"])
 
-    def test_non_grade_action_does_not_emit_commit_bundle(self) -> None:
+    def test_non_grade_action_does_not_emit_commit(self) -> None:
         runner = _FakeRunner()
         runtime = _build_runtime(runner)
         req = _build_signed_request(action="run")
         responses = list(runtime.stream(req, cast(grpc.ServicerContext, _FakeContext())))
         self.assertGreaterEqual(len(responses), 1)
         for response in responses:
-            self.assertNotEqual(response.WhichOneof("response"), "commit_bundle")
+            self.assertNotEqual(response.WhichOneof("response"), "commit")
 
     def test_exec_error_still_emits_signed_grade_bundle(self) -> None:
         runner = _FakeRunner()
@@ -349,10 +334,10 @@ class DaycareTests(unittest.TestCase):
         runner.plan_error("exec", "simulated exec startup failure")
         req = _build_signed_request()
         responses = list(runtime.stream(req, cast(grpc.ServicerContext, _FakeContext())))
-        self.assertEqual(responses[-1].WhichOneof("response"), "commit_bundle")
-        signed = responses[-1].commit_bundle
+        self.assertEqual(responses[-1].WhichOneof("response"), "commit")
+        signed = decode_signed_grading_commit(responses[-1].commit, "daycare-secret")
         self.assertAlmostEqual(signed.commit.score, 0.0)
-        self.assertTrue(signed.commit_signature)
+        self.assertTrue(responses[-1].commit.signature)
         self.assertIn("exec error", signed.commit.report_card.note)
         ops = [_command_key(call) for call in runner.calls]
         self.assertIn("stop", ops)
@@ -363,15 +348,9 @@ class DaycareTests(unittest.TestCase):
         runner = _FakeRunner()
         runtime = _build_runtime(runner)
         req = _build_signed_request()
-        req.commit_bundle.commit.step = 2
-        req.commit_bundle.commit_signature = compute_commit_signature(
-            req.commit_bundle.commit,
-            req.commit_bundle.problem_type_signature,
-            req.commit_bundle.problem_signature,
-            req.commit_bundle.hostname,
-            req.commit_bundle.user_id,
-            "daycare-secret",
-        )
+        decoded = decode_signed_grading_commit(req.commit, "daycare-secret")
+        decoded.commit.step = 2
+        req.commit.CopyFrom(encode_signed_grading_commit(decoded, "daycare-secret"))
         responses = list(runtime.stream(req, cast(grpc.ServicerContext, _FakeContext())))
         self.assertEqual(len(responses), 1)
         self.assertEqual(responses[0].WhichOneof("response"), "error")
@@ -541,14 +520,14 @@ class DaycareTests(unittest.TestCase):
         runner.plan_result("cp_get", CommandResult(returncode=0, stdout=_tar_bytes({"test_detail.xml": xunit}), stderr=b""))
         req = _build_signed_request(parser="xunit")
         responses = list(runtime.stream(req, cast(grpc.ServicerContext, _FakeContext())))
-        self.assertEqual(responses[-1].WhichOneof("response"), "commit_bundle")
-        signed = responses[-1].commit_bundle
+        self.assertEqual(responses[-1].WhichOneof("response"), "commit")
+        signed = decode_signed_grading_commit(responses[-1].commit, "daycare-secret")
         self.assertEqual(len(signed.commit.report_card.results), 2)
         self.assertAlmostEqual(signed.commit.score, 0.5)
 
     def test_gather_files_and_step_merge_order(self) -> None:
         req = _build_signed_request()
-        step, merged = gather_files_and_step(req.commit_bundle)
+        step, merged = gather_files_and_step(decode_signed_grading_commit(req.commit, "daycare-secret"))
         self.assertEqual(step.step, 1)
         self.assertIn("Makefile", merged)
         self.assertIn("template.txt", merged)
@@ -589,25 +568,14 @@ class DaycareTests(unittest.TestCase):
         runner = _FakeRunner()
         runtime = _build_runtime(runner)
         req = _build_signed_request()
-        req.commit_bundle.problem.options[:] = [
+        decoded = decode_signed_grading_commit(req.commit, "daycare-secret")
+        decoded.problem.problem_options[:] = [
             "maxCPU=3",
             "maxFileSize=7",
             "maxMemory=64",
             "maxThreads=9",
         ]
-        req.commit_bundle.problem_signature = compute_problem_signature(
-            req.commit_bundle.problem,
-            list(req.commit_bundle.problem_steps),
-            "daycare-secret",
-        )
-        req.commit_bundle.commit_signature = compute_commit_signature(
-            req.commit_bundle.commit,
-            req.commit_bundle.problem_type_signature,
-            req.commit_bundle.problem_signature,
-            req.commit_bundle.hostname,
-            req.commit_bundle.user_id,
-            "daycare-secret",
-        )
+        req.commit.CopyFrom(encode_signed_grading_commit(decoded, "daycare-secret"))
         _ = list(runtime.stream(req, cast(grpc.ServicerContext, _FakeContext())))
         run_call = next(call for call in runner.calls if _command_key(call) == "run")
         self.assertIn("--memory", run_call)
@@ -623,12 +591,12 @@ class DaycareTests(unittest.TestCase):
         runtime = _build_runtime(runner)
         req = _build_signed_request(parser="unknown-parser")
         responses = list(runtime.stream(req, cast(grpc.ServicerContext, _FakeContext())))
-        self.assertEqual(responses[-1].WhichOneof("response"), "commit_bundle")
-        signed = responses[-1].commit_bundle
+        self.assertEqual(responses[-1].WhichOneof("response"), "commit")
+        signed = decode_signed_grading_commit(responses[-1].commit, "daycare-secret")
         self.assertFalse(signed.commit.report_card.passed)
         self.assertIn("unknown parser", signed.commit.report_card.note)
         self.assertEqual(signed.commit.score, 0.0)
-        self.assertTrue(signed.commit_signature)
+        self.assertTrue(responses[-1].commit.signature)
 
 
 if __name__ == "__main__":

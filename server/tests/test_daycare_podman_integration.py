@@ -12,11 +12,7 @@ import grpc
 import codegrinder_pb2 as pb
 from config import ServerConfig
 from daycare import DaycareRuntime
-from mutations import (
-    compute_commit_signature,
-    compute_problem_signature,
-    compute_problem_type_signature,
-)
+from signatures import decode_signed_grading_commit, encode_signed_grading_commit
 
 _RUNTIME_CANDIDATES: tuple[tuple[str, ...], ...] = (("doas", "podman"), ("podman",))
 _IMAGE_CANDIDATES: tuple[str, ...] = ("localhost/codegrinder/riscv", "codegrinder/riscv")
@@ -58,11 +54,7 @@ def _build_signed_request(*, action: str, problem_options: list[str], image: str
         action="run",
         command="make run",
         parser="",
-        message="run",
-        interactive=False,
         max_cpu=30,
-        max_session=30,
-        max_timeout=30,
         max_fd=128,
         max_file_size=16,
         max_memory=512,
@@ -73,33 +65,28 @@ def _build_signed_request(*, action: str, problem_options: list[str], image: str
         action="grade",
         command="make grade",
         parser="xunit",
-        message="grade",
-        interactive=False,
         max_cpu=30,
-        max_session=30,
-        max_timeout=30,
         max_fd=128,
         max_file_size=16,
         max_memory=512,
         max_threads=32,
     )
     ptype = pb.ProblemType(
-        name="riscv",
-        image=image,
+        problem_type="riscv",
+        container=image,
         files={},
         actions={"run": run_action, "grade": grade_action},
     )
     problem = pb.Problem(
-        id=100,
-        unique="selection-sort",
-        note="integration fixture",
-        tags=["integration", "riscv"],
-        options=problem_options,
+        problem_id="selection-sort",
+        problem_note="integration fixture",
+        problem_tags=["integration", "riscv"],
+        problem_options=problem_options,
         created_at=now,
         updated_at=now,
     )
     step = pb.ProblemStep(
-        problem_id=100,
+        problem_id="selection-sort",
         step=1,
         problem_type="riscv",
         note="fixture step",
@@ -109,8 +96,8 @@ def _build_signed_request(*, action: str, problem_options: list[str], image: str
         whitelist={"sort.s": True},
     )
     commit = pb.Commit(
-        assignment_id=55,
-        problem_id=100,
+        assignment=pb.AssignmentKey(user_id="999", course_id="c-1", problem_set_id="ps-1"),
+        problem_id="selection-sort",
         step=1,
         action=action,
         note="",
@@ -120,26 +107,16 @@ def _build_signed_request(*, action: str, problem_options: list[str], image: str
         updated_at=now,
     )
 
-    daycare_secret = "daycare-secret"
-    hostname = "daycare.example.invalid"
-    user_id = 999
-    type_sig = compute_problem_type_signature(ptype, daycare_secret)
-    problem_sig = compute_problem_signature(problem, [step], daycare_secret)
-    commit_sig = compute_commit_signature(commit, type_sig, problem_sig, hostname, user_id, daycare_secret)
-
-    bundle = pb.CommitBundle(
+    bundle = pb.GradingCommit(
         problem_type=ptype,
-        problem_type_signature=type_sig,
         problem=problem,
         problem_steps=[step],
-        problem_signature=problem_sig,
-        hostname=hostname,
-        user_id=user_id,
+        hostname="daycare.example.invalid",
+        user_id="999",
         commit=commit,
-        commit_signature=commit_sig,
     )
     return pb.DaycareRequest(
-        commit_bundle=bundle,
+        commit=encode_signed_grading_commit(bundle, "daycare-secret"),
         problem_type="riscv",
         action=action,
         args=[],
@@ -195,7 +172,7 @@ class DaycarePodmanIntegrationTests(unittest.TestCase):
         responses = list(runtime.stream(request, cast(grpc.ServicerContext, _FakeContext())))
         response_kinds = [response.WhichOneof("response") for response in responses]
         self.assertNotIn("error", response_kinds)
-        self.assertNotIn("commit_bundle", response_kinds)
+        self.assertNotIn("commit", response_kinds)
 
         events = [response.event for response in responses if response.WhichOneof("response") == "event"]
         self.assertTrue(any(event.event == "exec" and list(event.exec_command) == ["make", "run"] for event in events))
@@ -221,12 +198,12 @@ class DaycarePodmanIntegrationTests(unittest.TestCase):
         self.assertTrue(b"<testsuite" in xml_bytes or b"<testsuites" in xml_bytes)
 
         grade_response = responses[-1]
-        self.assertEqual(grade_response.WhichOneof("response"), "commit_bundle")
-        signed_bundle = grade_response.commit_bundle
-        self.assertTrue(signed_bundle.commit_signature)
-        self.assertTrue(signed_bundle.commit.report_card.passed)
-        self.assertEqual(signed_bundle.commit.score, 1.0)
-        self.assertGreater(len(signed_bundle.commit.report_card.results), 0)
+        self.assertEqual(grade_response.WhichOneof("response"), "commit")
+        signed_commit = decode_signed_grading_commit(grade_response.commit, "daycare-secret")
+        self.assertTrue(grade_response.commit.signature)
+        self.assertTrue(signed_commit.commit.report_card.passed)
+        self.assertEqual(signed_commit.commit.score, 1.0)
+        self.assertGreater(len(signed_commit.commit.report_card.results), 0)
 
 
 if __name__ == "__main__":

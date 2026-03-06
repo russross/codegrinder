@@ -18,15 +18,14 @@ from lti import compute_oauth_signature
 
 @dataclass(slots=True)
 class GradePassbackTarget:
-    assignment_id: int
-    user_id: int
+    user_id: str
+    course_id: str
+    problem_set_id: str
     grade_id: str
     outcome_url: str
-    outcome_ext_url: str
     outcome_ext_accepted: str
     consumer_key: str
     score: float
-    canvas_title: str
 
 
 def _transcript_html(commit: pb.Commit) -> str:
@@ -149,7 +148,12 @@ def save_grade_async(target: GradePassbackTarget, report_html: str, lti_secret: 
                     exc,
                 )
                 if idx + 1 >= tries:
-                    logging.warning("giving up posting LMS grade for assignment %d", target.assignment_id)
+                    logging.warning(
+                        "giving up posting LMS grade for assignment %s/%s/%s",
+                        target.user_id,
+                        target.course_id,
+                        target.problem_set_id,
+                    )
                     return
                 time.sleep(sleep_seconds)
                 sleep_seconds = min(sleep_seconds * 2.0, 300.0)

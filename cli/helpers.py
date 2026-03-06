@@ -18,7 +18,7 @@ from packaging.version import Version
 import codegrinder_pb2 as pb
 import codegrinder_pb2_grpc as pb_grpc
 from errors import CliError, fail
-from models import Config, DotFileInfo, ProblemInfo
+from models import AssignmentRef, Config, DotFileInfo, ProblemInfo
 from version import CURRENT_VERSION
 
 INSTRUCTOR_FILE = ".codegrinderinstructor"
@@ -191,9 +191,15 @@ def plural(count: int) -> str:
 
 
 def _dotfile_from_raw(path: Path, raw: dict[str, object]) -> DotFileInfo:
-    assignment_id_raw = raw.get("assignmentID")
-    if not isinstance(assignment_id_raw, int):
-        fail(f"error parsing {path}: missing assignmentID")
+    assignment_ref_raw = raw.get("assignmentRef")
+    if not isinstance(assignment_ref_raw, dict):
+        fail(f"error parsing {path}: missing assignmentRef")
+    assignment_ref_map = cast(dict[str, object], assignment_ref_raw)
+    assignment_user_id = assignment_ref_map.get("userID")
+    assignment_course_id = assignment_ref_map.get("courseID")
+    assignment_problem_set_id = assignment_ref_map.get("problemSetID")
+    if not isinstance(assignment_user_id, str) or not isinstance(assignment_course_id, str) or not isinstance(assignment_problem_set_id, str):
+        fail(f"error parsing {path}: invalid assignmentRef")
 
     problems_raw = raw.get("problems")
     if not isinstance(problems_raw, dict):
@@ -205,12 +211,24 @@ def _dotfile_from_raw(path: Path, raw: dict[str, object]) -> DotFileInfo:
         if not isinstance(unique, str) or not isinstance(info, dict):
             fail(f"error parsing {path}: invalid problem entry")
         info_map = cast(dict[str, object], info)
-        pid = info_map.get("id")
+        pid = info_map.get("problemID")
         step = info_map.get("step")
-        if not isinstance(pid, int) or not isinstance(step, int):
+        total_steps = info_map.get("totalSteps")
+        if not isinstance(pid, str) or not isinstance(step, int):
             fail(f"error parsing {path}: invalid problem entry for {unique}")
-        problems[unique] = ProblemInfo(id=pid, step=step)
-    return DotFileInfo(assignment_id=assignment_id_raw, problems=problems, path=str(path))
+        normalized_total_steps = 1
+        if isinstance(total_steps, int) and total_steps > 0:
+            normalized_total_steps = total_steps
+        problems[unique] = ProblemInfo(problem_id=pid, step=step, total_steps=normalized_total_steps)
+    return DotFileInfo(
+        assignment_ref=AssignmentRef(
+            user_id=assignment_user_id,
+            course_id=assignment_course_id,
+            problem_set_id=assignment_problem_set_id,
+        ),
+        problems=problems,
+        path=str(path),
+    )
 
 
 def find_dotfile(start_dir: Path) -> tuple[DotFileInfo, Path, Path | None]:
@@ -246,9 +264,13 @@ def find_dotfile(start_dir: Path) -> tuple[DotFileInfo, Path, Path | None]:
 
 def save_dotfile(dotfile: DotFileInfo) -> None:
     payload = {
-        "assignmentID": dotfile.assignment_id,
+        "assignmentRef": {
+            "userID": dotfile.assignment_ref.user_id,
+            "courseID": dotfile.assignment_ref.course_id,
+            "problemSetID": dotfile.assignment_ref.problem_set_id,
+        },
         "problems": {
-            key: {"id": info.id, "step": info.step}
+            key: {"problemID": info.problem_id, "step": info.step, "totalSteps": info.total_steps}
             for key, info in dotfile.problems.items()
         },
     }

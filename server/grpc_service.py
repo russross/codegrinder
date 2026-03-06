@@ -20,38 +20,35 @@ from grade_passback import GradePassbackTarget, build_grade_report_html, save_gr
 from ipfilter import IPFilter, extract_ip_from_peer
 from mutations import (
     create_problem_set_bundle,
-    save_commit_bundle_common,
+    save_grading_commit_common,
     save_problem_bundle_common,
     sign_problem_bundle_unconfirmed,
     update_problem_bundle,
     update_problem_set_bundle,
 )
 from read_store import (
+    get_assignment_list_items_pb,
+    get_assignment_info_pb,
     get_assignment_pb,
-    get_assignment_problem_commit_last_pb,
-    get_assignment_problem_step_commit_last_pb,
     get_assignments_pb,
     get_course_pb,
-    get_course_user_assignments_pb,
-    get_course_users_pb,
-    get_courses_pb,
     get_list_problems_bundle,
     get_problem_pb,
-    get_problem_set_pb,
     get_problem_set_problems_pb,
     get_problem_sets_pb,
+    get_problem_step_files_pb,
     get_problem_step_pb,
     get_problem_steps_pb,
     get_problem_type_actions_rows,
     get_problem_types_rows,
     get_problems_pb,
-    get_user_assignments_pb,
     get_user_me_pb,
     get_user_pb,
-    get_users_pb,
     load_user_by_id,
     problem_type_pb,
+    search_problem_catalog_pb,
 )
+from signatures import decode_signed_grading_commit, encode_signed_grading_commit
 from sessions import COOKIE_NAME, LoginRecords, SessionError, decode_session, encode_session, new_session
 
 IP_ALLOWED_VAR: contextvars.ContextVar[bool] = contextvars.ContextVar("ip_allowed", default=True)
@@ -179,7 +176,7 @@ class RecoveryInterceptor(grpc.ServerInterceptor):
                     return original(request, context)
                 except grpc.RpcError:
                     raise
-                except Exception as exc:
+                except Exception:
                     if _context_has_grpc_status(context):
                         raise
                     logging.exception("panic in gRPC unary handler %s", method_name)
@@ -291,9 +288,9 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
             context.abort(grpc.StatusCode.INTERNAL, f"db error loading user: {exc}")
             raise AssertionError("unreachable")
 
-    def _problem_type_files(self, name: str) -> dict[str, bytes]:
+    def _problem_type_files(self, problem_type: str) -> dict[str, bytes]:
         files: dict[str, bytes] = {}
-        directory = self._root / "files" / name
+        directory = self._root / "files" / problem_type
         if not directory.exists() or not directory.is_dir():
             return files
         for path in directory.rglob("*"):
@@ -302,12 +299,17 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
             files[str(path.relative_to(directory))] = path.read_bytes()
         return files
 
-    def _load_problem_type(self, tx: sqlite3.Connection, name: str) -> pb.ProblemType:
-        row = tx.execute("SELECT * FROM problem_types WHERE name = ?", (name,)).fetchone()
+    def _load_problem_type(self, tx: sqlite3.Connection, problem_type: str) -> pb.ProblemType:
+        row = tx.execute("SELECT * FROM problem_types WHERE problem_type = ?", (problem_type,)).fetchone()
         if row is None:
             raise sqlite3.Error("not found")
-        action_rows = get_problem_type_actions_rows(tx, name)
-        return problem_type_pb(str(row["name"]), str(row["image"]), self._problem_type_files(name), action_rows)
+        action_rows = get_problem_type_actions_rows(tx, problem_type)
+        return problem_type_pb(
+            str(row["problem_type"]),
+            str(row["container"]),
+            self._problem_type_files(problem_type),
+            action_rows,
+        )
 
     # gRPC-native names
     def rpc_hello(self, request: pb.HelloRequest, context: grpc.ServicerContext) -> pb.HelloResponse:
@@ -343,7 +345,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
         def fn(tx: sqlite3.Connection) -> pb.ListProblemsResponse:
             user_row = self._current_user_row(tx, context)
             user, assignments, courses, problem_sets = get_list_problems_bundle(
-                tx, int(user_row["id"]), user_row, self._ip_allowed(context)
+                tx, str(user_row["user_id"]), user_row, self._ip_allowed(context)
             )
             return pb.ListProblemsResponse(
                 user=user, assignments=assignments, courses=courses, problem_sets=problem_sets
@@ -351,14 +353,43 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
 
         return self._with_tx(fn)
 
-    def rpc_version(self, _request: pb.GetVersionRequest, _context: grpc.ServicerContext) -> pb.GetVersionResponse:
-        return pb.GetVersionResponse(version=self._version.to_pb())
+    def rpc_list_assignments(
+        self, request: pb.ListAssignmentsRequest, context: grpc.ServicerContext
+    ) -> pb.ListAssignmentsResponse:
+        def fn(tx: sqlite3.Connection) -> pb.ListAssignmentsResponse:
+            current_user = self._current_user_row(tx, context)
+            try:
+                items = get_assignment_list_items_pb(
+                    tx,
+                    current_user,
+                    list(request.search),
+                    bool(request.include_student_context),
+                    self._ip_allowed(context),
+                )
+            except sqlite3.Error as exc:
+                context.abort(grpc.StatusCode.INTERNAL, f"db error listing assignments: {exc}")
+            return pb.ListAssignmentsResponse(items=items)
+
+        return self._with_tx(fn)
+
+    def rpc_search_problem_catalog(
+        self, request: pb.SearchProblemCatalogRequest, context: grpc.ServicerContext
+    ) -> pb.SearchProblemCatalogResponse:
+        def fn(tx: sqlite3.Connection) -> pb.SearchProblemCatalogResponse:
+            current_user = self._current_user_row(tx, context)
+            try:
+                response = search_problem_catalog_pb(tx, current_user, list(request.search))
+            except sqlite3.Error as exc:
+                context.abort(grpc.StatusCode.INTERNAL, f"db error searching problem catalog: {exc}")
+            return response
+
+        return self._with_tx(fn)
 
     def rpc_problem_types(self, _request: pb.GetProblemTypesRequest, context: grpc.ServicerContext) -> pb.GetProblemTypesResponse:
         def fn(tx: sqlite3.Connection) -> pb.GetProblemTypesResponse:
             try:
                 rows = get_problem_types_rows(tx)
-                types = [self._load_problem_type(tx, str(row["name"])) for row in rows]
+                types = [self._load_problem_type(tx, str(row["problem_type"])) for row in rows]
             except sqlite3.Error as exc:
                 context.abort(grpc.StatusCode.INTERNAL, f"db error getting problem types: {exc}")
             return pb.GetProblemTypesResponse(problem_types=types)
@@ -368,7 +399,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
     def rpc_problem_type(self, request: pb.GetProblemTypeRequest, context: grpc.ServicerContext) -> pb.GetProblemTypeResponse:
         def fn(tx: sqlite3.Connection) -> pb.GetProblemTypeResponse:
             try:
-                problem_type = self._load_problem_type(tx, request.name)
+                problem_type = self._load_problem_type(tx, request.problem_type)
             except sqlite3.Error as exc:
                 if _is_db_not_found(exc):
                     context.abort(grpc.StatusCode.NOT_FOUND, "not found")
@@ -393,7 +424,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
         def fn(tx: sqlite3.Connection) -> pb.GetProblemResponse:
             current_user = self._current_user_row(tx, context)
             try:
-                problem = get_problem_pb(tx, current_user, int(request.problem_id))
+                problem = get_problem_pb(tx, current_user, request.problem_id)
             except sqlite3.Error as exc:
                 if _is_db_not_found(exc):
                     context.abort(grpc.StatusCode.NOT_FOUND, "not found")
@@ -407,7 +438,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
         def fn(tx: sqlite3.Connection) -> pb.GetProblemStepsResponse:
             current_user = self._current_user_row(tx, context)
             try:
-                steps = get_problem_steps_pb(tx, current_user, int(request.problem_id))
+                steps = get_problem_steps_pb(tx, current_user, request.problem_id)
             except sqlite3.Error as exc:
                 if _is_db_not_found(exc):
                     context.abort(grpc.StatusCode.NOT_FOUND, "not found")
@@ -421,7 +452,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
         def fn(tx: sqlite3.Connection) -> pb.GetProblemStepResponse:
             current_user = self._current_user_row(tx, context)
             try:
-                step = get_problem_step_pb(tx, current_user, int(request.problem_id), int(request.step))
+                step = get_problem_step_pb(tx, current_user, request.problem_id, int(request.step))
             except sqlite3.Error as exc:
                 if _is_db_not_found(exc):
                     context.abort(grpc.StatusCode.NOT_FOUND, "not found")
@@ -442,27 +473,13 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
 
         return self._with_tx(fn)
 
-    def rpc_problem_set(self, request: pb.GetProblemSetRequest, context: grpc.ServicerContext) -> pb.GetProblemSetResponse:
-        def fn(tx: sqlite3.Connection) -> pb.GetProblemSetResponse:
-            current_user = self._current_user_row(tx, context)
-            try:
-                problem_set = get_problem_set_pb(tx, current_user, int(request.problem_set_id))
-            except sqlite3.Error as exc:
-                if _is_db_not_found(exc):
-                    context.abort(grpc.StatusCode.NOT_FOUND, "not found")
-                    raise AssertionError("unreachable")
-                context.abort(grpc.StatusCode.INTERNAL, f"db error getting problem set: {exc}")
-            return pb.GetProblemSetResponse(problem_set=problem_set)
-
-        return self._with_tx(fn)
-
     def rpc_problem_set_problems(
         self, request: pb.GetProblemSetProblemsRequest, context: grpc.ServicerContext
     ) -> pb.GetProblemSetProblemsResponse:
         def fn(tx: sqlite3.Connection) -> pb.GetProblemSetProblemsResponse:
             current_user = self._current_user_row(tx, context)
             try:
-                entries = get_problem_set_problems_pb(tx, current_user, int(request.problem_set_id))
+                entries = get_problem_set_problems_pb(tx, current_user, request.problem_set_id)
             except sqlite3.Error as exc:
                 if _is_db_not_found(exc):
                     context.abort(grpc.StatusCode.NOT_FOUND, "not found")
@@ -472,22 +489,11 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
 
         return self._with_tx(fn)
 
-    def rpc_courses(self, request: pb.GetCoursesRequest, context: grpc.ServicerContext) -> pb.GetCoursesResponse:
-        def fn(tx: sqlite3.Connection) -> pb.GetCoursesResponse:
-            current_user = self._current_user_row(tx, context)
-            try:
-                courses = get_courses_pb(tx, current_user, request.lti_label, request.name)
-            except sqlite3.Error as exc:
-                context.abort(grpc.StatusCode.INTERNAL, f"db error getting courses: {exc}")
-            return pb.GetCoursesResponse(courses=courses)
-
-        return self._with_tx(fn)
-
     def rpc_course(self, request: pb.GetCourseRequest, context: grpc.ServicerContext) -> pb.GetCourseResponse:
         def fn(tx: sqlite3.Connection) -> pb.GetCourseResponse:
             current_user = self._current_user_row(tx, context)
             try:
-                course = get_course_pb(tx, current_user, int(request.course_id))
+                course = get_course_pb(tx, current_user, request.course_id)
             except sqlite3.Error as exc:
                 if _is_db_not_found(exc):
                     context.abort(grpc.StatusCode.NOT_FOUND, "not found")
@@ -497,93 +503,17 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
 
         return self._with_tx(fn)
 
-    def rpc_users(self, request: pb.GetUsersRequest, context: grpc.ServicerContext) -> pb.GetUsersResponse:
-        def fn(tx: sqlite3.Connection) -> pb.GetUsersResponse:
-            current_user = self._current_user_row(tx, context)
-            try:
-                users = get_users_pb(tx, current_user, request.name, request.email, request.instructor, request.admin)
-            except ValueError as exc:
-                context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
-            except sqlite3.Error as exc:
-                context.abort(grpc.StatusCode.INTERNAL, f"db error getting users: {exc}")
-            return pb.GetUsersResponse(users=users)
-
-        return self._with_tx(fn)
-
-    def rpc_current_user(self, _request: pb.GetUserMeRequest, context: grpc.ServicerContext) -> pb.GetUserMeResponse:
-        def fn(tx: sqlite3.Connection) -> pb.GetUserMeResponse:
-            current_user = self._current_user_row(tx, context)
-            return pb.GetUserMeResponse(user=get_user_me_pb(current_user))
-
-        return self._with_tx(fn)
-
-    def rpc_exchange_user_session(
-        self, request: pb.GetUserSessionRequest, context: grpc.ServicerContext
-    ) -> pb.GetUserSessionResponse:
-        try:
-            user_id = self._login_records.get(request.key, datetime.now(tz=UTC))
-        except SessionError as exc:
-            context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
-        session = new_session(user_id, datetime.now(tz=UTC), self._config.sessions_expire)
-        cookie_value = encode_session(session, self._config.session_secret)
-        return pb.GetUserSessionResponse(cookie=f"{COOKIE_NAME}={cookie_value}")
-
     def rpc_user(self, request: pb.GetUserRequest, context: grpc.ServicerContext) -> pb.GetUserResponse:
         def fn(tx: sqlite3.Connection) -> pb.GetUserResponse:
             current_user = self._current_user_row(tx, context)
             try:
-                user = get_user_pb(tx, current_user, int(request.user_id))
+                user = get_user_pb(tx, current_user, request.user_id)
             except sqlite3.Error as exc:
                 if _is_db_not_found(exc):
                     context.abort(grpc.StatusCode.NOT_FOUND, "not found")
                     raise AssertionError("unreachable")
                 context.abort(grpc.StatusCode.INTERNAL, f"db error getting user: {exc}")
             return pb.GetUserResponse(user=user)
-
-        return self._with_tx(fn)
-
-    def rpc_course_users(self, request: pb.GetCourseUsersRequest, context: grpc.ServicerContext) -> pb.GetCourseUsersResponse:
-        def fn(tx: sqlite3.Connection) -> pb.GetCourseUsersResponse:
-            current_user = self._current_user_row(tx, context)
-            try:
-                users = get_course_users_pb(tx, current_user, int(request.course_id))
-            except sqlite3.Error as exc:
-                if _is_db_not_found(exc):
-                    context.abort(grpc.StatusCode.NOT_FOUND, "not found")
-                    raise AssertionError("unreachable")
-                context.abort(grpc.StatusCode.INTERNAL, f"db error getting course users: {exc}")
-            return pb.GetCourseUsersResponse(users=users)
-
-        return self._with_tx(fn)
-
-    def rpc_user_assignments(
-        self, request: pb.GetUserAssignmentsRequest, context: grpc.ServicerContext
-    ) -> pb.GetUserAssignmentsResponse:
-        def fn(tx: sqlite3.Connection) -> pb.GetUserAssignmentsResponse:
-            current_user = self._current_user_row(tx, context)
-            try:
-                assts = get_user_assignments_pb(tx, current_user, int(request.user_id), self._ip_allowed(context))
-            except sqlite3.Error as exc:
-                context.abort(grpc.StatusCode.INTERNAL, f"db error getting user assignments: {exc}")
-            return pb.GetUserAssignmentsResponse(assignments=assts)
-
-        return self._with_tx(fn)
-
-    def rpc_course_user_assignments(
-        self, request: pb.GetCourseUserAssignmentsRequest, context: grpc.ServicerContext
-    ) -> pb.GetCourseUserAssignmentsResponse:
-        def fn(tx: sqlite3.Connection) -> pb.GetCourseUserAssignmentsResponse:
-            current_user = self._current_user_row(tx, context)
-            try:
-                assts = get_course_user_assignments_pb(
-                    tx, current_user, int(request.course_id), int(request.user_id), self._ip_allowed(context)
-                )
-            except sqlite3.Error as exc:
-                if _is_db_not_found(exc):
-                    context.abort(grpc.StatusCode.NOT_FOUND, "not found")
-                    raise AssertionError("unreachable")
-                context.abort(grpc.StatusCode.INTERNAL, f"db error getting course user assignments: {exc}")
-            return pb.GetCourseUserAssignmentsResponse(assignments=assts)
 
         return self._with_tx(fn)
 
@@ -602,7 +532,14 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
         def fn(tx: sqlite3.Connection) -> pb.GetAssignmentResponse:
             current_user = self._current_user_row(tx, context)
             try:
-                asst = get_assignment_pb(tx, current_user, int(request.assignment_id), self._ip_allowed(context))
+                asst = get_assignment_pb(
+                    tx,
+                    current_user,
+                    request.assignment.user_id,
+                    request.assignment.course_id,
+                    request.assignment.problem_set_id,
+                    self._ip_allowed(context),
+                )
             except sqlite3.Error as exc:
                 if _is_db_not_found(exc):
                     context.abort(grpc.StatusCode.NOT_FOUND, "not found")
@@ -612,44 +549,53 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
 
         return self._with_tx(fn)
 
-    def rpc_assignment_problem_latest_commit(
-        self, request: pb.GetAssignmentProblemCommitLastRequest, context: grpc.ServicerContext
-    ) -> pb.GetAssignmentProblemCommitLastResponse:
-        def fn(tx: sqlite3.Connection) -> pb.GetAssignmentProblemCommitLastResponse:
+    def rpc_assignment_info(
+        self, request: pb.GetAssignmentInfoRequest, context: grpc.ServicerContext
+    ) -> pb.GetAssignmentInfoResponse:
+        def fn(tx: sqlite3.Connection) -> pb.GetAssignmentInfoResponse:
             current_user = self._current_user_row(tx, context)
             try:
-                commit = get_assignment_problem_commit_last_pb(
-                    tx, current_user, int(request.assignment_id), int(request.problem_id), self._ip_allowed(context)
-                )
-            except sqlite3.Error as exc:
-                if _is_db_not_found(exc):
-                    context.abort(grpc.StatusCode.NOT_FOUND, "not found")
-                    raise AssertionError("unreachable")
-                context.abort(grpc.StatusCode.INTERNAL, f"db error getting assignment problem commit last: {exc}")
-            return pb.GetAssignmentProblemCommitLastResponse(commit=commit)
-
-        return self._with_tx(fn)
-
-    def rpc_assignment_problem_step_latest_commit(
-        self, request: pb.GetAssignmentProblemStepCommitLastRequest, context: grpc.ServicerContext
-    ) -> pb.GetAssignmentProblemStepCommitLastResponse:
-        def fn(tx: sqlite3.Connection) -> pb.GetAssignmentProblemStepCommitLastResponse:
-            current_user = self._current_user_row(tx, context)
-            try:
-                commit = get_assignment_problem_step_commit_last_pb(
+                response = get_assignment_info_pb(
                     tx,
                     current_user,
-                    int(request.assignment_id),
-                    int(request.problem_id),
-                    int(request.step),
+                    request.assignment.user_id,
+                    request.assignment.course_id,
+                    request.assignment.problem_set_id,
                     self._ip_allowed(context),
                 )
             except sqlite3.Error as exc:
                 if _is_db_not_found(exc):
                     context.abort(grpc.StatusCode.NOT_FOUND, "not found")
                     raise AssertionError("unreachable")
-                context.abort(grpc.StatusCode.INTERNAL, f"db error getting assignment problem step commit last: {exc}")
-            return pb.GetAssignmentProblemStepCommitLastResponse(commit=commit)
+                context.abort(grpc.StatusCode.INTERNAL, f"db error getting assignment info: {exc}")
+            return response
+
+        return self._with_tx(fn)
+
+    def rpc_problem_step_files(
+        self, request: pb.GetProblemStepFilesRequest, context: grpc.ServicerContext
+    ) -> pb.GetProblemStepFilesResponse:
+        def fn(tx: sqlite3.Connection) -> pb.GetProblemStepFilesResponse:
+            current_user = self._current_user_row(tx, context)
+            try:
+                response = get_problem_step_files_pb(
+                    tx,
+                    current_user,
+                    request.assignment.user_id,
+                    request.assignment.course_id,
+                    request.assignment.problem_set_id,
+                    request.problem_id,
+                    int(request.step_number),
+                    bool(request.reset_to_step_start),
+                    self._ip_allowed(context),
+                    self._problem_type_files,
+                )
+            except sqlite3.Error as exc:
+                if _is_db_not_found(exc):
+                    context.abort(grpc.StatusCode.NOT_FOUND, "not found")
+                    raise AssertionError("unreachable")
+                context.abort(grpc.StatusCode.INTERNAL, f"db error getting problem step files: {exc}")
+            return response
 
         return self._with_tx(fn)
 
@@ -661,12 +607,18 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                 pass
         return self._config.hostname
 
-    def _problem_count_for_assignment(self, tx: sqlite3.Connection, assignment_id: int) -> int:
+    def _problem_count_for_assignment(
+        self,
+        tx: sqlite3.Connection,
+        assignment_user_id: str,
+        assignment_course_id: str,
+        assignment_problem_set_id: str,
+    ) -> int:
         row = tx.execute(
             "SELECT COUNT(1) AS c FROM problem_set_problems "
-            "JOIN assignments ON assignments.problem_set_id = problem_set_problems.problem_set_id "
-            "WHERE assignments.id = ?",
-            (assignment_id,),
+            "NATURAL JOIN assignments "
+            "WHERE assignments.user_id = ? AND assignments.course_id = ? AND assignments.problem_set_id = ?",
+            (assignment_user_id, assignment_course_id, assignment_problem_set_id),
         ).fetchone()
         if row is None:
             return 1
@@ -675,37 +627,46 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
     def _build_grade_passback_target(
         self,
         tx: sqlite3.Connection,
-        current_user_id: int,
-        bundle: pb.CommitBundle,
+        current_user_id: str,
+        bundle: pb.GradingCommit,
     ) -> GradePassbackTarget | None:
         if not bundle.commit.HasField("report_card"):
             return None
-        row = tx.execute("SELECT * FROM assignments WHERE id = ?", (int(bundle.commit.assignment_id),)).fetchone()
+        row = tx.execute(
+            "SELECT * FROM assignments WHERE user_id = ? AND course_id = ? AND problem_set_id = ?",
+            (
+                bundle.commit.assignment.user_id,
+                bundle.commit.assignment.course_id,
+                bundle.commit.assignment.problem_set_id,
+            ),
+        ).fetchone()
         if row is None:
             return None
-        if int(row["user_id"]) != current_user_id:
+        if str(row["user_id"]) != current_user_id:
             return None
+        score = 0.0
+        if bundle.commit.HasField("report_card"):
+            score = float(bundle.commit.score)
         return GradePassbackTarget(
-            assignment_id=int(row["id"]),
-            user_id=int(row["user_id"]),
+            user_id=str(row["user_id"]),
+            course_id=str(row["course_id"]),
+            problem_set_id=str(row["problem_set_id"]),
             grade_id=str(row["grade_id"] or ""),
             outcome_url=str(row["outcome_url"] or ""),
-            outcome_ext_url=str(row["outcome_ext_url"] or ""),
             outcome_ext_accepted=str(row["outcome_ext_accepted"] or ""),
             consumer_key=str(row["consumer_key"] or ""),
-            score=float(row["score"] or 0.0),
-            canvas_title=str(row["canvas_title"] or ""),
+            score=score,
         )
 
-    def _log_commit_request(self, current_user: sqlite3.Row, bundle: pb.CommitBundle, *, request_signed: bool) -> None:
+    def _log_commit_request(self, current_user: sqlite3.Row, bundle: pb.GradingCommit, *, request_signed: bool) -> None:
         note = ""
         if bundle.commit.note != "":
             note = f" ({bundle.commit.note})"
-        problem_note = bundle.problem.note
-        if bundle.commit.action == "" and bundle.commit_signature == "" and bundle.commit.note != "web autosave":
+        problem_note = bundle.problem.problem_note
+        if bundle.commit.action == "" and bundle.commit.note != "web autosave":
             logging.info(
                 "sync request: user %s syncing %s step %d%s",
-                current_user["name"],
+                current_user["user_name"],
                 problem_note,
                 int(bundle.commit.step),
                 note,
@@ -713,9 +674,9 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
             return
         if bundle.commit.action != "" and not request_signed:
             logging.info(
-                "pre-daycare commit: user %s (%d) action %s for %s step %d%s",
-                current_user["name"],
-                int(current_user["id"]),
+                "pre-daycare commit: user %s (%s) action %s for %s step %d%s",
+                current_user["user_name"],
+                str(current_user["user_id"]),
                 bundle.commit.action,
                 problem_note,
                 int(bundle.commit.step),
@@ -724,9 +685,9 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
             return
         if bundle.commit.action != "":
             logging.info(
-                "post-daycare commit: user %s (%d) action %s for %s step %d%s",
-                current_user["name"],
-                int(current_user["id"]),
+                "post-daycare commit: user %s (%s) action %s for %s step %d%s",
+                current_user["user_name"],
+                str(current_user["user_id"]),
                 bundle.commit.action,
                 problem_note,
                 int(bundle.commit.step),
@@ -746,7 +707,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
             try:
                 bundle = sign_problem_bundle_unconfirmed(
                     tx,
-                    int(current_user["id"]),
+                    str(current_user["user_id"]),
                     request.bundle,
                     self._config.daycare_secret,
                     str(self._root / "files"),
@@ -771,7 +732,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
             try:
                 bundle = save_problem_bundle_common(
                     tx,
-                    int(current_user["id"]),
+                    str(current_user["user_id"]),
                     request.bundle,
                     self._config.daycare_secret,
                     str(self._root / "files"),
@@ -795,8 +756,8 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
             try:
                 bundle = update_problem_bundle(
                     tx,
-                    int(current_user["id"]),
-                    int(request.problem_id),
+                    str(current_user["user_id"]),
+                    request.problem_id,
                     request.bundle,
                     self._config.daycare_secret,
                     str(self._root / "files"),
@@ -839,23 +800,22 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
 
         return self._with_tx(fn)
 
-    def rpc_commit_bundle_unsigned(
-        self, request: pb.PostCommitBundlesUnsignedRequest, context: grpc.ServicerContext
-    ) -> pb.PostCommitBundlesUnsignedResponse:
-        if request is None or not request.HasField("bundle"):
-            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "bundle is required")
+    def rpc_save_ungraded_commit(
+        self, request: pb.SaveUngradedCommitRequest, context: grpc.ServicerContext
+    ) -> pb.SaveUngradedCommitResponse:
+        if request is None or not request.HasField("commit"):
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "commit is required")
             raise AssertionError("unreachable")
 
         passback_target: GradePassbackTarget | None = None
         passback_html = ""
 
-        def fn(tx: sqlite3.Connection) -> pb.PostCommitBundlesUnsignedResponse:
+        def fn(tx: sqlite3.Connection) -> pb.SaveUngradedCommitResponse:
             nonlocal passback_target, passback_html
             current_user = self._current_user_row(tx, context)
-            working = pb.CommitBundle()
-            working.CopyFrom(request.bundle)
+            working = pb.GradingCommit()
+            working.CopyFrom(request.commit)
             working.hostname = ""
-            working.commit_signature = ""
             del working.commit.transcript[:]
             working.commit.ClearField("report_card")
             working.commit.score = 0.0
@@ -863,68 +823,83 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
             working.commit.created_at.FromDatetime(now)
             working.commit.updated_at.FromDatetime(now)
             try:
-                bundle = save_commit_bundle_common(
+                bundle = save_grading_commit_common(
                     tx,
-                    int(current_user["id"]),
+                    str(current_user["user_id"]),
                     working,
                     self._config.daycare_secret,
                     str(self._root / "files"),
                     self._ip_allowed(context),
                     self._select_daycare_host,
+                    graded=False,
                 )
             except Exception as exc:
-                context.abort(grpc.StatusCode.INTERNAL, f"db error posting commit bundles unsigned: {exc}")
+                context.abort(grpc.StatusCode.INTERNAL, f"db error saving ungraded commit: {exc}")
             self._log_commit_request(current_user, bundle, request_signed=False)
-            passback_target = self._build_grade_passback_target(tx, int(current_user["id"]), bundle)
+            passback_target = self._build_grade_passback_target(tx, str(current_user["user_id"]), bundle)
             if passback_target is not None:
                 passback_html = build_grade_report_html(
                     bundle.commit,
-                    bundle.problem.unique,
+                    bundle.problem.problem_id,
                     len(bundle.problem_steps),
-                    self._problem_count_for_assignment(tx, int(bundle.commit.assignment_id)),
+                    self._problem_count_for_assignment(
+                        tx,
+                        bundle.commit.assignment.user_id,
+                        bundle.commit.assignment.course_id,
+                        bundle.commit.assignment.problem_set_id,
+                    ),
                 )
-            return pb.PostCommitBundlesUnsignedResponse(bundle=bundle)
+            return pb.SaveUngradedCommitResponse(commit=encode_signed_grading_commit(bundle, self._config.daycare_secret))
 
         response = self._with_tx(fn)
         if passback_target is not None:
             save_grade_async(passback_target, passback_html, self._config.lti_secret)
         return response
 
-    def rpc_commit_bundle_signed(
-        self, request: pb.PostCommitBundlesSignedRequest, context: grpc.ServicerContext
-    ) -> pb.PostCommitBundlesSignedResponse:
-        if request is None or not request.HasField("bundle"):
-            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "bundle is required")
+    def rpc_save_graded_commit(
+        self, request: pb.SaveGradedCommitRequest, context: grpc.ServicerContext
+    ) -> pb.SaveGradedCommitResponse:
+        if request is None or not request.HasField("commit"):
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "commit is required")
             raise AssertionError("unreachable")
 
         passback_target: GradePassbackTarget | None = None
         passback_html = ""
 
-        def fn(tx: sqlite3.Connection) -> pb.PostCommitBundlesSignedResponse:
+        def fn(tx: sqlite3.Connection) -> pb.SaveGradedCommitResponse:
             nonlocal passback_target, passback_html
             current_user = self._current_user_row(tx, context)
             try:
-                bundle = save_commit_bundle_common(
+                grading_commit = decode_signed_grading_commit(request.commit, self._config.daycare_secret)
+                bundle = save_grading_commit_common(
                     tx,
-                    int(current_user["id"]),
-                    request.bundle,
+                    str(current_user["user_id"]),
+                    grading_commit,
                     self._config.daycare_secret,
                     str(self._root / "files"),
                     self._ip_allowed(context),
                     self._select_daycare_host,
+                    graded=True,
                 )
+            except ValueError as exc:
+                context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"invalid graded commit: {exc}")
             except Exception as exc:
-                context.abort(grpc.StatusCode.INTERNAL, f"db error posting commit bundles signed: {exc}")
+                context.abort(grpc.StatusCode.INTERNAL, f"db error saving graded commit: {exc}")
             self._log_commit_request(current_user, bundle, request_signed=True)
-            passback_target = self._build_grade_passback_target(tx, int(current_user["id"]), bundle)
+            passback_target = self._build_grade_passback_target(tx, str(current_user["user_id"]), bundle)
             if passback_target is not None:
                 passback_html = build_grade_report_html(
                     bundle.commit,
-                    bundle.problem.unique,
+                    bundle.problem.problem_id,
                     len(bundle.problem_steps),
-                    self._problem_count_for_assignment(tx, int(bundle.commit.assignment_id)),
+                    self._problem_count_for_assignment(
+                        tx,
+                        bundle.commit.assignment.user_id,
+                        bundle.commit.assignment.course_id,
+                        bundle.commit.assignment.problem_set_id,
+                    ),
                 )
-            return pb.PostCommitBundlesSignedResponse(bundle=bundle)
+            return pb.SaveGradedCommitResponse(commit=encode_signed_grading_commit(bundle, self._config.daycare_secret))
 
         response = self._with_tx(fn)
         if passback_target is not None:
@@ -941,8 +916,13 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
     def ListProblems(self, request: pb.ListProblemsRequest, context: grpc.ServicerContext) -> pb.ListProblemsResponse:
         return self.rpc_list_problems(request, context)
 
-    def GetVersion(self, request: pb.GetVersionRequest, context: grpc.ServicerContext) -> pb.GetVersionResponse:
-        return self.rpc_version(request, context)
+    def ListAssignments(self, request: pb.ListAssignmentsRequest, context: grpc.ServicerContext) -> pb.ListAssignmentsResponse:
+        return self.rpc_list_assignments(request, context)
+
+    def SearchProblemCatalog(
+        self, request: pb.SearchProblemCatalogRequest, context: grpc.ServicerContext
+    ) -> pb.SearchProblemCatalogResponse:
+        return self.rpc_search_problem_catalog(request, context)
 
     def GetProblemTypes(self, request: pb.GetProblemTypesRequest, context: grpc.ServicerContext) -> pb.GetProblemTypesResponse:
         return self.rpc_problem_types(request, context)
@@ -965,44 +945,16 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
     def GetProblemSets(self, request: pb.GetProblemSetsRequest, context: grpc.ServicerContext) -> pb.GetProblemSetsResponse:
         return self.rpc_problem_sets(request, context)
 
-    def GetProblemSet(self, request: pb.GetProblemSetRequest, context: grpc.ServicerContext) -> pb.GetProblemSetResponse:
-        return self.rpc_problem_set(request, context)
-
     def GetProblemSetProblems(
         self, request: pb.GetProblemSetProblemsRequest, context: grpc.ServicerContext
     ) -> pb.GetProblemSetProblemsResponse:
         return self.rpc_problem_set_problems(request, context)
 
-    def GetCourses(self, request: pb.GetCoursesRequest, context: grpc.ServicerContext) -> pb.GetCoursesResponse:
-        return self.rpc_courses(request, context)
-
     def GetCourse(self, request: pb.GetCourseRequest, context: grpc.ServicerContext) -> pb.GetCourseResponse:
         return self.rpc_course(request, context)
 
-    def GetUsers(self, request: pb.GetUsersRequest, context: grpc.ServicerContext) -> pb.GetUsersResponse:
-        return self.rpc_users(request, context)
-
-    def GetUserMe(self, request: pb.GetUserMeRequest, context: grpc.ServicerContext) -> pb.GetUserMeResponse:
-        return self.rpc_current_user(request, context)
-
-    def GetUserSession(self, request: pb.GetUserSessionRequest, context: grpc.ServicerContext) -> pb.GetUserSessionResponse:
-        return self.rpc_exchange_user_session(request, context)
-
     def GetUser(self, request: pb.GetUserRequest, context: grpc.ServicerContext) -> pb.GetUserResponse:
         return self.rpc_user(request, context)
-
-    def GetCourseUsers(self, request: pb.GetCourseUsersRequest, context: grpc.ServicerContext) -> pb.GetCourseUsersResponse:
-        return self.rpc_course_users(request, context)
-
-    def GetUserAssignments(
-        self, request: pb.GetUserAssignmentsRequest, context: grpc.ServicerContext
-    ) -> pb.GetUserAssignmentsResponse:
-        return self.rpc_user_assignments(request, context)
-
-    def GetCourseUserAssignments(
-        self, request: pb.GetCourseUserAssignmentsRequest, context: grpc.ServicerContext
-    ) -> pb.GetCourseUserAssignmentsResponse:
-        return self.rpc_course_user_assignments(request, context)
 
     def GetAssignments(self, request: pb.GetAssignmentsRequest, context: grpc.ServicerContext) -> pb.GetAssignmentsResponse:
         return self.rpc_assignments(request, context)
@@ -1010,15 +962,15 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
     def GetAssignment(self, request: pb.GetAssignmentRequest, context: grpc.ServicerContext) -> pb.GetAssignmentResponse:
         return self.rpc_assignment(request, context)
 
-    def GetAssignmentProblemCommitLast(
-        self, request: pb.GetAssignmentProblemCommitLastRequest, context: grpc.ServicerContext
-    ) -> pb.GetAssignmentProblemCommitLastResponse:
-        return self.rpc_assignment_problem_latest_commit(request, context)
+    def GetAssignmentInfo(
+        self, request: pb.GetAssignmentInfoRequest, context: grpc.ServicerContext
+    ) -> pb.GetAssignmentInfoResponse:
+        return self.rpc_assignment_info(request, context)
 
-    def GetAssignmentProblemStepCommitLast(
-        self, request: pb.GetAssignmentProblemStepCommitLastRequest, context: grpc.ServicerContext
-    ) -> pb.GetAssignmentProblemStepCommitLastResponse:
-        return self.rpc_assignment_problem_step_latest_commit(request, context)
+    def GetProblemStepFiles(
+        self, request: pb.GetProblemStepFilesRequest, context: grpc.ServicerContext
+    ) -> pb.GetProblemStepFilesResponse:
+        return self.rpc_problem_step_files(request, context)
 
     def PostProblemBundleUnconfirmed(
         self, request: pb.PostProblemBundleUnconfirmedRequest, context: grpc.ServicerContext
@@ -1043,15 +995,15 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
     ) -> pb.PutProblemSetBundleResponse:
         return self.rpc_update_problem_set_bundle(request, context)
 
-    def PostCommitBundlesUnsigned(
-        self, request: pb.PostCommitBundlesUnsignedRequest, context: grpc.ServicerContext
-    ) -> pb.PostCommitBundlesUnsignedResponse:
-        return self.rpc_commit_bundle_unsigned(request, context)
+    def SaveUngradedCommit(
+        self, request: pb.SaveUngradedCommitRequest, context: grpc.ServicerContext
+    ) -> pb.SaveUngradedCommitResponse:
+        return self.rpc_save_ungraded_commit(request, context)
 
-    def PostCommitBundlesSigned(
-        self, request: pb.PostCommitBundlesSignedRequest, context: grpc.ServicerContext
-    ) -> pb.PostCommitBundlesSignedResponse:
-        return self.rpc_commit_bundle_signed(request, context)
+    def SaveGradedCommit(
+        self, request: pb.SaveGradedCommitRequest, context: grpc.ServicerContext
+    ) -> pb.SaveGradedCommitResponse:
+        return self.rpc_save_graded_commit(request, context)
 
     def Daycare(self, request: pb.DaycareRequest, context: grpc.ServicerContext) -> Iterator[pb.DaycareResponse]:
         yield from self.rpc_daycare_stream(request, context)

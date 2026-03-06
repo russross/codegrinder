@@ -4,7 +4,7 @@ import base64
 import binascii
 import hmac
 import secrets
-import struct
+import json
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -16,7 +16,6 @@ COOKIE_NAME = "codegrinder"
 LOGIN_RECORD_TIMEOUT = timedelta(minutes=5)
 KEY_CHAR_SET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
 SESSION_VERSION = 1
-SESSION_PAYLOAD_STRUCT = struct.Struct(">BqQ")
 
 
 class SessionError(ValueError):
@@ -26,11 +25,11 @@ class SessionError(ValueError):
 @dataclass(slots=True)
 class CookieSession:
     expires_at: datetime
-    user_id: int
+    user_id: str
     path: str = "/"
 
 
-def new_session(user_id: int, now: datetime, sessions_expire: list[datetime]) -> CookieSession:
+def new_session(user_id: str, now: datetime, sessions_expire: list[datetime]) -> CookieSession:
     expires_at = next_session_expiry(now, sessions_expire)
     return CookieSession(expires_at=expires_at, user_id=user_id)
 
@@ -47,13 +46,15 @@ def _b64url_decode(value: str) -> bytes:
 def encode_session(session: CookieSession, secret: str) -> str:
     if session.expires_at.tzinfo is None:
         raise SessionError("session is expired; must log in again to continue")
-    if session.user_id < 1:
+    user_id = str(session.user_id)
+    if user_id.strip() == "":
         raise SessionError("session does not contain a legal user ID field")
     expires_at_utc = session.expires_at.astimezone(UTC)
     epoch = datetime(1970, 1, 1, tzinfo=UTC)
     delta = expires_at_utc - epoch
     expires_at_us = ((delta.days * 86_400) + delta.seconds) * 1_000_000 + delta.microseconds
-    payload = SESSION_PAYLOAD_STRUCT.pack(SESSION_VERSION, expires_at_us, session.user_id)
+    payload_obj = {"v": SESSION_VERSION, "exp": expires_at_us, "uid": user_id}
+    payload = json.dumps(payload_obj, separators=(",", ":")).encode("utf-8")
     sig = hmac.new(secret.encode("utf-8"), payload, sha256).digest()
     return f"{_b64url_encode(payload)}.{_b64url_encode(sig)}"
 
@@ -68,10 +69,13 @@ def decode_session(cookie_value: str, secret: str, now: datetime) -> CookieSessi
 
     try:
         payload = _b64url_decode(payload_encoded)
-        version, expires_at_us, user_id = SESSION_PAYLOAD_STRUCT.unpack(payload)
+        payload_obj = json.loads(payload.decode("utf-8"))
+        version = int(payload_obj.get("v", 0))
+        expires_at_us = int(payload_obj.get("exp", 0))
+        user_id = str(payload_obj.get("uid", ""))
         expected_sig = hmac.new(secret.encode("utf-8"), payload, sha256).digest()
         got_sig = _b64url_decode(sig_encoded)
-    except (ValueError, struct.error, binascii.Error) as exc:
+    except (ValueError, TypeError, json.JSONDecodeError, binascii.Error) as exc:
         raise SessionError("unable to decode session cookie") from exc
 
     if version != SESSION_VERSION:
@@ -83,7 +87,7 @@ def decode_session(cookie_value: str, secret: str, now: datetime) -> CookieSessi
     expires_at = epoch + timedelta(microseconds=expires_at_us)
     if expires_at < now:
         raise SessionError("session is expired; must log in again to continue")
-    if user_id < 1:
+    if user_id.strip() == "":
         raise SessionError("session does not contain a legal user ID field")
 
     return CookieSession(expires_at=expires_at, user_id=user_id)
@@ -91,7 +95,7 @@ def decode_session(cookie_value: str, secret: str, now: datetime) -> CookieSessi
 
 @dataclass(slots=True)
 class _LoginRecord:
-    user_id: int
+    user_id: str
     time: datetime
 
 
@@ -109,7 +113,7 @@ class LoginRecords:
         for key in expired:
             del self._records[key]
 
-    def insert(self, user_id: int, now: datetime) -> str:
+    def insert(self, user_id: str, now: datetime) -> str:
         with self._lock:
             while True:
                 key = make_login_key()
@@ -119,7 +123,7 @@ class LoginRecords:
             self._expire(now)
             return key
 
-    def get(self, key: str, now: datetime) -> int:
+    def get(self, key: str, now: datetime) -> str:
         with self._lock:
             self._expire(now)
             if key not in self._records:
