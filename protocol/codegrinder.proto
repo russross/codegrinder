@@ -63,8 +63,6 @@ message ProblemType {
 // ProblemTypeAction defines parser/command and execution limits for a
 // single problem type action.
 message ProblemTypeAction {
-   string problem_type = 1;
-   string action = 2;
    string command = 3;
    string parser = 4;
    int64 max_cpu = 7;
@@ -72,8 +70,8 @@ message ProblemTypeAction {
    int64 max_file_size = 11;
    int64 max_memory = 12;
    int64 max_threads = 13;
-   reserved 5, 6, 8, 9;
-   reserved "message", "interactive", "max_session", "max_timeout";
+   reserved 1, 2, 5, 6, 8, 9;
+   reserved "problem_type", "action", "message", "interactive", "max_session", "max_timeout";
 }
 
 // Problem represents a single problem.
@@ -155,16 +153,14 @@ message Commit {
 
 // ProblemBundle represents a bundle of problem data.
 message ProblemBundle {
-   map<string, ProblemType> problem_types = 1;
-   map<string, string> problem_type_signatures = 2;
-   Problem problem = 3;
-   repeated ProblemStep problem_steps = 4;
-   string problem_signature = 5;
-   string hostname = 6;
-   string user_id = 7;
-   repeated Commit commits = 8;
-   repeated string commit_signatures = 9;
-   repeated SignedGradingCommit signed_grading_commits = 10;
+   Problem problem = 1;
+   repeated ProblemStep problem_steps = 2;
+   map<string, ProblemType> problem_types = 3;
+   string problem_signature = 4;
+   string hostname = 5;
+   string user_id = 6;
+   repeated Commit commits = 7;
+   repeated SignedGradingCommit signed_grading_commits = 8;
 }
 
 // ProblemSetBundle represents a bundle of problem set data.
@@ -247,12 +243,10 @@ service CodeGrinderService {
    rpc GetUser(GetUserRequest) returns (GetUserResponse);
    // GetAssignments retrieves assignments with optional filters
    rpc GetAssignments(GetAssignmentsRequest) returns (GetAssignmentsResponse);
-   // GetAssignment retrieves a specific assignment
+   // GetAssignment retrieves assignment metadata and per-problem step progress.
    rpc GetAssignment(GetAssignmentRequest) returns (GetAssignmentResponse);
-   // GetAssignmentInfo retrieves assignment metadata and per-problem step progress.
-   rpc GetAssignmentInfo(GetAssignmentInfoRequest) returns (GetAssignmentInfoResponse);
-   // GetProblemStepFiles retrieves system-owned and student-owned files for one step.
-   rpc GetProblemStepFiles(GetProblemStepFilesRequest) returns (GetProblemStepFilesResponse);
+   // GetAssignmentStepFiles retrieves the system-owned and student-owned files for one step.
+   rpc GetAssignmentStepFiles(GetAssignmentStepFilesRequest) returns (GetAssignmentStepFilesResponse);
    // PostProblemBundleUnconfirmed handles unconfirmed problem bundle
    rpc PostProblemBundleUnconfirmed(PostProblemBundleUnconfirmedRequest) returns (PostProblemBundleUnconfirmedResponse);
    // PostProblemBundleConfirmed handles confirmed problem bundle
@@ -378,7 +372,7 @@ message GetProblemTypeResponse {
 // Request for GetProblems
 message GetProblemsRequest {
    string session_cookie = 1;
-   string unique = 2;
+   string problem_id = 2;
    string problem_type = 3;
    string note = 4;
 }
@@ -425,7 +419,7 @@ message GetProblemStepResponse {
 // Request for GetProblemSets
 message GetProblemSetsRequest {
    string session_cookie = 1;
-   string unique = 2;
+   string problem_set_id = 2;
    string note = 3;
    repeated string search = 4;
 }
@@ -485,55 +479,46 @@ message GetAssignmentRequest {
    AssignmentKey assignment = 2;
 }
 
-// Response for GetAssignment
-message GetAssignmentResponse {
-   Assignment assignment = 1;
-}
-
-// Request for GetAssignmentInfo
-message GetAssignmentInfoRequest {
-   string session_cookie = 1;
-   AssignmentKey assignment = 2;
-}
-
-// AssignmentProblemInfo reports one problem's progress in the assignment.
-message AssignmentProblemInfo {
+// AssignmentProblemProgress reports one problem's progress in the assignment.
+message AssignmentProblemProgress {
    string problem_id = 1;
    string problem_note = 2;
    int64 current_step_number = 3;
    int64 total_steps = 4;
 }
 
-// Response for GetAssignmentInfo
-message GetAssignmentInfoResponse {
+// Response for GetAssignment
+message GetAssignmentResponse {
    AssignmentKey assignment = 1;
    string problem_set_note = 2;
    string course_name = 3;
-   repeated AssignmentProblemInfo problems = 4;
+   repeated AssignmentProblemProgress problems = 4;
 }
 
-// Request for GetProblemStepFiles
-message GetProblemStepFilesRequest {
+// Request for GetAssignmentStepFiles
+message GetAssignmentStepFilesRequest {
    string session_cookie = 1;
    AssignmentKey assignment = 2;
    string problem_id = 3;
    int64 step_number = 4; // 0 means use the student's current step for this problem.
    bool reset_to_step_start = 5;
+   bool include_contents = 6;
 }
 
-// ProblemStepFileBlob is one file path/content pair.
-message ProblemStepFileBlob {
+// AssignmentStepFile is one file path/content pair.
+message AssignmentStepFile {
    string path = 1;
    bytes content = 2;
 }
 
-// Response for GetProblemStepFiles
-message GetProblemStepFilesResponse {
+// Response for GetAssignmentStepFiles
+message GetAssignmentStepFilesResponse {
    int64 step_number = 1;
    int64 total_steps = 2;
-   repeated ProblemStepFileBlob system_owned_files = 3;
-   repeated ProblemStepFileBlob student_owned_files = 4;
+   repeated AssignmentStepFile system_owned_files = 3;
+   repeated AssignmentStepFile student_owned_files = 4;
 }
+
 
 // Request for PostProblemBundleUnconfirmed
 message PostProblemBundleUnconfirmedRequest {

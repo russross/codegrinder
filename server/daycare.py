@@ -1301,7 +1301,7 @@ class DaycareRuntime:
                         image=candidate,
                         problem_type=bundle.problem_type,
                         problem=bundle.problem,
-                        action=action.action,
+                        action=action_param,
                         limits=limits,
                         name=nanny_name,
                         args=args,
@@ -1359,7 +1359,7 @@ class DaycareRuntime:
                 elif action.parser != "":
                     _report_card_log_and_fail(
                         nanny.report_card,
-                        f'unknown parser "{action.parser}" for problem type {action.problem_type} action {action.action}',
+                        f'unknown parser "{action.parser}" for problem type {bundle.problem_type.problem_type} action {action_param}',
                     )
                 else:
                     joined = " ".join(cmd)

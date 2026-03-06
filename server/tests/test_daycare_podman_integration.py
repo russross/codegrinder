@@ -50,8 +50,6 @@ def _selection_sort_files() -> dict[str, bytes]:
 def _build_signed_request(*, action: str, problem_options: list[str], image: str) -> pb.DaycareRequest:
     now = datetime.now(tz=UTC)
     run_action = pb.ProblemTypeAction(
-        problem_type="riscv",
-        action="run",
         command="make run",
         parser="",
         max_cpu=30,
@@ -61,8 +59,6 @@ def _build_signed_request(*, action: str, problem_options: list[str], image: str
         max_threads=32,
     )
     grade_action = pb.ProblemTypeAction(
-        problem_type="riscv",
-        action="grade",
         command="make grade",
         parser="xunit",
         max_cpu=30,

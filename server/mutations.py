@@ -188,7 +188,6 @@ def sign_problem_bundle_unconfirmed(
     current_user_id: str,
     bundle: pb.ProblemBundle,
     daycare_secret: str,
-    root_files_dir: str,
     assign_host: Callable[[set[str]], str],
 ) -> pb.ProblemBundle:
     if bundle.user_id != current_user_id:
@@ -222,7 +221,6 @@ def save_problem_bundle_common(
     current_user_id: str,
     bundle: pb.ProblemBundle,
     daycare_secret: str,
-    root_files_dir: str,
 ) -> pb.ProblemBundle:
     if bundle.user_id != current_user_id:
         raise ValueError("bundle must include user's ID")
@@ -293,11 +291,10 @@ def update_problem_bundle(
     problem_id: str,
     bundle: pb.ProblemBundle,
     daycare_secret: str,
-    root_files_dir: str,
 ) -> pb.ProblemBundle:
     if bundle.problem.problem_id != problem_id:
         raise ValueError("problem ID mismatch")
-    return save_problem_bundle_common(tx, current_user_id, bundle, daycare_secret, root_files_dir)
+    return save_problem_bundle_common(tx, current_user_id, bundle, daycare_secret)
 
 
 def save_problem_set_bundle_common(tx: sqlite3.Connection, bundle: pb.ProblemSetBundle) -> pb.ProblemSetBundle:
@@ -362,7 +359,6 @@ def save_grading_commit_common(
     current_user_id: str,
     bundle: pb.GradingCommit,
     daycare_secret: str,
-    root_files_dir: str,
     ip_allowed: bool,
     assign_host: Callable[[set[str]], str],
     graded: bool,
@@ -451,8 +447,6 @@ def save_grading_commit_common(
     actions: dict[str, pb.ProblemTypeAction] = {}
     for row in problem_type_actions:
         actions[str(row["action"])] = pb.ProblemTypeAction(
-            problem_type=str(row["problem_type"]),
-            action=str(row["action"]),
             command=str(row["command"]),
             parser=str(row["parser"] or ""),
             max_cpu=int(row["max_cpu"]),

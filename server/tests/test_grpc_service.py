@@ -244,7 +244,7 @@ class GrpcServiceTests(unittest.TestCase):
 
     def test_assignment_info_advances_current_step(self) -> None:
         ctx = cast(grpc.ServicerContext, self._auth_context())
-        reply = self.service.GetAssignmentInfo(pb.GetAssignmentInfoRequest(assignment=self._assignment_key()), ctx)
+        reply = self.service.GetAssignment(pb.GetAssignmentRequest(assignment=self._assignment_key()), ctx)
         self.assertEqual(reply.assignment.problem_set_id, "ps1")
         self.assertEqual(reply.course_name, "Course 101")
         self.assertEqual(reply.problem_set_note, "Set Note")
@@ -255,12 +255,13 @@ class GrpcServiceTests(unittest.TestCase):
 
     def test_step_files_current_falls_back_to_starter(self) -> None:
         ctx = cast(grpc.ServicerContext, self._auth_context())
-        reply = self.service.GetProblemStepFiles(
-            pb.GetProblemStepFilesRequest(
+        reply = self.service.GetAssignmentStepFiles(
+            pb.GetAssignmentStepFilesRequest(
                 assignment=self._assignment_key(),
                 problem_id="p1",
                 step_number=2,
                 reset_to_step_start=False,
+                include_contents=True,
             ),
             ctx,
         )
@@ -272,16 +273,34 @@ class GrpcServiceTests(unittest.TestCase):
 
     def test_step_files_with_zero_step_uses_current_progress(self) -> None:
         ctx = cast(grpc.ServicerContext, self._auth_context())
-        reply = self.service.GetProblemStepFiles(
-            pb.GetProblemStepFilesRequest(
+        reply = self.service.GetAssignmentStepFiles(
+            pb.GetAssignmentStepFilesRequest(
                 assignment=self._assignment_key(),
                 problem_id="p1",
                 step_number=0,
                 reset_to_step_start=False,
+                include_contents=True,
             ),
             ctx,
         )
         self.assertEqual(reply.step_number, 2)
+
+    def test_step_files_can_skip_contents(self) -> None:
+        ctx = cast(grpc.ServicerContext, self._auth_context())
+        reply = self.service.GetAssignmentStepFiles(
+            pb.GetAssignmentStepFilesRequest(
+                assignment=self._assignment_key(),
+                problem_id="p1",
+                step_number=2,
+                reset_to_step_start=False,
+                include_contents=False,
+            ),
+            ctx,
+        )
+        self.assertEqual([item.path for item in reply.system_owned_files], ["Makefile", "doc/index.html"])
+        self.assertEqual([item.content for item in reply.system_owned_files], [b"", b""])
+        self.assertEqual([item.path for item in reply.student_owned_files], ["README.md", "helper.py", "main.py"])
+        self.assertEqual([item.content for item in reply.student_owned_files], [b"", b"", b""])
 
     def test_step_files_current_uses_saved_commit_when_present(self) -> None:
         now = "2026-02-16T10:00:00+00:00"
@@ -296,12 +315,13 @@ class GrpcServiceTests(unittest.TestCase):
         )
         self.conn.commit()
         ctx = cast(grpc.ServicerContext, self._auth_context())
-        reply = self.service.GetProblemStepFiles(
-            pb.GetProblemStepFilesRequest(
+        reply = self.service.GetAssignmentStepFiles(
+            pb.GetAssignmentStepFilesRequest(
                 assignment=self._assignment_key(),
                 problem_id="p1",
                 step_number=2,
                 reset_to_step_start=False,
+                include_contents=True,
             ),
             ctx,
         )
@@ -310,12 +330,13 @@ class GrpcServiceTests(unittest.TestCase):
 
     def test_step_files_reset_uses_step_start_state(self) -> None:
         ctx = cast(grpc.ServicerContext, self._auth_context())
-        reply = self.service.GetProblemStepFiles(
-            pb.GetProblemStepFilesRequest(
+        reply = self.service.GetAssignmentStepFiles(
+            pb.GetAssignmentStepFilesRequest(
                 assignment=self._assignment_key(),
                 problem_id="p1",
                 step_number=2,
                 reset_to_step_start=True,
+                include_contents=True,
             ),
             ctx,
         )

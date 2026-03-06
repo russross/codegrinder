@@ -6,3 +6,4 @@ config.json
 rpc/*.pb.go
 *.swp
 certs
+.ruff_cache

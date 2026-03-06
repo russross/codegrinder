@@ -28,15 +28,14 @@ from mutations import (
 )
 from read_store import (
     get_assignment_list_items_pb,
-    get_assignment_info_pb,
-    get_assignment_pb,
+    get_assignment_summary_pb,
+    get_assignment_step_files_pb,
     get_assignments_pb,
     get_course_pb,
     get_list_problems_bundle,
     get_problem_pb,
     get_problem_set_problems_pb,
     get_problem_sets_pb,
-    get_problem_step_files_pb,
     get_problem_step_pb,
     get_problem_steps_pb,
     get_problem_type_actions_rows,
@@ -413,7 +412,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
         def fn(tx: sqlite3.Connection) -> pb.GetProblemsResponse:
             current_user = self._current_user_row(tx, context)
             try:
-                problems = get_problems_pb(tx, current_user, request.unique, request.problem_type, request.note)
+                problems = get_problems_pb(tx, current_user, request.problem_id, request.problem_type, request.note)
             except sqlite3.Error as exc:
                 context.abort(grpc.StatusCode.INTERNAL, f"db error getting problems: {exc}")
             return pb.GetProblemsResponse(problems=problems)
@@ -466,7 +465,9 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
         def fn(tx: sqlite3.Connection) -> pb.GetProblemSetsResponse:
             current_user = self._current_user_row(tx, context)
             try:
-                problem_sets = get_problem_sets_pb(tx, current_user, request.unique, request.note, list(request.search))
+                problem_sets = get_problem_sets_pb(
+                    tx, current_user, request.problem_set_id, request.note, list(request.search)
+                )
             except sqlite3.Error as exc:
                 context.abort(grpc.StatusCode.INTERNAL, f"db error getting problem sets: {exc}")
             return pb.GetProblemSetsResponse(problem_sets=problem_sets)
@@ -532,7 +533,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
         def fn(tx: sqlite3.Connection) -> pb.GetAssignmentResponse:
             current_user = self._current_user_row(tx, context)
             try:
-                asst = get_assignment_pb(
+                asst = get_assignment_summary_pb(
                     tx,
                     current_user,
                     request.assignment.user_id,
@@ -545,40 +546,17 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                     context.abort(grpc.StatusCode.NOT_FOUND, "not found")
                     raise AssertionError("unreachable")
                 context.abort(grpc.StatusCode.INTERNAL, f"db error getting assignment: {exc}")
-            return pb.GetAssignmentResponse(assignment=asst)
+            return asst
 
         return self._with_tx(fn)
 
-    def rpc_assignment_info(
-        self, request: pb.GetAssignmentInfoRequest, context: grpc.ServicerContext
-    ) -> pb.GetAssignmentInfoResponse:
-        def fn(tx: sqlite3.Connection) -> pb.GetAssignmentInfoResponse:
+    def rpc_assignment_step_files(
+        self, request: pb.GetAssignmentStepFilesRequest, context: grpc.ServicerContext
+    ) -> pb.GetAssignmentStepFilesResponse:
+        def fn(tx: sqlite3.Connection) -> pb.GetAssignmentStepFilesResponse:
             current_user = self._current_user_row(tx, context)
             try:
-                response = get_assignment_info_pb(
-                    tx,
-                    current_user,
-                    request.assignment.user_id,
-                    request.assignment.course_id,
-                    request.assignment.problem_set_id,
-                    self._ip_allowed(context),
-                )
-            except sqlite3.Error as exc:
-                if _is_db_not_found(exc):
-                    context.abort(grpc.StatusCode.NOT_FOUND, "not found")
-                    raise AssertionError("unreachable")
-                context.abort(grpc.StatusCode.INTERNAL, f"db error getting assignment info: {exc}")
-            return response
-
-        return self._with_tx(fn)
-
-    def rpc_problem_step_files(
-        self, request: pb.GetProblemStepFilesRequest, context: grpc.ServicerContext
-    ) -> pb.GetProblemStepFilesResponse:
-        def fn(tx: sqlite3.Connection) -> pb.GetProblemStepFilesResponse:
-            current_user = self._current_user_row(tx, context)
-            try:
-                response = get_problem_step_files_pb(
+                response = get_assignment_step_files_pb(
                     tx,
                     current_user,
                     request.assignment.user_id,
@@ -587,6 +565,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                     request.problem_id,
                     int(request.step_number),
                     bool(request.reset_to_step_start),
+                    bool(request.include_contents),
                     self._ip_allowed(context),
                     self._problem_type_files,
                 )
@@ -710,7 +689,6 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                     str(current_user["user_id"]),
                     request.bundle,
                     self._config.daycare_secret,
-                    str(self._root / "files"),
                     self._select_daycare_host,
                 )
             except Exception as exc:
@@ -735,7 +713,6 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                     str(current_user["user_id"]),
                     request.bundle,
                     self._config.daycare_secret,
-                    str(self._root / "files"),
                 )
             except Exception as exc:
                 context.abort(grpc.StatusCode.INTERNAL, f"db error posting problem bundle confirmed: {exc}")
@@ -760,7 +737,6 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                     request.problem_id,
                     request.bundle,
                     self._config.daycare_secret,
-                    str(self._root / "files"),
                 )
             except Exception as exc:
                 context.abort(grpc.StatusCode.INTERNAL, f"db error putting problem bundle: {exc}")
@@ -828,7 +804,6 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                     str(current_user["user_id"]),
                     working,
                     self._config.daycare_secret,
-                    str(self._root / "files"),
                     self._ip_allowed(context),
                     self._select_daycare_host,
                     graded=False,
@@ -876,7 +851,6 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                     str(current_user["user_id"]),
                     grading_commit,
                     self._config.daycare_secret,
-                    str(self._root / "files"),
                     self._ip_allowed(context),
                     self._select_daycare_host,
                     graded=True,
@@ -962,15 +936,10 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
     def GetAssignment(self, request: pb.GetAssignmentRequest, context: grpc.ServicerContext) -> pb.GetAssignmentResponse:
         return self.rpc_assignment(request, context)
 
-    def GetAssignmentInfo(
-        self, request: pb.GetAssignmentInfoRequest, context: grpc.ServicerContext
-    ) -> pb.GetAssignmentInfoResponse:
-        return self.rpc_assignment_info(request, context)
-
-    def GetProblemStepFiles(
-        self, request: pb.GetProblemStepFilesRequest, context: grpc.ServicerContext
-    ) -> pb.GetProblemStepFilesResponse:
-        return self.rpc_problem_step_files(request, context)
+    def GetAssignmentStepFiles(
+        self, request: pb.GetAssignmentStepFilesRequest, context: grpc.ServicerContext
+    ) -> pb.GetAssignmentStepFilesResponse:
+        return self.rpc_assignment_step_files(request, context)
 
     def PostProblemBundleUnconfirmed(
         self, request: pb.PostProblemBundleUnconfirmedRequest, context: grpc.ServicerContext

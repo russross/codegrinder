@@ -288,14 +288,14 @@ def _system_owned_files_for_step(
     return files
 
 
-def get_assignment_info_pb(
+def get_assignment_summary_pb(
     conn: sqlite3.Connection,
     current_user: sqlite3.Row,
     assignment_user_id: str,
     assignment_course_id: str,
     assignment_problem_set_id: str,
     ip_allowed: bool,
-) -> pb.GetAssignmentInfoResponse:
+) -> pb.GetAssignmentResponse:
     assignment = get_assignment_pb(
         conn,
         current_user,
@@ -339,7 +339,7 @@ def get_assignment_info_pb(
         if problem_id not in success_by_problem:
             success_by_problem[problem_id] = set()
         success_by_problem[problem_id].add(int(row["step_number"]))
-    problems: list[pb.AssignmentProblemInfo] = []
+    problems: list[pb.AssignmentProblemProgress] = []
     for row in problem_rows:
         problem_id = str(row["problem_id"])
         total_steps = total_steps_by_problem.get(problem_id, 1)
@@ -350,14 +350,14 @@ def get_assignment_info_pb(
                 current_step = step_number
                 break
         problems.append(
-            pb.AssignmentProblemInfo(
+            pb.AssignmentProblemProgress(
                 problem_id=problem_id,
                 problem_note=str(row["problem_note"]),
                 current_step_number=current_step,
                 total_steps=total_steps,
             )
         )
-    return pb.GetAssignmentInfoResponse(
+    return pb.GetAssignmentResponse(
         assignment=pb.AssignmentKey(
             user_id=assignment.user_id,
             course_id=assignment.course_id,
@@ -399,7 +399,7 @@ def _resolve_current_step_number(
     return total_steps
 
 
-def get_problem_step_files_pb(
+def get_assignment_step_files_pb(
     conn: sqlite3.Connection,
     current_user: sqlite3.Row,
     assignment_user_id: str,
@@ -408,9 +408,10 @@ def get_problem_step_files_pb(
     problem_id: str,
     step_number: int,
     reset_to_step_start: bool,
+    include_contents: bool,
     ip_allowed: bool,
     load_problem_type_files: Callable[[str], dict[str, bytes]],
-) -> pb.GetProblemStepFilesResponse:
+) -> pb.GetAssignmentStepFilesResponse:
     assignment = get_assignment_pb(
         conn,
         current_user,
@@ -492,15 +493,19 @@ def get_problem_step_files_pb(
                 str(commit_row["problem_id"]),
                 int(commit_row["step_number"]),
             )
-    return pb.GetProblemStepFilesResponse(
+    if not include_contents:
+        system_owned_files = {path: b"" for path in system_owned_files}
+        student_owned_files = {path: b"" for path in student_owned_files}
+
+    return pb.GetAssignmentStepFilesResponse(
         step_number=resolved_step_number,
         total_steps=total_steps,
         system_owned_files=[
-            pb.ProblemStepFileBlob(path=path, content=content)
+            pb.AssignmentStepFile(path=path, content=content)
             for path, content in sorted(system_owned_files.items())
         ],
         student_owned_files=[
-            pb.ProblemStepFileBlob(path=path, content=content)
+            pb.AssignmentStepFile(path=path, content=content)
             for path, content in sorted(student_owned_files.items())
         ],
     )
@@ -812,8 +817,6 @@ def problem_type_pb(problem_type: str, container: str, files: dict[str, bytes], 
     actions: dict[str, pb.ProblemTypeAction] = {}
     for row in action_rows:
         actions[str(row["action"])] = pb.ProblemTypeAction(
-            problem_type=str(row["problem_type"]),
-            action=str(row["action"]),
             command=str(row["command"]),
             parser=str(row["parser"] or ""),
             max_cpu=int(row["max_cpu"]),

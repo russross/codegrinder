@@ -140,8 +140,6 @@ def _build_signed_request(
 ) -> pb.DaycareRequest:
     now = updated_at or datetime.now(tz=UTC)
     action_entry = pb.ProblemTypeAction(
-        problem_type="python3unittest",
-        action=action,
         command="run-tests",
         parser=parser,
         max_cpu=10,

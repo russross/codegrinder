@@ -222,21 +222,11 @@ def _build_commit_from_disk(
 
 def gather_student(config: Config, session: Session, start_dir: Path) -> tuple[pb.ProblemType, pb.Problem, pb.ProblemStep, pb.Assignment, pb.Commit, DotFileInfo, Path]:
     dotfile, problem_set_dir, maybe_problem_dir = find_dotfile(start_dir)
-
-    assignment_resp = _rpc_call(
-        config,
-        "GetAssignment",
-        session.stub.GetAssignment,
-        pb.GetAssignmentRequest(
-            assignment=pb.AssignmentKey(
-                user_id=dotfile.assignment_ref.user_id,
-                course_id=dotfile.assignment_ref.course_id,
-                problem_set_id=dotfile.assignment_ref.problem_set_id,
-            )
-        ),
-        grpc_metadata(config.cookie),
+    assignment = pb.Assignment(
+        user_id=dotfile.assignment_ref.user_id,
+        course_id=dotfile.assignment_ref.course_id,
+        problem_set_id=dotfile.assignment_ref.problem_set_id,
     )
-    assignment = assignment_resp.assignment
 
     if len(dotfile.problems) == 1:
         unique = next(iter(dotfile.problems))
@@ -262,21 +252,17 @@ def gather_student(config: Config, session: Session, start_dir: Path) -> tuple[p
 
     step_files_resp = _rpc_call(
         config,
-        "GetProblemStepFiles",
-        session.stub.GetProblemStepFiles,
-        pb.GetProblemStepFilesRequest(
+        "GetAssignmentStepFiles",
+        session.stub.GetAssignmentStepFiles,
+        pb.GetAssignmentStepFilesRequest(
             assignment=_assignment_key(assignment),
             problem_id=problem.problem_id,
             step_number=info.step,
             reset_to_step_start=False,
+            include_contents=False,
         ),
         grpc_metadata(config.cookie),
     )
-    system_files = {
-        str(Path(entry.path)): entry.content
-        for entry in step_files_resp.system_owned_files
-    }
-    update_files(problem_dir, system_files, None, True)
 
     step_resp = _rpc_call(
         config,
@@ -371,9 +357,9 @@ def handle_daycare_stream(
 def get_assignment(config: Config, session: Session, assignment: pb.Assignment, root_dir: Path, pretty_root: str) -> Path:
     info_resp = _rpc_call(
         config,
-        "GetAssignmentInfo",
-        session.stub.GetAssignmentInfo,
-        pb.GetAssignmentInfoRequest(assignment=_assignment_key(assignment)),
+        "GetAssignment",
+        session.stub.GetAssignment,
+        pb.GetAssignmentRequest(assignment=_assignment_key(assignment)),
         grpc_metadata(config.cookie),
     )
     root_dir = root_dir / course_directory(info_resp.course_name) / info_resp.assignment.problem_set_id
@@ -403,13 +389,14 @@ def get_assignment(config: Config, session: Session, assignment: pb.Assignment, 
 
         files_resp = _rpc_call(
             config,
-            "GetProblemStepFiles",
-            session.stub.GetProblemStepFiles,
-            pb.GetProblemStepFilesRequest(
+            "GetAssignmentStepFiles",
+            session.stub.GetAssignmentStepFiles,
+            pb.GetAssignmentStepFilesRequest(
                 assignment=_assignment_key(assignment),
                 problem_id=problem_info.problem_id,
                 step_number=problem_info.current_step_number,
                 reset_to_step_start=False,
+                include_contents=True,
             ),
             grpc_metadata(config.cookie),
         )
@@ -551,13 +538,14 @@ def command_grade(args: argparse.Namespace) -> None:
             fail(f"unable to find problem info for {problem.problem_id}")
         current_files_resp = _rpc_call(
             config,
-            "GetProblemStepFiles",
-            session.stub.GetProblemStepFiles,
-            pb.GetProblemStepFilesRequest(
+            "GetAssignmentStepFiles",
+            session.stub.GetAssignmentStepFiles,
+            pb.GetAssignmentStepFilesRequest(
                 assignment=commit.assignment,
                 problem_id=problem.problem_id,
                 step_number=info.step,
                 reset_to_step_start=False,
+                include_contents=False,
             ),
             grpc_metadata(config.cookie),
         )
@@ -603,13 +591,14 @@ def command_grade(args: argparse.Namespace) -> None:
                 print(f"moving to step {next_step_number}")
                 new_files_resp = _rpc_call(
                     config,
-                    "GetProblemStepFiles",
-                    session.stub.GetProblemStepFiles,
-                    pb.GetProblemStepFilesRequest(
+                    "GetAssignmentStepFiles",
+                    session.stub.GetAssignmentStepFiles,
+                    pb.GetAssignmentStepFilesRequest(
                         assignment=commit.assignment,
                         problem_id=problem.problem_id,
                         step_number=next_step_number,
                         reset_to_step_start=False,
+                        include_contents=True,
                     ),
                     grpc_metadata(config.cookie),
                 )
@@ -688,13 +677,14 @@ def command_reset(args: argparse.Namespace) -> None:
         info = dotfile.problems[problem.problem_id]
         reset_files_resp = _rpc_call(
             config,
-            "GetProblemStepFiles",
-            session.stub.GetProblemStepFiles,
-            pb.GetProblemStepFilesRequest(
+            "GetAssignmentStepFiles",
+            session.stub.GetAssignmentStepFiles,
+            pb.GetAssignmentStepFilesRequest(
                 assignment=_assignment_key(assignment),
                 problem_id=problem.problem_id,
                 step_number=info.step,
                 reset_to_step_start=True,
+                include_contents=True,
             ),
             grpc_metadata(config.cookie),
         )
@@ -931,15 +921,11 @@ def command_student(args: argparse.Namespace) -> None:
 
 def download_student_assignment(config: Config, session: Session, assignment_key: pb.AssignmentKey, assignment: pb.Assignment | None) -> None:
     if assignment is None:
-        response = _rpc_call(
-            config,
-            "GetAssignment",
-            session.stub.GetAssignment,
-            pb.GetAssignmentRequest(assignment=assignment_key),
-            grpc_metadata(config.cookie),
+        assignment = pb.Assignment(
+            user_id=assignment_key.user_id,
+            course_id=assignment_key.course_id,
+            problem_set_id=assignment_key.problem_set_id,
         )
-        assignment = response.assignment
-
     user_resp = _rpc_call(
         config,
         "GetUser",
@@ -1149,7 +1135,7 @@ def gather_author(
         config,
         "GetProblems",
         session.stub.GetProblems,
-        pb.GetProblemsRequest(unique=problem.problem_id),
+        pb.GetProblemsRequest(problem_id=problem.problem_id),
         grpc_metadata(config.cookie),
     )
     existing = list(existing_resp.problems)
@@ -1160,7 +1146,7 @@ def gather_author(
             config,
             "GetProblemSets",
             session.stub.GetProblemSets,
-            pb.GetProblemSetsRequest(unique=problem.problem_id),
+            pb.GetProblemSetsRequest(problem_set_id=problem.problem_id),
             grpc_metadata(config.cookie),
         )
         existing_sets = list(existing_sets_resp.problem_sets)
@@ -1325,7 +1311,7 @@ def create_problem_set(config: Config, session: Session, path: Path, is_update: 
         config,
         "GetProblemSets",
         session.stub.GetProblemSets,
-        pb.GetProblemSetsRequest(unique=problem_set.problem_set_id),
+        pb.GetProblemSetsRequest(problem_set_id=problem_set.problem_set_id),
         grpc_metadata(config.cookie),
     )
     existing = list(existing_resp.problem_sets)
@@ -1353,7 +1339,7 @@ def create_problem_set(config: Config, session: Session, path: Path, is_update: 
             config,
             "GetProblems",
             session.stub.GetProblems,
-            pb.GetProblemsRequest(unique=unique),
+            pb.GetProblemsRequest(problem_id=unique),
             grpc_metadata(config.cookie),
         )
         problems = list(response.problems)
