@@ -1,12 +1,7 @@
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
-from collections.abc import Mapping
 from datetime import UTC
 from typing import Any
-from urllib.parse import quote
 
 import codegrinder_pb2 as pb
 
@@ -27,26 +22,6 @@ _SIGNAL_NAMES: dict[int, str] = {
     14: "SIGALRM",
     15: "SIGTERM",
 }
-
-
-def _escape(value: str) -> str:
-    return quote(value, safe="-._~")
-
-
-def _encode(values: Mapping[str, list[str]]) -> bytes:
-    parts: list[str] = []
-    for key in sorted(values):
-        prefix = f"{_escape(key)}="
-        for value in values[key]:
-            parts.append(prefix + _escape(value))
-    return "&".join(parts).encode("utf-8")
-
-
-def compute_hmac_signature(secret: str, values: Mapping[str, list[str]]) -> str:
-    digest = hmac.new(secret.encode("utf-8"), _encode(values), hashlib.sha256).digest()
-    return base64.b64encode(digest).decode("ascii")
-
-
 def format_timestamp(ts: Any) -> str:
     dt = ts.ToDatetime(tzinfo=UTC)
     rounded = dt.replace(microsecond=0)

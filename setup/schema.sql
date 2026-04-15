@@ -72,22 +72,14 @@ CREATE INDEX problem_steps_problem_type ON problem_steps (problem_type);
 CREATE TABLE problem_step_files (
     problem_id              text NOT NULL,
     step_number             integer NOT NULL,
+    file_type               text NOT NULL,
     path                    text NOT NULL,
     content                 blob NOT NULL,
 
-    PRIMARY KEY (problem_id, step_number, path),
+    PRIMARY KEY (problem_id, step_number, file_type, path),
     FOREIGN KEY (problem_id, step_number) REFERENCES problem_steps (problem_id, step_number) ON DELETE CASCADE ON UPDATE CASCADE,
-    CHECK (trim(path) = path AND length(path) > 0)
-) WITHOUT ROWID;
-
-CREATE TABLE problem_step_solution_files (
-    problem_id              text NOT NULL,
-    step_number             integer NOT NULL,
-    path                    text NOT NULL,
-    content                 blob NOT NULL,
-
-    PRIMARY KEY (problem_id, step_number, path),
-    FOREIGN KEY (problem_id, step_number) REFERENCES problem_steps (problem_id, step_number) ON DELETE CASCADE ON UPDATE CASCADE,
+    CHECK (step_number >= 1),
+    CHECK (trim(file_type) = file_type AND file_type IN ('regular', 'starter', 'solution')),
     CHECK (trim(path) = path AND length(path) > 0)
 ) WITHOUT ROWID;
 
@@ -344,7 +336,8 @@ SELECT
                 SELECT DISTINCT problem_step_files.path
                 FROM problem_step_files
                 WHERE problem_step_files.problem_id = problem_steps.problem_id
-                    AND problem_step_files.step_number <= problem_steps.step_number
+                    AND problem_step_files.step_number = problem_steps.step_number
+                    AND problem_step_files.file_type = 'solution'
                 ORDER BY problem_step_files.path
             ) AS paths
         ),

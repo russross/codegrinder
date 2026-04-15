@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import fnmatch
 import json
 import sqlite3
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import PurePosixPath
 from typing import Any, Callable
-from urllib.parse import quote
 
 import codegrinder_pb2 as pb
 from google.protobuf.json_format import MessageToDict
 
+from problem_files import ProblemStepFileType
 from proto_conv import parse_time
-from signatures import encode_params, encode_signed_grading_commit, hmac_sha256_base64
+from signatures import encode_signed_grading_commit
 
 SIGNED_COMMIT_TIMEOUT = timedelta(minutes=15)
 
@@ -68,71 +71,6 @@ def _require_positive_int_weight(value: float, label: str) -> int:
     return out
 
 
-def _map_bytes_sorted(items: dict[str, bytes], key_prefix: str, values: dict[str, list[str]]) -> None:
-    for name in sorted(items.keys()):
-        values[f"{key_prefix}{name}"] = [bytes(items[name] or b"").decode("latin1")]
-
-
-def compute_problem_type_signature(problem_type: pb.ProblemType, secret: str) -> str:
-    values: dict[str, list[str]] = {
-        "problem_type": [problem_type.problem_type],
-        "container": [problem_type.container],
-    }
-    _map_bytes_sorted(dict(problem_type.files), "file-", values)
-    for name in sorted(problem_type.actions.keys()):
-        action = problem_type.actions[name]
-        values[f"action-{name}-command"] = [action.command]
-        values[f"action-{name}-parser"] = [action.parser]
-        values[f"action-{name}-max-cpu"] = [str(action.max_cpu)]
-        values[f"action-{name}-max-fd"] = [str(action.max_fd)]
-        values[f"action-{name}-max-file-size"] = [str(action.max_file_size)]
-        values[f"action-{name}-max-memory"] = [str(action.max_memory)]
-        values[f"action-{name}-max-threads"] = [str(action.max_threads)]
-    return hmac_sha256_base64(secret, encode_params(values))
-
-
-def compute_problem_signature(problem: pb.Problem, steps: list[pb.ProblemStep], secret: str) -> str:
-    values: dict[str, list[str]] = {
-        "problem_id": [problem.problem_id],
-        "problem_note": [problem.problem_note],
-    }
-    if problem.problem_tags:
-        values["problem_tags"] = list(problem.problem_tags)
-    if problem.problem_options:
-        values["problem_options"] = list(problem.problem_options)
-    for step in steps:
-        values[f"step-{step.step}-problem_type"] = [step.problem_type]
-        values[f"step-{step.step}-note"] = [step.note]
-        values[f"step-{step.step}-instructions"] = [step.instructions]
-        values[f"step-{step.step}-weight"] = [format(step.weight, "g")]
-    return hmac_sha256_base64(secret, encode_params(values))
-
-
-def compute_commit_signature(
-    commit: pb.Commit,
-    problem_type_signature: str,
-    problem_signature: str,
-    hostname: str,
-    user_id: str,
-    secret: str,
-) -> str:
-    values: dict[str, list[str]] = {
-        "problem_type_signature": [problem_type_signature],
-        "problem_signature": [problem_signature],
-        "hostname": [hostname],
-        "user_id": [user_id],
-        "assignment_user_id": [commit.assignment.user_id],
-        "assignment_course_id": [commit.assignment.course_id],
-        "assignment_problem_set_id": [commit.assignment.problem_set_id],
-        "problem_id": [commit.problem_id],
-        "step": [str(commit.step)],
-        "action": [commit.action],
-        "note": [commit.note],
-        "score": [format(commit.score, "g")],
-    }
-    return hmac_sha256_base64(secret, encode_params(values))
-
-
 def _problem_to_row(problem: pb.Problem) -> tuple[str, str, str, str, str, str]:
     now = _timestamp_now()
     if not problem.HasField("created_at"):
@@ -148,12 +86,21 @@ def _problem_to_row(problem: pb.Problem) -> tuple[str, str, str, str, str, str]:
     )
 
 
-def _save_problem_step_files(tx: sqlite3.Connection, table: str, problem_id: str, step: int, files: dict[str, bytes]) -> None:
-    tx.execute(f"DELETE FROM {table} WHERE problem_id = ? AND step_number = ?", (problem_id, step))
+def _save_problem_step_files(
+    tx: sqlite3.Connection,
+    problem_id: str,
+    step: int,
+    file_type: ProblemStepFileType,
+    files: dict[str, bytes],
+) -> None:
+    tx.execute(
+        "DELETE FROM problem_step_files WHERE problem_id = ? AND step_number = ? AND file_type = ?",
+        (problem_id, step, file_type.value),
+    )
     for name in sorted(files.keys()):
         tx.execute(
-            f"INSERT INTO {table}(problem_id, step_number, path, content) VALUES (?, ?, ?, ?)",
-            (problem_id, step, name, bytes(files[name] or b"")),
+            "INSERT INTO problem_step_files(problem_id, step_number, file_type, path, content) VALUES (?, ?, ?, ?, ?)",
+            (problem_id, step, file_type.value, name, bytes(files[name] or b"")),
         )
 
 
@@ -183,50 +130,285 @@ def _report_card_to_json(report_card: pb.ReportCard | None) -> str:
     return json.dumps(data, separators=(",", ":"))
 
 
-def sign_problem_bundle_unconfirmed(
+@dataclass(slots=True)
+class _UploadedEntry:
+    content: bytes
+    source: str
+
+
+@dataclass(slots=True)
+class _IgnoreRule:
+    base_dir: str
+    pattern: str
+    anchored: bool
+    directory_only: bool
+
+
+def _normalize_rel_path(path: str, *, label: str) -> str:
+    raw = path.strip()
+    if raw == "":
+        raise ValueError(f"{label} path must not be empty")
+    normalized = PurePosixPath(raw)
+    if normalized.is_absolute():
+        raise ValueError(f"{label} path must be relative: {path!r}")
+    parts = normalized.parts
+    if len(parts) == 0:
+        raise ValueError(f"{label} path must not be empty")
+    for part in parts:
+        if part in ("", ".", ".."):
+            raise ValueError(f"{label} path must not contain '.' or '..': {path!r}")
+    return normalized.as_posix()
+
+
+def _collect_author_files(files: list[pb.AuthorFile], *, label: str) -> dict[str, bytes]:
+    out: dict[str, bytes] = {}
+    for entry in files:
+        path = _normalize_rel_path(entry.path, label=label)
+        out[path] = bytes(entry.content or b"")
+    return out
+
+
+def _parse_ignore_rules(tree: dict[str, _UploadedEntry]) -> list[_IgnoreRule]:
+    rules: list[_IgnoreRule] = []
+    for path in sorted(tree.keys()):
+        if PurePosixPath(path).name != ".gitignore":
+            continue
+        base_dir = PurePosixPath(path).parent.as_posix()
+        if base_dir == ".":
+            base_dir = ""
+        text = tree[path].content.decode("utf-8", errors="replace")
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if line == "" or line.startswith("#"):
+                continue
+            anchored = line.startswith("/")
+            if anchored:
+                line = line[1:]
+            directory_only = line.endswith("/")
+            if directory_only:
+                line = line[:-1]
+            if line == "":
+                continue
+            rules.append(_IgnoreRule(base_dir=base_dir, pattern=line, anchored=anchored, directory_only=directory_only))
+    return rules
+
+
+def _relative_to_base(path: str, base_dir: str) -> str | None:
+    if base_dir == "":
+        return path
+    if path == base_dir:
+        return ""
+    prefix = base_dir + "/"
+    if not path.startswith(prefix):
+        return None
+    return path[len(prefix) :]
+
+
+def _match_ignore_rule(rule: _IgnoreRule, path: str) -> bool:
+    rel_path = _relative_to_base(path, rule.base_dir)
+    if rel_path is None or rel_path == "":
+        return False
+    rel_obj = PurePosixPath(rel_path)
+    candidate_paths = [rel_obj.as_posix()]
+    if not rule.anchored and "/" not in rule.pattern:
+        candidate_paths.extend(part for part in rel_obj.parts)
+    if not rule.anchored and "/" in rule.pattern:
+        parts = rel_obj.parts
+        candidate_paths.extend("/".join(parts[idx:]) for idx in range(1, len(parts)))
+    if rule.directory_only:
+        directory_candidates = []
+        parts = rel_obj.parts[:-1]
+        for idx in range(1, len(parts) + 1):
+            directory_candidates.append("/".join(parts[:idx]))
+        candidate_paths.extend(directory_candidates)
+    for candidate in candidate_paths:
+        if candidate == "":
+            continue
+        if fnmatch.fnmatchcase(candidate, rule.pattern):
+            return True
+    return False
+
+
+def _filter_ignored_entries(tree: dict[str, _UploadedEntry]) -> dict[str, _UploadedEntry]:
+    rules = _parse_ignore_rules(tree)
+    out: dict[str, _UploadedEntry] = {}
+    for path, entry in tree.items():
+        ignored = False
+        for rule in rules:
+            if _match_ignore_rule(rule, path):
+                ignored = True
+        if not ignored:
+            out[path] = entry
+    return out
+
+
+def _load_problem_type_from_store(
+    tx: sqlite3.Connection,
+    problem_type: str,
+    load_problem_type_files: Callable[[str], dict[str, bytes]],
+) -> pb.ProblemType:
+    row = tx.execute("SELECT * FROM problem_types WHERE problem_type = ?", (problem_type,)).fetchone()
+    if row is None:
+        raise sqlite3.Error("not found")
+    action_rows = tx.execute("SELECT * FROM problem_type_actions WHERE problem_type = ?", (problem_type,)).fetchall()
+    actions: dict[str, pb.ProblemTypeAction] = {}
+    for action_row in action_rows:
+        actions[str(action_row["action"])] = pb.ProblemTypeAction(
+            command=str(action_row["command"]),
+            parser=str(action_row["parser"] or ""),
+            max_cpu=int(action_row["max_cpu"]),
+            max_fd=int(action_row["max_fd"]),
+            max_file_size=int(action_row["max_file_size"]),
+            max_memory=int(action_row["max_memory"]),
+            max_threads=int(action_row["max_threads"]),
+        )
+    return pb.ProblemType(
+        problem_type=problem_type,
+        container=str(row["container"]),
+        files=load_problem_type_files(problem_type),
+        actions=actions,
+    )
+
+
+def _build_problem_from_draft(draft: pb.AuthorProblemDraft) -> pb.Problem:
+    if draft.problem_id.strip() == "":
+        raise ValueError("problem_id is required")
+    if draft.problem_note.strip() == "":
+        raise ValueError("problem_note is required")
+    problem = pb.Problem(
+        problem_id=draft.problem_id,
+        problem_note=draft.problem_note,
+        problem_tags=list(draft.problem_tags),
+        problem_options=list(draft.problem_options),
+    )
+    now = _timestamp_now()
+    _set_ts(problem.created_at, now)
+    _set_ts(problem.updated_at, now)
+    return problem
+
+
+def prepare_problem(
     tx: sqlite3.Connection,
     current_user_id: str,
-    bundle: pb.ProblemBundle,
+    draft: pb.AuthorProblemDraft,
+    action: str,
     daycare_secret: str,
     assign_host: Callable[[set[str]], str],
+    load_problem_type_files: Callable[[str], dict[str, bytes]],
 ) -> pb.ProblemBundle:
-    if bundle.user_id != current_user_id:
-        raise ValueError("bundle must include user's ID")
+    if len(draft.steps) == 0:
+        raise ValueError("problem draft must include at least one step")
+    problem = _build_problem_from_draft(draft)
+    bundle = pb.ProblemBundle(problem=problem, user_id=current_user_id)
+    bundle.hostname = assign_host({step.problem_type for step in draft.steps})
+    prior_solution_paths: set[str] = set()
     now = _timestamp_now()
-    if bundle.problem.problem_id == "":
-        bundle.problem.problem_id = quote(bundle.problem.problem_note.strip().lower().replace(" ", "-"), safe="-._~")
-    _set_ts(bundle.problem.created_at, now)
-    _set_ts(bundle.problem.updated_at, now)
-    for idx, step in enumerate(bundle.problem_steps, start=1):
-        step.problem_id = bundle.problem.problem_id
-        step.step = idx
-    bundle.problem_signature = compute_problem_signature(bundle.problem, list(bundle.problem_steps), daycare_secret)
-    if bundle.hostname == "":
-        bundle.hostname = assign_host({step.problem_type for step in bundle.problem_steps})
-    del bundle.signed_grading_commits[:]
-    for idx, step in enumerate(bundle.problem_steps):
-        if idx >= len(bundle.commits):
-            break
-        commit = _grading_commit_from_problem_bundle(
-            bundle=bundle,
-            step_index=idx,
-            commit=bundle.commits[idx],
+    effective_action = "grade" if action == "" else action
+
+    for index, step_draft in enumerate(draft.steps, start=1):
+        if int(step_draft.step_number) != index:
+            raise ValueError(f"expected step {index}, found {int(step_draft.step_number)}")
+        if step_draft.problem_type.strip() == "":
+            raise ValueError(f"step {index} problem type is required")
+        step_note = str(step_draft.note)
+        weight = float(step_draft.weight)
+        step_weight = _require_positive_int_weight(weight, f"step {index} weight")
+
+        problem_type = _load_problem_type_from_store(tx, step_draft.problem_type, load_problem_type_files)
+        bundle.problem_types[problem_type.problem_type].CopyFrom(problem_type)
+
+        uploaded_tree: dict[str, _UploadedEntry] = {}
+        for path, content in _collect_author_files(list(step_draft.files), label=f"step {index} file").items():
+            uploaded_tree[path] = _UploadedEntry(content=content, source="uploaded")
+        for path, content in _collect_author_files(
+            list(step_draft.starter_files), label=f"step {index} starter file"
+        ).items():
+            uploaded_tree[f"_starter/{path}"] = _UploadedEntry(content=content, source="starter")
+        for path, content in dict(problem_type.files).items():
+            normalized = _normalize_rel_path(str(path), label=f"problem type {problem_type.problem_type} file")
+            uploaded_tree[normalized] = _UploadedEntry(content=bytes(content or b""), source="problem_type")
+
+        filtered_tree = _filter_ignored_entries(uploaded_tree)
+        starter_files: dict[str, bytes] = {}
+        for path, entry in filtered_tree.items():
+            if entry.source != "starter":
+                continue
+            logical_path = _normalize_rel_path(path.removeprefix("_starter/"), label=f"step {index} starter file")
+            if logical_path in problem_type.files:
+                raise ValueError(
+                    f"step {index} starter file {logical_path!r} conflicts with problem type file {logical_path!r}"
+                )
+            starter_files[logical_path] = entry.content
+
+        student_owned_paths = prior_solution_paths | set(starter_files.keys())
+        solution_files: dict[str, bytes] = {}
+        step_files: dict[str, bytes] = {}
+        for path, entry in filtered_tree.items():
+            if entry.source != "uploaded":
+                continue
+            if path in student_owned_paths:
+                solution_files[path] = entry.content
+            else:
+                step_files[path] = entry.content
+
+        missing = [path for path in sorted(student_owned_paths) if path not in solution_files]
+        if missing:
+            lines = [f"step {index} solution is missing required student files:"]
+            lines.extend(f"  {path}" for path in missing)
+            raise ValueError("\n".join(lines))
+
+        step = pb.ProblemStep(
+            problem_id=problem.problem_id,
+            step=index,
+            problem_type=problem_type.problem_type,
+            note=step_note,
+            weight=float(step_weight),
+            files=step_files,
+            starter_files=starter_files,
+            whitelist={path: True for path in sorted(solution_files)},
         )
-        bundle.signed_grading_commits.append(encode_signed_grading_commit(commit, daycare_secret))
+        bundle.problem_steps.append(step)
+        prior_solution_paths = set(solution_files)
+
+        commit = pb.Commit(
+            step=index,
+            action=effective_action,
+            note="author solution submitted via grind"
+            if action == ""
+            else f"author solution tested with action {action} via grind",
+            problem_id=problem.problem_id,
+            files=solution_files,
+        )
+        _set_ts(commit.created_at, now)
+        _set_ts(commit.updated_at, now)
+        bundle.commits.append(commit)
+
+    del bundle.signed_grading_commits[:]
+    for index, commit in enumerate(bundle.commits):
+        grading_commit = _grading_commit_from_problem_bundle(bundle=bundle, step_index=index, commit=commit)
+        bundle.signed_grading_commits.append(encode_signed_grading_commit(grading_commit, daycare_secret))
     return bundle
 
 
-def save_problem_bundle_common(
+def save_problem(
     tx: sqlite3.Connection,
     current_user_id: str,
+    mode: pb.SaveMode.ValueType,
     bundle: pb.ProblemBundle,
-    daycare_secret: str,
 ) -> pb.ProblemBundle:
     if bundle.user_id != current_user_id:
         raise ValueError("bundle must include user's ID")
     if bundle.problem.problem_id == "":
         raise ValueError("problem_id is required")
     row = tx.execute("SELECT * FROM problems WHERE problem_id = ?", (bundle.problem.problem_id,)).fetchone()
+    if mode == pb.SAVE_MODE_UNSPECIFIED:
+        raise ValueError("save mode is required")
+    if mode == pb.SAVE_MODE_CREATE and row is not None:
+        raise ValueError(f"problem {bundle.problem.problem_id!r} already exists")
+    if mode == pb.SAVE_MODE_UPDATE and row is None:
+        raise ValueError(f"problem {bundle.problem.problem_id!r} does not exist")
+    if row is not None:
+        _set_ts(bundle.problem.created_at, parse_time(row["problem_created_at"]))
     values = _problem_to_row(bundle.problem)
     if row is None:
         tx.execute(
@@ -256,7 +438,7 @@ def save_problem_bundle_common(
                     step.step,
                     step.problem_type,
                     step.note,
-                    step.instructions,
+                    "",
                     step_weight,
                 ),
             )
@@ -267,43 +449,45 @@ def save_problem_bundle_common(
                 (
                     step.problem_type,
                     step.note,
-                    step.instructions,
+                    "",
                     step_weight,
                     step.problem_id,
                     step.step,
                 ),
             )
-        _save_problem_step_files(tx, "problem_step_files", step.problem_id, step.step, dict(step.files))
-        _save_problem_step_files(tx, "problem_step_solution_files", step.problem_id, step.step, dict(step.solution))
+        if idx > len(bundle.commits):
+            raise ValueError(f"missing commit for step {idx}")
+        commit = bundle.commits[idx - 1]
+        if int(commit.step) != idx:
+            raise ValueError(f"commit step mismatch for step {idx}")
+        _save_problem_step_files(tx, step.problem_id, step.step, ProblemStepFileType.REGULAR, dict(step.files))
+        _save_problem_step_files(tx, step.problem_id, step.step, ProblemStepFileType.STARTER, dict(step.starter_files))
+        _save_problem_step_files(tx, step.problem_id, step.step, ProblemStepFileType.SOLUTION, dict(commit.files))
 
     tx.execute(
         "DELETE FROM problem_steps WHERE problem_id = ? AND step_number > ?",
         (bundle.problem.problem_id, len(bundle.problem_steps)),
     )
-
-    bundle.problem_signature = compute_problem_signature(bundle.problem, list(bundle.problem_steps), daycare_secret)
     return bundle
 
 
-def update_problem_bundle(
+def save_problem_set(
     tx: sqlite3.Connection,
-    current_user_id: str,
-    problem_id: str,
-    bundle: pb.ProblemBundle,
-    daycare_secret: str,
-) -> pb.ProblemBundle:
-    if bundle.problem.problem_id != problem_id:
-        raise ValueError("problem ID mismatch")
-    return save_problem_bundle_common(tx, current_user_id, bundle, daycare_secret)
-
-
-def save_problem_set_bundle_common(tx: sqlite3.Connection, bundle: pb.ProblemSetBundle) -> pb.ProblemSetBundle:
+    mode: pb.SaveMode.ValueType,
+    bundle: pb.ProblemSetBundle,
+) -> pb.ProblemSetBundle:
     pset = bundle.problem_set
     if pset.problem_set_id == "":
         raise ValueError("problem_set_id is required")
+    if mode == pb.SAVE_MODE_UNSPECIFIED:
+        raise ValueError("save mode is required")
     now_sql = _rfc3339_round_sec(_timestamp_now())
     tags_json = json.dumps(list(pset.problem_set_tags))
     row = tx.execute("SELECT * FROM problem_sets WHERE problem_set_id = ?", (pset.problem_set_id,)).fetchone()
+    if mode == pb.SAVE_MODE_CREATE and row is not None:
+        raise ValueError(f"problem set {pset.problem_set_id!r} already exists")
+    if mode == pb.SAVE_MODE_UPDATE and row is None:
+        raise ValueError(f"problem set {pset.problem_set_id!r} does not exist")
     if row is None:
         tx.execute(
             "INSERT INTO problem_sets(problem_set_id, problem_set_note, problem_set_tags, problem_set_created_at, problem_set_updated_at) VALUES (?, ?, ?, ?, ?)",
@@ -319,19 +503,14 @@ def save_problem_set_bundle_common(tx: sqlite3.Connection, bundle: pb.ProblemSet
     for psp in bundle.problem_set_problems:
         psp.problem_set_id = pset.problem_set_id
         problem_weight = _require_positive_int_weight(float(psp.weight), f"problem {psp.problem_id} weight")
+        exists = tx.execute("SELECT 1 FROM problems WHERE problem_id = ?", (psp.problem_id,)).fetchone()
+        if exists is None:
+            raise ValueError(f"problem {psp.problem_id!r} does not exist")
         tx.execute(
             "INSERT INTO problem_set_problems(problem_set_id, problem_id, problem_weight) VALUES (?, ?, ?)",
             (psp.problem_set_id, psp.problem_id, problem_weight),
         )
     return bundle
-
-
-def create_problem_set_bundle(tx: sqlite3.Connection, bundle: pb.ProblemSetBundle) -> pb.ProblemSetBundle:
-    return save_problem_set_bundle_common(tx, bundle)
-
-
-def update_problem_set_bundle(tx: sqlite3.Connection, bundle: pb.ProblemSetBundle) -> pb.ProblemSetBundle:
-    return save_problem_set_bundle_common(tx, bundle)
 
 
 def _save_commit_files(
@@ -477,7 +656,6 @@ def save_grading_commit_common(
         step=int(step_row["step_number"]),
         problem_type=str(step_row["problem_type"]),
         note=str(step_row["step_note"]),
-        instructions=str(step_row["step_instructions"]),
         weight=float(step_row["step_weight"]),
     )
     whitelist = _json_load(step_row["whitelist"], {})

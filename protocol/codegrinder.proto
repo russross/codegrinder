@@ -90,11 +90,13 @@ message ProblemStep {
    int64 step = 2;
    string problem_type = 3;
    string note = 4;
-   string instructions = 5;
    double weight = 6;
    map<string, bytes> files = 7;
    map<string, bool> whitelist = 8;
    map<string, bytes> solution = 9;
+   map<string, bytes> starter_files = 10;
+   reserved 5;
+   reserved "instructions";
 }
 
 // ProblemSetProblem represents a problem in a problem set.
@@ -156,7 +158,6 @@ message ProblemBundle {
    Problem problem = 1;
    repeated ProblemStep problem_steps = 2;
    map<string, ProblemType> problem_types = 3;
-   string problem_signature = 4;
    string hostname = 5;
    string user_id = 6;
    repeated Commit commits = 7;
@@ -179,7 +180,9 @@ message GradingCommit {
     Commit commit = 6;
 }
 
-// SignedGradingCommit carries an encoded grading commit plus its signature.
+// SignedGradingCommit carries protobuf-encoded grading commit bytes plus an HMAC
+// signature. Clients may decode the bytes for inspection, but must forward the
+// encoded bytes unchanged to preserve the signature.
 message SignedGradingCommit {
     bytes commit = 1;
     string signature = 2;
@@ -211,12 +214,38 @@ message Version {
    string thonny_version_recommended = 5;
 }
 
+enum SaveMode {
+   SAVE_MODE_UNSPECIFIED = 0;
+   SAVE_MODE_CREATE = 1;
+   SAVE_MODE_UPDATE = 2;
+}
+
+message AuthorFile {
+   string path = 1;
+   bytes content = 2;
+}
+
+message AuthorProblemStepDraft {
+   int64 step_number = 1;
+   string problem_type = 2;
+   string note = 3;
+   double weight = 4;
+   repeated AuthorFile files = 5;
+   repeated AuthorFile starter_files = 6;
+}
+
+message AuthorProblemDraft {
+   string problem_id = 1;
+   string problem_note = 2;
+   repeated string problem_tags = 3;
+   repeated string problem_options = 4;
+   repeated AuthorProblemStepDraft steps = 5;
+}
+
 // CodeGrinderService provides CodeGrinder operations
 service CodeGrinderService {
    // Hello performs session validation/exchange and returns server info
    rpc Hello(HelloRequest) returns (HelloResponse);
-   // ListProblems retrieves all problems and related data for the authenticated user
-   rpc ListProblems(ListProblemsRequest) returns (ListProblemsResponse);
    // ListAssignments retrieves assignment-focused list rows for list/student flows.
    rpc ListAssignments(ListAssignmentsRequest) returns (ListAssignmentsResponse);
    // SearchProblemCatalog retrieves problem sets with nested problem and step summaries.
@@ -229,16 +258,8 @@ service CodeGrinderService {
    rpc GetProblems(GetProblemsRequest) returns (GetProblemsResponse);
    // GetProblem retrieves a specific problem
    rpc GetProblem(GetProblemRequest) returns (GetProblemResponse);
-   // GetProblemSteps retrieves steps for a problem
-   rpc GetProblemSteps(GetProblemStepsRequest) returns (GetProblemStepsResponse);
    // GetProblemStep retrieves a specific step
    rpc GetProblemStep(GetProblemStepRequest) returns (GetProblemStepResponse);
-   // GetProblemSets retrieves problem sets with optional filters
-   rpc GetProblemSets(GetProblemSetsRequest) returns (GetProblemSetsResponse);
-   // GetProblemSetProblems retrieves problems in a problem set
-   rpc GetProblemSetProblems(GetProblemSetProblemsRequest) returns (GetProblemSetProblemsResponse);
-   // GetCourse retrieves a specific course
-   rpc GetCourse(GetCourseRequest) returns (GetCourseResponse);
    // GetUser retrieves a specific user
    rpc GetUser(GetUserRequest) returns (GetUserResponse);
    // GetAssignments retrieves assignments with optional filters
@@ -247,16 +268,12 @@ service CodeGrinderService {
    rpc GetAssignment(GetAssignmentRequest) returns (GetAssignmentResponse);
    // GetAssignmentStepFiles retrieves the system-owned and student-owned files for one step.
    rpc GetAssignmentStepFiles(GetAssignmentStepFilesRequest) returns (GetAssignmentStepFilesResponse);
-   // PostProblemBundleUnconfirmed handles unconfirmed problem bundle
-   rpc PostProblemBundleUnconfirmed(PostProblemBundleUnconfirmedRequest) returns (PostProblemBundleUnconfirmedResponse);
-   // PostProblemBundleConfirmed handles confirmed problem bundle
-   rpc PostProblemBundleConfirmed(PostProblemBundleConfirmedRequest) returns (PostProblemBundleConfirmedResponse);
-   // PutProblemBundle handles updating problem bundle
-   rpc PutProblemBundle(PutProblemBundleRequest) returns (PutProblemBundleResponse);
-   // PostProblemSetBundle handles problem set bundle
-   rpc PostProblemSetBundle(PostProblemSetBundleRequest) returns (PostProblemSetBundleResponse);
-   // PutProblemSetBundle handles updating problem set bundle
-   rpc PutProblemSetBundle(PutProblemSetBundleRequest) returns (PutProblemSetBundleResponse);
+   // PrepareProblem validates author source material and signs daycare bundles.
+   rpc PrepareProblem(PrepareProblemRequest) returns (PrepareProblemResponse);
+   // SaveProblem persists a prepared author problem bundle.
+   rpc SaveProblem(SaveProblemRequest) returns (SaveProblemResponse);
+   // SaveProblemSet persists an authored problem set bundle.
+   rpc SaveProblemSet(SaveProblemSetRequest) returns (SaveProblemSetResponse);
    // SaveUngradedCommit handles an ungraded commit before daycare processing.
    rpc SaveUngradedCommit(SaveUngradedCommitRequest) returns (SaveUngradedCommitResponse);
    // SaveGradedCommit handles a graded commit returned by daycare.
@@ -275,19 +292,6 @@ message HelloResponse {
    string cookie = 1;
    User user = 2;
    Version version = 3;
-}
-
-// Request for ListProblems
-message ListProblemsRequest {
-  string session_cookie = 1;
-}
-
-// Response for ListProblems
-message ListProblemsResponse {
-   User user = 1;
-   repeated Assignment assignments = 2;
-   repeated Course courses = 3;
-   repeated ProblemSet problem_sets = 4;
 }
 
 // Request for ListAssignments
@@ -393,17 +397,6 @@ message GetProblemResponse {
    Problem problem = 1;
 }
 
-// Request for GetProblemSteps
-message GetProblemStepsRequest {
-   string session_cookie = 1;
-   string problem_id = 2;
-}
-
-// Response for GetProblemSteps
-message GetProblemStepsResponse {
-   repeated ProblemStep problem_steps = 1;
-}
-
 // Request for GetProblemStep
 message GetProblemStepRequest {
    string session_cookie = 1;
@@ -414,41 +407,6 @@ message GetProblemStepRequest {
 // Response for GetProblemStep
 message GetProblemStepResponse {
    ProblemStep problem_step = 1;
-}
-
-// Request for GetProblemSets
-message GetProblemSetsRequest {
-   string session_cookie = 1;
-   string problem_set_id = 2;
-   string note = 3;
-   repeated string search = 4;
-}
-
-// Response for GetProblemSets
-message GetProblemSetsResponse {
-   repeated ProblemSet problem_sets = 1;
-}
-
-// Request for GetProblemSetProblems
-message GetProblemSetProblemsRequest {
-   string session_cookie = 1;
-   string problem_set_id = 2;
-}
-
-// Response for GetProblemSetProblems
-message GetProblemSetProblemsResponse {
-   repeated ProblemSetProblem problem_set_problems = 1;
-}
-
-// Request for GetCourse
-message GetCourseRequest {
-   string session_cookie = 1;
-   string course_id = 2;
-}
-
-// Response for GetCourse
-message GetCourseResponse {
-   Course course = 1;
 }
 
 // Request for GetUser
@@ -520,59 +478,39 @@ message GetAssignmentStepFilesResponse {
 }
 
 
-// Request for PostProblemBundleUnconfirmed
-message PostProblemBundleUnconfirmedRequest {
+// Request for PrepareProblem
+message PrepareProblemRequest {
    string session_cookie = 1;
-   ProblemBundle bundle = 2;
+   AuthorProblemDraft draft = 2;
+   string action = 3;
 }
 
-// Response for PostProblemBundleUnconfirmed
-message PostProblemBundleUnconfirmedResponse {
+// Response for PrepareProblem
+message PrepareProblemResponse {
    ProblemBundle bundle = 1;
 }
 
-// Request for PostProblemBundleConfirmed
-message PostProblemBundleConfirmedRequest {
+// Request for SaveProblem
+message SaveProblemRequest {
    string session_cookie = 1;
-   ProblemBundle bundle = 2;
-}
-
-// Response for PostProblemBundleConfirmed
-message PostProblemBundleConfirmedResponse {
-   ProblemBundle bundle = 1;
-}
-
-// Request for PutProblemBundle
-message PutProblemBundleRequest {
-   string session_cookie = 1;
-   string problem_id = 2;
+   SaveMode mode = 2;
    ProblemBundle bundle = 3;
 }
 
-// Response for PutProblemBundle
-message PutProblemBundleResponse {
+// Response for SaveProblem
+message SaveProblemResponse {
    ProblemBundle bundle = 1;
 }
 
-// Request for PostProblemSetBundle
-message PostProblemSetBundleRequest {
+// Request for SaveProblemSet
+message SaveProblemSetRequest {
    string session_cookie = 1;
-   ProblemSetBundle bundle = 2;
+   SaveMode mode = 2;
+   ProblemSetBundle bundle = 3;
 }
 
-// Response for PostProblemSetBundle
-message PostProblemSetBundleResponse {
-   ProblemSetBundle bundle = 1;
-}
-
-// Request for PutProblemSetBundle
-message PutProblemSetBundleRequest {
-   string session_cookie = 1;
-   ProblemSetBundle bundle = 2;
-}
-
-// Response for PutProblemSetBundle
-message PutProblemSetBundleResponse {
+// Response for SaveProblemSet
+message SaveProblemSetResponse {
    ProblemSetBundle bundle = 1;
 }
 
@@ -594,6 +532,4 @@ message SaveGradedCommitRequest {
 }
 
 // Response for SaveGradedCommit
-message SaveGradedCommitResponse {
-   SignedGradingCommit commit = 1;
-}
+message SaveGradedCommitResponse {}

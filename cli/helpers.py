@@ -112,11 +112,9 @@ def check_version(version: pb.Version) -> None:
 def _sanitize_map(data: Any) -> None:
     if isinstance(data, dict):
         for key, value in list(data.items()):
-            if key in {"files", "solution"} and isinstance(value, dict):
+            if key in {"files", "solution", "starter_files"} and isinstance(value, dict):
                 for name in list(value.keys()):
                     value[name] = "..."
-            elif key == "instructions":
-                data[key] = "..."
             _sanitize_map(value)
     elif isinstance(data, list):
         for value in data:

@@ -3,11 +3,15 @@ from __future__ import annotations
 import unittest
 from datetime import UTC, datetime
 
+import codegrinder_pb2 as pb
 from signatures import (
     compute_daycare_registration_signature,
+    decode_signed_grading_commit,
     encode_params,
+    encode_signed_grading_commit,
     escape,
     hmac_sha256_base64,
+    verified_grading_commit_blob,
 )
 
 
@@ -36,6 +40,28 @@ class SignatureTests(unittest.TestCase):
             secret="secret",
         )
         self.assertEqual(sig, "04Kr9Gg29WeMQdz6yKzFDaB809rmKn9qNpxmLHXcTGg=")
+
+    def test_signed_grading_commit_round_trips_blob_bytes(self) -> None:
+        commit = pb.GradingCommit(
+            hostname="daycare.example.invalid",
+            user_id="u1",
+            commit=pb.Commit(problem_id="p1", step=1, action="grade"),
+        )
+        signed = encode_signed_grading_commit(commit, "secret")
+        self.assertEqual(verified_grading_commit_blob(signed, "secret"), commit.SerializeToString())
+        decoded = decode_signed_grading_commit(signed, "secret")
+        self.assertEqual(decoded.SerializeToString(), commit.SerializeToString())
+
+    def test_signed_grading_commit_rejects_tampered_blob(self) -> None:
+        commit = pb.GradingCommit(
+            hostname="daycare.example.invalid",
+            user_id="u1",
+            commit=pb.Commit(problem_id="p1", step=1, action="grade"),
+        )
+        signed = encode_signed_grading_commit(commit, "secret")
+        signed.commit = signed.commit + b"\x00"
+        with self.assertRaisesRegex(ValueError, "signature mismatch"):
+            verified_grading_commit_blob(signed, "secret")
 
 
 if __name__ == "__main__":

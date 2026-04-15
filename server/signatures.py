@@ -7,6 +7,8 @@ from hashlib import sha256
 
 import codegrinder_pb2 as pb
 
+_GRADING_COMMIT_HMAC_CONTEXT = b"codegrinder:grading-commit:v1\0"
+
 
 def escape(value: str) -> str:
     out = []
@@ -37,30 +39,43 @@ def hmac_sha256_base64(secret: str, payload: bytes) -> str:
     return base64.b64encode(mac.digest()).decode("ascii")
 
 
-def sign_blob(secret: str, payload: bytes) -> str:
-    return hmac_sha256_base64(secret, payload)
+def _hmac_sha256(secret: str, payload: bytes) -> bytes:
+    return hmac.new(secret.encode("utf-8"), payload, sha256).digest()
 
 
-def verify_blob_signature(secret: str, payload: bytes, signature: str) -> None:
-    expected = sign_blob(secret, payload)
+def sign_grading_commit_blob(secret: str, payload: bytes) -> str:
+    mac = _hmac_sha256(secret, _GRADING_COMMIT_HMAC_CONTEXT + payload)
+    return base64.b64encode(mac).decode("ascii")
+
+
+def verify_grading_commit_blob(secret: str, payload: bytes, signature: str) -> None:
+    expected = sign_grading_commit_blob(secret, payload)
     if not hmac.compare_digest(expected, signature):
         raise ValueError("grading commit signature mismatch")
 
 
-def encode_signed_grading_commit(commit: pb.GradingCommit, secret: str) -> pb.SignedGradingCommit:
-    payload = commit.SerializeToString()
-    return pb.SignedGradingCommit(commit=payload, signature=sign_blob(secret, payload))
-
-
-def decode_signed_grading_commit(envelope: pb.SignedGradingCommit, secret: str) -> pb.GradingCommit:
+def verified_grading_commit_blob(envelope: pb.SignedGradingCommit, secret: str) -> bytes:
     if envelope.commit == b"":
         raise ValueError("signed grading commit must include encoded commit bytes")
     if envelope.signature == "":
         raise ValueError("signed grading commit must include a signature")
-    verify_blob_signature(secret, envelope.commit, envelope.signature)
+    verify_grading_commit_blob(secret, envelope.commit, envelope.signature)
+    return bytes(envelope.commit)
+
+
+def parse_grading_commit_blob(payload: bytes) -> pb.GradingCommit:
     commit = pb.GradingCommit()
-    commit.ParseFromString(envelope.commit)
+    commit.ParseFromString(payload)
     return commit
+
+
+def encode_signed_grading_commit(commit: pb.GradingCommit, secret: str) -> pb.SignedGradingCommit:
+    payload = commit.SerializeToString()
+    return pb.SignedGradingCommit(commit=payload, signature=sign_grading_commit_blob(secret, payload))
+
+
+def decode_signed_grading_commit(envelope: pb.SignedGradingCommit, secret: str) -> pb.GradingCommit:
+    return parse_grading_commit_blob(verified_grading_commit_blob(envelope, secret))
 
 
 def compute_daycare_registration_signature(

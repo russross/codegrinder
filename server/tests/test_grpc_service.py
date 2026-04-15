@@ -14,6 +14,8 @@ import codegrinder_pb2 as pb
 from config import ServerConfig
 from db import setup_db
 from grpc_service import CodeGrinderService
+from problem_files import ProblemStepFileType
+from signatures import encode_signed_grading_commit
 from sessions import LoginRecords, encode_session, new_session
 
 
@@ -81,16 +83,32 @@ def _seed(conn: sqlite3.Connection) -> None:
         ("p1", 2, "python3unittest", "Step 2", "Step 2 Instructions", 1),
     )
     conn.execute(
-        "INSERT INTO problem_step_files(problem_id, step_number, path, content) VALUES (?, ?, ?, ?)",
-        ("p1", 1, "main.py", b"print('step1')\n"),
+        "INSERT INTO problem_step_files(problem_id, step_number, file_type, path, content) VALUES (?, ?, ?, ?, ?)",
+        ("p1", 2, ProblemStepFileType.REGULAR, "README.md", b"system file\n"),
     )
     conn.execute(
-        "INSERT INTO problem_step_files(problem_id, step_number, path, content) VALUES (?, ?, ?, ?)",
-        ("p1", 2, "helper.py", b"print('helper')\n"),
+        "INSERT INTO problem_step_files(problem_id, step_number, file_type, path, content) VALUES (?, ?, ?, ?, ?)",
+        ("p1", 1, ProblemStepFileType.STARTER, "main.py", b"print('step1')\n"),
     )
     conn.execute(
-        "INSERT INTO problem_step_files(problem_id, step_number, path, content) VALUES (?, ?, ?, ?)",
-        ("p1", 2, "README.md", b"system file\n"),
+        "INSERT INTO problem_step_files(problem_id, step_number, file_type, path, content) VALUES (?, ?, ?, ?, ?)",
+        ("p1", 2, ProblemStepFileType.STARTER, "main.py", b"print('step2-reset')\n"),
+    )
+    conn.execute(
+        "INSERT INTO problem_step_files(problem_id, step_number, file_type, path, content) VALUES (?, ?, ?, ?, ?)",
+        ("p1", 2, ProblemStepFileType.STARTER, "helper.py", b"print('helper')\n"),
+    )
+    conn.execute(
+        "INSERT INTO problem_step_files(problem_id, step_number, file_type, path, content) VALUES (?, ?, ?, ?, ?)",
+        ("p1", 1, ProblemStepFileType.SOLUTION, "main.py", b"print('step1-solution')\n"),
+    )
+    conn.execute(
+        "INSERT INTO problem_step_files(problem_id, step_number, file_type, path, content) VALUES (?, ?, ?, ?, ?)",
+        ("p1", 2, ProblemStepFileType.SOLUTION, "main.py", b"print('step2-main')\n"),
+    )
+    conn.execute(
+        "INSERT INTO problem_step_files(problem_id, step_number, file_type, path, content) VALUES (?, ?, ?, ?, ?)",
+        ("p1", 2, ProblemStepFileType.SOLUTION, "helper.py", b"print('helper')\n"),
     )
     conn.execute(
         "INSERT INTO problem_sets(problem_set_id, problem_set_note, problem_set_tags, problem_set_created_at, problem_set_updated_at) "
@@ -140,6 +158,7 @@ class GrpcServiceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         root = Path(self.tmp.name)
+        self.root = root
         (root / "files" / "python3unittest").mkdir(parents=True)
         (root / "files" / "python3unittest" / "Makefile").write_text("all:\n", encoding="utf-8")
         db_path = root / "db.sqlite"
@@ -183,14 +202,6 @@ class GrpcServiceTests(unittest.TestCase):
         with self.assertRaises(_AbortError) as err:
             self.service.GetAssignments(pb.GetAssignmentsRequest(), cast(grpc.ServicerContext, _FakeContext()))
         self.assertEqual(err.exception.code, grpc.StatusCode.UNAUTHENTICATED)
-
-    def test_list_problems(self) -> None:
-        reply = self.service.ListProblems(pb.ListProblemsRequest(), cast(grpc.ServicerContext, self._auth_context()))
-        self.assertEqual(reply.user.user_id, "u1")
-        self.assertEqual(len(reply.assignments), 1)
-        self.assertEqual(reply.assignments[0].problem_set_id, "ps1")
-        self.assertEqual(len(reply.courses), 1)
-        self.assertEqual(len(reply.problem_sets), 1)
 
     def test_list_assignments_modes(self) -> None:
         student_ctx = cast(grpc.ServicerContext, self._auth_context("u1"))
@@ -237,10 +248,11 @@ class GrpcServiceTests(unittest.TestCase):
         ctx = cast(grpc.ServicerContext, self._auth_context())
         problem = self.service.GetProblem(pb.GetProblemRequest(problem_id="p1"), ctx).problem
         self.assertEqual(problem.problem_id, "p1")
-        steps = self.service.GetProblemSteps(pb.GetProblemStepsRequest(problem_id="p1"), ctx).problem_steps
-        self.assertEqual(len(steps), 2)
         one_step = self.service.GetProblemStep(pb.GetProblemStepRequest(problem_id="p1", step=1), ctx).problem_step
         self.assertEqual(one_step.step, 1)
+        self.assertEqual(dict(one_step.whitelist), {"main.py": True})
+        two_step = self.service.GetProblemStep(pb.GetProblemStepRequest(problem_id="p1", step=2), ctx).problem_step
+        self.assertEqual(dict(two_step.whitelist), {"helper.py": True, "main.py": True})
 
     def test_assignment_info_advances_current_step(self) -> None:
         ctx = cast(grpc.ServicerContext, self._auth_context())
@@ -268,7 +280,7 @@ class GrpcServiceTests(unittest.TestCase):
         self.assertEqual(reply.step_number, 2)
         self.assertEqual(reply.total_steps, 2)
         student_files = {item.path: item.content for item in reply.student_owned_files}
-        self.assertEqual(student_files.get("main.py"), b"print('done')\n")
+        self.assertEqual(student_files.get("main.py"), b"print('step2-reset')\n")
         self.assertEqual(student_files.get("helper.py"), b"print('helper')\n")
 
     def test_step_files_with_zero_step_uses_current_progress(self) -> None:
@@ -297,10 +309,10 @@ class GrpcServiceTests(unittest.TestCase):
             ),
             ctx,
         )
-        self.assertEqual([item.path for item in reply.system_owned_files], ["Makefile", "doc/index.html"])
+        self.assertEqual([item.path for item in reply.system_owned_files], ["Makefile", "README.md"])
         self.assertEqual([item.content for item in reply.system_owned_files], [b"", b""])
-        self.assertEqual([item.path for item in reply.student_owned_files], ["README.md", "helper.py", "main.py"])
-        self.assertEqual([item.content for item in reply.student_owned_files], [b"", b"", b""])
+        self.assertEqual([item.path for item in reply.student_owned_files], ["helper.py", "main.py"])
+        self.assertEqual([item.content for item in reply.student_owned_files], [b"", b""])
 
     def test_step_files_current_uses_saved_commit_when_present(self) -> None:
         now = "2026-02-16T10:00:00+00:00"
@@ -341,8 +353,205 @@ class GrpcServiceTests(unittest.TestCase):
             ctx,
         )
         student_files = {item.path: item.content for item in reply.student_owned_files}
-        self.assertEqual(student_files.get("main.py"), b"print('done')\n")
+        self.assertEqual(student_files.get("main.py"), b"print('step2-reset')\n")
         self.assertEqual(student_files.get("helper.py"), b"print('helper')\n")
+
+    def test_save_graded_commit_returns_empty_success_response(self) -> None:
+        now = datetime(2026, 2, 16, 10, 0, 0, tzinfo=UTC)
+        graded = pb.GradingCommit(
+            problem_type=pb.ProblemType(
+                problem_type="python3unittest",
+                container="img",
+                actions={
+                    "grade": pb.ProblemTypeAction(
+                        command="make grade",
+                        parser="xunit",
+                        max_cpu=10,
+                        max_fd=100,
+                        max_file_size=10,
+                        max_memory=256,
+                        max_threads=20,
+                    )
+                },
+            ),
+            problem=pb.Problem(
+                problem_id="p1",
+                problem_note="Problem Note",
+                problem_tags=["tag"],
+                problem_options=[],
+                created_at=now,
+                updated_at=now,
+            ),
+            problem_steps=[
+                pb.ProblemStep(
+                    problem_id="p1",
+                    step=1,
+                    problem_type="python3unittest",
+                    note="Step 1",
+                    weight=1.0,
+                    whitelist={"main.py": True},
+                )
+            ],
+            hostname="example.invalid",
+            user_id="u1",
+            commit=pb.Commit(
+                assignment=self._assignment_key(),
+                problem_id="p1",
+                step=1,
+                action="grade",
+                note="graded",
+                files={"main.py": b"print('graded')\n"},
+                report_card=pb.ReportCard(passed=True, note="ok"),
+                score=1.0,
+                created_at=now,
+                updated_at=now,
+            ),
+        )
+        signed = encode_signed_grading_commit(graded, "daycare-secret")
+        ctx = cast(grpc.ServicerContext, self._auth_context())
+        reply = self.service.SaveGradedCommit(pb.SaveGradedCommitRequest(commit=signed), ctx)
+        self.assertEqual(reply.ListFields(), [])
+
+    def test_prepare_problem_overlays_type_files_then_filters_gitignore(self) -> None:
+        (self.root / "files" / "python3unittest" / ".gitignore").write_text("ignored.txt\n", encoding="utf-8")
+        author_ctx = cast(grpc.ServicerContext, self._auth_context("u2"))
+        reply = self.service.PrepareProblem(
+            pb.PrepareProblemRequest(
+                draft=pb.AuthorProblemDraft(
+                    problem_id="overlay-problem",
+                    problem_note="Overlay Problem",
+                    problem_tags=["author"],
+                    problem_options=[],
+                    steps=[
+                        pb.AuthorProblemStepDraft(
+                            step_number=1,
+                            problem_type="python3unittest",
+                            note="Step 1",
+                            weight=1.0,
+                            files=[
+                                pb.AuthorFile(path="Makefile", content=b"stale author copy\n"),
+                                pb.AuthorFile(path="README.md", content=b"keep me\n"),
+                                pb.AuthorFile(path="ignored.txt", content=b"drop me\n"),
+                                pb.AuthorFile(path="subdir/.gitignore", content=b"*.tmp\n"),
+                                pb.AuthorFile(path="subdir/keep.txt", content=b"keep\n"),
+                                pb.AuthorFile(path="subdir/skip.tmp", content=b"drop\n"),
+                                pb.AuthorFile(path="main.py", content=b"print('solution')\n"),
+                            ],
+                            starter_files=[pb.AuthorFile(path="main.py", content=b"print('starter')\n")],
+                        )
+                    ],
+                )
+            ),
+            author_ctx,
+        )
+        step = reply.bundle.problem_steps[0]
+        self.assertEqual(
+            dict(step.files),
+            {
+                "README.md": b"keep me\n",
+                "subdir/.gitignore": b"*.tmp\n",
+                "subdir/keep.txt": b"keep\n",
+            },
+        )
+        self.assertEqual(dict(step.starter_files), {"main.py": b"print('starter')\n"})
+        self.assertEqual(dict(reply.bundle.commits[0].files), {"main.py": b"print('solution')\n"})
+        self.assertEqual(reply.bundle.problem_types["python3unittest"].files["Makefile"], b"all:\n")
+
+    def test_prepare_problem_allows_later_step_starter_reset_for_existing_student_file(self) -> None:
+        author_ctx = cast(grpc.ServicerContext, self._auth_context("u2"))
+        reply = self.service.PrepareProblem(
+            pb.PrepareProblemRequest(
+                draft=pb.AuthorProblemDraft(
+                    problem_id="reset-problem",
+                    problem_note="Reset Problem",
+                    problem_tags=[],
+                    problem_options=[],
+                    steps=[
+                        pb.AuthorProblemStepDraft(
+                            step_number=1,
+                            problem_type="python3unittest",
+                            note="Step 1",
+                            weight=1.0,
+                            files=[pb.AuthorFile(path="main.py", content=b"print('step1-solution')\n")],
+                            starter_files=[pb.AuthorFile(path="main.py", content=b"print('step1-starter')\n")],
+                        ),
+                        pb.AuthorProblemStepDraft(
+                            step_number=2,
+                            problem_type="python3unittest",
+                            note="Step 2",
+                            weight=1.0,
+                            files=[pb.AuthorFile(path="main.py", content=b"print('step2-solution')\n")],
+                            starter_files=[pb.AuthorFile(path="main.py", content=b"print('step2-reset')\n")],
+                        ),
+                    ],
+                )
+            ),
+            author_ctx,
+        )
+        step_two = reply.bundle.problem_steps[1]
+        self.assertEqual(dict(step_two.starter_files), {"main.py": b"print('step2-reset')\n"})
+        self.assertEqual(dict(step_two.whitelist), {"main.py": True})
+        self.assertEqual(dict(reply.bundle.commits[1].files), {"main.py": b"print('step2-solution')\n"})
+
+    def test_prepare_and_save_problem_persist_starter_and_solution_files(self) -> None:
+        author_ctx = cast(grpc.ServicerContext, self._auth_context("u2"))
+        prepared = self.service.PrepareProblem(
+            pb.PrepareProblemRequest(
+                draft=pb.AuthorProblemDraft(
+                    problem_id="prepared-problem",
+                    problem_note="Prepared Problem",
+                    problem_tags=[],
+                    problem_options=[],
+                    steps=[
+                        pb.AuthorProblemStepDraft(
+                            step_number=1,
+                            problem_type="python3unittest",
+                            note="Step 1",
+                            weight=1.0,
+                            files=[
+                                pb.AuthorFile(path="README.md", content=b"system file\n"),
+                                pb.AuthorFile(path="main.py", content=b"print('solution')\n"),
+                            ],
+                            starter_files=[pb.AuthorFile(path="main.py", content=b"print('starter')\n")],
+                        )
+                    ],
+                )
+            ),
+            author_ctx,
+        )
+        saved = self.service.SaveProblem(
+            pb.SaveProblemRequest(mode=pb.SAVE_MODE_CREATE, bundle=prepared.bundle),
+            author_ctx,
+        )
+        self.assertEqual(saved.bundle.problem.problem_id, "prepared-problem")
+        file_rows = self.conn.execute(
+            "SELECT file_type, path, content FROM problem_step_files WHERE problem_id = ?",
+            ("prepared-problem",),
+        ).fetchall()
+        self.assertEqual(
+            sorted(
+                [(str(row["file_type"]), str(row["path"]), bytes(row["content"])) for row in file_rows],
+                key=lambda item: (item[1], {"regular": 0, "starter": 1, "solution": 2}[item[0]]),
+            ),
+            [
+                ("regular", "README.md", b"system file\n"),
+                ("starter", "main.py", b"print('starter')\n"),
+                ("solution", "main.py", b"print('solution')\n"),
+            ],
+        )
+        with self.assertRaises(_AbortError) as err:
+            self.service.SaveProblem(
+                pb.SaveProblemRequest(mode=pb.SAVE_MODE_CREATE, bundle=prepared.bundle),
+                author_ctx,
+            )
+        self.assertEqual(err.exception.code, grpc.StatusCode.INVALID_ARGUMENT)
+
+    def test_problem_step_file_type_constraint_rejects_invalid_value(self) -> None:
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.conn.execute(
+                "INSERT INTO problem_step_files(problem_id, step_number, file_type, path, content) VALUES (?, ?, ?, ?, ?)",
+                ("p1", 1, "bogus", "bad.txt", b"bad\n"),
+            )
 
 
 if __name__ == "__main__":

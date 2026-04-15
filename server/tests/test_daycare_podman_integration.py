@@ -86,7 +86,6 @@ def _build_signed_request(*, action: str, problem_options: list[str], image: str
         step=1,
         problem_type="riscv",
         note="fixture step",
-        instructions="run fixture",
         weight=1.0,
         files={},
         whitelist={"sort.s": True},

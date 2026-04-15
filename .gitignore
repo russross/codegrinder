@@ -7,3 +7,5 @@ rpc/*.pb.go
 *.swp
 certs
 .ruff_cache
+.codex
+TODO.md

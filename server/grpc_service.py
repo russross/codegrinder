@@ -19,25 +19,18 @@ from db import transaction
 from grade_passback import GradePassbackTarget, build_grade_report_html, save_grade_async
 from ipfilter import IPFilter, extract_ip_from_peer
 from mutations import (
-    create_problem_set_bundle,
+    prepare_problem,
     save_grading_commit_common,
-    save_problem_bundle_common,
-    sign_problem_bundle_unconfirmed,
-    update_problem_bundle,
-    update_problem_set_bundle,
+    save_problem,
+    save_problem_set,
 )
 from read_store import (
     get_assignment_list_items_pb,
     get_assignment_summary_pb,
     get_assignment_step_files_pb,
     get_assignments_pb,
-    get_course_pb,
-    get_list_problems_bundle,
     get_problem_pb,
-    get_problem_set_problems_pb,
-    get_problem_sets_pb,
     get_problem_step_pb,
-    get_problem_steps_pb,
     get_problem_type_actions_rows,
     get_problem_types_rows,
     get_problems_pb,
@@ -254,7 +247,9 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
             return fn(tx)
 
     def _require_author(self, user_row: sqlite3.Row, context: grpc.ServicerContext) -> None:
-        if bool(user_row["admin"]) or bool(user_row["author"]):
+        is_admin = bool(user_row["admin"]) if "admin" in user_row.keys() else False
+        is_author = bool(user_row["author"]) if "author" in user_row.keys() else False
+        if is_admin or is_author:
             return
         context.abort(grpc.StatusCode.PERMISSION_DENIED, "user is not an author")
 
@@ -340,18 +335,6 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
 
         return self._with_tx(fn2)
 
-    def rpc_list_problems(self, _request: pb.ListProblemsRequest, context: grpc.ServicerContext) -> pb.ListProblemsResponse:
-        def fn(tx: sqlite3.Connection) -> pb.ListProblemsResponse:
-            user_row = self._current_user_row(tx, context)
-            user, assignments, courses, problem_sets = get_list_problems_bundle(
-                tx, str(user_row["user_id"]), user_row, self._ip_allowed(context)
-            )
-            return pb.ListProblemsResponse(
-                user=user, assignments=assignments, courses=courses, problem_sets=problem_sets
-            )
-
-        return self._with_tx(fn)
-
     def rpc_list_assignments(
         self, request: pb.ListAssignmentsRequest, context: grpc.ServicerContext
     ) -> pb.ListAssignmentsResponse:
@@ -433,20 +416,6 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
 
         return self._with_tx(fn)
 
-    def rpc_problem_steps(self, request: pb.GetProblemStepsRequest, context: grpc.ServicerContext) -> pb.GetProblemStepsResponse:
-        def fn(tx: sqlite3.Connection) -> pb.GetProblemStepsResponse:
-            current_user = self._current_user_row(tx, context)
-            try:
-                steps = get_problem_steps_pb(tx, current_user, request.problem_id)
-            except sqlite3.Error as exc:
-                if _is_db_not_found(exc):
-                    context.abort(grpc.StatusCode.NOT_FOUND, "not found")
-                    raise AssertionError("unreachable")
-                context.abort(grpc.StatusCode.INTERNAL, f"db error getting problem steps: {exc}")
-            return pb.GetProblemStepsResponse(problem_steps=steps)
-
-        return self._with_tx(fn)
-
     def rpc_problem_step(self, request: pb.GetProblemStepRequest, context: grpc.ServicerContext) -> pb.GetProblemStepResponse:
         def fn(tx: sqlite3.Connection) -> pb.GetProblemStepResponse:
             current_user = self._current_user_row(tx, context)
@@ -458,49 +427,6 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                     raise AssertionError("unreachable")
                 context.abort(grpc.StatusCode.INTERNAL, f"db error getting problem step: {exc}")
             return pb.GetProblemStepResponse(problem_step=step)
-
-        return self._with_tx(fn)
-
-    def rpc_problem_sets(self, request: pb.GetProblemSetsRequest, context: grpc.ServicerContext) -> pb.GetProblemSetsResponse:
-        def fn(tx: sqlite3.Connection) -> pb.GetProblemSetsResponse:
-            current_user = self._current_user_row(tx, context)
-            try:
-                problem_sets = get_problem_sets_pb(
-                    tx, current_user, request.problem_set_id, request.note, list(request.search)
-                )
-            except sqlite3.Error as exc:
-                context.abort(grpc.StatusCode.INTERNAL, f"db error getting problem sets: {exc}")
-            return pb.GetProblemSetsResponse(problem_sets=problem_sets)
-
-        return self._with_tx(fn)
-
-    def rpc_problem_set_problems(
-        self, request: pb.GetProblemSetProblemsRequest, context: grpc.ServicerContext
-    ) -> pb.GetProblemSetProblemsResponse:
-        def fn(tx: sqlite3.Connection) -> pb.GetProblemSetProblemsResponse:
-            current_user = self._current_user_row(tx, context)
-            try:
-                entries = get_problem_set_problems_pb(tx, current_user, request.problem_set_id)
-            except sqlite3.Error as exc:
-                if _is_db_not_found(exc):
-                    context.abort(grpc.StatusCode.NOT_FOUND, "not found")
-                    raise AssertionError("unreachable")
-                context.abort(grpc.StatusCode.INTERNAL, f"db error getting problem set problems: {exc}")
-            return pb.GetProblemSetProblemsResponse(problem_set_problems=entries)
-
-        return self._with_tx(fn)
-
-    def rpc_course(self, request: pb.GetCourseRequest, context: grpc.ServicerContext) -> pb.GetCourseResponse:
-        def fn(tx: sqlite3.Connection) -> pb.GetCourseResponse:
-            current_user = self._current_user_row(tx, context)
-            try:
-                course = get_course_pb(tx, current_user, request.course_id)
-            except sqlite3.Error as exc:
-                if _is_db_not_found(exc):
-                    context.abort(grpc.StatusCode.NOT_FOUND, "not found")
-                    raise AssertionError("unreachable")
-                context.abort(grpc.StatusCode.INTERNAL, f"db error getting course: {exc}")
-            return pb.GetCourseResponse(course=course)
 
         return self._with_tx(fn)
 
@@ -673,106 +599,78 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                 note,
             )
 
-    def rpc_problem_bundle_unconfirmed(
-        self, request: pb.PostProblemBundleUnconfirmedRequest, context: grpc.ServicerContext
-    ) -> pb.PostProblemBundleUnconfirmedResponse:
-        if request is None or not request.HasField("bundle"):
-            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "bundle is required")
+    def rpc_prepare_problem(
+        self, request: pb.PrepareProblemRequest, context: grpc.ServicerContext
+    ) -> pb.PrepareProblemResponse:
+        if request is None or not request.HasField("draft"):
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "draft is required")
             raise AssertionError("unreachable")
 
-        def fn(tx: sqlite3.Connection) -> pb.PostProblemBundleUnconfirmedResponse:
+        def fn(tx: sqlite3.Connection) -> pb.PrepareProblemResponse:
             current_user = self._current_user_row(tx, context)
             self._require_author(current_user, context)
             try:
-                bundle = sign_problem_bundle_unconfirmed(
+                bundle = prepare_problem(
                     tx,
                     str(current_user["user_id"]),
-                    request.bundle,
+                    request.draft,
+                    request.action,
                     self._config.daycare_secret,
                     self._select_daycare_host,
+                    self._problem_type_files,
                 )
+            except ValueError as exc:
+                context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"invalid problem draft: {exc}")
             except Exception as exc:
-                context.abort(grpc.StatusCode.INTERNAL, f"db error posting problem bundle unconfirmed: {exc}")
-            return pb.PostProblemBundleUnconfirmedResponse(bundle=bundle)
+                context.abort(grpc.StatusCode.INTERNAL, f"db error preparing problem: {exc}")
+            return pb.PrepareProblemResponse(bundle=bundle)
 
         return self._with_tx(fn)
 
-    def rpc_problem_bundle_confirmed(
-        self, request: pb.PostProblemBundleConfirmedRequest, context: grpc.ServicerContext
-    ) -> pb.PostProblemBundleConfirmedResponse:
+    def rpc_save_problem(self, request: pb.SaveProblemRequest, context: grpc.ServicerContext) -> pb.SaveProblemResponse:
         if request is None or not request.HasField("bundle"):
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "bundle is required")
             raise AssertionError("unreachable")
 
-        def fn(tx: sqlite3.Connection) -> pb.PostProblemBundleConfirmedResponse:
+        def fn(tx: sqlite3.Connection) -> pb.SaveProblemResponse:
             current_user = self._current_user_row(tx, context)
             self._require_author(current_user, context)
             try:
-                bundle = save_problem_bundle_common(
+                bundle = save_problem(
                     tx,
                     str(current_user["user_id"]),
+                    request.mode,
                     request.bundle,
-                    self._config.daycare_secret,
                 )
+            except ValueError as exc:
+                context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"invalid problem save: {exc}")
             except Exception as exc:
-                context.abort(grpc.StatusCode.INTERNAL, f"db error posting problem bundle confirmed: {exc}")
-            return pb.PostProblemBundleConfirmedResponse(bundle=bundle)
+                context.abort(grpc.StatusCode.INTERNAL, f"db error saving problem: {exc}")
+            return pb.SaveProblemResponse(bundle=bundle)
 
         return self._with_tx(fn)
 
-    def rpc_update_problem_bundle(
-        self, request: pb.PutProblemBundleRequest, context: grpc.ServicerContext
-    ) -> pb.PutProblemBundleResponse:
+    def rpc_save_problem_set(
+        self, request: pb.SaveProblemSetRequest, context: grpc.ServicerContext
+    ) -> pb.SaveProblemSetResponse:
         if request is None or not request.HasField("bundle"):
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "bundle is required")
             raise AssertionError("unreachable")
 
-        def fn(tx: sqlite3.Connection) -> pb.PutProblemBundleResponse:
+        def fn(tx: sqlite3.Connection) -> pb.SaveProblemSetResponse:
             current_user = self._current_user_row(tx, context)
             self._require_author(current_user, context)
             try:
-                bundle = update_problem_bundle(
+                bundle = save_problem_set(
                     tx,
-                    str(current_user["user_id"]),
-                    request.problem_id,
+                    request.mode,
                     request.bundle,
-                    self._config.daycare_secret,
                 )
+            except ValueError as exc:
+                context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"invalid problem set save: {exc}")
             except Exception as exc:
-                context.abort(grpc.StatusCode.INTERNAL, f"db error putting problem bundle: {exc}")
-            return pb.PutProblemBundleResponse(bundle=bundle)
-
-        return self._with_tx(fn)
-
-    def rpc_create_problem_set_bundle(
-        self, request: pb.PostProblemSetBundleRequest, context: grpc.ServicerContext
-    ) -> pb.PostProblemSetBundleResponse:
-        if request is None or not request.HasField("bundle"):
-            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "bundle is required")
-            raise AssertionError("unreachable")
-
-        def fn(tx: sqlite3.Connection) -> pb.PostProblemSetBundleResponse:
-            try:
-                bundle = create_problem_set_bundle(tx, request.bundle)
-            except Exception as exc:
-                context.abort(grpc.StatusCode.INTERNAL, f"db error posting problem set bundle: {exc}")
-            return pb.PostProblemSetBundleResponse(bundle=bundle)
-
-        return self._with_tx(fn)
-
-    def rpc_update_problem_set_bundle(
-        self, request: pb.PutProblemSetBundleRequest, context: grpc.ServicerContext
-    ) -> pb.PutProblemSetBundleResponse:
-        if request is None or not request.HasField("bundle"):
-            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "bundle is required")
-            raise AssertionError("unreachable")
-
-        def fn(tx: sqlite3.Connection) -> pb.PutProblemSetBundleResponse:
-            try:
-                bundle = update_problem_set_bundle(tx, request.bundle)
-            except Exception as exc:
-                context.abort(grpc.StatusCode.INTERNAL, f"db error putting problem set bundle: {exc}")
-            return pb.PutProblemSetBundleResponse(bundle=bundle)
+                context.abort(grpc.StatusCode.INTERNAL, f"db error saving problem set: {exc}")
+            return pb.SaveProblemSetResponse(bundle=bundle)
 
         return self._with_tx(fn)
 
@@ -873,7 +771,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                         bundle.commit.assignment.problem_set_id,
                     ),
                 )
-            return pb.SaveGradedCommitResponse(commit=encode_signed_grading_commit(bundle, self._config.daycare_secret))
+            return pb.SaveGradedCommitResponse()
 
         response = self._with_tx(fn)
         if passback_target is not None:
@@ -886,9 +784,6 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
     # protobuf service interface mapping
     def Hello(self, request: pb.HelloRequest, context: grpc.ServicerContext) -> pb.HelloResponse:
         return self.rpc_hello(request, context)
-
-    def ListProblems(self, request: pb.ListProblemsRequest, context: grpc.ServicerContext) -> pb.ListProblemsResponse:
-        return self.rpc_list_problems(request, context)
 
     def ListAssignments(self, request: pb.ListAssignmentsRequest, context: grpc.ServicerContext) -> pb.ListAssignmentsResponse:
         return self.rpc_list_assignments(request, context)
@@ -910,22 +805,8 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
     def GetProblem(self, request: pb.GetProblemRequest, context: grpc.ServicerContext) -> pb.GetProblemResponse:
         return self.rpc_problem(request, context)
 
-    def GetProblemSteps(self, request: pb.GetProblemStepsRequest, context: grpc.ServicerContext) -> pb.GetProblemStepsResponse:
-        return self.rpc_problem_steps(request, context)
-
     def GetProblemStep(self, request: pb.GetProblemStepRequest, context: grpc.ServicerContext) -> pb.GetProblemStepResponse:
         return self.rpc_problem_step(request, context)
-
-    def GetProblemSets(self, request: pb.GetProblemSetsRequest, context: grpc.ServicerContext) -> pb.GetProblemSetsResponse:
-        return self.rpc_problem_sets(request, context)
-
-    def GetProblemSetProblems(
-        self, request: pb.GetProblemSetProblemsRequest, context: grpc.ServicerContext
-    ) -> pb.GetProblemSetProblemsResponse:
-        return self.rpc_problem_set_problems(request, context)
-
-    def GetCourse(self, request: pb.GetCourseRequest, context: grpc.ServicerContext) -> pb.GetCourseResponse:
-        return self.rpc_course(request, context)
 
     def GetUser(self, request: pb.GetUserRequest, context: grpc.ServicerContext) -> pb.GetUserResponse:
         return self.rpc_user(request, context)
@@ -941,28 +822,14 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
     ) -> pb.GetAssignmentStepFilesResponse:
         return self.rpc_assignment_step_files(request, context)
 
-    def PostProblemBundleUnconfirmed(
-        self, request: pb.PostProblemBundleUnconfirmedRequest, context: grpc.ServicerContext
-    ) -> pb.PostProblemBundleUnconfirmedResponse:
-        return self.rpc_problem_bundle_unconfirmed(request, context)
+    def PrepareProblem(self, request: pb.PrepareProblemRequest, context: grpc.ServicerContext) -> pb.PrepareProblemResponse:
+        return self.rpc_prepare_problem(request, context)
 
-    def PostProblemBundleConfirmed(
-        self, request: pb.PostProblemBundleConfirmedRequest, context: grpc.ServicerContext
-    ) -> pb.PostProblemBundleConfirmedResponse:
-        return self.rpc_problem_bundle_confirmed(request, context)
+    def SaveProblem(self, request: pb.SaveProblemRequest, context: grpc.ServicerContext) -> pb.SaveProblemResponse:
+        return self.rpc_save_problem(request, context)
 
-    def PutProblemBundle(self, request: pb.PutProblemBundleRequest, context: grpc.ServicerContext) -> pb.PutProblemBundleResponse:
-        return self.rpc_update_problem_bundle(request, context)
-
-    def PostProblemSetBundle(
-        self, request: pb.PostProblemSetBundleRequest, context: grpc.ServicerContext
-    ) -> pb.PostProblemSetBundleResponse:
-        return self.rpc_create_problem_set_bundle(request, context)
-
-    def PutProblemSetBundle(
-        self, request: pb.PutProblemSetBundleRequest, context: grpc.ServicerContext
-    ) -> pb.PutProblemSetBundleResponse:
-        return self.rpc_update_problem_set_bundle(request, context)
+    def SaveProblemSet(self, request: pb.SaveProblemSetRequest, context: grpc.ServicerContext) -> pb.SaveProblemSetResponse:
+        return self.rpc_save_problem_set(request, context)
 
     def SaveUngradedCommit(
         self, request: pb.SaveUngradedCommitRequest, context: grpc.ServicerContext

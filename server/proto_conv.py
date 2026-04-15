@@ -148,7 +148,6 @@ def problem_step_row_to_pb(row: Any) -> pb.ProblemStep:
         step=int(row["step_number"]),
         problem_type=str(row["problem_type"]),
         note=str(row["step_note"]),
-        instructions=str(row["step_instructions"]),
         weight=float(row["step_weight"]),
         whitelist={str(k): bool(v) for k, v in whitelist.items()},
     )

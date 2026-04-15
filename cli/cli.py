@@ -288,7 +288,6 @@ def gather_student(config: Config, session: Session, start_dir: Path) -> tuple[p
             step_files[str(Path(name))] = contents
     for name, contents in problem_type.files.items():
         step_files[str(Path(name))] = contents
-    step_files[str(Path("doc") / "index.html")] = step.instructions.encode("utf-8")
     update_files(problem_dir, step_files, None, True)
 
     commit = _build_commit_from_disk(
@@ -578,9 +577,10 @@ def command_grade(args: argparse.Namespace) -> None:
             pb.SaveGradedCommitRequest(commit=graded),
             grpc_metadata(config.cookie),
         )
-        saved = pb.GradingCommit()
-        saved.ParseFromString(saved_resp.commit.commit)
-        saved_commit = saved.commit
+        _ = saved_resp
+        graded_bundle = pb.GradingCommit()
+        graded_bundle.ParseFromString(graded.commit)
+        saved_commit = graded_bundle.commit
 
         if saved_commit.HasField("report_card") and saved_commit.report_card.passed and saved_commit.score == 1.0:
             print(f"step {saved_commit.step} passed")
@@ -950,29 +950,6 @@ def download_student_assignment(config: Config, session: Session, assignment_key
         subprocess.run(["rm", "-rf", str(root_dir)], check=False)
 
 
-def parse_gitignore(content: str) -> list[str]:
-    patterns: list[str] = []
-    for line in content.splitlines():
-        text = line.strip()
-        if not text or text.startswith("#"):
-            continue
-        patterns.append(text)
-    return patterns
-
-
-def match_pattern(pattern: str, path: str) -> bool:
-    if pattern.endswith("/"):
-        needle = pattern.removesuffix("/")
-        return path.startswith(needle + "/") or path == needle
-    if pattern.startswith("*"):
-        return path.endswith(pattern.removeprefix("*"))
-    return path == pattern
-
-
-def is_ignored(path: str, patterns: list[str]) -> bool:
-    return any(match_pattern(pattern, path) for pattern in patterns)
-
-
 def parse_problem_cfg(path: Path) -> ProblemCfg:
     sections = parse_gcfg(path)
     problem_section = get_first_section(sections, "problem")
@@ -1095,13 +1072,10 @@ def find_problem_cfg(now, start_dir: Path) -> tuple[Path, Path, int, pb.Problem 
 
 
 def gather_author(
-    config: Config,
-    session: Session,
     now,
-    is_update: bool,
     action: str,
     start_dir: Path,
-) -> tuple[pb.ProblemBundle, Path, int]:
+) -> tuple[pb.AuthorProblemDraft, Path, int]:
     directory, step_dir, step_num, problem, steps, single = find_problem_cfg(now, start_dir)
     if problem is None:
         fail(f"unable to find {PROBLEM_CONFIG_NAME} in current directory or one of its ancestors\n   you must run this in a problem directory")
@@ -1117,177 +1091,78 @@ def gather_author(
     if directory.name != problem.problem_id:
         fail("the problem directory name must match the problem unique ID")
 
-    problem_types: dict[str, pb.ProblemType] = {}
-    for step in steps:
-        if step.problem_type not in problem_types:
-            response = _rpc_call(
-                config,
-                "GetProblemType",
-                session.stub.GetProblemType,
-                pb.GetProblemTypeRequest(problem_type=step.problem_type),
-                grpc_metadata(config.cookie),
-            )
-            problem_types[step.problem_type] = response.problem_type
+    def report_whitespace_issues(path_label: str, content: bytes) -> None:
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError:
+            return
+        issues: list[str] = []
+        if "\r" in text:
+            issues.append("non-Unix line endings")
+        if text != "" and not text.endswith("\n"):
+            issues.append("missing final newline")
+        if any(line.endswith(" ") for line in text.splitlines()):
+            issues.append("trailing spaces")
+        if issues:
+            print(f"warning: {path_label} has {', '.join(issues)}")
 
-    unsigned = pb.ProblemBundle(problem=problem)
+    def gather_step_tree(step_directory: Path, step_index: int) -> tuple[list[pb.AuthorFile], list[pb.AuthorFile]]:
+        if not step_directory.is_dir():
+            fail(f"missing step directory {step_directory}")
+        authored_files: list[pb.AuthorFile] = []
+        starter_files: list[pb.AuthorFile] = []
+        for path in sorted(step_directory.rglob("*")):
+            rel = path.relative_to(step_directory)
+            if path.is_dir():
+                continue
+            rel_posix = rel.as_posix()
+            if single and rel_posix == PROBLEM_CONFIG_NAME:
+                continue
+            parts = rel.parts
+            if parts[0] == "_solution":
+                fail("legacy _solution authoring layout is no longer supported")
+            content = path.read_bytes()
+            if parts[0] == "_starter":
+                if len(parts) == 1:
+                    fail("_starter must be a directory")
+                logical_path = Path(*parts[1:]).as_posix()
+                report_whitespace_issues(f"step {step_index} file _starter/{logical_path}", content)
+                starter_files.append(pb.AuthorFile(path=logical_path, content=content))
+                continue
+            report_whitespace_issues(f"step {step_index} file {rel_posix}", content)
+            authored_files.append(pb.AuthorFile(path=rel_posix, content=content))
+        return authored_files, starter_files
 
-    existing_resp = _rpc_call(
-        config,
-        "GetProblems",
-        session.stub.GetProblems,
-        pb.GetProblemsRequest(problem_id=problem.problem_id),
-        grpc_metadata(config.cookie),
+    draft = pb.AuthorProblemDraft(
+        problem_id=problem.problem_id,
+        problem_note=problem.problem_note,
+        problem_tags=problem.problem_tags,
+        problem_options=problem.problem_options,
     )
-    existing = list(existing_resp.problems)
-    if len(existing) == 0:
-        if is_update:
-            fail(f"you specified --update, but no existing problem with unique ID {problem.problem_id!r} was found")
-        existing_sets_resp = _rpc_call(
-            config,
-            "GetProblemSets",
-            session.stub.GetProblemSets,
-            pb.GetProblemSetsRequest(problem_set_id=problem.problem_id),
-            grpc_metadata(config.cookie),
-        )
-        existing_sets = list(existing_sets_resp.problem_sets)
-        if len(existing_sets) > 1:
-            fail(f"error: server found multiple problem sets with matching unique ID {problem.problem_id!r}")
-        if len(existing_sets) == 1:
-            fail(
-                f"problem set {existing_sets[0].problem_set_id} already exists with matching ID\n"
-                "  this would prevent creating a problem set containing just this problem with matching id"
-            )
-        print(f"problem ID is {problem.problem_id!r}")
-        print("  this problem is new--no existing problem has the same unique ID")
-    elif len(existing) == 1:
-        if action == "" and not is_update:
-            fail(f"you did not specify --update, but a problem already exists with unique ID {problem.problem_id!r}")
-        print(f"problem ID is {problem.problem_id!r}")
-        print(f"  this is an update of problem {existing[0].problem_id}")
-        print(f"  ({existing[0].problem_note!r})")
-        problem.problem_id = existing[0].problem_id
-        problem.created_at.CopyFrom(existing[0].created_at)
-    else:
-        fail(f"error: server found multiple problems with matching unique ID {problem.problem_id!r}")
 
-    whitelist: dict[str, bool] = {}
     for idx, step in enumerate(steps, start=1):
         print(f"gathering step {idx}")
-        commit = pb.Commit(
-            step=idx,
-            action="grade" if action == "" else action,
-            note="author solution submitted via grind"
-            if action == ""
-            else f"author solution tested with action {action} via grind",
-            files={},
-        )
-        _set_proto_timestamp(commit.created_at, now)
-        _set_proto_timestamp(commit.updated_at, now)
-
-        starter: dict[str, bytes] = {}
-        solution: dict[str, bytes] = {}
-        root: dict[str, bytes] = {}
         step_directory = directory if single else directory / str(idx)
-
-        gitignore = problem_types[step.problem_type].files.get(".gitignore", b"")
-        patterns = parse_gitignore(gitignore.decode("utf-8", errors="replace"))
-
-        for path in step_directory.rglob("*"):
-            rel = path.relative_to(step_directory).as_posix()
-            if path.is_dir():
-                if is_ignored(rel, patterns):
-                    print(f"  skipping directory {rel}")
-                    continue
-                continue
-            if single and rel == PROBLEM_CONFIG_NAME:
-                continue
-            if rel in problem_types[step.problem_type].files:
-                print(f"  skipping file {rel}")
-                print("    because it is provided by the problem type")
-                continue
-            if is_ignored(rel, patterns):
-                print(f"  skipping file {rel}")
-                print("    because it matches .gitignore pattern")
-                continue
-
-            contents = path.read_bytes()
-            parts = rel.split("/", 1)
-            if len(parts) == 2 and parts[0] == "_solution":
-                solution[parts[1]] = contents
-            elif len(parts) == 2 and parts[0] == "_starter":
-                starter[parts[1]] = contents
-            else:
-                root[rel] = contents
-
-        if solution and not starter:
-            for name in list(solution.keys()):
-                if name in root:
-                    starter[name] = root.pop(name)
-                    whitelist[name] = True
-                elif name not in whitelist:
-                    fail(f"found {name} in the solution, but no matching starter file")
-            for name in whitelist:
-                if name in root:
-                    fail(f"found {name} outside the _solution directory")
-        elif starter and not solution:
-            for name in starter:
-                whitelist[name] = True
-            for name in whitelist:
-                if name in root:
-                    solution[name] = root.pop(name)
-        elif starter and solution:
-            for name in starter:
-                whitelist[name] = True
-            for name in whitelist:
-                if name in root:
-                    fail(f"found {name} outside the _solution and _starter directories")
-        elif idx > 1:
-            for name in whitelist:
-                if name in root:
-                    solution[name] = root.pop(name)
-        else:
-            fail("must have solution files and starter files")
-
-        for name, contents in root.items():
-            step.files[name] = contents
-        for name, contents in starter.items():
-            step.files[name] = contents
-
-        step.whitelist.clear()
-        for name in whitelist:
-            step.whitelist[name] = True
-
-        unused = dict(whitelist)
-        for name, contents in solution.items():
-            if name in whitelist:
-                commit.files[name] = contents
-                unused.pop(name, None)
-            else:
-                print(f"  warning: skipping solution file {name!r}")
-                print("    because it is not in the starter file set of this or any previous step")
-
-        if unused:
-            lines = ["  example solution must include all files in the starter set"]
-            if idx > 1:
-                lines.append("  from this and previous steps")
-            lines.extend(f"    solution is missing file {name}" for name in unused)
-            fail("\n".join(lines) + "\nsolution rejected, please update and try again")
-
-        unsigned.problem_steps.append(step)
-        unsigned.commits.append(commit)
+        authored_files, starter_files = gather_step_tree(step_directory, idx)
+        draft.steps.append(
+            pb.AuthorProblemStepDraft(
+                step_number=idx,
+                note=step.note,
+                problem_type=step.problem_type,
+                weight=step.weight,
+                files=authored_files,
+                starter_files=starter_files,
+            )
+        )
         print(
-            f"  found {len(step.files)} problem definition file{plural(len(step.files))} "
-            f"and {len(commit.files)} solution file{plural(len(commit.files))}"
+            f"  found {len(authored_files)} authored file{plural(len(authored_files))} "
+            f"and {len(starter_files)} starter file{plural(len(starter_files))}"
         )
 
-    if action:
-        if not single and (step_dir == directory or step_num < 1):
-            fail("to run an action, you must be in a step directory")
-        problem_type = problem_types[steps[0].problem_type if single else steps[step_num - 1].problem_type]
-        if action not in problem_type.actions:
-            fail(f"action {action!r} does not exist for problem type {problem_type.problem_type}")
+    if action and not single and (step_dir == directory or step_num < 1):
+        fail("to run an action, you must be in a step directory")
 
-    return unsigned, step_dir, step_num
+    return draft, step_dir, step_num
 
 
 def create_problem_set(config: Config, session: Session, path: Path, is_update: bool) -> None:
@@ -1306,30 +1181,6 @@ def create_problem_set(config: Config, session: Session, path: Path, is_update: 
         fail("the problem set file name must match the problem set unique ID")
 
     bundle = pb.ProblemSetBundle(problem_set=problem_set)
-
-    existing_resp = _rpc_call(
-        config,
-        "GetProblemSets",
-        session.stub.GetProblemSets,
-        pb.GetProblemSetsRequest(problem_set_id=problem_set.problem_set_id),
-        grpc_metadata(config.cookie),
-    )
-    existing = list(existing_resp.problem_sets)
-    if len(existing) == 0:
-        if is_update:
-            fail(f"you specified --update, but no existing problem set with unique ID {problem_set.problem_set_id!r} was found")
-        print(f"problem set ID is {problem_set.problem_set_id!r}")
-        print("  this problem set is new--no existing problem set has the same unique ID")
-    elif len(existing) == 1:
-        if not is_update:
-            fail(f"you did not specify --update, but a problem set already exists with unique ID {problem_set.problem_set_id!r}")
-        print(f"problem set ID is {problem_set.problem_set_id!r}")
-        print(f"  this is an update of problem set {existing[0].problem_set_id}")
-        print(f"  ({existing[0].problem_set_note!r})")
-        problem_set.problem_set_id = existing[0].problem_set_id
-        problem_set.created_at.CopyFrom(existing[0].created_at)
-    else:
-        fail(f"error: server found multiple problems with matching unique ID {problem_set.problem_set_id!r}")
 
     if not cfg.problems:
         fail("a problem set must contain at least one problem")
@@ -1351,24 +1202,18 @@ def create_problem_set(config: Config, session: Session, path: Path, is_update: 
             pb.ProblemSetProblem(problem_id=problems[0].problem_id, weight=weight if weight > 0.0 else 1.0)
         )
 
-    if len(existing) == 0:
-        final = _rpc_call(
-            config,
-            "PostProblemSetBundle",
-            session.stub.PostProblemSetBundle,
-            pb.PostProblemSetBundleRequest(bundle=bundle),
-            grpc_metadata(config.cookie),
-        )
-        print(f"problem set {final.bundle.problem_set.problem_set_id!r} created and ready to use")
-    else:
-        final = _rpc_call(
-            config,
-            "PutProblemSetBundle",
-            session.stub.PutProblemSetBundle,
-            pb.PutProblemSetBundleRequest(bundle=bundle),
-            grpc_metadata(config.cookie),
-        )
+    mode = pb.SAVE_MODE_UPDATE if is_update else pb.SAVE_MODE_CREATE
+    final = _rpc_call(
+        config,
+        "SaveProblemSet",
+        session.stub.SaveProblemSet,
+        pb.SaveProblemSetRequest(mode=mode, bundle=bundle),
+        grpc_metadata(config.cookie),
+    )
+    if is_update:
         print(f"problem set {final.bundle.problem_set.problem_set_id!r} saved and ready to use")
+    else:
+        print(f"problem set {final.bundle.problem_set.problem_set_id!r} created and ready to use")
 
 
 def command_create(args: argparse.Namespace) -> None:
@@ -1394,14 +1239,13 @@ def command_create(args: argparse.Namespace) -> None:
         if is_update and action:
             fail("you specified --update, which is not valid when running an action")
 
-        unsigned, step_dir, step_num = gather_author(config, session, now, is_update, action, Path("."))
-        unsigned.user_id = session.user.user_id
+        draft, step_dir, step_num = gather_author(now, action, Path("."))
 
         signed_resp = _rpc_call(
             config,
-            "PostProblemBundleUnconfirmed",
-            session.stub.PostProblemBundleUnconfirmed,
-            pb.PostProblemBundleUnconfirmedRequest(bundle=unsigned),
+            "PrepareProblem",
+            session.stub.PrepareProblem,
+            pb.PrepareProblemRequest(draft=draft, action=action),
             grpc_metadata(config.cookie),
         )
         signed = signed_resp.bundle
@@ -1442,26 +1286,21 @@ def command_create(args: argparse.Namespace) -> None:
 
         print("problem and solution confirmed successfully")
 
-        if not is_update:
-            final_resp = _rpc_call(
-                config,
-                "PostProblemBundleConfirmed",
-                session.stub.PostProblemBundleConfirmed,
-                pb.PostProblemBundleConfirmedRequest(bundle=signed),
-                grpc_metadata(config.cookie),
-            )
-            final = final_resp.bundle
-            print(f"problem {final.problem.problem_id!r} created and ready to use")
-        else:
-            final_resp = _rpc_call(
-                config,
-                "PutProblemBundle",
-                session.stub.PutProblemBundle,
-                pb.PutProblemBundleRequest(problem_id=signed.problem.problem_id, bundle=signed),
-                grpc_metadata(config.cookie),
-            )
-            final = final_resp.bundle
+        final_resp = _rpc_call(
+            config,
+            "SaveProblem",
+            session.stub.SaveProblem,
+            pb.SaveProblemRequest(
+                mode=pb.SAVE_MODE_UPDATE if is_update else pb.SAVE_MODE_CREATE,
+                bundle=signed,
+            ),
+            grpc_metadata(config.cookie),
+        )
+        final = final_resp.bundle
+        if is_update:
             print(f"problem {final.problem.problem_id!r} saved and ready to use")
+        else:
+            print(f"problem {final.problem.problem_id!r} created and ready to use")
 
 
 def _build_parser() -> argparse.ArgumentParser:

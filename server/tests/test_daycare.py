@@ -167,7 +167,6 @@ def _build_signed_request(
         step=1,
         problem_type="python3unittest",
         note="step note",
-        instructions="step instructions",
         weight=1.0,
         files={"template.txt": b"tmpl\n"},
         whitelist={"main.py": True},

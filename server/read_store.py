@@ -1,17 +1,16 @@
 from __future__ import annotations
 
-import json
 import sqlite3
 from pathlib import Path
 from typing import Any, Callable
 
 import codegrinder_pb2 as pb
+from problem_files import ProblemStepFileType
 from proto_conv import (
     assignment_list_item_row_to_pb,
     assignment_row_to_pb,
     course_row_to_pb,
     problem_row_to_pb,
-    problem_set_problem_row_to_pb,
     problem_set_row_to_pb,
     problem_step_row_to_pb,
     user_row_to_pb,
@@ -216,28 +215,6 @@ def load_commit_files(
     return {str(row["path"]): bytes(row["content"] or b"") for row in rows}
 
 
-def _student_owned_paths_for_step(conn: sqlite3.Connection, problem_id: str, step_number: int) -> list[str]:
-    row = _q1(
-        conn,
-        "SELECT whitelist FROM problem_step_whitelist WHERE problem_id = ? AND step_number = ?",
-        (problem_id, step_number),
-    )
-    raw = row["whitelist"]
-    if raw is None:
-        return []
-    if isinstance(raw, bytes):
-        text = raw.decode("utf-8")
-    else:
-        text = str(raw)
-    try:
-        loaded = json.loads(text)
-    except json.JSONDecodeError:
-        loaded = {}
-    if not isinstance(loaded, dict):
-        return []
-    return sorted(str(key) for key in loaded.keys())
-
-
 def _starter_student_files(
     conn: sqlite3.Connection,
     user_id: str,
@@ -245,8 +222,7 @@ def _starter_student_files(
     problem_set_id: str,
     problem_id: str,
     step_number: int,
-    step_files: dict[str, bytes],
-    student_owned_paths: set[str],
+    starter_files: dict[str, bytes],
 ) -> dict[str, bytes]:
     files: dict[str, bytes] = {}
     if step_number > 1:
@@ -265,24 +241,20 @@ def _starter_student_files(
                 str(prev["problem_id"]),
                 int(prev["step_number"]),
             )
-    for path, content in step_files.items():
-        if path in student_owned_paths:
-            files[path] = content
+        else:
+            files = load_problem_step_files(conn, problem_id, step_number - 1, ProblemStepFileType.SOLUTION)
+    for path, content in starter_files.items():
+        files[path] = content
     return files
 
 
 def _system_owned_files_for_step(
     load_problem_type_files: Callable[[str], dict[str, bytes]],
     problem_type: str,
-    step_instructions: str,
     step_files: dict[str, bytes],
-    student_owned_paths: set[str],
 ) -> dict[str, bytes]:
     files: dict[str, bytes] = {}
-    for path, content in step_files.items():
-        if path not in student_owned_paths:
-            files[path] = content
-    files["doc/index.html"] = step_instructions.encode("utf-8")
+    files.update(step_files)
     for path, content in load_problem_type_files(problem_type).items():
         files[str(Path(path))] = content
     return files
@@ -445,14 +417,12 @@ def get_assignment_step_files_pb(
         (problem_id,),
     )
     total_steps = max(1, int(total_steps_row["total_steps"] or 0))
-    step_files = load_problem_step_files(conn, problem_id, resolved_step_number)
-    student_owned_paths = set(_student_owned_paths_for_step(conn, problem_id, resolved_step_number))
+    step_files = load_problem_step_files(conn, problem_id, resolved_step_number, ProblemStepFileType.REGULAR)
+    starter_files = load_problem_step_files(conn, problem_id, resolved_step_number, ProblemStepFileType.STARTER)
     system_owned_files = _system_owned_files_for_step(
         load_problem_type_files,
         str(step_row["problem_type"]),
-        str(step_row["step_instructions"]),
         step_files,
-        student_owned_paths,
     )
     student_owned_files: dict[str, bytes]
     if reset_to_step_start:
@@ -463,8 +433,7 @@ def get_assignment_step_files_pb(
             assignment.problem_set_id,
             problem_id,
             resolved_step_number,
-            step_files,
-            student_owned_paths,
+            starter_files,
         )
     else:
         commit_row = conn.execute(
@@ -481,8 +450,7 @@ def get_assignment_step_files_pb(
                 assignment.problem_set_id,
                 problem_id,
                 resolved_step_number,
-                step_files,
-                student_owned_paths,
+                starter_files,
             )
         else:
             student_owned_files = load_commit_files(
@@ -565,45 +533,16 @@ def get_problem_pb(conn: sqlite3.Connection, current_user: sqlite3.Row, problem_
     return problem_row_to_pb(get_problem_row(conn, current_user, problem_id))
 
 
-def get_problem_steps_pb(conn: sqlite3.Connection, current_user: sqlite3.Row, problem_id: str) -> list[pb.ProblemStep]:
-    if bool(current_user["author"]):
-        rows = _q(
-            conn,
-            "SELECT problem_steps.*, problem_step_whitelist.whitelist FROM problem_steps "
-            "NATURAL JOIN problem_step_whitelist "
-            "WHERE problem_steps.problem_id = ? ORDER BY problem_steps.step_number",
-            (problem_id,),
-        )
-    else:
-        rows = _q(
-            conn,
-            "SELECT problem_steps.*, problem_step_whitelist.whitelist FROM problem_steps "
-            "NATURAL JOIN problem_step_whitelist "
-            "NATURAL JOIN user_problems "
-            "WHERE user_problems.user_id = ? AND user_problems.problem_id = ? ORDER BY problem_steps.step_number",
-            (str(current_user["user_id"]), problem_id),
-        )
-    if len(rows) == 0:
-        raise sqlite3.Error("not found")
-    out: list[pb.ProblemStep] = []
-    for row in rows:
-        step = problem_step_row_to_pb(row)
-        if not bool(current_user["author"]):
-            step.solution.clear()
-        out.append(step)
-    return out
-
-
-def load_problem_step_files(conn: sqlite3.Connection, problem_id: str, step: int) -> dict[str, bytes]:
-    rows = _q(conn, "SELECT path, content FROM problem_step_files WHERE problem_id = ? AND step_number = ?", (problem_id, step))
-    return {str(row["path"]): bytes(row["content"] or b"") for row in rows}
-
-
-def load_problem_step_solution(conn: sqlite3.Connection, problem_id: str, step: int) -> dict[str, bytes]:
+def load_problem_step_files(
+    conn: sqlite3.Connection,
+    problem_id: str,
+    step: int,
+    file_type: ProblemStepFileType,
+) -> dict[str, bytes]:
     rows = _q(
         conn,
-        "SELECT path, content FROM problem_step_solution_files WHERE problem_id = ? AND step_number = ?",
-        (problem_id, step),
+        "SELECT path, content FROM problem_step_files WHERE problem_id = ? AND step_number = ? AND file_type = ?",
+        (problem_id, step, file_type.value),
     )
     return {str(row["path"]): bytes(row["content"] or b"") for row in rows}
 
@@ -627,43 +566,11 @@ def get_problem_step_pb(conn: sqlite3.Connection, current_user: sqlite3.Row, pro
             (str(current_user["user_id"]), problem_id, step_no),
         )
     step = problem_step_row_to_pb(row)
-    step.files.update(load_problem_step_files(conn, problem_id, step_no))
+    step.files.update(load_problem_step_files(conn, problem_id, step_no, ProblemStepFileType.REGULAR))
+    step.starter_files.update(load_problem_step_files(conn, problem_id, step_no, ProblemStepFileType.STARTER))
     if bool(current_user["author"]):
-        step.solution.update(load_problem_step_solution(conn, problem_id, step_no))
+        step.solution.update(load_problem_step_files(conn, problem_id, step_no, ProblemStepFileType.SOLUTION))
     return step
-
-
-def get_problem_sets_pb(
-    conn: sqlite3.Connection,
-    current_user: sqlite3.Row,
-    problem_set_id: str,
-    note: str,
-    search: list[str],
-) -> list[pb.ProblemSet]:
-    where = ""
-    args: list[Any] = []
-    search_flag = False
-    for term in search:
-        where, args = add_where_like(where, args, "problem_set_search_fields.search_text", term)
-        search_flag = True
-    if problem_set_id != "":
-        where, args = add_where_eq(where, args, "problem_sets.problem_set_id", problem_set_id)
-    if note != "":
-        where, args = add_where_like(where, args, "problem_sets.problem_set_note", note)
-    if bool(current_user["author"]):
-        query = "SELECT problem_sets.* FROM problem_sets"
-        if search_flag:
-            query += " NATURAL JOIN problem_set_search_fields"
-        query += where + " ORDER BY problem_sets.problem_set_id"
-        rows = _q(conn, query, tuple(args))
-    else:
-        where, args = add_where_eq(where, args, "user_problem_sets.user_id", str(current_user["user_id"]))
-        query = "SELECT problem_sets.* FROM problem_sets NATURAL JOIN user_problem_sets"
-        if search_flag:
-            query += " NATURAL JOIN problem_set_search_fields"
-        query += where + " ORDER BY problem_sets.problem_set_id"
-        rows = _q(conn, query, tuple(args))
-    return [problem_set_row_to_pb(row) for row in rows]
 
 
 def get_problem_set_pb(conn: sqlite3.Connection, current_user: sqlite3.Row, problem_set_id: str) -> pb.ProblemSet:
@@ -677,21 +584,6 @@ def get_problem_set_pb(conn: sqlite3.Connection, current_user: sqlite3.Row, prob
             (str(current_user["user_id"]), problem_set_id),
         )
     return problem_set_row_to_pb(row)
-
-
-def get_problem_set_problems_pb(conn: sqlite3.Connection, current_user: sqlite3.Row, problem_set_id: str) -> list[pb.ProblemSetProblem]:
-    if bool(current_user["author"]):
-        rows = _q(conn, "SELECT * FROM problem_set_problems WHERE problem_set_id = ? ORDER BY problem_id", (problem_set_id,))
-    else:
-        rows = _q(
-            conn,
-            "SELECT problem_set_problems.* FROM problem_set_problems NATURAL JOIN user_problem_sets "
-            "WHERE user_problem_sets.user_id = ? AND problem_set_problems.problem_set_id = ? ORDER BY problem_id",
-            (str(current_user["user_id"]), problem_set_id),
-        )
-    if len(rows) == 0:
-        raise sqlite3.Error("not found")
-    return [problem_set_problem_row_to_pb(row) for row in rows]
 
 
 def search_problem_catalog_pb(
@@ -796,21 +688,6 @@ def search_problem_catalog_pb(
         step.step_weight = int(row["step_weight"])
 
     return pb.SearchProblemCatalogResponse(problem_sets=set_items)
-
-
-def get_list_problems_bundle(
-    conn: sqlite3.Connection, user_id: str, current_user: sqlite3.Row, ip_allowed: bool
-) -> tuple[pb.User, list[pb.Assignment], list[pb.Course], list[pb.ProblemSet]]:
-    user_pb = user_row_to_pb(current_user)
-    assignments = get_user_assignments_pb(conn, current_user, user_id, ip_allowed)
-    course_map: dict[str, pb.Course] = {}
-    problem_set_map: dict[str, pb.ProblemSet] = {}
-    for asst in assignments:
-        if asst.course_id not in course_map:
-            course_map[asst.course_id] = get_course_pb(conn, current_user, asst.course_id)
-        if asst.problem_set_id not in problem_set_map:
-            problem_set_map[asst.problem_set_id] = get_problem_set_pb(conn, current_user, asst.problem_set_id)
-    return user_pb, assignments, list(course_map.values()), list(problem_set_map.values())
 
 
 def problem_type_pb(problem_type: str, container: str, files: dict[str, bytes], action_rows: list[sqlite3.Row]) -> pb.ProblemType:
