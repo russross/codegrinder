@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from cli import gather_author
+from authoring import gather_author
 from errors import CliError
 
 

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from cli import parse_problem_cfg, parse_problem_set_cfg
+from author_config import parse_author_problem_config, parse_author_problem_set_config
 from errors import CliError
 
 
@@ -29,7 +29,7 @@ type = python3unittest
         encoding="utf-8",
     )
 
-    parsed = parse_problem_cfg(cfg)
+    parsed = parse_author_problem_config(cfg)
     assert parsed.problem_id == "loops-1"
     assert len(parsed.steps) == 2
     assert parsed.steps[0].weight == 0.5
@@ -54,7 +54,7 @@ type = cppunittest
     )
 
     with pytest.raises(CliError) as err:
-        parse_problem_cfg(cfg)
+        parse_author_problem_config(cfg)
     assert "problem type must be specified" in str(err.value)
 
 
@@ -76,7 +76,7 @@ weight = 2.5
         encoding="utf-8",
     )
 
-    parsed = parse_problem_set_cfg(cfg)
+    parsed = parse_author_problem_set_config(cfg)
     assert parsed.problem_set_id == "cs1400-ps1"
     assert parsed.problems["p-one"] == 2.5
     assert parsed.problems["p-two"] == 1.0

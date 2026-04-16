@@ -8,6 +8,16 @@
 - Preserve `session_cookie` request fields where they help future web-gRPC integration, even if the current Python gRPC path authenticates through metadata instead
 
 
+# CLI Config
+
+- CLI config uses XDG conventions: `$XDG_CONFIG_HOME/codegrinder/config.toml`, defaulting to `~/.config/codegrinder/config.toml`.
+- Do not use legacy `~/.codegrinderrc` or `~/.codegrinderinstructor` files.
+- The config file is TOML and is created on login.
+- Login updates only the auth cookie/token and server URL; preserve user-editable settings such as workspace root and instructor mode when the file already exists.
+- The workspace root setting controls where per-course assignment directories are created. Default it to `$HOME` and explicitly write that default to the config file.
+- Instructor mode is an optional TOML boolean line. Omit it for normal student configs; missing means `false`.
+
+
 # Protocol Naming
 
 - Use `Get` for single-item reads, `List` for plural reads, and `Search` for query-style discovery.

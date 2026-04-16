@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import codegrinder_pb2 as pb
 
-from author_config import PROBLEM_CONFIG_NAME, parse_author_problem_config, parse_author_problem_set_config
+from author_config import AuthorProblemConfig, PROBLEM_CONFIG_NAME, parse_author_problem_config, parse_author_problem_set_config
 from errors import fail
-from helpers import grpc_metadata, grpc_time_now, plural
-from models import Config
+from helpers import grpc_time_now, plural
+from rpc_client import CodeGrinderClient
 
 
 def _set_proto_timestamp(target: object, now) -> None:
@@ -17,48 +18,39 @@ def _set_proto_timestamp(target: object, now) -> None:
     setattr(target, "nanos", nanos)
 
 
-def find_problem_cfg(now, start_dir: Path) -> tuple[Path, Path, int, pb.Problem | None, list[pb.ProblemStep], bool]:
+@dataclass(slots=True)
+class AuthorProblemLayout:
+    root_dir: Path
+    active_step_dir: Path
+    active_step_number: int
+    config: AuthorProblemConfig
+
+
+def resolve_author_problem_layout(start_dir: Path) -> AuthorProblemLayout | None:
     directory = start_dir.resolve()
     step_dir = directory
-    step_num = 0
     while not (directory / PROBLEM_CONFIG_NAME).exists():
         step_dir = directory
         parent = directory.parent
         if parent == directory:
-            return Path(""), Path(""), 0, None, [], False
+            return None
         directory = parent
 
-    cfg = parse_author_problem_config(directory / PROBLEM_CONFIG_NAME)
-    problem = pb.Problem(
-        problem_id=cfg.problem_id,
-        problem_note=cfg.note,
-        problem_tags=cfg.tags,
-        problem_options=cfg.options,
-    )
-    _set_proto_timestamp(problem.created_at, now)
-    _set_proto_timestamp(problem.updated_at, now)
-
-    single = cfg.single_step_layout
-    steps: list[pb.ProblemStep] = []
-    for idx, step_cfg in enumerate(cfg.steps, start=1):
-        steps.append(
-            pb.ProblemStep(
-                step=idx,
-                note=step_cfg.note,
-                problem_type=step_cfg.problem_type,
-                weight=step_cfg.weight,
-                files={},
-            )
-        )
-
-    if single:
+    config = parse_author_problem_config(directory / PROBLEM_CONFIG_NAME)
+    if config.single_step_layout:
         step_num = 1
     elif step_dir != directory and step_dir.name.isdigit():
         n = int(step_dir.name)
-        if 1 <= n <= len(steps):
-            step_num = n
+        step_num = n if 1 <= n <= len(config.steps) else 0
+    else:
+        step_num = 0
 
-    return directory, step_dir, step_num, problem, steps, single
+    return AuthorProblemLayout(
+        root_dir=directory,
+        active_step_dir=step_dir,
+        active_step_number=step_num,
+        config=config,
+    )
 
 
 def gather_author(
@@ -66,11 +58,17 @@ def gather_author(
     action: str,
     start_dir: Path,
 ) -> tuple[pb.AuthorProblemDraft, Path, int]:
-    directory, step_dir, step_num, problem, steps, single = find_problem_cfg(now, start_dir)
-    if problem is None:
+    _ = now
+    layout = resolve_author_problem_layout(start_dir)
+    if layout is None:
         fail(f"unable to find {PROBLEM_CONFIG_NAME} in current directory or one of its ancestors\n   you must run this in a problem directory")
 
-    if single and (directory / "1").is_dir():
+    directory = layout.root_dir
+    step_dir = layout.active_step_dir
+    step_num = layout.active_step_number
+    config = layout.config
+
+    if config.single_step_layout and (directory / "1").is_dir():
         fail(
             f"{PROBLEM_CONFIG_NAME} is set up for a single-step problem with the step files in\n"
             f"  the same directory as {PROBLEM_CONFIG_NAME}, but there is also a directory named '1'\n"
@@ -78,7 +76,7 @@ def gather_author(
             "  into the main directory and delete the '1' directory"
         )
 
-    if directory.name != problem.problem_id:
+    if directory.name != config.problem_id:
         fail("the problem directory name must match the problem unique ID")
 
     def report_whitespace_issues(path_label: str, content: bytes) -> None:
@@ -106,7 +104,7 @@ def gather_author(
             if path.is_dir():
                 continue
             rel_posix = rel.as_posix()
-            if single and rel_posix == PROBLEM_CONFIG_NAME:
+            if config.single_step_layout and rel_posix == PROBLEM_CONFIG_NAME:
                 continue
             parts = rel.parts
             if parts[0] == "_solution":
@@ -124,15 +122,15 @@ def gather_author(
         return authored_files, starter_files
 
     draft = pb.AuthorProblemDraft(
-        problem_id=problem.problem_id,
-        problem_note=problem.problem_note,
-        problem_tags=problem.problem_tags,
-        problem_options=problem.problem_options,
+        problem_id=config.problem_id,
+        problem_note=config.note,
+        problem_tags=config.tags,
+        problem_options=config.options,
     )
 
-    for idx, step in enumerate(steps, start=1):
+    for idx, step in enumerate(config.steps, start=1):
         print(f"gathering step {idx}")
-        step_directory = directory if single else directory / str(idx)
+        step_directory = directory if config.single_step_layout else directory / str(idx)
         authored_files, starter_files = gather_step_tree(step_directory, idx)
         draft.steps.append(
             pb.AuthorProblemStepDraft(
@@ -149,13 +147,13 @@ def gather_author(
             f"and {len(starter_files)} starter file{plural(len(starter_files))}"
         )
 
-    if action and not single and (step_dir == directory or step_num < 1):
+    if action and not config.single_step_layout and (step_dir == directory or step_num < 1):
         fail("to run an action, you must be in a step directory")
 
     return draft, step_dir, step_num
 
 
-def save_problem_set(config: Config, session, rpc_call, path: Path, is_update: bool) -> None:
+def save_problem_set(client: CodeGrinderClient, path: Path, is_update: bool) -> None:
     now = grpc_time_now()
     cfg = parse_author_problem_set_config(path)
 
@@ -181,13 +179,7 @@ def save_problem_set(config: Config, session, rpc_call, path: Path, is_update: b
         )
 
     mode = pb.SAVE_MODE_UPDATE if is_update else pb.SAVE_MODE_CREATE
-    final = rpc_call(
-        config,
-        "SaveProblemSet",
-        session.stub.SaveProblemSet,
-        pb.SaveProblemSetRequest(mode=mode, bundle=bundle),
-        grpc_metadata(config.cookie),
-    )
+    final = client.save_problem_set(mode, bundle)
     if is_update:
         print(f"problem set {final.bundle.problem_set.problem_set_id!r} saved and ready to use")
     else:

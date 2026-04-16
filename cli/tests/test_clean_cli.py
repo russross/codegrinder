@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cli import _build_parser, clean_workspace_tree
+from cli import _build_parser
+from student_workspace import clean_workspace_tree
 
 
 def test_clean_command_is_registered() -> None:

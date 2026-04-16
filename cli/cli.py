@@ -5,26 +5,21 @@ import logging
 import os
 import subprocess
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from pathlib import Path
-from typing import TypeVar
-
 import codegrinder_pb2 as pb
 
-from author_config import PROBLEM_CONFIG_NAME, parse_author_problem_config, parse_author_problem_set_config
-from authoring import find_problem_cfg, gather_author, save_problem_set
+from author_config import PROBLEM_CONFIG_NAME
+from authoring import gather_author, resolve_author_problem_layout, save_problem_set
 from errors import CliError, fail
 from helpers import (
-    Session,
     check_version,
     clean_error,
     course_directory,
-    dashes,
     dump_message,
-    grpc_metadata,
     grpc_time_now,
-    has_instructor_file,
     load_config,
+    load_config_or_default,
     managed_session,
     program_name,
     save_dotfile,
@@ -33,31 +28,25 @@ from helpers import (
 )
 from models import AssignmentRef, Config, DotFileInfo, ProblemInfo
 from student_workspace import (
-    assignment_key_from_dotfile as _assignment_from_dotfile,
+    assignment_key_from_dotfile,
     clean_workspace_tree,
-    gather_student as _gather_student,
-    get_workspace as _get_workspace,
-    resolve_student_problem as _resolve_student_problem,
-    save_student_workspace as _save_student_workspace,
-    workspace_file_map as _assignment_step_files,
-    workspace_official_paths as _workspace_paths,
+    gather_student,
+    get_workspace,
+    resolve_student_problem,
+    save_student_workspace,
+    workspace_file_map,
+    workspace_official_paths,
 )
 from daycare_client import handle_daycare_stream
+from presentation import (
+    print_assignment_list,
+    print_problem_catalog,
+    sorted_assignment_items,
+    sorted_student_assignment_items,
+)
 from protocol import dump_transcript
+from rpc_client import CodeGrinderClient
 from version import CURRENT_VERSION
-
-
-T = TypeVar("T")
-
-
-def _rpc_call(config: Config, name: str, fn: Callable[..., T], request: object, metadata: Sequence[tuple[str, str]]) -> T:
-    dump_message(config, name, True, request)
-    try:
-        response = fn(request, metadata=metadata)
-    except Exception as exc:
-        raise CliError(clean_error(exc)) from exc
-    dump_message(config, name, False, response)
-    return response
 
 
 def _usage_error(parser: argparse.ArgumentParser) -> None:
@@ -118,83 +107,18 @@ def command_list(args: argparse.Namespace) -> None:
 
     config = load_command_config(args)
     with managed_session(config) as session:
-        response = _rpc_call(
-            config,
-            "ListAssignments",
-            session.stub.ListAssignments,
-            pb.ListAssignmentsRequest(include_student_context=False),
-            grpc_metadata(config.cookie),
-        )
+        client = CodeGrinderClient(config, session)
+        response = client.list_assignments(include_student_context=False)
         items = list(response.items)
         if not items:
             fail("no assignments found\nyou must start each assignment through Canvas before you can access it here")
 
-        items = sorted(
-            items,
-            key=lambda item: (
-                item.assignment.course_id,
-                item.due_at.seconds if item.HasField("due_at") else 0,
-                item.lock_at.seconds if item.HasField("lock_at") else 0,
-                item.assignment.user_id,
-                item.assignment.problem_set_id,
-            ),
-        )
-        longest_idx = len(str(len(items)))
-        longest_ps = max(len(item.assignment.problem_set_id) for item in items)
-
-        current_course_id = ""
-        for idx, item in enumerate(items, start=1):
-            assignment = item.assignment
-            if assignment.course_id != current_course_id:
-                if current_course_id != "":
-                    print()
-                current_course_id = assignment.course_id
-                print(item.course_name)
-                print(dashes(len(item.course_name)))
-
-            pset_label = assignment.problem_set_id
-            print(f"{idx:>{longest_idx}}. {pset_label:<{longest_ps}} ({course_directory(item.course_name)}/{pset_label})")
+        items = sorted_assignment_items(items)
+        print_assignment_list(items)
 
 
-def save_student_workspace(config: Config, session: Session, student, note: str) -> None:
-    _save_student_workspace(config, session, _rpc_call, student, note)
-
-
-def get_workspace(
-    config: Config,
-    session: Session,
-    assignment: pb.AssignmentKey,
-    problem_id: str,
-    step_number: int,
-    file_state: pb.WorkspaceFileState.ValueType,
-    include_contents: bool,
-    include_solution_files: bool,
-) -> pb.GetWorkspaceResponse:
-    return _get_workspace(
-        config,
-        session,
-        _rpc_call,
-        assignment,
-        problem_id,
-        step_number,
-        file_state,
-        include_contents,
-        include_solution_files,
-    )
-
-
-def gather_student(config: Config, session: Session, start_dir: Path):
-    return _gather_student(config, session, _rpc_call, start_dir)
-
-
-def get_assignment(config: Config, session: Session, assignment: pb.AssignmentKey, root_dir: Path, pretty_root: str) -> Path:
-    info_resp = _rpc_call(
-        config,
-        "GetAssignment",
-        session.stub.GetAssignment,
-        pb.GetAssignmentRequest(assignment=assignment),
-        grpc_metadata(config.cookie),
-    )
+def get_assignment(client: CodeGrinderClient, assignment: pb.AssignmentKey, root_dir: Path, pretty_root: str) -> Path:
+    info_resp = client.get_assignment(assignment)
     root_dir = root_dir / course_directory(info_resp.course_name) / info_resp.assignment.problem_set_id
     pretty_full = str(Path(pretty_root) / course_directory(info_resp.course_name) / info_resp.assignment.problem_set_id)
     if root_dir.exists():
@@ -221,8 +145,7 @@ def get_assignment(config: Config, session: Session, assignment: pb.AssignmentKe
             print(f"unpacking step {problem_info.current_step_number}")
 
         workspace = get_workspace(
-            config,
-            session,
+            client,
             assignment,
             problem_info.problem_id,
             int(problem_info.current_step_number),
@@ -230,8 +153,8 @@ def get_assignment(config: Config, session: Session, assignment: pb.AssignmentKe
             True,
             False,
         )
-        files = _assignment_step_files(workspace.system_owned_files)
-        files.update(_assignment_step_files(workspace.student_owned_files))
+        files = workspace_file_map(workspace.system_owned_files)
+        files.update(workspace_file_map(workspace.student_owned_files))
         update_files(target, files, None, False)
 
     dotfile = DotFileInfo(
@@ -261,32 +184,18 @@ def command_get(args: argparse.Namespace) -> None:
     config = load_command_config(args)
 
     name = args.get_args[0]
-    root_dir = Path.home()
-    pretty_root = "~"
+    root_dir = config.workspace_root
+    pretty_root = str(config.workspace_root)
     if len(args.get_args) == 2:
         root_dir = Path(args.get_args[1])
         pretty_root = str(root_dir)
 
     with managed_session(config) as session:
+        client = CodeGrinderClient(config, session)
         assignment: pb.AssignmentKey
         if name.isdigit() and int(name) > 0:
-            asst_resp = _rpc_call(
-                config,
-                "ListAssignments",
-                session.stub.ListAssignments,
-                pb.ListAssignmentsRequest(search=[], include_student_context=False),
-                grpc_metadata(config.cookie),
-            )
-            ordered = sorted(
-                list(asst_resp.items),
-                key=lambda item: (
-                    item.assignment.course_id,
-                    item.due_at.seconds if item.HasField("due_at") else 0,
-                    item.lock_at.seconds if item.HasField("lock_at") else 0,
-                    item.assignment.user_id,
-                    item.assignment.problem_set_id,
-                ),
-            )
+            asst_resp = client.list_assignments(search=[], include_student_context=False)
+            ordered = sorted_assignment_items(asst_resp.items)
             idx = int(name)
             if idx < 1 or idx > len(ordered):
                 fail(f"assignment number {idx} not found; run '{program_name()} list' to refresh numbering")
@@ -300,13 +209,7 @@ def command_get(args: argparse.Namespace) -> None:
                     f"   or  '{program_name()} get [course/problem-id]'"
                 )
             course_term, pset_term = parts
-            response = _rpc_call(
-                config,
-                "ListAssignments",
-                session.stub.ListAssignments,
-                pb.ListAssignmentsRequest(search=[course_term, pset_term], include_student_context=False),
-                grpc_metadata(config.cookie),
-            )
+            response = client.list_assignments(search=[course_term, pset_term], include_student_context=False)
             matches = list(response.items)
             if not matches:
                 fail(
@@ -323,7 +226,7 @@ def command_get(args: argparse.Namespace) -> None:
 
         if assignment.user_id != session.user.user_id:
             fail("you do not have access to that assignment")
-        get_assignment(config, session, assignment, root_dir, pretty_root)
+        get_assignment(client, assignment, root_dir, pretty_root)
 
 
 def command_sync(args: argparse.Namespace) -> None:
@@ -332,8 +235,9 @@ def command_sync(args: argparse.Namespace) -> None:
 
     config = load_command_config(args)
     with managed_session(config) as session:
-        student = gather_student(config, session, Path("."))
-        save_student_workspace(config, session, student, "grind sync")
+        client = CodeGrinderClient(config, session)
+        student = gather_student(client, Path("."))
+        save_student_workspace(client, student, "grind sync")
         print(f"problem {student.workspace.problem_id} step {student.commit.step} synced")
 
 
@@ -343,9 +247,10 @@ def command_clean(args: argparse.Namespace) -> None:
 
     config = load_command_config(args)
     with managed_session(config) as session:
-        student = gather_student(config, session, Path("."))
-        save_student_workspace(config, session, student, "grind clean")
-        clean_workspace_tree(student.problem_dir, _workspace_paths(student.workspace))
+        client = CodeGrinderClient(config, session)
+        student = gather_student(client, Path("."))
+        save_student_workspace(client, student, "grind clean")
+        clean_workspace_tree(student.problem_dir, workspace_official_paths(student.workspace))
         print(f"problem {student.workspace.problem_id} step {student.commit.step} cleaned")
 
 
@@ -356,7 +261,8 @@ def command_grade(args: argparse.Namespace) -> None:
     config = load_command_config(args)
 
     with managed_session(config) as session:
-        student = gather_student(config, session, Path("."))
+        client = CodeGrinderClient(config, session)
+        student = gather_student(client, Path("."))
         workspace = student.workspace
         commit = student.commit
         info = student.dotfile.problems.get(workspace.problem_id)
@@ -368,13 +274,7 @@ def command_grade(args: argparse.Namespace) -> None:
         commit.note = "grind grade"
         unsigned = pb.GradingCommit(user_id=session.user.user_id, commit=commit)
 
-        signed_resp = _rpc_call(
-            config,
-            "SaveUngradedCommit",
-            session.stub.SaveUngradedCommit,
-            pb.SaveUngradedCommitRequest(commit=unsigned),
-            grpc_metadata(config.cookie),
-        )
+        signed_resp = client.save_ungraded_commit(unsigned)
         signed = signed_resp.bundle
         signed_bundle = pb.RuntimeBundle()
         signed_bundle.ParseFromString(signed.bundle)
@@ -382,17 +282,11 @@ def command_grade(args: argparse.Namespace) -> None:
             fail("server was unable to find a suitable daycare, unable to grade")
 
         print(f"submitting {workspace.problem_id} step {commit.step} for grading")
-        graded = handle_daycare_stream(config, session, signed, [], Path(""), False)
+        graded = handle_daycare_stream(client, signed, [], Path(""), False)
         if graded is None:
             fail("the server ended the connection without sending a report card")
 
-        saved_resp = _rpc_call(
-            config,
-            "SaveGradedCommit",
-            session.stub.SaveGradedCommit,
-            pb.SaveGradedCommitRequest(bundle=graded),
-            grpc_metadata(config.cookie),
-        )
+        saved_resp = client.save_graded_commit(graded)
         _ = saved_resp
         graded_bundle = pb.RuntimeBundle()
         graded_bundle.ParseFromString(graded.bundle)
@@ -406,8 +300,7 @@ def command_grade(args: argparse.Namespace) -> None:
                 next_step_number = int(workspace.step_number) + 1
                 print(f"moving to step {next_step_number}")
                 next_workspace = get_workspace(
-                    config,
-                    session,
+                    client,
                     commit.assignment,
                     workspace.problem_id,
                     next_step_number,
@@ -415,8 +308,8 @@ def command_grade(args: argparse.Namespace) -> None:
                     True,
                     False,
                 )
-                files = _assignment_step_files(next_workspace.system_owned_files)
-                files.update(_assignment_step_files(next_workspace.student_owned_files))
+                files = workspace_file_map(next_workspace.system_owned_files)
+                files.update(workspace_file_map(next_workspace.student_owned_files))
                 update_files(Path("."), files, current_paths, False)
                 info.step = next_step_number
                 info.total_steps = int(next_workspace.total_steps)
@@ -442,7 +335,8 @@ def command_action(args: argparse.Namespace) -> None:
     config = load_command_config(args)
 
     with managed_session(config) as session:
-        student = gather_student(config, session, Path("."))
+        client = CodeGrinderClient(config, session)
+        student = gather_student(client, Path("."))
         workspace = student.workspace
         commit = student.commit
         commit.action = action
@@ -457,13 +351,7 @@ def command_action(args: argparse.Namespace) -> None:
             fail(f"use '{program_name()} action [action]' to initiate an action")
 
         unsigned = pb.GradingCommit(user_id=session.user.user_id, commit=commit)
-        signed_resp = _rpc_call(
-            config,
-            "SaveUngradedCommit",
-            session.stub.SaveUngradedCommit,
-            pb.SaveUngradedCommitRequest(commit=unsigned),
-            grpc_metadata(config.cookie),
-        )
+        signed_resp = client.save_ungraded_commit(unsigned)
         signed = signed_resp.bundle
         signed_bundle = pb.RuntimeBundle()
         signed_bundle.ParseFromString(signed.bundle)
@@ -472,18 +360,18 @@ def command_action(args: argparse.Namespace) -> None:
             fail("server was unable to find a suitable daycare, unable to run action")
 
         print(f"starting interactive session for {workspace.problem_id} step {commit.step}")
-        handle_daycare_stream(config, session, signed, [], Path("."), True)
+        handle_daycare_stream(client, signed, [], Path("."), True)
 
 
 def command_reset(args: argparse.Namespace) -> None:
     config = load_command_config(args)
 
     with managed_session(config) as session:
-        dotfile, problem_dir, problem_id, info = _resolve_student_problem(Path("."))
+        client = CodeGrinderClient(config, session)
+        dotfile, problem_dir, problem_id, info = resolve_student_problem(Path("."))
         reset_workspace = get_workspace(
-            config,
-            session,
-            _assignment_from_dotfile(dotfile),
+            client,
+            assignment_key_from_dotfile(dotfile),
             problem_id,
             info.step,
             pb.WORKSPACE_FILE_STATE_STEP_START,
@@ -503,8 +391,8 @@ def command_reset(args: argparse.Namespace) -> None:
             if not found:
                 fail(f"no file matching {requested!r} in the list of student files for this step")
 
-        files = _assignment_step_files(reset_workspace.system_owned_files)
-        expected_student = _assignment_step_files(reset_workspace.student_owned_files)
+        files = workspace_file_map(reset_workspace.system_owned_files)
+        expected_student = workspace_file_map(reset_workspace.student_owned_files)
         files.update(expected_student)
 
         found_mod = False
@@ -541,35 +429,12 @@ def command_problem(args: argparse.Namespace) -> None:
     config = load_command_config(args)
 
     with managed_session(config) as session:
-        catalog_resp = _rpc_call(
-            config,
-            "SearchProblemCatalog",
-            session.stub.SearchProblemCatalog,
-            pb.SearchProblemCatalogRequest(search=args.problem_args),
-            grpc_metadata(config.cookie),
-        )
+        client = CodeGrinderClient(config, session)
+        catalog_resp = client.search_problem_catalog(args.problem_args)
         problem_sets = sorted(catalog_resp.problem_sets, key=lambda ps: ps.problem_set_id.lower())
         if not problem_sets:
             fail("no problem sets found matching the terms you gave")
-
-        for index, pset in enumerate(problem_sets):
-            if index > 0:
-                print()
-            print(pset.problem_set_note)
-
-            for problem in pset.problems:
-                if problem.problem_weight == 1:
-                    print(f"  * {problem.problem_note} ({problem.problem_id})")
-                else:
-                    print(f"  * {problem.problem_note} ({problem.problem_id}, weight {problem.problem_weight})")
-                for step in problem.steps:
-                    text = step.step_note.replace("\n", "\n       ")
-                    suffix = "" if step.step_weight == 1 else f" (weight {step.step_weight})"
-                    n = int(step.step_number)
-                    print(f"    {n}. {text}{suffix}")
-
-            print()
-            print(f"  → https://{config.host}/lti/problem_sets/cli/{pset.problem_set_id}")
+        print_problem_catalog(problem_sets, client.config.host)
 
 
 def command_solve(args: argparse.Namespace) -> None:
@@ -579,13 +444,13 @@ def command_solve(args: argparse.Namespace) -> None:
     config = load_command_config(args)
 
     with managed_session(config) as session:
+        client = CodeGrinderClient(config, session)
         if not session.user.author:
             fail("you must be an author to use this command")
-        dotfile, problem_dir, problem_id, info = _resolve_student_problem(Path("."))
+        dotfile, problem_dir, problem_id, info = resolve_student_problem(Path("."))
         workspace = get_workspace(
-            config,
-            session,
-            _assignment_from_dotfile(dotfile),
+            client,
+            assignment_key_from_dotfile(dotfile),
             problem_id,
             info.step,
             pb.WORKSPACE_FILE_STATE_CURRENT,
@@ -594,24 +459,19 @@ def command_solve(args: argparse.Namespace) -> None:
         )
         if not workspace.solution_files:
             fail("no solution files found")
-        update_files(problem_dir, _assignment_step_files(workspace.solution_files), None, True)
+        update_files(problem_dir, workspace_file_map(workspace.solution_files), None, True)
 
 
 def command_type(args: argparse.Namespace) -> None:
     config = load_command_config(args)
 
     with managed_session(config) as session:
+        client = CodeGrinderClient(config, session)
         if args.list:
             if args.type_args or args.remove:
                 print("warning: for a list request, other options will be ignored")
             print("Problem types:")
-            response = _rpc_call(
-                config,
-                "GetProblemTypes",
-                session.stub.GetProblemTypes,
-                pb.GetProblemTypesRequest(),
-                grpc_metadata(config.cookie),
-            )
+            response = client.get_problem_types()
             if not response.problem_types:
                 fail("no problem types found")
             width = max(len(pt.problem_type) for pt in response.problem_types)
@@ -623,25 +483,23 @@ def command_type(args: argparse.Namespace) -> None:
         directory = Path(".")
         problem_type_name = ""
         if not args.type_args:
-            _, step_dir, step_num, problem, steps, single = find_problem_cfg(grpc_time_now(), Path("."))
-            if problem is None:
+            layout = resolve_author_problem_layout(Path("."))
+            if layout is None:
                 fail(f"you must supply the problem type or have a valid {PROBLEM_CONFIG_NAME} file already in place")
-            if not single and step_num < 1:
+            if not layout.config.single_step_layout and layout.active_step_number < 1:
                 fail("you must run this from within a step directory")
-            directory = step_dir
-            problem_type_name = steps[0].problem_type if single else steps[step_num - 1].problem_type
+            directory = layout.active_step_dir
+            problem_type_name = (
+                layout.config.steps[0].problem_type
+                if layout.config.single_step_layout
+                else layout.config.steps[layout.active_step_number - 1].problem_type
+            )
         elif len(args.type_args) == 1:
             problem_type_name = args.type_args[0]
         else:
             _usage_error(args.parser)
 
-        response = _rpc_call(
-            config,
-            "GetProblemType",
-            session.stub.GetProblemType,
-            pb.GetProblemTypeRequest(problem_type=problem_type_name),
-            grpc_metadata(config.cookie),
-        )
+        response = client.get_problem_type(problem_type_name)
         problem_type = response.problem_type
 
         if args.remove:
@@ -666,22 +524,9 @@ def command_student(args: argparse.Namespace) -> None:
     config = load_command_config(args)
 
     with managed_session(config) as session:
-        response = _rpc_call(
-            config,
-            "ListAssignments",
-            session.stub.ListAssignments,
-            pb.ListAssignmentsRequest(search=args.student_args, include_student_context=True),
-            grpc_metadata(config.cookie),
-        )
-        items = sorted(
-            response.items,
-            key=lambda item: (
-                item.assignment.user_id,
-                item.assignment.course_id,
-                item.due_at.seconds if item.HasField("due_at") else 0,
-                item.assignment.problem_set_id,
-            ),
-        )
+        client = CodeGrinderClient(config, session)
+        response = client.list_assignments(search=args.student_args, include_student_context=True)
+        items = sorted_student_assignment_items(response.items)
         if not items:
             fail("no assignments found matching the terms you gave")
 
@@ -696,7 +541,7 @@ def command_student(args: argparse.Namespace) -> None:
                     print()
                 prev_user_id = assignment.user_id
                 print(f"{item.user_name} ({item.user_login})")
-                print(dashes(len(item.user_name) + len(item.user_login) + len(" ()")))
+                print("-" * (len(item.user_name) + len(item.user_login) + len(" ()")))
 
             when = item.due_at.ToDatetime().strftime("%d %b %y %H:%M UTC") if item.HasField("due_at") else "no due date"
             print(f"{idx:>{longest_num}}. {assignment.problem_set_id} ({item.course_name}) [{when}]")
@@ -704,7 +549,7 @@ def command_student(args: argparse.Namespace) -> None:
 
         if len(user_ids) == 1:
             most_recent = items[-1]
-            download_student_assignment(config, session, most_recent)
+            download_student_assignment(client, most_recent)
         else:
             fail(
                 "the search found assignments for more than one user\n"
@@ -715,14 +560,14 @@ def command_student(args: argparse.Namespace) -> None:
             )
 
 
-def download_student_assignment(config: Config, session: Session, item: pb.AssignmentListItem) -> None:
+def download_student_assignment(client: CodeGrinderClient, item: pb.AssignmentListItem) -> None:
     assignment = item.assignment
     print(f"[{item.user_name}] assignment {assignment.course_id}/{assignment.problem_set_id}")
 
     root_dir = Path("/tmp") / f"grind-tmp.{os.getpid()}"
     root_dir.mkdir(mode=0o700, exist_ok=False)
     try:
-        change_to = get_assignment(config, session, assignment, root_dir, str(root_dir))
+        change_to = get_assignment(client, assignment, root_dir, str(root_dir))
         shell = os.environ.get("SHELL", "/bin/bash")
         print("exit shell when finished")
         subprocess.run([shell], cwd=change_to, check=True)
@@ -731,18 +576,6 @@ def download_student_assignment(config: Config, session: Session, item: pb.Assig
     finally:
         print(f"deleting {root_dir}")
         subprocess.run(["rm", "-rf", str(root_dir)], check=False)
-
-
-def parse_problem_cfg(path: Path):
-    return parse_author_problem_config(path)
-
-
-def parse_problem_set_cfg(path: Path):
-    return parse_author_problem_set_config(path)
-
-
-def create_problem_set(config: Config, session: Session, path: Path, is_update: bool) -> None:
-    save_problem_set(config, session, _rpc_call, path, is_update)
 
 
 def command_create(args: argparse.Namespace) -> None:
@@ -756,10 +589,11 @@ def command_create(args: argparse.Namespace) -> None:
     is_update = bool(args.update)
 
     with managed_session(config) as session:
+        client = CodeGrinderClient(config, session)
         if pset:
             if action:
                 fail("you cannot specify an action when creating a problem set")
-            create_problem_set(config, session, Path(pset), is_update)
+            save_problem_set(client, Path(pset), is_update)
             return
 
         now = grpc_time_now()
@@ -768,13 +602,7 @@ def command_create(args: argparse.Namespace) -> None:
 
         draft, step_dir, step_num = gather_author(now, action, Path("."))
 
-        signed_resp = _rpc_call(
-            config,
-            "PrepareProblem",
-            session.stub.PrepareProblem,
-            pb.PrepareProblemRequest(draft=draft, action=action),
-            grpc_metadata(config.cookie),
-        )
+        signed_resp = client.prepare_problem(draft, action)
         signed = signed_resp.bundle
 
         if not signed.hostname:
@@ -785,12 +613,12 @@ def command_create(args: argparse.Namespace) -> None:
                 fail("to use --action, you must run from within a step directory")
             print(f"running interactive session for action {action!r} on step {step_num}")
 
-            handle_daycare_stream(config, session, signed.signed_grading_commits[step_num - 1], [], step_dir, True)
+            handle_daycare_stream(client, signed.signed_grading_commits[step_num - 1], [], step_dir, True)
             return
 
         for n in range(len(signed.problem_steps)):
             print(f"validating solution for step {n + 1}")
-            validated = handle_daycare_stream(config, session, signed.signed_grading_commits[n], [], Path(""), False)
+            validated = handle_daycare_stream(client, signed.signed_grading_commits[n], [], Path(""), False)
             if validated is None:
                 fail("the server ended the connection without sending a report card")
             validated_commit = pb.RuntimeBundle()
@@ -813,16 +641,7 @@ def command_create(args: argparse.Namespace) -> None:
 
         print("problem and solution confirmed successfully")
 
-        final_resp = _rpc_call(
-            config,
-            "SaveProblem",
-            session.stub.SaveProblem,
-            pb.SaveProblemRequest(
-                mode=pb.SAVE_MODE_UPDATE if is_update else pb.SAVE_MODE_CREATE,
-                bundle=signed,
-            ),
-            grpc_metadata(config.cookie),
-        )
+        final_resp = client.save_problem(pb.SAVE_MODE_UPDATE if is_update else pb.SAVE_MODE_CREATE, signed)
         final = final_resp.bundle
         if is_update:
             print(f"problem {final.problem.problem_id!r} saved and ready to use")
@@ -834,7 +653,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="grind", description="A command-line tool to access CodeGrinder")
     parser.set_defaults(func=None)
 
-    is_instructor = has_instructor_file()
+    is_instructor = load_config_or_default().instructor
 
     if is_instructor:
         parser.add_argument("--api", action="store_true", help="report all API requests")

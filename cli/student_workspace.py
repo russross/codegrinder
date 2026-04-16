@@ -7,8 +7,9 @@ from collections.abc import Sequence
 import codegrinder_pb2 as pb
 
 from errors import fail
-from helpers import find_dotfile, grpc_metadata, grpc_time_now, update_files
-from models import Config, DotFileInfo, ProblemInfo
+from helpers import find_dotfile, grpc_time_now, update_files
+from models import DotFileInfo, ProblemInfo
+from rpc_client import CodeGrinderClient
 
 
 @dataclass(slots=True)
@@ -110,24 +111,16 @@ def clean_workspace_tree(directory: Path, official_paths: set[str]) -> None:
         path.unlink()
 
 
-def save_student_workspace(config: Config, session, rpc_call, student: StudentWorkspace, note: str) -> None:
+def save_student_workspace(client: CodeGrinderClient, student: StudentWorkspace, note: str) -> None:
     commit = student.commit
     commit.action = ""
     commit.note = note
-    unsigned = pb.GradingCommit(user_id=session.user.user_id, commit=commit)
-    rpc_call(
-        config,
-        "SaveUngradedCommit",
-        session.stub.SaveUngradedCommit,
-        pb.SaveUngradedCommitRequest(commit=unsigned),
-        grpc_metadata(config.cookie),
-    )
+    unsigned = pb.GradingCommit(user_id=client.session.user.user_id, commit=commit)
+    client.save_ungraded_commit(unsigned)
 
 
 def get_workspace(
-    config: Config,
-    session,
-    rpc_call,
+    client: CodeGrinderClient,
     assignment: pb.AssignmentKey,
     problem_id: str,
     step_number: int,
@@ -135,28 +128,20 @@ def get_workspace(
     include_contents: bool,
     include_solution_files: bool,
 ) -> pb.GetWorkspaceResponse:
-    return rpc_call(
-        config,
-        "GetWorkspace",
-        session.stub.GetWorkspace,
-        pb.GetWorkspaceRequest(
-            assignment=assignment,
-            problem_id=problem_id,
-            step_number=step_number,
-            file_state=file_state,
-            include_contents=include_contents,
-            include_solution_files=include_solution_files,
-        ),
-        grpc_metadata(config.cookie),
+    return client.get_workspace(
+        assignment,
+        problem_id,
+        step_number,
+        file_state,
+        include_contents,
+        include_solution_files,
     )
 
 
-def gather_student(config: Config, session, rpc_call, start_dir: Path) -> StudentWorkspace:
+def gather_student(client: CodeGrinderClient, start_dir: Path) -> StudentWorkspace:
     dotfile, problem_dir, problem_id, info = resolve_student_problem(start_dir)
     workspace = get_workspace(
-        config,
-        session,
-        rpc_call,
+        client,
         assignment_key_from_dotfile(dotfile),
         problem_id,
         info.step,

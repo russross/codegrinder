@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass(slots=True)
 class Config:
     host: str = ""
     cookie: str = ""
+    workspace_root: Path = Path.home()
+    instructor: bool = False
     api_report: bool = False
     api_dump: bool = False
 

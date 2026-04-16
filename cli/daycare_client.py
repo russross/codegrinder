@@ -6,37 +6,36 @@ from pathlib import Path
 import codegrinder_pb2 as pb
 
 from errors import CliError
-from helpers import Session, clean_error, dump_message, grpc_metadata
-from models import Config
+from helpers import clean_error, dump_message, grpc_metadata
+from rpc_client import CodeGrinderClient
 from protocol import dump_event
 
 
 def handle_daycare_stream(
-    config: Config,
-    session: Session,
+    client: CodeGrinderClient,
     bundle: pb.SignedRuntimeBundle,
     args: list[str],
     directory: Path,
     process_events: bool,
 ) -> pb.SignedRuntimeBundle | None:
     request = pb.DaycareRequest(bundle=bundle, args=args)
-    dump_message(config, "Daycare", True, request)
+    dump_message(client.config, "Daycare", True, request)
     try:
-        stream = session.stub.Daycare(request, metadata=grpc_metadata(config.cookie))
+        stream = client.session.stub.Daycare(request, metadata=grpc_metadata(client.config.cookie))
     except Exception as exc:
         raise CliError(f"error starting Daycare session: {clean_error(exc)}") from exc
-    dump_message(config, "Daycare", False, None)
+    dump_message(client.config, "Daycare", False, None)
 
     for reply in stream:
         if reply.error:
-            dump_message(config, "Daycare Error", False, reply.error)
+            dump_message(client.config, "Daycare Error", False, reply.error)
             raise CliError(f"server returned an error: {reply.error}")
         if reply.HasField("bundle"):
-            dump_message(config, "Daycare Bundle", False, reply.bundle)
+            dump_message(client.config, "Daycare Bundle", False, reply.bundle)
             return reply.bundle
         if reply.HasField("event"):
             event = reply.event
-            dump_message(config, "Daycare Event", False, event)
+            dump_message(client.config, "Daycare Event", False, event)
             if event.event in {"exec", "stdin", "stdout", "exit", "error", "stderr"}:
                 if process_events:
                     print(dump_event(event), end="")

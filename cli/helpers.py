@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import sys
+import tomllib
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -21,10 +23,9 @@ from errors import CliError, fail
 from models import AssignmentRef, Config, DotFileInfo, ProblemInfo
 from version import CURRENT_VERSION
 
-INSTRUCTOR_FILE = ".codegrinderinstructor"
 PER_PROBLEM_SET_DOT_FILE = ".grind"
-CONFIG_DIR = Path("~/.config/codegrinder").expanduser()
-CONFIG_FILE = CONFIG_DIR / "config.json"
+CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "codegrinder"
+CONFIG_FILE = CONFIG_DIR / "config.toml"
 
 
 @dataclass(slots=True)
@@ -50,40 +51,67 @@ def program_name() -> str:
     return Path(sys.argv[0]).name or "grind"
 
 
-def config_dir() -> Path:
-    return CONFIG_DIR
-
-
-def has_instructor_file() -> bool:
-    return (Path.home() / INSTRUCTOR_FILE).exists()
-
-
-def load_config() -> Config:
-    if not CONFIG_FILE.exists():
-        fail(f"Unable to load config file; try running '{program_name()} login'")
-
+def _parse_config_file() -> dict[str, object]:
     try:
-        raw = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+        return tomllib.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError as exc:
         fail(
             f"failed to parse {CONFIG_FILE}: {exc}\n"
             f"you may wish to try deleting the file and running '{program_name()} login' again"
         )
 
+
+def _config_from_raw(raw: dict[str, object]) -> Config:
     host = raw.get("host", "")
     cookie = raw.get("cookie", "")
-    if not isinstance(host, str) or not isinstance(cookie, str):
+    workspace_root = raw.get("workspace_root", str(Path.home()))
+    instructor = raw.get("instructor", False)
+    if (
+        not isinstance(host, str)
+        or not isinstance(cookie, str)
+        or not isinstance(workspace_root, str)
+        or not isinstance(instructor, bool)
+    ):
         fail(
-            f"failed to parse {CONFIG_FILE}: invalid host/cookie type\n"
+            f"failed to parse {CONFIG_FILE}: invalid config value type\n"
             f"you may wish to try deleting the file and running '{program_name()} login' again"
         )
-    return Config(host=host, cookie=cookie)
+    return Config(host=host, cookie=cookie, workspace_root=Path(workspace_root).expanduser(), instructor=instructor)
+
+
+def load_config() -> Config:
+    if not CONFIG_FILE.exists():
+        fail(f"Unable to load config file; try running '{program_name()} login'")
+    return _config_from_raw(_parse_config_file())
+
+
+def load_config_or_default() -> Config:
+    if not CONFIG_FILE.exists():
+        return Config(workspace_root=Path.home())
+    return _config_from_raw(_parse_config_file())
+
+
+def _toml_string(value: str) -> str:
+    return json.dumps(value)
 
 
 def write_config(config: Config) -> None:
+    existing = load_config_or_default()
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    payload = {"host": config.host, "cookie": config.cookie}
-    CONFIG_FILE.write_text(json.dumps(payload, indent=4) + "\n", encoding="utf-8")
+    merged = Config(
+        host=config.host,
+        cookie=config.cookie,
+        workspace_root=existing.workspace_root,
+        instructor=existing.instructor,
+    )
+    lines = [
+        f"host = {_toml_string(merged.host)}",
+        f"cookie = {_toml_string(merged.cookie)}",
+        f"workspace_root = {_toml_string(str(merged.workspace_root))}",
+    ]
+    if merged.instructor:
+        lines.append("instructor = true")
+    CONFIG_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def check_version(version: pb.Version) -> None:
