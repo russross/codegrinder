@@ -12,8 +12,9 @@ import codegrinder_pb2 as pb
 from google.protobuf.json_format import MessageToDict
 
 from problem_files import ProblemStepFileType
+from read_store import load_problem_step_files
 from proto_conv import parse_time
-from signatures import encode_signed_grading_commit
+from signatures import encode_signed_runtime_bundle
 
 SIGNED_COMMIT_TIMEOUT = timedelta(minutes=15)
 
@@ -386,7 +387,7 @@ def prepare_problem(
     del bundle.signed_grading_commits[:]
     for index, commit in enumerate(bundle.commits):
         grading_commit = _grading_commit_from_problem_bundle(bundle=bundle, step_index=index, commit=commit)
-        bundle.signed_grading_commits.append(encode_signed_grading_commit(grading_commit, daycare_secret))
+        bundle.signed_grading_commits.append(encode_signed_runtime_bundle(grading_commit, daycare_secret))
     return bundle
 
 
@@ -533,6 +534,51 @@ def _save_commit_files(
         )
 
 
+def _runtime_limits_from_action(action: pb.ProblemTypeAction) -> pb.RuntimeLimits:
+    return pb.RuntimeLimits(
+        max_cpu=int(action.max_cpu),
+        max_fd=int(action.max_fd),
+        max_file_size=int(action.max_file_size),
+        max_memory=int(action.max_memory),
+        max_threads=int(action.max_threads),
+    )
+
+
+def _runtime_bundle_from_parts(
+    *,
+    hostname: str,
+    user_id: str,
+    assignment: pb.AssignmentKey,
+    problem_id: str,
+    problem_note: str,
+    problem_options: list[str],
+    step_number: int,
+    total_steps: int,
+    action_name: str,
+    action: pb.ProblemTypeAction,
+    container: str,
+    files: dict[str, bytes],
+    commit: pb.Commit,
+) -> pb.RuntimeBundle:
+    return pb.RuntimeBundle(
+        hostname=hostname,
+        user_id=user_id,
+        assignment=assignment,
+        problem_id=problem_id,
+        problem_note=problem_note,
+        problem_options=problem_options,
+        step_number=step_number,
+        total_steps=total_steps,
+        action=action_name,
+        container=container,
+        command=action.command,
+        parser=action.parser,
+        limits=_runtime_limits_from_action(action),
+        files=files,
+        commit=commit,
+    )
+
+
 def save_grading_commit_common(
     tx: sqlite3.Connection,
     current_user_id: str,
@@ -540,8 +586,9 @@ def save_grading_commit_common(
     daycare_secret: str,
     ip_allowed: bool,
     assign_host: Callable[[set[str]], str],
+    load_problem_type_files: Callable[[str], dict[str, bytes]],
     graded: bool,
-) -> pb.GradingCommit:
+) -> pb.RuntimeBundle:
     if bundle.user_id != current_user_id:
         raise ValueError("bundle must include user's ID")
     commit = bundle.commit
@@ -577,13 +624,26 @@ def save_grading_commit_common(
     ).fetchone()
     if step_row is None:
         raise sqlite3.Error("not found")
+    membership = tx.execute(
+        "SELECT 1 FROM problem_set_problems WHERE problem_set_id = ? AND problem_id = ?",
+        (commit.assignment.problem_set_id, commit.problem_id),
+    ).fetchone()
+    if membership is None:
+        raise sqlite3.Error("not found")
+
+    whitelist = _json_load(step_row["whitelist"], {})
+    allowed_paths = {str(k) for k, v in whitelist.items() if bool(v)} if isinstance(whitelist, dict) else set()
+    submitted_paths = {str(path) for path in dict(commit.files)}
+    unexpected_paths = sorted(submitted_paths - allowed_paths)
+    if unexpected_paths:
+        raise ValueError("commit includes non-student-owned files: " + ", ".join(unexpected_paths))
 
     now = _timestamp_now()
     if not commit.HasField("created_at"):
         _set_ts(commit.created_at, now)
     _set_ts(commit.updated_at, now)
 
-    action = commit.action
+    action_name = commit.action
     if not graded:
         commit.action = ""
 
@@ -615,16 +675,35 @@ def save_grading_commit_common(
             int(commit.step),
             dict(commit.files),
         )
-    commit.action = action
+    commit.action = action_name
 
-    if bundle.hostname == "":
-        bundle.hostname = assign_host({step_row["problem_type"]})
+    total_steps_row = tx.execute(
+        "SELECT MAX(step_number) AS total_steps FROM problem_steps WHERE problem_id = ?",
+        (commit.problem_id,),
+    ).fetchone()
+    total_steps = max(1, int(total_steps_row["total_steps"] or 0)) if total_steps_row is not None else 1
+    problem_options_raw = _json_load(problem["problem_options"], [])
+    problem_options = [str(v) for v in problem_options_raw] if isinstance(problem_options_raw, list) else []
+    if action_name == "" and not graded:
+        runtime_commit = pb.Commit()
+        runtime_commit.CopyFrom(commit)
+        return pb.RuntimeBundle(
+            user_id=bundle.user_id,
+            assignment=commit.assignment,
+            problem_id=commit.problem_id,
+            problem_note=str(problem["problem_note"]),
+            problem_options=problem_options,
+            step_number=int(commit.step),
+            total_steps=total_steps,
+            commit=runtime_commit,
+        )
+
     problem_type = tx.execute("SELECT * FROM problem_types WHERE problem_type = ?", (step_row["problem_type"],)).fetchone()
     if problem_type is None:
         raise sqlite3.Error("not found")
-    problem_type_actions = tx.execute("SELECT * FROM problem_type_actions WHERE problem_type = ?", (step_row["problem_type"],)).fetchall()
+    action_rows = tx.execute("SELECT * FROM problem_type_actions WHERE problem_type = ?", (step_row["problem_type"],)).fetchall()
     actions: dict[str, pb.ProblemTypeAction] = {}
-    for row in problem_type_actions:
+    for row in action_rows:
         actions[str(row["action"])] = pb.ProblemTypeAction(
             command=str(row["command"]),
             parser=str(row["parser"] or ""),
@@ -634,41 +713,57 @@ def save_grading_commit_common(
             max_memory=int(row["max_memory"]),
             max_threads=int(row["max_threads"]),
         )
-    pb_problem_type = pb.ProblemType(
-        problem_type=str(problem_type["problem_type"]),
-        container=str(problem_type["container"]),
-        actions=actions,
-    )
+    runtime_action_name = action_name if action_name != "" else "grade"
+    runtime_action = actions.get(runtime_action_name)
+    if runtime_action is None:
+        raise ValueError(f'action "{runtime_action_name}" not defined for problem type {step_row["problem_type"]}')
 
-    pb_problem = pb.Problem(
-        problem_id=str(problem["problem_id"]),
-        problem_note=str(problem["problem_note"]),
-    )
-    tags = _json_load(problem["problem_tags"], [])
-    if isinstance(tags, list):
-        pb_problem.problem_tags.extend([str(v) for v in tags])
-    options = _json_load(problem["problem_options"], [])
-    if isinstance(options, list):
-        pb_problem.problem_options.extend([str(v) for v in options])
-
-    pb_step = pb.ProblemStep(
-        problem_id=str(step_row["problem_id"]),
-        step=int(step_row["step_number"]),
-        problem_type=str(step_row["problem_type"]),
-        note=str(step_row["step_note"]),
-        weight=float(step_row["step_weight"]),
-    )
-    whitelist = _json_load(step_row["whitelist"], {})
-    if isinstance(whitelist, dict):
-        pb_step.whitelist.update({str(k): bool(v) for k, v in whitelist.items()})
-    return pb.GradingCommit(
-        problem_type=pb_problem_type,
-        problem=pb_problem,
-        problem_steps=[pb_step],
-        hostname=bundle.hostname,
+    runtime_files: dict[str, bytes] = {}
+    runtime_files.update(load_problem_type_files(str(step_row["problem_type"])))
+    runtime_files.update(load_problem_step_files(tx, commit.problem_id, int(commit.step), ProblemStepFileType.REGULAR))
+    runtime_files.update({str(path): bytes(content or b"") for path, content in dict(commit.files).items()})
+    runtime_hostname = bundle.hostname or assign_host({str(step_row["problem_type"])})
+    runtime_commit = pb.Commit()
+    runtime_commit.CopyFrom(commit)
+    runtime_commit.action = runtime_action_name
+    return _runtime_bundle_from_parts(
+        hostname=runtime_hostname,
         user_id=bundle.user_id,
-        commit=commit,
+        assignment=commit.assignment,
+        problem_id=commit.problem_id,
+        problem_note=str(problem["problem_note"]),
+        problem_options=problem_options,
+        step_number=int(commit.step),
+        total_steps=total_steps,
+        action_name=runtime_action_name,
+        action=runtime_action,
+        container=str(problem_type["container"]),
+        files=runtime_files,
+        commit=runtime_commit,
     )
+
+
+def save_runtime_bundle_common(
+    tx: sqlite3.Connection,
+    current_user_id: str,
+    runtime: pb.RuntimeBundle,
+    ip_allowed: bool,
+    graded: bool,
+) -> pb.RuntimeBundle:
+    grading = pb.GradingCommit(user_id=runtime.user_id, hostname=runtime.hostname, commit=runtime.commit)
+    saved = save_grading_commit_common(
+        tx,
+        current_user_id,
+        grading,
+        "",
+        ip_allowed,
+        lambda _problem_types: runtime.hostname,
+        lambda _problem_type: {},
+        graded,
+    )
+    runtime.commit.CopyFrom(saved.commit)
+    return runtime
+
 
 
 def _grading_commit_from_problem_bundle(
@@ -676,14 +771,34 @@ def _grading_commit_from_problem_bundle(
     bundle: pb.ProblemBundle,
     step_index: int,
     commit: pb.Commit,
-) -> pb.GradingCommit:
+) -> pb.RuntimeBundle:
     step = bundle.problem_steps[step_index]
     problem_type = bundle.problem_types[step.problem_type]
-    return pb.GradingCommit(
-        problem_type=problem_type,
-        problem=bundle.problem,
-        problem_steps=bundle.problem_steps,
+    runtime_action_name = commit.action if commit.action != "" else "grade"
+    action = problem_type.actions.get(runtime_action_name)
+    if action is None:
+        raise ValueError(f'action "{runtime_action_name}" not defined for problem type {problem_type.problem_type}')
+    runtime_files: dict[str, bytes] = {}
+    runtime_files.update({str(path): bytes(content or b"") for path, content in dict(problem_type.files).items()})
+    runtime_files.update({str(path): bytes(content or b"") for path, content in dict(step.files).items()})
+    runtime_files.update({str(path): bytes(content or b"") for path, content in dict(commit.files).items()})
+    runtime_commit = pb.Commit()
+    runtime_commit.CopyFrom(commit)
+    runtime_commit.problem_id = bundle.problem.problem_id
+    runtime_commit.step = step.step
+    runtime_commit.action = runtime_action_name
+    return _runtime_bundle_from_parts(
         hostname=bundle.hostname,
         user_id=bundle.user_id,
-        commit=commit,
+        assignment=runtime_commit.assignment,
+        problem_id=bundle.problem.problem_id,
+        problem_note=bundle.problem.problem_note,
+        problem_options=list(bundle.problem.problem_options),
+        step_number=int(step.step),
+        total_steps=len(bundle.problem_steps),
+        action_name=runtime_action_name,
+        action=action,
+        container=problem_type.container,
+        files=runtime_files,
+        commit=runtime_commit,
     )

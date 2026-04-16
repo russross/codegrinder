@@ -8,6 +8,7 @@ from hashlib import sha256
 import codegrinder_pb2 as pb
 
 _GRADING_COMMIT_HMAC_CONTEXT = b"codegrinder:grading-commit:v1\0"
+_RUNTIME_BUNDLE_HMAC_CONTEXT = b"codegrinder:runtime-bundle:v1\0"
 
 
 def escape(value: str) -> str:
@@ -76,6 +77,41 @@ def encode_signed_grading_commit(commit: pb.GradingCommit, secret: str) -> pb.Si
 
 def decode_signed_grading_commit(envelope: pb.SignedGradingCommit, secret: str) -> pb.GradingCommit:
     return parse_grading_commit_blob(verified_grading_commit_blob(envelope, secret))
+
+
+def sign_runtime_bundle_blob(secret: str, payload: bytes) -> str:
+    mac = _hmac_sha256(secret, _RUNTIME_BUNDLE_HMAC_CONTEXT + payload)
+    return base64.b64encode(mac).decode("ascii")
+
+
+def verify_runtime_bundle_blob(secret: str, payload: bytes, signature: str) -> None:
+    expected = sign_runtime_bundle_blob(secret, payload)
+    if not hmac.compare_digest(expected, signature):
+        raise ValueError("runtime bundle signature mismatch")
+
+
+def verified_runtime_bundle_blob(envelope: pb.SignedRuntimeBundle, secret: str) -> bytes:
+    if envelope.bundle == b"":
+        raise ValueError("signed runtime bundle must include encoded bundle bytes")
+    if envelope.signature == "":
+        raise ValueError("signed runtime bundle must include a signature")
+    verify_runtime_bundle_blob(secret, envelope.bundle, envelope.signature)
+    return bytes(envelope.bundle)
+
+
+def parse_runtime_bundle_blob(payload: bytes) -> pb.RuntimeBundle:
+    bundle = pb.RuntimeBundle()
+    bundle.ParseFromString(payload)
+    return bundle
+
+
+def encode_signed_runtime_bundle(bundle: pb.RuntimeBundle, secret: str) -> pb.SignedRuntimeBundle:
+    payload = bundle.SerializeToString()
+    return pb.SignedRuntimeBundle(bundle=payload, signature=sign_runtime_bundle_blob(secret, payload))
+
+
+def decode_signed_runtime_bundle(envelope: pb.SignedRuntimeBundle, secret: str) -> pb.RuntimeBundle:
+    return parse_runtime_bundle_blob(verified_runtime_bundle_blob(envelope, secret))
 
 
 def compute_daycare_registration_signature(

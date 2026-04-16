@@ -15,7 +15,7 @@ from config import ServerConfig
 from db import setup_db
 from grpc_service import CodeGrinderService
 from problem_files import ProblemStepFileType
-from signatures import encode_signed_grading_commit
+from signatures import encode_signed_runtime_bundle
 from sessions import LoginRecords, encode_session, new_session
 
 
@@ -200,7 +200,7 @@ class GrpcServiceTests(unittest.TestCase):
 
     def test_auth_required(self) -> None:
         with self.assertRaises(_AbortError) as err:
-            self.service.GetAssignments(pb.GetAssignmentsRequest(), cast(grpc.ServicerContext, _FakeContext()))
+            self.service.ListAssignments(pb.ListAssignmentsRequest(), cast(grpc.ServicerContext, _FakeContext()))
         self.assertEqual(err.exception.code, grpc.StatusCode.UNAUTHENTICATED)
 
     def test_list_assignments_modes(self) -> None:
@@ -244,15 +244,7 @@ class GrpcServiceTests(unittest.TestCase):
         self.assertEqual(problem.problem_weight, 1)
         self.assertEqual([step.step_number for step in problem.steps], [1, 2])
 
-    def test_problem_and_step_reads(self) -> None:
-        ctx = cast(grpc.ServicerContext, self._auth_context())
-        problem = self.service.GetProblem(pb.GetProblemRequest(problem_id="p1"), ctx).problem
-        self.assertEqual(problem.problem_id, "p1")
-        one_step = self.service.GetProblemStep(pb.GetProblemStepRequest(problem_id="p1", step=1), ctx).problem_step
-        self.assertEqual(one_step.step, 1)
-        self.assertEqual(dict(one_step.whitelist), {"main.py": True})
-        two_step = self.service.GetProblemStep(pb.GetProblemStepRequest(problem_id="p1", step=2), ctx).problem_step
-        self.assertEqual(dict(two_step.whitelist), {"helper.py": True, "main.py": True})
+
 
     def test_assignment_info_advances_current_step(self) -> None:
         ctx = cast(grpc.ServicerContext, self._auth_context())
@@ -267,13 +259,14 @@ class GrpcServiceTests(unittest.TestCase):
 
     def test_step_files_current_falls_back_to_starter(self) -> None:
         ctx = cast(grpc.ServicerContext, self._auth_context())
-        reply = self.service.GetAssignmentStepFiles(
-            pb.GetAssignmentStepFilesRequest(
+        reply = self.service.GetWorkspace(
+            pb.GetWorkspaceRequest(
                 assignment=self._assignment_key(),
                 problem_id="p1",
                 step_number=2,
-                reset_to_step_start=False,
+                file_state=pb.WORKSPACE_FILE_STATE_CURRENT,
                 include_contents=True,
+                include_solution_files=False,
             ),
             ctx,
         )
@@ -285,13 +278,14 @@ class GrpcServiceTests(unittest.TestCase):
 
     def test_step_files_with_zero_step_uses_current_progress(self) -> None:
         ctx = cast(grpc.ServicerContext, self._auth_context())
-        reply = self.service.GetAssignmentStepFiles(
-            pb.GetAssignmentStepFilesRequest(
+        reply = self.service.GetWorkspace(
+            pb.GetWorkspaceRequest(
                 assignment=self._assignment_key(),
                 problem_id="p1",
                 step_number=0,
-                reset_to_step_start=False,
+                file_state=pb.WORKSPACE_FILE_STATE_CURRENT,
                 include_contents=True,
+                include_solution_files=False,
             ),
             ctx,
         )
@@ -299,13 +293,14 @@ class GrpcServiceTests(unittest.TestCase):
 
     def test_step_files_can_skip_contents(self) -> None:
         ctx = cast(grpc.ServicerContext, self._auth_context())
-        reply = self.service.GetAssignmentStepFiles(
-            pb.GetAssignmentStepFilesRequest(
+        reply = self.service.GetWorkspace(
+            pb.GetWorkspaceRequest(
                 assignment=self._assignment_key(),
                 problem_id="p1",
                 step_number=2,
-                reset_to_step_start=False,
+                file_state=pb.WORKSPACE_FILE_STATE_CURRENT,
                 include_contents=False,
+                include_solution_files=False,
             ),
             ctx,
         )
@@ -327,13 +322,14 @@ class GrpcServiceTests(unittest.TestCase):
         )
         self.conn.commit()
         ctx = cast(grpc.ServicerContext, self._auth_context())
-        reply = self.service.GetAssignmentStepFiles(
-            pb.GetAssignmentStepFilesRequest(
+        reply = self.service.GetWorkspace(
+            pb.GetWorkspaceRequest(
                 assignment=self._assignment_key(),
                 problem_id="p1",
                 step_number=2,
-                reset_to_step_start=False,
+                file_state=pb.WORKSPACE_FILE_STATE_CURRENT,
                 include_contents=True,
+                include_solution_files=False,
             ),
             ctx,
         )
@@ -342,13 +338,14 @@ class GrpcServiceTests(unittest.TestCase):
 
     def test_step_files_reset_uses_step_start_state(self) -> None:
         ctx = cast(grpc.ServicerContext, self._auth_context())
-        reply = self.service.GetAssignmentStepFiles(
-            pb.GetAssignmentStepFilesRequest(
+        reply = self.service.GetWorkspace(
+            pb.GetWorkspaceRequest(
                 assignment=self._assignment_key(),
                 problem_id="p1",
                 step_number=2,
-                reset_to_step_start=True,
+                file_state=pb.WORKSPACE_FILE_STATE_STEP_START,
                 include_contents=True,
+                include_solution_files=False,
             ),
             ctx,
         )
@@ -358,59 +355,40 @@ class GrpcServiceTests(unittest.TestCase):
 
     def test_save_graded_commit_returns_empty_success_response(self) -> None:
         now = datetime(2026, 2, 16, 10, 0, 0, tzinfo=UTC)
-        graded = pb.GradingCommit(
-            problem_type=pb.ProblemType(
-                problem_type="python3unittest",
-                container="img",
-                actions={
-                    "grade": pb.ProblemTypeAction(
-                        command="make grade",
-                        parser="xunit",
-                        max_cpu=10,
-                        max_fd=100,
-                        max_file_size=10,
-                        max_memory=256,
-                        max_threads=20,
-                    )
-                },
-            ),
-            problem=pb.Problem(
-                problem_id="p1",
-                problem_note="Problem Note",
-                problem_tags=["tag"],
-                problem_options=[],
-                created_at=now,
-                updated_at=now,
-            ),
-            problem_steps=[
-                pb.ProblemStep(
-                    problem_id="p1",
-                    step=1,
-                    problem_type="python3unittest",
-                    note="Step 1",
-                    weight=1.0,
-                    whitelist={"main.py": True},
-                )
-            ],
+        commit = pb.Commit(
+            assignment=self._assignment_key(),
+            problem_id="p1",
+            step=1,
+            action="grade",
+            note="graded",
+            files={"main.py": b"print('graded')\n"},
+            report_card=pb.ReportCard(passed=True, note="ok"),
+            score=1.0,
+            created_at=now,
+            updated_at=now,
+        )
+        runtime = pb.RuntimeBundle(
             hostname="example.invalid",
             user_id="u1",
-            commit=pb.Commit(
-                assignment=self._assignment_key(),
-                problem_id="p1",
-                step=1,
-                action="grade",
-                note="graded",
-                files={"main.py": b"print('graded')\n"},
-                report_card=pb.ReportCard(passed=True, note="ok"),
-                score=1.0,
-                created_at=now,
-                updated_at=now,
-            ),
+            assignment=self._assignment_key(),
+            problem_id="p1",
+            problem_note="Problem Note",
+            problem_options=[],
+            step_number=1,
+            total_steps=2,
+            action="grade",
+            container="img",
+            command="make grade",
+            parser="xunit",
+            limits=pb.RuntimeLimits(max_cpu=10, max_fd=100, max_file_size=10, max_memory=256, max_threads=20),
+            files={"Makefile": b"all:\n", "main.py": b"print('graded')\n"},
+            commit=commit,
         )
-        signed = encode_signed_grading_commit(graded, "daycare-secret")
+        signed = encode_signed_runtime_bundle(runtime, "daycare-secret")
         ctx = cast(grpc.ServicerContext, self._auth_context())
-        reply = self.service.SaveGradedCommit(pb.SaveGradedCommitRequest(commit=signed), ctx)
+        reply = self.service.SaveGradedCommit(pb.SaveGradedCommitRequest(bundle=signed), ctx)
         self.assertEqual(reply.ListFields(), [])
+
 
     def test_prepare_problem_overlays_type_files_then_filters_gitignore(self) -> None:
         (self.root / "files" / "python3unittest" / ".gitignore").write_text("ignored.txt\n", encoding="utf-8")

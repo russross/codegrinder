@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -10,11 +11,17 @@ from proto_conv import (
     assignment_list_item_row_to_pb,
     assignment_row_to_pb,
     course_row_to_pb,
-    problem_row_to_pb,
     problem_set_row_to_pb,
-    problem_step_row_to_pb,
     user_row_to_pb,
 )
+
+
+@dataclass(slots=True)
+class WorkspaceFiles:
+    step_number: int
+    total_steps: int
+    system_owned_files: list[pb.AssignmentStepFile]
+    student_owned_files: list[pb.AssignmentStepFile]
 
 
 def _q(conn: sqlite3.Connection, sql: str, args: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
@@ -69,43 +76,6 @@ def get_course_pb(conn: sqlite3.Connection, current_user: sqlite3.Row, course_id
         (str(current_user["user_id"]), course_id),
     )
     return course_row_to_pb(row)
-
-
-def get_user_pb(conn: sqlite3.Connection, current_user: sqlite3.Row, user_id: str) -> pb.User:
-    row = _q1(
-        conn,
-        "SELECT users.*, EXISTS(SELECT 1 FROM authors WHERE authors.user_id = users.user_id) AS author "
-        "FROM users JOIN user_users ON users.user_id = user_users.other_user_id "
-        "WHERE user_users.viewer_user_id = ? AND user_users.other_user_id = ?",
-        (str(current_user["user_id"]), user_id),
-    )
-    return user_row_to_pb(row)
-
-
-def get_assignments_pb(conn: sqlite3.Connection, current_user: sqlite3.Row, search_terms: list[str], ip_allowed: bool) -> list[pb.Assignment]:
-    where = ""
-    args: list[Any] = []
-    for term in search_terms:
-        where, args = add_where_like(where, args, "assignment_search_fields.search_text", term)
-    where, args = add_where_eq(where, args, "user_assignments.viewer_user_id", str(current_user["user_id"]))
-    if where == "":
-        where = " WHERE"
-    else:
-        where += " AND"
-    where += " (? OR NOT user_assignments.restricted)"
-    args.append(1 if ip_allowed else 0)
-    rows = _q(
-        conn,
-        "SELECT assignments.* FROM assignments JOIN assignment_search_fields "
-        "NATURAL JOIN assignment_search_fields "
-        "JOIN user_assignments ON user_assignments.assignment_user_id = assignments.user_id "
-        "AND user_assignments.course_id = assignments.course_id "
-        "AND user_assignments.problem_set_id = assignments.problem_set_id"
-        + where
-        + " ORDER BY assignments.course_id, assignments.due_at, assignments.problem_set_id",
-        tuple(args),
-    )
-    return [assignment_row_to_pb(row) for row in rows]
 
 
 def get_assignment_list_items_pb(
@@ -383,7 +353,7 @@ def get_assignment_step_files_pb(
     include_contents: bool,
     ip_allowed: bool,
     load_problem_type_files: Callable[[str], dict[str, bytes]],
-) -> pb.GetAssignmentStepFilesResponse:
+) -> WorkspaceFiles:
     assignment = get_assignment_pb(
         conn,
         current_user,
@@ -465,7 +435,7 @@ def get_assignment_step_files_pb(
         system_owned_files = {path: b"" for path in system_owned_files}
         student_owned_files = {path: b"" for path in student_owned_files}
 
-    return pb.GetAssignmentStepFilesResponse(
+    return WorkspaceFiles(
         step_number=resolved_step_number,
         total_steps=total_steps,
         system_owned_files=[
@@ -475,6 +445,74 @@ def get_assignment_step_files_pb(
         student_owned_files=[
             pb.AssignmentStepFile(path=path, content=content)
             for path, content in sorted(student_owned_files.items())
+        ],
+    )
+
+
+
+def get_workspace_pb(
+    conn: sqlite3.Connection,
+    current_user: sqlite3.Row,
+    assignment_user_id: str,
+    assignment_course_id: str,
+    assignment_problem_set_id: str,
+    problem_id: str,
+    step_number: int,
+    file_state: pb.WorkspaceFileState.ValueType,
+    include_contents: bool,
+    include_solution_files: bool,
+    ip_allowed: bool,
+    load_problem_type_files: Callable[[str], dict[str, bytes]],
+) -> pb.GetWorkspaceResponse:
+    reset_to_step_start = file_state == pb.WORKSPACE_FILE_STATE_STEP_START
+    files = get_assignment_step_files_pb(
+        conn,
+        current_user,
+        assignment_user_id,
+        assignment_course_id,
+        assignment_problem_set_id,
+        problem_id,
+        step_number,
+        reset_to_step_start,
+        include_contents,
+        ip_allowed,
+        load_problem_type_files,
+    )
+    problem_row = get_problem_row(conn, current_user, problem_id)
+    step_row = _q1(
+        conn,
+        "SELECT * FROM problem_steps WHERE problem_id = ? AND step_number = ?",
+        (problem_id, int(files.step_number)),
+    )
+    action_rows = get_problem_type_actions_rows(conn, str(step_row["problem_type"]))
+    solution_files: dict[str, bytes] = {}
+    if include_solution_files:
+        if not bool(current_user["author"]):
+            raise PermissionError("solution files require author access")
+        solution_files = load_problem_step_files(conn, problem_id, int(files.step_number), ProblemStepFileType.SOLUTION)
+
+    if not include_contents:
+        solution_files = {path: b"" for path in solution_files}
+
+    return pb.GetWorkspaceResponse(
+        assignment=pb.AssignmentKey(
+            user_id=assignment_user_id,
+            course_id=assignment_course_id,
+            problem_set_id=assignment_problem_set_id,
+        ),
+        problem_id=problem_id,
+        problem_note=str(problem_row["problem_note"]),
+        step_number=files.step_number,
+        total_steps=files.total_steps,
+        problem_type=str(step_row["problem_type"]),
+        step_note=str(step_row["step_note"]),
+        step_weight=float(step_row["step_weight"]),
+        actions=sorted(str(row["action"]) for row in action_rows),
+        system_owned_files=files.system_owned_files,
+        student_owned_files=files.student_owned_files,
+        solution_files=[
+            pb.AssignmentStepFile(path=path, content=content)
+            for path, content in sorted(solution_files.items())
         ],
     )
 
@@ -498,41 +536,6 @@ def get_problem_row(conn: sqlite3.Connection, current_user: sqlite3.Row, problem
     )
 
 
-def get_problems_pb(conn: sqlite3.Connection, current_user: sqlite3.Row, problem_id: str, problem_type: str, note: str) -> list[pb.Problem]:
-    where = ""
-    args: list[Any] = []
-    if problem_id != "":
-        where, args = add_where_eq(where, args, "problems.problem_id", problem_id)
-    if problem_type != "":
-        where, args = add_where_eq(where, args, "problem_steps.problem_type", problem_type)
-    if note != "":
-        where, args = add_where_like(where, args, "problems.problem_note", note)
-    if bool(current_user["author"]):
-        rows = _q(
-            conn,
-            "SELECT DISTINCT problems.* FROM problems NATURAL LEFT JOIN problem_steps"
-            + where
-            + " ORDER BY problems.problem_id",
-            tuple(args),
-        )
-    else:
-        where, args = add_where_eq(where, args, "user_problems.user_id", str(current_user["user_id"]))
-        rows = _q(
-            conn,
-            "SELECT DISTINCT problems.* FROM problems "
-            "NATURAL JOIN user_problems "
-            "NATURAL LEFT JOIN problem_steps"
-            + where
-            + " ORDER BY problems.problem_id",
-            tuple(args),
-        )
-    return [problem_row_to_pb(row) for row in rows]
-
-
-def get_problem_pb(conn: sqlite3.Connection, current_user: sqlite3.Row, problem_id: str) -> pb.Problem:
-    return problem_row_to_pb(get_problem_row(conn, current_user, problem_id))
-
-
 def load_problem_step_files(
     conn: sqlite3.Connection,
     problem_id: str,
@@ -545,32 +548,6 @@ def load_problem_step_files(
         (problem_id, step, file_type.value),
     )
     return {str(row["path"]): bytes(row["content"] or b"") for row in rows}
-
-
-def get_problem_step_pb(conn: sqlite3.Connection, current_user: sqlite3.Row, problem_id: str, step_no: int) -> pb.ProblemStep:
-    if bool(current_user["author"]):
-        row = _q1(
-            conn,
-            "SELECT problem_steps.*, problem_step_whitelist.whitelist FROM problem_steps "
-            "NATURAL JOIN problem_step_whitelist "
-            "WHERE problem_steps.problem_id = ? AND problem_steps.step_number = ?",
-            (problem_id, step_no),
-        )
-    else:
-        row = _q1(
-            conn,
-            "SELECT problem_steps.*, problem_step_whitelist.whitelist FROM problem_steps "
-            "NATURAL JOIN problem_step_whitelist "
-            "NATURAL JOIN user_problems "
-            "WHERE user_problems.user_id = ? AND problem_steps.problem_id = ? AND problem_steps.step_number = ?",
-            (str(current_user["user_id"]), problem_id, step_no),
-        )
-    step = problem_step_row_to_pb(row)
-    step.files.update(load_problem_step_files(conn, problem_id, step_no, ProblemStepFileType.REGULAR))
-    step.starter_files.update(load_problem_step_files(conn, problem_id, step_no, ProblemStepFileType.STARTER))
-    if bool(current_user["author"]):
-        step.solution.update(load_problem_step_files(conn, problem_id, step_no, ProblemStepFileType.SOLUTION))
-    return step
 
 
 def get_problem_set_pb(conn: sqlite3.Connection, current_user: sqlite3.Row, problem_set_id: str) -> pb.ProblemSet:

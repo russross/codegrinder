@@ -12,7 +12,7 @@ import grpc
 import codegrinder_pb2 as pb
 from config import ServerConfig
 from daycare import DaycareRuntime
-from signatures import decode_signed_grading_commit, encode_signed_grading_commit
+from signatures import decode_signed_runtime_bundle, encode_signed_runtime_bundle
 
 _RUNTIME_CANDIDATES: tuple[tuple[str, ...], ...] = (("doas", "podman"), ("podman",))
 _IMAGE_CANDIDATES: tuple[str, ...] = ("localhost/codegrinder/riscv", "codegrinder/riscv")
@@ -47,6 +47,16 @@ def _selection_sort_files() -> dict[str, bytes]:
     return files
 
 
+def _runtime_limits_from_action(action: pb.ProblemTypeAction) -> pb.RuntimeLimits:
+    return pb.RuntimeLimits(
+        max_cpu=action.max_cpu,
+        max_fd=action.max_fd,
+        max_file_size=action.max_file_size,
+        max_memory=action.max_memory,
+        max_threads=action.max_threads,
+    )
+
+
 def _build_signed_request(*, action: str, problem_options: list[str], image: str) -> pb.DaycareRequest:
     now = datetime.now(tz=UTC)
     run_action = pb.ProblemTypeAction(
@@ -67,29 +77,7 @@ def _build_signed_request(*, action: str, problem_options: list[str], image: str
         max_memory=512,
         max_threads=32,
     )
-    ptype = pb.ProblemType(
-        problem_type="riscv",
-        container=image,
-        files={},
-        actions={"run": run_action, "grade": grade_action},
-    )
-    problem = pb.Problem(
-        problem_id="selection-sort",
-        problem_note="integration fixture",
-        problem_tags=["integration", "riscv"],
-        problem_options=problem_options,
-        created_at=now,
-        updated_at=now,
-    )
-    step = pb.ProblemStep(
-        problem_id="selection-sort",
-        step=1,
-        problem_type="riscv",
-        note="fixture step",
-        weight=1.0,
-        files={},
-        whitelist={"sort.s": True},
-    )
+    action_entry = grade_action if action == "grade" else run_action
     commit = pb.Commit(
         assignment=pb.AssignmentKey(user_id="999", course_id="c-1", problem_set_id="ps-1"),
         problem_id="selection-sort",
@@ -101,21 +89,24 @@ def _build_signed_request(*, action: str, problem_options: list[str], image: str
         created_at=now,
         updated_at=now,
     )
-
-    bundle = pb.GradingCommit(
-        problem_type=ptype,
-        problem=problem,
-        problem_steps=[step],
+    bundle = pb.RuntimeBundle(
         hostname="daycare.example.invalid",
         user_id="999",
+        assignment=commit.assignment,
+        problem_id="selection-sort",
+        problem_note="integration fixture",
+        problem_options=problem_options,
+        step_number=1,
+        total_steps=1,
+        action=action,
+        container=image,
+        command=action_entry.command,
+        parser=action_entry.parser,
+        limits=_runtime_limits_from_action(action_entry),
+        files=_selection_sort_files(),
         commit=commit,
     )
-    return pb.DaycareRequest(
-        commit=encode_signed_grading_commit(bundle, "daycare-secret"),
-        problem_type="riscv",
-        action=action,
-        args=[],
-    )
+    return pb.DaycareRequest(bundle=encode_signed_runtime_bundle(bundle, "daycare-secret"), args=[])
 
 
 class DaycarePodmanIntegrationTests(unittest.TestCase):
@@ -167,7 +158,7 @@ class DaycarePodmanIntegrationTests(unittest.TestCase):
         responses = list(runtime.stream(request, cast(grpc.ServicerContext, _FakeContext())))
         response_kinds = [response.WhichOneof("response") for response in responses]
         self.assertNotIn("error", response_kinds)
-        self.assertNotIn("commit", response_kinds)
+        self.assertNotIn("bundle", response_kinds)
 
         events = [response.event for response in responses if response.WhichOneof("response") == "event"]
         self.assertTrue(any(event.event == "exec" and list(event.exec_command) == ["make", "run"] for event in events))
@@ -193,12 +184,12 @@ class DaycarePodmanIntegrationTests(unittest.TestCase):
         self.assertTrue(b"<testsuite" in xml_bytes or b"<testsuites" in xml_bytes)
 
         grade_response = responses[-1]
-        self.assertEqual(grade_response.WhichOneof("response"), "commit")
-        signed_commit = decode_signed_grading_commit(grade_response.commit, "daycare-secret")
-        self.assertTrue(grade_response.commit.signature)
-        self.assertTrue(signed_commit.commit.report_card.passed)
-        self.assertEqual(signed_commit.commit.score, 1.0)
-        self.assertGreater(len(signed_commit.commit.report_card.results), 0)
+        self.assertEqual(grade_response.WhichOneof("response"), "bundle")
+        signed_bundle = decode_signed_runtime_bundle(grade_response.bundle, "daycare-secret")
+        self.assertTrue(grade_response.bundle.signature)
+        self.assertTrue(signed_bundle.commit.report_card.passed)
+        self.assertEqual(signed_bundle.commit.score, 1.0)
+        self.assertGreater(len(signed_bundle.commit.report_card.results), 0)
 
 
 if __name__ == "__main__":

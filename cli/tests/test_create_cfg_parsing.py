@@ -30,7 +30,7 @@ type = python3unittest
     )
 
     parsed = parse_problem_cfg(cfg)
-    assert parsed.unique == "loops-1"
+    assert parsed.problem_id == "loops-1"
     assert len(parsed.steps) == 2
     assert parsed.steps[0].weight == 0.5
     assert parsed.steps[1].problem_type == "python3unittest"
@@ -77,6 +77,6 @@ weight = 2.5
     )
 
     parsed = parse_problem_set_cfg(cfg)
-    assert parsed.unique == "cs1400-ps1"
+    assert parsed.problem_set_id == "cs1400-ps1"
     assert parsed.problems["p-one"] == 2.5
     assert parsed.problems["p-two"] == 1.0

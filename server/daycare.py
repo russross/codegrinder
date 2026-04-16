@@ -22,7 +22,7 @@ import grpc
 import codegrinder_pb2 as pb
 from config import ServerConfig
 from proto_conv import parse_time
-from signatures import decode_signed_grading_commit, encode_signed_grading_commit
+from signatures import decode_signed_runtime_bundle, encode_signed_runtime_bundle
 from timeutils import format_duration_for_log
 
 DEFAULT_CONTAINER_ENGINE = "podman"
@@ -273,7 +273,7 @@ class Limits:
     max_threads: int
 
     @classmethod
-    def from_action(cls, action: pb.ProblemTypeAction) -> Limits:
+    def from_action(cls, action: pb.RuntimeLimits) -> Limits:
         return cls(
             max_cpu=int(action.max_cpu),
             max_fd=int(action.max_fd),
@@ -357,8 +357,8 @@ class Nanny:
         container_command: list[str],
         user_id: str,
         image: str,
-        problem_type: pb.ProblemType,
-        problem: pb.Problem,
+        problem_type: str,
+        problem_id: str,
         action: str,
         limits: Limits,
         name: str,
@@ -406,8 +406,8 @@ class Nanny:
                 "new container %s; action %s on %s (%s); params cpu=%d, fd=%d, file=%d, mem=%d, threads=%d",
                 name,
                 action,
-                problem.problem_id,
-                problem_type.problem_type,
+                problem_id,
+                problem_type,
                 limits.max_cpu,
                 limits.max_fd,
                 limits.max_file_size,
@@ -419,8 +419,8 @@ class Nanny:
                 "new container %s; action %s on %s (%s); params cpu=%d, fd=%d, file=%d, mem=%d, threads=%d args=%s",
                 name,
                 action,
-                problem.problem_id,
-                problem_type.problem_type,
+                problem_id,
+                problem_type,
                 limits.max_cpu,
                 limits.max_fd,
                 limits.max_file_size,
@@ -889,65 +889,41 @@ def _untar_bytes(data: bytes) -> dict[str, bytes]:
 
 def validate_and_decode_action(
     *,
-    envelope: pb.SignedGradingCommit,
-    problem_type_param: str,
-    action_param: str,
+    envelope: pb.SignedRuntimeBundle,
     daycare_secret: str,
     hostname: str,
     now: datetime,
-) -> tuple[pb.GradingCommit, pb.ProblemTypeAction]:
-    bundle = decode_signed_grading_commit(envelope, daycare_secret)
-    if not bundle.HasField("problem_type"):
-        raise ValueError("grading commit must include the problem type")
-    if not bundle.HasField("problem"):
-        raise ValueError("grading commit must include the problem")
-    if bundle.problem_type.problem_type != problem_type_param:
-        raise ValueError(
-            f"problem type in URL ({problem_type_param}) must match problem type in bundle ({bundle.problem_type.problem_type})"
-        )
-    if action_param == "":
-        raise ValueError("action must be included in request URL")
-    if action_param not in bundle.problem_type.actions:
-        raise ValueError(f'action "{action_param}" not defined for problem type {bundle.problem_type.problem_type}')
-    if len(bundle.problem_steps) == 0:
-        raise ValueError("grading commit must include the problem steps")
-    if not bundle.HasField("commit"):
-        raise ValueError("grading commit must include the commit")
+) -> pb.RuntimeBundle:
+    bundle = decode_signed_runtime_bundle(envelope, daycare_secret)
     if bundle.hostname == "":
-        raise ValueError("grading commit must include the daycare host name")
+        raise ValueError("runtime bundle must include the daycare host name")
     if bundle.user_id == "":
-        raise ValueError("grading commit must include the user's ID")
+        raise ValueError("runtime bundle must include the user's ID")
+    if bundle.problem_id == "":
+        raise ValueError("runtime bundle must include the problem ID")
+    if bundle.action == "":
+        raise ValueError("runtime bundle must include the action")
+    if bundle.container == "":
+        raise ValueError("runtime bundle must include the container")
+    if bundle.command == "":
+        raise ValueError("runtime bundle must include the command")
+    if not bundle.HasField("commit"):
+        raise ValueError("runtime bundle must include the commit")
     if bundle.hostname != hostname:
-        raise ValueError(f"commit is signed for host {bundle.hostname}, this is {hostname}")
+        raise ValueError(f"runtime bundle is signed for host {bundle.hostname}, this is {hostname}")
     age = now - _ts_to_datetime(bundle.commit.updated_at)
     if age < timedelta(0):
         age = -age
     if age > SIGNED_REQUEST_MAX_AGE:
-        raise ValueError(f"commit signature is {age} old, cannot be more than {SIGNED_REQUEST_MAX_AGE}")
-    if bundle.commit.action != action_param:
-        raise ValueError(f"commit says action is {bundle.commit.action}, but request says {action_param}")
-    return bundle, bundle.problem_type.actions[action_param]
+        raise ValueError(f"runtime bundle signature is {age} old, cannot be more than {SIGNED_REQUEST_MAX_AGE}")
+    if bundle.commit.action != bundle.action:
+        raise ValueError(f"commit says action is {bundle.commit.action}, but runtime bundle says {bundle.action}")
+    return bundle
 
 
-def gather_files_and_step(bundle: pb.GradingCommit) -> tuple[pb.ProblemStep, dict[str, bytes]]:
-    step_num = int(bundle.commit.step)
-    if step_num < 1 or step_num > len(bundle.problem_steps):
-        raise ValueError(f"commit refers to step number {step_num}, but there are {len(bundle.problem_steps)} steps")
-    step = bundle.problem_steps[step_num - 1]
-    if int(step.step) != step_num:
-        raise ValueError(
-            f"step number mismatch: commit is for step {step_num}, but step object thinks it is {int(step.step)}"
-        )
-    if step.problem_type != bundle.problem_type.problem_type:
-        raise ValueError(
-            f'problem type mismatch in step {step.step}: expected "{bundle.problem_type.problem_type}", got "{step.problem_type}"'
-        )
+def gather_files(bundle: pb.RuntimeBundle) -> dict[str, bytes]:
+    return {name: bytes(content or b"") for name, content in dict(bundle.files).items()}
 
-    merged: dict[str, bytes] = {}
-    merged.update({name: bytes(content or b"") for name, content in dict(bundle.problem_type.files).items()})
-    merged.update({name: bytes(content or b"") for name, content in dict(step.files).items()})
-    merged.update({name: bytes(content or b"") for name, content in dict(bundle.commit.files).items()})
-    return step, merged
 
 
 def stream_nanny_events(
@@ -1197,8 +1173,8 @@ class DaycareRuntime:
         if request is None:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "request is required")
             raise AssertionError("unreachable")
-        if not request.HasField("commit"):
-            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "commit is required")
+        if not request.HasField("bundle"):
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "bundle is required")
             raise AssertionError("unreachable")
 
         q: queue.Queue[pb.DaycareResponse | None] = queue.Queue(maxsize=100)
@@ -1208,9 +1184,7 @@ class DaycareRuntime:
             try:
                 self._handle_problem_action(
                     cancel_event=cancel_event,
-                    envelope=request.commit,
-                    problem_type_param=request.problem_type,
-                    action_param=request.action,
+                    envelope=request.bundle,
                     args=list(request.args),
                     out_queue=q,
                 )
@@ -1244,9 +1218,7 @@ class DaycareRuntime:
         self,
         *,
         cancel_event: threading.Event,
-        envelope: pb.SignedGradingCommit,
-        problem_type_param: str,
-        action_param: str,
+        envelope: pb.SignedRuntimeBundle,
         args: list[str],
         out_queue: queue.Queue[pb.DaycareResponse | None],
     ) -> None:
@@ -1260,10 +1232,8 @@ class DaycareRuntime:
             out_queue.put(pb.DaycareResponse(error=message))
 
         try:
-            bundle, action = validate_and_decode_action(
+            bundle = validate_and_decode_action(
                 envelope=envelope,
-                problem_type_param=problem_type_param,
-                action_param=action_param,
                 daycare_secret=self._config.daycare_secret,
                 hostname=self._config.hostname,
                 now=now,
@@ -1274,21 +1244,17 @@ class DaycareRuntime:
 
         nanny_name = f"nanny-{bundle.user_id}"
 
-        try:
-            _, files = gather_files_and_step(bundle)
-        except ValueError as exc:
-            emit_error(f"error gathering files: {exc}")
-            return
+        files = gather_files(bundle)
 
         self._container_limiter.acquire()
         logging.info("container locked for user %s", bundle.user_id)
         try:
-            limits = Limits.from_action(action)
-            limits.override(list(bundle.problem.problem_options))
+            limits = Limits.from_action(bundle.limits)
+            limits.override(list(bundle.problem_options))
             timeout_seconds = float(int(limits.max_cpu) * 2 + 5)
             action_deadline_monotonic = time.monotonic() + timeout_seconds
 
-            image_candidates = self._image_candidates_with_cache(image=bundle.problem_type.container)
+            image_candidates = self._image_candidates_with_cache(image=bundle.container)
             nanny: Nanny | None = None
             creation_error: CommandError | None = None
             missing_images: list[str] = []
@@ -1299,16 +1265,16 @@ class DaycareRuntime:
                         container_command=self._container_command,
                         user_id=bundle.user_id,
                         image=candidate,
-                        problem_type=bundle.problem_type,
-                        problem=bundle.problem,
-                        action=action_param,
+                        problem_type=bundle.container,
+                        problem_id=bundle.problem_id,
+                        action=bundle.action,
                         limits=limits,
                         name=nanny_name,
                         args=args,
                         action_deadline_monotonic=action_deadline_monotonic,
                         cancel_event=cancel_event,
                     )
-                    self._cache_resolved_image(image=bundle.problem_type.container, resolved_image=candidate)
+                    self._cache_resolved_image(image=bundle.container, resolved_image=candidate)
                     break
                 except CommandError as exc:
                     creation_error = exc
@@ -1351,15 +1317,15 @@ class DaycareRuntime:
                     event_listener.join()
                     return
 
-                cmd = action.command.split()
-                if action.parser == "xunit":
+                cmd = bundle.command.split()
+                if bundle.parser == "xunit":
                     run_and_parse_xunit(nanny, cmd)
-                elif action.parser == "check":
+                elif bundle.parser == "check":
                     run_and_parse_check_xml(nanny, cmd)
-                elif action.parser != "":
+                elif bundle.parser != "":
                     _report_card_log_and_fail(
                         nanny.report_card,
-                        f'unknown parser "{action.parser}" for problem type {bundle.problem_type.problem_type} action {action_param}',
+                        f'unknown parser "{bundle.parser}" for action {bundle.action}',
                     )
                 else:
                     joined = " ".join(cmd)
@@ -1376,7 +1342,7 @@ class DaycareRuntime:
 
                 bundle.commit.report_card.CopyFrom(nanny.report_card)
 
-                for option in bundle.problem.problem_options:
+                for option in bundle.problem_options:
                     parts = option.split("=", 1)
                     if len(parts) != 2 or parts[0] != "download":
                         continue
@@ -1391,12 +1357,12 @@ class DaycareRuntime:
                 nanny.close_events()
                 event_listener.join()
 
-                if bundle.commit.action == "grade":
+                if bundle.action == "grade":
                     bundle.commit.score = _compute_grade_score(bundle.commit.report_card)
                     _set_timestamp(bundle.commit.updated_at, now)
                     out_queue.put(
                         pb.DaycareResponse(
-                            commit=encode_signed_grading_commit(bundle, self._config.daycare_secret)
+                            bundle=encode_signed_runtime_bundle(bundle, self._config.daycare_secret)
                         )
                     )
             finally:

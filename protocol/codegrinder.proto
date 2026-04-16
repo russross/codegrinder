@@ -161,7 +161,7 @@ message ProblemBundle {
    string hostname = 5;
    string user_id = 6;
    repeated Commit commits = 7;
-   repeated SignedGradingCommit signed_grading_commits = 8;
+   repeated SignedRuntimeBundle signed_grading_commits = 8;
 }
 
 // ProblemSetBundle represents a bundle of problem set data.
@@ -180,6 +180,34 @@ message GradingCommit {
     Commit commit = 6;
 }
 
+// RuntimeLimits carries container limits for one runtime action.
+message RuntimeLimits {
+   int64 max_cpu = 1;
+   int64 max_fd = 2;
+   int64 max_file_size = 3;
+   int64 max_memory = 4;
+   int64 max_threads = 5;
+}
+
+// RuntimeBundle is the complete signed execution request consumed by daycare.
+message RuntimeBundle {
+   string hostname = 1;
+   string user_id = 2;
+   AssignmentKey assignment = 3;
+   string problem_id = 4;
+   string problem_note = 5;
+   repeated string problem_options = 6;
+   int64 step_number = 7;
+   int64 total_steps = 8;
+   string action = 9;
+   string container = 10;
+   string command = 11;
+   string parser = 12;
+   RuntimeLimits limits = 13;
+   map<string, bytes> files = 14;
+   Commit commit = 15;
+}
+
 // SignedGradingCommit carries protobuf-encoded grading commit bytes plus an HMAC
 // signature. Clients may decode the bytes for inspection, but must forward the
 // encoded bytes unchanged to preserve the signature.
@@ -188,12 +216,18 @@ message SignedGradingCommit {
     string signature = 2;
 }
 
+// SignedRuntimeBundle carries protobuf-encoded runtime bundle bytes plus an HMAC
+// signature. Clients may decode the bytes for inspection, but must forward the
+// encoded bytes unchanged to preserve the signature.
+message SignedRuntimeBundle {
+    bytes bundle = 1;
+    string signature = 2;
+}
+
 // DaycareRequest represents a request for the daycare service.
 message DaycareRequest {
-    SignedGradingCommit commit = 1;
-    string problem_type = 2;
-    string action = 3;
-    repeated string args = 4;
+    SignedRuntimeBundle bundle = 1;
+    repeated string args = 2;
 }
 
 // DaycareResponse represents a response from the daycare service.
@@ -201,7 +235,7 @@ message DaycareResponse {
     oneof response {
         EventMessage event = 1;
         string error = 2;
-        SignedGradingCommit commit = 3;
+        SignedRuntimeBundle bundle = 3;
     }
 }
 
@@ -254,20 +288,10 @@ service CodeGrinderService {
    rpc GetProblemTypes(GetProblemTypesRequest) returns (GetProblemTypesResponse);
    // GetProblemType retrieves a specific problem type
    rpc GetProblemType(GetProblemTypeRequest) returns (GetProblemTypeResponse);
-   // GetProblems retrieves problems with optional filters
-   rpc GetProblems(GetProblemsRequest) returns (GetProblemsResponse);
-   // GetProblem retrieves a specific problem
-   rpc GetProblem(GetProblemRequest) returns (GetProblemResponse);
-   // GetProblemStep retrieves a specific step
-   rpc GetProblemStep(GetProblemStepRequest) returns (GetProblemStepResponse);
-   // GetUser retrieves a specific user
-   rpc GetUser(GetUserRequest) returns (GetUserResponse);
-   // GetAssignments retrieves assignments with optional filters
-   rpc GetAssignments(GetAssignmentsRequest) returns (GetAssignmentsResponse);
    // GetAssignment retrieves assignment metadata and per-problem step progress.
    rpc GetAssignment(GetAssignmentRequest) returns (GetAssignmentResponse);
-   // GetAssignmentStepFiles retrieves the system-owned and student-owned files for one step.
-   rpc GetAssignmentStepFiles(GetAssignmentStepFilesRequest) returns (GetAssignmentStepFilesResponse);
+   // GetWorkspace retrieves canonical local workspace context for one assignment step.
+   rpc GetWorkspace(GetWorkspaceRequest) returns (GetWorkspaceResponse);
    // PrepareProblem validates author source material and signs daycare bundles.
    rpc PrepareProblem(PrepareProblemRequest) returns (PrepareProblemResponse);
    // SaveProblem persists a prepared author problem bundle.
@@ -373,64 +397,6 @@ message GetProblemTypeResponse {
    ProblemType problem_type = 1;
 }
 
-// Request for GetProblems
-message GetProblemsRequest {
-   string session_cookie = 1;
-   string problem_id = 2;
-   string problem_type = 3;
-   string note = 4;
-}
-
-// Response for GetProblems
-message GetProblemsResponse {
-   repeated Problem problems = 1;
-}
-
-// Request for GetProblem
-message GetProblemRequest {
-   string session_cookie = 1;
-   string problem_id = 2;
-}
-
-// Response for GetProblem
-message GetProblemResponse {
-   Problem problem = 1;
-}
-
-// Request for GetProblemStep
-message GetProblemStepRequest {
-   string session_cookie = 1;
-   string problem_id = 2;
-   int64 step = 3;
-}
-
-// Response for GetProblemStep
-message GetProblemStepResponse {
-   ProblemStep problem_step = 1;
-}
-
-// Request for GetUser
-message GetUserRequest {
-   string session_cookie = 1;
-   string user_id = 2;
-}
-
-// Response for GetUser
-message GetUserResponse {
-   User user = 1;
-}
-
-// Request for GetAssignments
-message GetAssignmentsRequest {
-   string session_cookie = 1;
-   repeated string search = 2;
-}
-
-// Response for GetAssignments
-message GetAssignmentsResponse {
-   repeated Assignment assignments = 1;
-}
-
 // Request for GetAssignment
 message GetAssignmentRequest {
    string session_cookie = 1;
@@ -453,28 +419,43 @@ message GetAssignmentResponse {
    repeated AssignmentProblemProgress problems = 4;
 }
 
-// Request for GetAssignmentStepFiles
-message GetAssignmentStepFilesRequest {
-   string session_cookie = 1;
-   AssignmentKey assignment = 2;
-   string problem_id = 3;
-   int64 step_number = 4; // 0 means use the student's current step for this problem.
-   bool reset_to_step_start = 5;
-   bool include_contents = 6;
-}
-
 // AssignmentStepFile is one file path/content pair.
 message AssignmentStepFile {
    string path = 1;
    bytes content = 2;
 }
 
-// Response for GetAssignmentStepFiles
-message GetAssignmentStepFilesResponse {
-   int64 step_number = 1;
-   int64 total_steps = 2;
-   repeated AssignmentStepFile system_owned_files = 3;
-   repeated AssignmentStepFile student_owned_files = 4;
+enum WorkspaceFileState {
+   WORKSPACE_FILE_STATE_UNSPECIFIED = 0;
+   WORKSPACE_FILE_STATE_CURRENT = 1;
+   WORKSPACE_FILE_STATE_STEP_START = 2;
+}
+
+// Request for GetWorkspace
+message GetWorkspaceRequest {
+   string session_cookie = 1;
+   AssignmentKey assignment = 2;
+   string problem_id = 3;
+   int64 step_number = 4; // 0 means use the student's current step for this problem.
+   WorkspaceFileState file_state = 5;
+   bool include_contents = 6;
+   bool include_solution_files = 7;
+}
+
+// Response for GetWorkspace
+message GetWorkspaceResponse {
+   AssignmentKey assignment = 1;
+   string problem_id = 2;
+   string problem_note = 3;
+   int64 step_number = 4;
+   int64 total_steps = 5;
+   string problem_type = 6;
+   string step_note = 7;
+   double step_weight = 8;
+   repeated string actions = 9;
+   repeated AssignmentStepFile system_owned_files = 10;
+   repeated AssignmentStepFile student_owned_files = 11;
+   repeated AssignmentStepFile solution_files = 12;
 }
 
 
@@ -522,13 +503,13 @@ message SaveUngradedCommitRequest {
 
 // Response for SaveUngradedCommit
 message SaveUngradedCommitResponse {
-   SignedGradingCommit commit = 1;
+   SignedRuntimeBundle bundle = 1;
 }
 
 // Request for SaveGradedCommit
 message SaveGradedCommitRequest {
    string session_cookie = 1;
-   SignedGradingCommit commit = 2;
+   SignedRuntimeBundle bundle = 2;
 }
 
 // Response for SaveGradedCommit
