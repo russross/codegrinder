@@ -2,21 +2,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
 import codegrinder_pb2 as pb
 from problem_files import ProblemStepFileType
 from proto_conv import to_timestamp
-
-
-@dataclass(slots=True)
-class WorkspaceFiles:
-    step_number: int
-    total_steps: int
-    system_owned_files: list[pb.AssignmentStepFile]
-    student_owned_files: list[pb.AssignmentStepFile]
 
 
 def _q(conn: sqlite3.Connection, sql: str, args: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
@@ -69,10 +60,10 @@ def get_assignment_list_items_pb(
     where = ""
     args: list[Any] = []
     for term in search_terms:
-        where, args = add_where_like(where, args, "assignment_search_fields.search_text", term)
+        where, args = add_where_like(where, args, "assignment_list_fields.search_text", term)
     where, args = add_where_eq(where, args, "user_assignments.viewer_user_id", str(current_user["user_id"]))
     if not include_student_context:
-        where, args = add_where_eq(where, args, "assignments.user_id", str(current_user["user_id"]))
+        where, args = add_where_eq(where, args, "assignment_list_fields.user_id", str(current_user["user_id"]))
     if where == "":
         where = " WHERE"
     else:
@@ -83,21 +74,17 @@ def get_assignment_list_items_pb(
     rows = _q(
         conn,
         "SELECT "
-        "assignments.user_id, assignments.course_id, assignments.problem_set_id, "
-        "assignments.unlock_at, assignments.due_at, assignments.lock_at, "
-        "problem_sets.problem_set_note, courses.course_name, users.user_name, users.user_login "
-        "FROM assignments "
-        "JOIN user_assignments ON user_assignments.assignment_user_id = assignments.user_id "
-        "AND user_assignments.course_id = assignments.course_id "
-        "AND user_assignments.problem_set_id = assignments.problem_set_id "
-        "JOIN assignment_search_fields ON assignment_search_fields.user_id = assignments.user_id "
-        "AND assignment_search_fields.course_id = assignments.course_id "
-        "AND assignment_search_fields.problem_set_id = assignments.problem_set_id "
-        "JOIN courses ON courses.course_id = assignments.course_id "
-        "JOIN users ON users.user_id = assignments.user_id "
-        "JOIN problem_sets ON problem_sets.problem_set_id = assignments.problem_set_id "
+        "assignment_list_fields.user_id, assignment_list_fields.course_id, assignment_list_fields.problem_set_id, "
+        "assignment_list_fields.unlock_at, assignment_list_fields.due_at, assignment_list_fields.lock_at, "
+        "assignment_list_fields.problem_set_note, assignment_list_fields.course_name, "
+        "assignment_list_fields.user_name, assignment_list_fields.user_login "
+        "FROM assignment_list_fields "
+        "JOIN user_assignments ON user_assignments.assignment_user_id = assignment_list_fields.user_id "
+        "AND user_assignments.course_id = assignment_list_fields.course_id "
+        "AND user_assignments.problem_set_id = assignment_list_fields.problem_set_id "
         + where
-        + " ORDER BY assignments.course_id, assignments.due_at, assignments.lock_at, assignments.user_id, assignments.problem_set_id",
+        + " ORDER BY assignment_list_fields.course_id, assignment_list_fields.due_at, assignment_list_fields.lock_at, "
+        "assignment_list_fields.user_id, assignment_list_fields.problem_set_id",
         tuple(args),
     )
     items = [
@@ -284,17 +271,19 @@ def _resolve_current_step_number(
     return int(row["current_step_number"])
 
 
-def get_assignment_step_files_pb(
+def get_workspace_pb(
     conn: sqlite3.Connection,
     current_user: sqlite3.Row,
     assignment: pb.AssignmentKey,
     problem_id: str,
     step_number: int,
-    reset_to_step_start: bool,
+    file_state: pb.WorkspaceFileState.ValueType,
     include_contents: bool,
+    include_solution_files: bool,
     ip_allowed: bool,
     load_problem_type_files: Callable[[str], dict[str, bytes]],
-) -> WorkspaceFiles:
+) -> pb.GetWorkspaceResponse:
+    reset_to_step_start = file_state == pb.WORKSPACE_FILE_STATE_STEP_START
     get_assignment_access_row(conn, current_user, assignment, ip_allowed)
     _q1(
         conn,
@@ -369,57 +358,18 @@ def get_assignment_step_files_pb(
         system_owned_files = {path: b"" for path in system_owned_files}
         student_owned_files = {path: b"" for path in student_owned_files}
 
-    return WorkspaceFiles(
-        step_number=resolved_step_number,
-        total_steps=total_steps,
-        system_owned_files=[
-            pb.AssignmentStepFile(path=path, content=content)
-            for path, content in sorted(system_owned_files.items())
-        ],
-        student_owned_files=[
-            pb.AssignmentStepFile(path=path, content=content)
-            for path, content in sorted(student_owned_files.items())
-        ],
-    )
-
-
-
-def get_workspace_pb(
-    conn: sqlite3.Connection,
-    current_user: sqlite3.Row,
-    assignment: pb.AssignmentKey,
-    problem_id: str,
-    step_number: int,
-    file_state: pb.WorkspaceFileState.ValueType,
-    include_contents: bool,
-    include_solution_files: bool,
-    ip_allowed: bool,
-    load_problem_type_files: Callable[[str], dict[str, bytes]],
-) -> pb.GetWorkspaceResponse:
-    reset_to_step_start = file_state == pb.WORKSPACE_FILE_STATE_STEP_START
-    files = get_assignment_step_files_pb(
-        conn,
-        current_user,
-        assignment,
-        problem_id,
-        step_number,
-        reset_to_step_start,
-        include_contents,
-        ip_allowed,
-        load_problem_type_files,
-    )
     problem_row = get_problem_row(conn, current_user, problem_id)
     step_row = _q1(
         conn,
         "SELECT * FROM problem_steps WHERE problem_id = ? AND step_number = ?",
-        (problem_id, int(files.step_number)),
+        (problem_id, int(resolved_step_number)),
     )
     action_rows = get_problem_type_actions_rows(conn, str(step_row["problem_type"]))
     solution_files: dict[str, bytes] = {}
     if include_solution_files:
         if not bool(current_user["author"]):
             raise PermissionError("solution files require author access")
-        solution_files = load_problem_step_files(conn, problem_id, int(files.step_number), ProblemStepFileType.SOLUTION)
+        solution_files = load_problem_step_files(conn, problem_id, int(resolved_step_number), ProblemStepFileType.SOLUTION)
 
     if not include_contents:
         solution_files = {path: b"" for path in solution_files}
@@ -428,14 +378,20 @@ def get_workspace_pb(
         assignment=assignment,
         problem_id=problem_id,
         problem_note=str(problem_row["problem_note"]),
-        step_number=files.step_number,
-        total_steps=files.total_steps,
+        step_number=resolved_step_number,
+        total_steps=total_steps,
         problem_type=str(step_row["problem_type"]),
         step_note=str(step_row["step_note"]),
         step_weight=float(step_row["step_weight"]),
         actions=sorted(str(row["action"]) for row in action_rows),
-        system_owned_files=files.system_owned_files,
-        student_owned_files=files.student_owned_files,
+        system_owned_files=[
+            pb.AssignmentStepFile(path=path, content=content)
+            for path, content in sorted(system_owned_files.items())
+        ],
+        student_owned_files=[
+            pb.AssignmentStepFile(path=path, content=content)
+            for path, content in sorted(student_owned_files.items())
+        ],
         solution_files=[
             pb.AssignmentStepFile(path=path, content=content)
             for path, content in sorted(solution_files.items())
@@ -533,25 +489,7 @@ def search_problem_catalog_pb(
     problem_by_key: dict[tuple[str, str], pb.ProblemCatalogProblem] = {}
     set_ids: list[str] = []
     for row in set_rows:
-        raw_tags = row["problem_set_tags"]
-        tags: list[Any]
-        if raw_tags is None or raw_tags == "":
-            tags = []
-        elif isinstance(raw_tags, list):
-            tags = raw_tags
-        elif isinstance(raw_tags, bytes):
-            try:
-                parsed_tags = json.loads(raw_tags.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
-                parsed_tags = []
-            tags = parsed_tags if isinstance(parsed_tags, list) else []
-        else:
-            try:
-                parsed_tags = json.loads(str(raw_tags))
-            except (json.JSONDecodeError, TypeError, ValueError):
-                parsed_tags = []
-            tags = parsed_tags if isinstance(parsed_tags, list) else []
-
+        tags = json.loads(str(row["problem_set_tags"]))
         problem_set_id = str(row["problem_set_id"])
         item = pb.ProblemCatalogSet(
             problem_set_id=problem_set_id,

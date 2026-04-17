@@ -293,11 +293,18 @@ CREATE VIEW user_assignments AS
     )
     GROUP BY viewer_user_id, asst_user_id, course_id, problem_set_id;
 
-CREATE VIEW assignment_search_fields AS
+CREATE VIEW assignment_list_fields AS
     SELECT
         assignments.user_id,
         assignments.course_id,
         assignments.problem_set_id,
+        assignments.unlock_at,
+        assignments.due_at,
+        assignments.lock_at,
+        problem_sets.problem_set_note,
+        courses.course_name,
+        users.user_name,
+        users.user_login,
         courses.course_name || ',' ||
         users.user_name || ',' || users.user_login || ',' ||
         problem_sets.problem_set_id || ',' || problem_sets.problem_set_note || ',' || problem_sets.problem_set_tags AS search_text

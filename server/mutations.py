@@ -401,36 +401,47 @@ def save_problem(
         raise ValueError("bundle must include user's ID")
     if bundle.problem.problem_id == "":
         raise ValueError("problem_id is required")
-    row = tx.execute("SELECT * FROM problems WHERE problem_id = ?", (bundle.problem.problem_id,)).fetchone()
     if mode == pb.SAVE_MODE_UNSPECIFIED:
         raise ValueError("save mode is required")
-    if mode == pb.SAVE_MODE_CREATE and row is not None:
-        raise ValueError(f"problem {bundle.problem.problem_id!r} already exists")
-    if mode == pb.SAVE_MODE_UPDATE and row is None:
-        raise ValueError(f"problem {bundle.problem.problem_id!r} does not exist")
-    if row is not None:
-        _set_ts(bundle.problem.created_at, parse_time(row["problem_created_at"]))
     values = _problem_to_row(bundle.problem)
-    if row is None:
-        tx.execute(
-            "INSERT INTO problems(problem_id, problem_note, problem_tags, problem_options, problem_created_at, problem_updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-            values,
-        )
+    if mode == pb.SAVE_MODE_CREATE:
+        try:
+            tx.execute(
+                "INSERT INTO problems(problem_id, problem_note, problem_tags, problem_options, problem_created_at, problem_updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                values,
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ValueError(f"problem {bundle.problem.problem_id!r} already exists") from exc
     else:
-        tx.execute(
-            "UPDATE problems SET problem_note = ?, problem_tags = ?, problem_options = ?, problem_created_at = ?, problem_updated_at = ? WHERE problem_id = ?",
-            (values[1], values[2], values[3], values[4], values[5], values[0]),
+        if mode != pb.SAVE_MODE_UPDATE:
+            raise ValueError("save mode is required")
+        updated = tx.execute(
+            "UPDATE problems SET problem_note = ?, problem_tags = ?, problem_options = ?, problem_updated_at = ? "
+            "WHERE problem_id = ? RETURNING problem_created_at",
+            (values[1], values[2], values[3], values[5], values[0]),
         )
+        row = updated.fetchone()
+        if row is None:
+            raise ValueError(f"problem {bundle.problem.problem_id!r} does not exist")
+        _set_ts(bundle.problem.created_at, parse_time(row["problem_created_at"]))
 
     for idx, step in enumerate(bundle.problem_steps, start=1):
         step.problem_id = bundle.problem.problem_id
         step.step = idx
         step_weight = _require_positive_int_weight(float(step.weight), f"step {idx} weight")
         existing = tx.execute(
-            "SELECT 1 FROM problem_steps WHERE problem_id = ? AND step_number = ?",
-            (step.problem_id, step.step),
-        ).fetchone()
-        if existing is None:
+            "UPDATE problem_steps SET problem_type = ?, step_note = ?, step_instructions = ?, step_weight = ? "
+            "WHERE problem_id = ? AND step_number = ?",
+            (
+                step.problem_type,
+                step.note,
+                "",
+                step_weight,
+                step.problem_id,
+                step.step,
+            ),
+        )
+        if existing.rowcount == 0:
             tx.execute(
                 "INSERT INTO problem_steps(problem_id, step_number, problem_type, step_note, step_instructions, step_weight) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
@@ -441,19 +452,6 @@ def save_problem(
                     step.note,
                     "",
                     step_weight,
-                ),
-            )
-        else:
-            tx.execute(
-                "UPDATE problem_steps SET problem_type = ?, step_note = ?, step_instructions = ?, step_weight = ? "
-                "WHERE problem_id = ? AND step_number = ?",
-                (
-                    step.problem_type,
-                    step.note,
-                    "",
-                    step_weight,
-                    step.problem_id,
-                    step.step,
                 ),
             )
         if idx > len(bundle.commits):
@@ -484,33 +482,39 @@ def save_problem_set(
         raise ValueError("save mode is required")
     now_sql = _rfc3339_round_sec(_timestamp_now())
     tags_json = json.dumps(list(pset.problem_set_tags))
-    row = tx.execute("SELECT * FROM problem_sets WHERE problem_set_id = ?", (pset.problem_set_id,)).fetchone()
-    if mode == pb.SAVE_MODE_CREATE and row is not None:
-        raise ValueError(f"problem set {pset.problem_set_id!r} already exists")
-    if mode == pb.SAVE_MODE_UPDATE and row is None:
-        raise ValueError(f"problem set {pset.problem_set_id!r} does not exist")
-    if row is None:
-        tx.execute(
-            "INSERT INTO problem_sets(problem_set_id, problem_set_note, problem_set_tags, problem_set_created_at, problem_set_updated_at) VALUES (?, ?, ?, ?, ?)",
-            (pset.problem_set_id, pset.problem_set_note, tags_json, now_sql, now_sql),
-        )
+    if mode == pb.SAVE_MODE_CREATE:
+        try:
+            tx.execute(
+                "INSERT INTO problem_sets(problem_set_id, problem_set_note, problem_set_tags, problem_set_created_at, problem_set_updated_at) VALUES (?, ?, ?, ?, ?)",
+                (pset.problem_set_id, pset.problem_set_note, tags_json, now_sql, now_sql),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ValueError(f"problem set {pset.problem_set_id!r} already exists") from exc
     else:
-        tx.execute(
+        if mode != pb.SAVE_MODE_UPDATE:
+            raise ValueError("save mode is required")
+        updated = tx.execute(
             "UPDATE problem_sets SET problem_set_note = ?, problem_set_tags = ?, problem_set_updated_at = ? WHERE problem_set_id = ?",
             (pset.problem_set_note, tags_json, now_sql, pset.problem_set_id),
         )
+        if updated.rowcount == 0:
+            raise ValueError(f"problem set {pset.problem_set_id!r} does not exist")
 
     tx.execute("DELETE FROM problem_set_problems WHERE problem_set_id = ?", (pset.problem_set_id,))
+    seen_problem_ids: set[str] = set()
     for psp in bundle.problem_set_problems:
         psp.problem_set_id = pset.problem_set_id
+        if psp.problem_id in seen_problem_ids:
+            raise ValueError(f"problem {psp.problem_id!r} listed more than once")
+        seen_problem_ids.add(psp.problem_id)
         problem_weight = _require_positive_int_weight(float(psp.weight), f"problem {psp.problem_id} weight")
-        exists = tx.execute("SELECT 1 FROM problems WHERE problem_id = ?", (psp.problem_id,)).fetchone()
-        if exists is None:
-            raise ValueError(f"problem {psp.problem_id!r} does not exist")
-        tx.execute(
-            "INSERT INTO problem_set_problems(problem_set_id, problem_id, problem_weight) VALUES (?, ?, ?)",
-            (psp.problem_set_id, psp.problem_id, problem_weight),
-        )
+        try:
+            tx.execute(
+                "INSERT INTO problem_set_problems(problem_set_id, problem_id, problem_weight) VALUES (?, ?, ?)",
+                (psp.problem_set_id, psp.problem_id, problem_weight),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ValueError(f"problem {psp.problem_id!r} does not exist") from exc
     return bundle
 
 

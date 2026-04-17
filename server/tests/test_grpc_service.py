@@ -524,6 +524,57 @@ class GrpcServiceTests(unittest.TestCase):
             )
         self.assertEqual(err.exception.code, grpc.StatusCode.INVALID_ARGUMENT)
 
+    def test_save_problem_update_preserves_created_at(self) -> None:
+        author_ctx = cast(grpc.ServicerContext, self._auth_context("u2"))
+        prepared = self.service.PrepareProblem(
+            pb.PrepareProblemRequest(
+                draft=pb.AuthorProblemDraft(
+                    problem_id="update-problem",
+                    problem_note="Original Note",
+                    problem_tags=[],
+                    problem_options=[],
+                    steps=[
+                        pb.AuthorProblemStepDraft(
+                            step_number=1,
+                            problem_type="python3unittest",
+                            note="Step 1",
+                            weight=1.0,
+                            files=[pb.AuthorFile(path="main.py", content=b"print('solution')\n")],
+                            starter_files=[pb.AuthorFile(path="main.py", content=b"print('starter')\n")],
+                        )
+                    ],
+                )
+            ),
+            author_ctx,
+        )
+        saved = self.service.SaveProblem(
+            pb.SaveProblemRequest(mode=pb.SAVE_MODE_CREATE, bundle=prepared.bundle),
+            author_ctx,
+        )
+        original_created_at = saved.bundle.problem.created_at.ToDatetime(tzinfo=UTC)
+
+        prepared.bundle.problem.problem_note = "Updated Note"
+        prepared.bundle.problem.updated_at.FromDatetime(datetime(2026, 2, 17, 10, 0, 0, tzinfo=UTC))
+        prepared.bundle.problem_steps[0].note = "Updated Step 1"
+        prepared.bundle.commits[0].note = "updated"
+
+        updated = self.service.SaveProblem(
+            pb.SaveProblemRequest(mode=pb.SAVE_MODE_UPDATE, bundle=prepared.bundle),
+            author_ctx,
+        )
+        self.assertEqual(updated.bundle.problem.problem_note, "Updated Note")
+        self.assertEqual(
+            updated.bundle.problem.created_at.ToDatetime(tzinfo=UTC).replace(microsecond=0),
+            original_created_at.replace(microsecond=0),
+        )
+        row = self.conn.execute(
+            "SELECT problem_note, problem_created_at FROM problems WHERE problem_id = ?",
+            ("update-problem",),
+        ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(str(row["problem_note"]), "Updated Note")
+        self.assertEqual(datetime.fromisoformat(str(row["problem_created_at"])), original_created_at.replace(microsecond=0))
+
     def test_problem_step_file_type_constraint_rejects_invalid_value(self) -> None:
         with self.assertRaises(sqlite3.IntegrityError):
             self.conn.execute(
