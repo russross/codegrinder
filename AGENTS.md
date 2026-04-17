@@ -1,6 +1,12 @@
 # General project rules
 
-- Current project is refactoring gRPC protocol to be clean, streamlined, and shaped around current usage
+For Python server checks:
+
+- The server is its own uv project under `server/`; run server pytest from that directory with `uv run pytest tests`.
+- Do not run server tests from the repo root with `uv run --project server pytest`; pytest will collect unrelated repo paths such as `certs/` and CLI tests, and imports will not match the server test layout.
+
+For protocol changes:
+
 - Backware compatibility of the protocol is NOT a goal
 - Always clean up/remove fields that are not actually used
 - Favor flattening message data types where appropriate

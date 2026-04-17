@@ -31,7 +31,6 @@ from read_store import (
     get_workspace_pb,
     get_problem_type_actions_rows,
     get_problem_types_rows,
-    get_user_me_pb,
     load_user_by_id,
     problem_type_pb,
     search_problem_catalog_pb,
@@ -319,7 +318,12 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                     context.abort(grpc.StatusCode.INTERNAL, f"db error getting user me: {exc}")
                 return pb.HelloResponse(
                     cookie=f"{COOKIE_NAME}={cookie_value}",
-                    user=get_user_me_pb(user_row),
+                    user=pb.User(
+                        user_id=str(user_row["user_id"]),
+                        user_name=str(user_row["user_name"]),
+                        user_login=str(user_row["user_login"]),
+                        author=bool(user_row["author"]) if "author" in user_row.keys() else False,
+                    ),
                     version=version,
                 )
 
@@ -327,7 +331,15 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
 
         def fn2(tx: sqlite3.Connection) -> pb.HelloResponse:
             user_row = self._current_user_row(tx, context)
-            return pb.HelloResponse(user=get_user_me_pb(user_row), version=version)
+            return pb.HelloResponse(
+                user=pb.User(
+                    user_id=str(user_row["user_id"]),
+                    user_name=str(user_row["user_name"]),
+                    user_login=str(user_row["user_login"]),
+                    author=bool(user_row["author"]) if "author" in user_row.keys() else False,
+                ),
+                version=version,
+            )
 
         return self._with_tx(fn2)
 
@@ -394,9 +406,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                 asst = get_assignment_summary_pb(
                     tx,
                     current_user,
-                    request.assignment.user_id,
-                    request.assignment.course_id,
-                    request.assignment.problem_set_id,
+                    request.assignment,
                     self._ip_allowed(context),
                 )
             except sqlite3.Error as exc:
@@ -415,9 +425,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                 return get_workspace_pb(
                     tx,
                     current_user,
-                    request.assignment.user_id,
-                    request.assignment.course_id,
-                    request.assignment.problem_set_id,
+                    request.assignment,
                     request.problem_id,
                     int(request.step_number),
                     request.file_state,

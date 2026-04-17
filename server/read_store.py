@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -7,13 +8,7 @@ from typing import Any, Callable
 
 import codegrinder_pb2 as pb
 from problem_files import ProblemStepFileType
-from proto_conv import (
-    assignment_list_item_row_to_pb,
-    assignment_row_to_pb,
-    course_row_to_pb,
-    problem_set_row_to_pb,
-    user_row_to_pb,
-)
+from proto_conv import to_timestamp
 
 
 @dataclass(slots=True)
@@ -64,20 +59,6 @@ def load_user_by_id(conn: sqlite3.Connection, user_id: str) -> sqlite3.Row:
     )
 
 
-def get_user_me_pb(current_user_row: sqlite3.Row) -> pb.User:
-    return user_row_to_pb(current_user_row)
-
-
-def get_course_pb(conn: sqlite3.Connection, current_user: sqlite3.Row, course_id: str) -> pb.Course:
-    row = _q1(
-        conn,
-        "SELECT courses.* FROM courses NATURAL JOIN user_assignments "
-        "WHERE user_assignments.viewer_user_id = ? AND user_assignments.course_id = ?",
-        (str(current_user["user_id"]), course_id),
-    )
-    return course_row_to_pb(row)
-
-
 def get_assignment_list_items_pb(
     conn: sqlite3.Connection,
     current_user: sqlite3.Row,
@@ -119,7 +100,23 @@ def get_assignment_list_items_pb(
         + " ORDER BY assignments.course_id, assignments.due_at, assignments.lock_at, assignments.user_id, assignments.problem_set_id",
         tuple(args),
     )
-    items = [assignment_list_item_row_to_pb(row) for row in rows]
+    items = [
+        pb.AssignmentListItem(
+            assignment=pb.AssignmentKey(
+                user_id=str(row["user_id"]),
+                course_id=str(row["course_id"]),
+                problem_set_id=str(row["problem_set_id"] or ""),
+            ),
+            problem_set_note=str(row["problem_set_note"] or ""),
+            unlock_at=to_timestamp(row["unlock_at"]),
+            due_at=to_timestamp(row["due_at"]),
+            lock_at=to_timestamp(row["lock_at"]),
+            course_name=str(row["course_name"] or ""),
+            user_name=str(row["user_name"] or ""),
+            user_login=str(row["user_login"] or ""),
+        )
+        for row in rows
+    ]
     if include_student_context:
         return items
     for item in items:
@@ -128,29 +125,13 @@ def get_assignment_list_items_pb(
     return items
 
 
-def get_user_assignments_pb(conn: sqlite3.Connection, current_user: sqlite3.Row, user_id: str, ip_allowed: bool) -> list[pb.Assignment]:
-    rows = _q(
-        conn,
-        "SELECT assignments.* FROM assignments JOIN user_assignments "
-        "ON assignments.user_id = user_assignments.assignment_user_id "
-        "AND assignments.course_id = user_assignments.course_id "
-        "AND assignments.problem_set_id = user_assignments.problem_set_id "
-        "WHERE assignments.user_id = ? AND user_assignments.viewer_user_id = ? AND (? OR NOT user_assignments.restricted) "
-        "ORDER BY assignments.course_id, assignments.due_at, assignments.problem_set_id",
-        (user_id, str(current_user["user_id"]), 1 if ip_allowed else 0),
-    )
-    return [assignment_row_to_pb(row) for row in rows]
-
-
-def get_assignment_pb(
+def get_assignment_access_row(
     conn: sqlite3.Connection,
     current_user: sqlite3.Row,
-    assignment_user_id: str,
-    assignment_course_id: str,
-    assignment_problem_set_id: str,
+    assignment: pb.AssignmentKey,
     ip_allowed: bool,
-) -> pb.Assignment:
-    row = _q1(
+) -> sqlite3.Row:
+    return _q1(
         conn,
         "SELECT assignments.* FROM assignments JOIN user_assignments "
         "ON assignments.user_id = user_assignments.assignment_user_id "
@@ -159,14 +140,13 @@ def get_assignment_pb(
         "WHERE assignments.user_id = ? AND assignments.course_id = ? AND assignments.problem_set_id = ? "
         "AND user_assignments.viewer_user_id = ? AND (? OR NOT user_assignments.restricted)",
         (
-            assignment_user_id,
-            assignment_course_id,
-            assignment_problem_set_id,
+            assignment.user_id,
+            assignment.course_id,
+            assignment.problem_set_id,
             str(current_user["user_id"]),
             1 if ip_allowed else 0,
         ),
     )
-    return assignment_row_to_pb(row)
 
 
 def load_commit_files(
@@ -233,80 +213,56 @@ def _system_owned_files_for_step(
 def get_assignment_summary_pb(
     conn: sqlite3.Connection,
     current_user: sqlite3.Row,
-    assignment_user_id: str,
-    assignment_course_id: str,
-    assignment_problem_set_id: str,
+    assignment: pb.AssignmentKey,
     ip_allowed: bool,
 ) -> pb.GetAssignmentResponse:
-    assignment = get_assignment_pb(
+    assignment_row = _q1(
         conn,
-        current_user,
-        assignment_user_id,
-        assignment_course_id,
-        assignment_problem_set_id,
-        ip_allowed,
+        "SELECT "
+        "assignments.user_id, assignments.course_id, assignments.problem_set_id, "
+        "courses.course_name, problem_sets.problem_set_note "
+        "FROM assignments "
+        "JOIN user_assignments ON user_assignments.assignment_user_id = assignments.user_id "
+        "AND user_assignments.course_id = assignments.course_id "
+        "AND user_assignments.problem_set_id = assignments.problem_set_id "
+        "JOIN courses ON courses.course_id = assignments.course_id "
+        "JOIN problem_sets ON problem_sets.problem_set_id = assignments.problem_set_id "
+        "WHERE assignments.user_id = ? AND assignments.course_id = ? AND assignments.problem_set_id = ? "
+        "AND user_assignments.viewer_user_id = ? AND (? OR NOT user_assignments.restricted)",
+        (
+            assignment.user_id,
+            assignment.course_id,
+            assignment.problem_set_id,
+            str(current_user["user_id"]),
+            1 if ip_allowed else 0,
+        ),
     )
-    course = get_course_pb(conn, current_user, assignment.course_id)
-    problem_set = get_problem_set_pb(conn, current_user, assignment.problem_set_id)
     problem_rows = _q(
         conn,
-        "SELECT problem_set_problems.problem_id, problems.problem_note "
-        "FROM problem_set_problems NATURAL JOIN problems "
-        "WHERE problem_set_problems.problem_set_id = ? "
-        "ORDER BY problem_set_problems.problem_id",
-        (assignment.problem_set_id,),
-    )
-    total_rows = _q(
-        conn,
-        "SELECT problem_id, MAX(step_number) AS total_steps "
-        "FROM problem_steps GROUP BY problem_id",
-    )
-    total_steps_by_problem = {
-        str(row["problem_id"]): max(1, int(row["total_steps"] or 0))
-        for row in total_rows
-    }
-    success_rows = _q(
-        conn,
-        "SELECT problem_id, step_number "
-        "FROM commits "
+        "SELECT problem_id, problem_note, current_step_number, total_steps "
+        "FROM assignment_problem_progress "
         "WHERE user_id = ? AND course_id = ? AND problem_set_id = ? "
-        "AND json_extract(report_card, '$.passed') = 1 "
-        "AND score = 1.0 "
-        "GROUP BY problem_id, step_number",
+        "ORDER BY problem_id",
         (assignment.user_id, assignment.course_id, assignment.problem_set_id),
     )
-    success_by_problem: dict[str, set[int]] = {}
-    for row in success_rows:
-        problem_id = str(row["problem_id"])
-        if problem_id not in success_by_problem:
-            success_by_problem[problem_id] = set()
-        success_by_problem[problem_id].add(int(row["step_number"]))
     problems: list[pb.AssignmentProblemProgress] = []
     for row in problem_rows:
-        problem_id = str(row["problem_id"])
-        total_steps = total_steps_by_problem.get(problem_id, 1)
-        current_step = total_steps
-        success_steps = success_by_problem.get(problem_id, set())
-        for step_number in range(1, total_steps + 1):
-            if step_number not in success_steps:
-                current_step = step_number
-                break
         problems.append(
             pb.AssignmentProblemProgress(
-                problem_id=problem_id,
+                problem_id=str(row["problem_id"]),
                 problem_note=str(row["problem_note"]),
-                current_step_number=current_step,
-                total_steps=total_steps,
+                current_step_number=int(row["current_step_number"]),
+                total_steps=int(row["total_steps"]),
             )
         )
     return pb.GetAssignmentResponse(
         assignment=pb.AssignmentKey(
-            user_id=assignment.user_id,
-            course_id=assignment.course_id,
-            problem_set_id=assignment.problem_set_id,
+            user_id=str(assignment_row["user_id"]),
+            course_id=str(assignment_row["course_id"]),
+            problem_set_id=str(assignment_row["problem_set_id"]),
         ),
-        problem_set_note=problem_set.problem_set_note,
-        course_name=course.course_name,
+        problem_set_note=str(assignment_row["problem_set_note"]),
+        course_name=str(assignment_row["course_name"]),
         problems=problems,
     )
 
@@ -320,33 +276,18 @@ def _resolve_current_step_number(
 ) -> int:
     row = _q1(
         conn,
-        "SELECT MAX(step_number) AS total_steps FROM problem_steps WHERE problem_id = ?",
-        (problem_id,),
-    )
-    total_steps = max(1, int(row["total_steps"] or 0))
-    success_rows = _q(
-        conn,
-        "SELECT step_number "
-        "FROM commits "
-        "WHERE user_id = ? AND course_id = ? AND problem_set_id = ? AND problem_id = ? "
-        "AND json_extract(report_card, '$.passed') = 1 "
-        "AND score = 1.0 "
-        "GROUP BY step_number",
+        "SELECT current_step_number "
+        "FROM assignment_problem_progress "
+        "WHERE user_id = ? AND course_id = ? AND problem_set_id = ? AND problem_id = ?",
         (user_id, course_id, problem_set_id, problem_id),
     )
-    success_steps = {int(success_row["step_number"]) for success_row in success_rows}
-    for candidate in range(1, total_steps + 1):
-        if candidate not in success_steps:
-            return candidate
-    return total_steps
+    return int(row["current_step_number"])
 
 
 def get_assignment_step_files_pb(
     conn: sqlite3.Connection,
     current_user: sqlite3.Row,
-    assignment_user_id: str,
-    assignment_course_id: str,
-    assignment_problem_set_id: str,
+    assignment: pb.AssignmentKey,
     problem_id: str,
     step_number: int,
     reset_to_step_start: bool,
@@ -354,14 +295,7 @@ def get_assignment_step_files_pb(
     ip_allowed: bool,
     load_problem_type_files: Callable[[str], dict[str, bytes]],
 ) -> WorkspaceFiles:
-    assignment = get_assignment_pb(
-        conn,
-        current_user,
-        assignment_user_id,
-        assignment_course_id,
-        assignment_problem_set_id,
-        ip_allowed,
-    )
+    get_assignment_access_row(conn, current_user, assignment, ip_allowed)
     _q1(
         conn,
         "SELECT 1 FROM problem_set_problems WHERE problem_set_id = ? AND problem_id = ?",
@@ -383,7 +317,7 @@ def get_assignment_step_files_pb(
     )
     total_steps_row = _q1(
         conn,
-        "SELECT MAX(step_number) AS total_steps FROM problem_steps WHERE problem_id = ?",
+        "SELECT total_steps FROM problem_total_steps WHERE problem_id = ?",
         (problem_id,),
     )
     total_steps = max(1, int(total_steps_row["total_steps"] or 0))
@@ -453,9 +387,7 @@ def get_assignment_step_files_pb(
 def get_workspace_pb(
     conn: sqlite3.Connection,
     current_user: sqlite3.Row,
-    assignment_user_id: str,
-    assignment_course_id: str,
-    assignment_problem_set_id: str,
+    assignment: pb.AssignmentKey,
     problem_id: str,
     step_number: int,
     file_state: pb.WorkspaceFileState.ValueType,
@@ -468,9 +400,7 @@ def get_workspace_pb(
     files = get_assignment_step_files_pb(
         conn,
         current_user,
-        assignment_user_id,
-        assignment_course_id,
-        assignment_problem_set_id,
+        assignment,
         problem_id,
         step_number,
         reset_to_step_start,
@@ -495,11 +425,7 @@ def get_workspace_pb(
         solution_files = {path: b"" for path in solution_files}
 
     return pb.GetWorkspaceResponse(
-        assignment=pb.AssignmentKey(
-            user_id=assignment_user_id,
-            course_id=assignment_course_id,
-            problem_set_id=assignment_problem_set_id,
-        ),
+        assignment=assignment,
         problem_id=problem_id,
         problem_note=str(problem_row["problem_note"]),
         step_number=files.step_number,
@@ -548,19 +474,6 @@ def load_problem_step_files(
         (problem_id, step, file_type.value),
     )
     return {str(row["path"]): bytes(row["content"] or b"") for row in rows}
-
-
-def get_problem_set_pb(conn: sqlite3.Connection, current_user: sqlite3.Row, problem_set_id: str) -> pb.ProblemSet:
-    if bool(current_user["author"]):
-        row = _q1(conn, "SELECT * FROM problem_sets WHERE problem_set_id = ?", (problem_set_id,))
-    else:
-        row = _q1(
-            conn,
-            "SELECT problem_sets.* FROM problem_sets NATURAL JOIN user_problem_sets "
-            "WHERE user_problem_sets.user_id = ? AND user_problem_sets.problem_set_id = ?",
-            (str(current_user["user_id"]), problem_set_id),
-        )
-    return problem_set_row_to_pb(row)
 
 
 def search_problem_catalog_pb(
@@ -618,18 +531,38 @@ def search_problem_catalog_pb(
     set_items: list[pb.ProblemCatalogSet] = []
     set_by_id: dict[str, pb.ProblemCatalogSet] = {}
     problem_by_key: dict[tuple[str, str], pb.ProblemCatalogProblem] = {}
-    set_pbs = [problem_set_row_to_pb(row) for row in set_rows]
-    for problem_set in set_pbs:
+    set_ids: list[str] = []
+    for row in set_rows:
+        raw_tags = row["problem_set_tags"]
+        tags: list[Any]
+        if raw_tags is None or raw_tags == "":
+            tags = []
+        elif isinstance(raw_tags, list):
+            tags = raw_tags
+        elif isinstance(raw_tags, bytes):
+            try:
+                parsed_tags = json.loads(raw_tags.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+                parsed_tags = []
+            tags = parsed_tags if isinstance(parsed_tags, list) else []
+        else:
+            try:
+                parsed_tags = json.loads(str(raw_tags))
+            except (json.JSONDecodeError, TypeError, ValueError):
+                parsed_tags = []
+            tags = parsed_tags if isinstance(parsed_tags, list) else []
+
+        problem_set_id = str(row["problem_set_id"])
         item = pb.ProblemCatalogSet(
-            problem_set_id=problem_set.problem_set_id,
-            problem_set_note=problem_set.problem_set_note,
-            problem_set_tags=list(problem_set.problem_set_tags),
+            problem_set_id=problem_set_id,
+            problem_set_note=str(row["problem_set_note"]),
+            problem_set_tags=[str(tag) for tag in tags],
         )
         set_items.append(item)
-        set_by_id[problem_set.problem_set_id] = item
+        set_by_id[problem_set_id] = item
+        set_ids.append(problem_set_id)
 
-    placeholders = ", ".join("?" for _ in set_pbs)
-    set_ids = tuple(problem_set.problem_set_id for problem_set in set_pbs)
+    placeholders = ", ".join("?" for _ in set_ids)
     rows = _q(
         conn,
         "SELECT "
@@ -645,7 +578,7 @@ def search_problem_catalog_pb(
         "JOIN problem_steps ON problem_steps.problem_id = problem_set_problems.problem_id "
         f"WHERE problem_set_problems.problem_set_id IN ({placeholders}) "
         "ORDER BY problem_set_problems.problem_set_id, problem_set_problems.problem_id, problem_steps.step_number",
-        set_ids,
+        tuple(set_ids),
     )
 
     for row in rows:

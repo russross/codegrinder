@@ -37,7 +37,7 @@ class _FakeContext:
 
 
 def _selection_sort_files() -> dict[str, bytes]:
-    root = Path(__file__).resolve().parents[2] / "selection-sort"
+    root = Path(__file__).resolve().parent / "fixtures" / "selection-sort"
     files: dict[str, bytes] = {}
     for path in sorted(root.rglob("*")):
         if not path.is_file():

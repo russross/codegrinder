@@ -80,7 +80,18 @@ CREATE TABLE problem_step_files (
     FOREIGN KEY (problem_id, step_number) REFERENCES problem_steps (problem_id, step_number) ON DELETE CASCADE ON UPDATE CASCADE,
     CHECK (step_number >= 1),
     CHECK (trim(file_type) = file_type AND file_type IN ('regular', 'starter', 'solution')),
-    CHECK (trim(path) = path AND length(path) > 0)
+    CHECK (trim(path) = path AND length(path) > 0),
+    CHECK (
+        path NOT GLOB '/*'
+        AND path NOT GLOB './*'
+        AND path NOT GLOB '../*'
+        AND path NOT GLOB '*//*'
+        AND path NOT GLOB '*/./*'
+        AND path NOT GLOB '*/../*'
+        AND path NOT GLOB '*/.'
+        AND path NOT GLOB '*/..'
+        AND path NOT IN ('.', '..')
+    )
 ) WITHOUT ROWID;
 
 CREATE TABLE problem_sets (
@@ -231,8 +242,19 @@ CREATE TABLE commit_files (
     PRIMARY KEY (user_id, course_id, problem_set_id, problem_id, step_number, path),
     FOREIGN KEY (user_id, course_id, problem_set_id, problem_id, step_number)
         REFERENCES commits (user_id, course_id, problem_set_id, problem_id, step_number)
-        ON DELETE CASCADE ON UPDATE CASCADE
-    CHECK (trim(path) = path AND length(path) > 0)
+        ON DELETE CASCADE ON UPDATE CASCADE,
+    CHECK (trim(path) = path AND length(path) > 0),
+    CHECK (
+        path NOT GLOB '/*'
+        AND path NOT GLOB './*'
+        AND path NOT GLOB '../*'
+        AND path NOT GLOB '*//*'
+        AND path NOT GLOB '*/./*'
+        AND path NOT GLOB '*/../*'
+        AND path NOT GLOB '*/.'
+        AND path NOT GLOB '*/..'
+        AND path NOT IN ('.', '..')
+    )
 ) WITHOUT ROWID;
 
 CREATE VIEW user_problem_sets AS
@@ -324,6 +346,55 @@ SELECT
     END AS assignment_score
 FROM problem_scores
 GROUP BY user_id, course_id, problem_set_id;
+
+CREATE VIEW problem_total_steps AS
+    SELECT problem_id, MAX(step_number) AS total_steps
+    FROM problem_steps
+    GROUP BY problem_id;
+
+CREATE VIEW passed_commit_steps AS
+    SELECT user_id, course_id, problem_set_id, problem_id, step_number
+    FROM commits
+    WHERE json_extract(report_card, '$.passed') = 1
+        AND score = 1.0
+    GROUP BY user_id, course_id, problem_set_id, problem_id, step_number;
+
+CREATE VIEW assignment_problem_progress AS
+    SELECT
+        assignments.user_id,
+        assignments.course_id,
+        assignments.problem_set_id,
+        problem_set_problems.problem_id,
+        problems.problem_note,
+        COALESCE(problem_total_steps.total_steps, 1) AS total_steps,
+        COALESCE(
+            MIN(
+                CASE
+                    WHEN problem_steps.step_number IS NOT NULL
+                        AND passed_commit_steps.step_number IS NULL
+                    THEN problem_steps.step_number
+                END
+            ),
+            COALESCE(problem_total_steps.total_steps, 1)
+        ) AS current_step_number
+    FROM assignments
+    NATURAL JOIN problem_set_problems
+    JOIN problems ON problems.problem_id = problem_set_problems.problem_id
+    LEFT JOIN problem_total_steps ON problem_total_steps.problem_id = problem_set_problems.problem_id
+    LEFT JOIN problem_steps ON problem_steps.problem_id = problem_set_problems.problem_id
+    LEFT JOIN passed_commit_steps
+        ON passed_commit_steps.user_id = assignments.user_id
+        AND passed_commit_steps.course_id = assignments.course_id
+        AND passed_commit_steps.problem_set_id = assignments.problem_set_id
+        AND passed_commit_steps.problem_id = problem_set_problems.problem_id
+        AND passed_commit_steps.step_number = problem_steps.step_number
+    GROUP BY
+        assignments.user_id,
+        assignments.course_id,
+        assignments.problem_set_id,
+        problem_set_problems.problem_id,
+        problems.problem_note,
+        problem_total_steps.total_steps;
 
 CREATE VIEW problem_step_whitelist AS
 SELECT
