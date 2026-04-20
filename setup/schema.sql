@@ -54,7 +54,6 @@ CREATE TABLE problem_steps (
     step_number             integer NOT NULL,
     problem_type            text NOT NULL,
     step_note               text NOT NULL,
-    step_instructions       text NOT NULL,
     step_weight             integer NOT NULL,
 
     PRIMARY KEY (problem_id, step_number),
@@ -62,7 +61,6 @@ CREATE TABLE problem_steps (
     FOREIGN KEY (problem_type) REFERENCES problem_types (problem_type) ON DELETE RESTRICT ON UPDATE CASCADE,
     CHECK (trim(problem_type) = problem_type AND length(problem_type) > 0),
     CHECK (trim(step_note) = step_note),
-    CHECK (trim(step_instructions) = step_instructions),
     CHECK (step_number >= 1),
     CHECK (step_weight > 0),
     CHECK (typeof(step_weight) = 'integer')
@@ -257,41 +255,49 @@ CREATE TABLE commit_files (
     )
 ) WITHOUT ROWID;
 
-CREATE VIEW user_problem_sets AS
-    SELECT DISTINCT assignments.user_id, assignments.problem_set_id
-    FROM assignments
-    UNION
-    SELECT DISTINCT instructors.user_id, assignments.problem_set_id
-    FROM user_courses AS instructors
-    JOIN assignments ON instructors.course_id = assignments.course_id
-    WHERE instructors.is_instructor;
-
-CREATE VIEW user_problems AS
-    SELECT DISTINCT user_problem_sets.user_id, problem_set_problems.problem_id
-    FROM user_problem_sets
-    NATURAL JOIN problem_set_problems;
-
-CREATE VIEW user_users AS
-    SELECT DISTINCT instructors.user_id AS viewer_user_id, assignments.user_id AS other_user_id
-    FROM user_courses AS instructors
-    JOIN assignments ON instructors.course_id = assignments.course_id
-    WHERE instructors.is_instructor
-    UNION
-    SELECT user_id AS viewer_user_id, user_id AS other_user_id FROM users;
-
-CREATE VIEW user_assignments AS
-    SELECT viewer_user_id, asst_user_id AS assignment_user_id, course_id, problem_set_id, MIN(restricted) AS restricted
+CREATE VIEW accessible_assignments AS
+    SELECT
+        viewer_user_id,
+        assignment_user_id,
+        course_id,
+        problem_set_id,
+        MAX(is_owner) AS is_owner,
+        MAX(is_course_instructor) AS is_course_instructor,
+        MIN(restricted) AS restricted
     FROM (
-        SELECT assignments.user_id AS viewer_user_id, assignments.user_id AS asst_user_id, assignments.course_id, assignments.problem_set_id, assignments.restricted
+        SELECT
+            assignments.user_id AS viewer_user_id,
+            assignments.user_id AS assignment_user_id,
+            assignments.course_id,
+            assignments.problem_set_id,
+            1 AS is_owner,
+            0 AS is_course_instructor,
+            assignments.restricted
         FROM assignments
         UNION ALL
-        SELECT instructors.user_id AS viewer_user_id, assignments.user_id AS asst_user_id, assignments.course_id, assignments.problem_set_id, 0 AS restricted
+        SELECT
+            instructors.user_id AS viewer_user_id,
+            assignments.user_id AS assignment_user_id,
+            assignments.course_id,
+            assignments.problem_set_id,
+            0 AS is_owner,
+            1 AS is_course_instructor,
+            0 AS restricted
         FROM assignments
         JOIN user_courses AS instructors
             ON instructors.course_id = assignments.course_id
             AND instructors.is_instructor
     )
-    GROUP BY viewer_user_id, asst_user_id, course_id, problem_set_id;
+    GROUP BY viewer_user_id, assignment_user_id, course_id, problem_set_id;
+
+CREATE VIEW accessible_problem_sets AS
+    SELECT DISTINCT viewer_user_id, problem_set_id
+    FROM accessible_assignments;
+
+CREATE VIEW accessible_problems AS
+    SELECT DISTINCT accessible_problem_sets.viewer_user_id, problem_set_problems.problem_id
+    FROM accessible_problem_sets
+    NATURAL JOIN problem_set_problems;
 
 CREATE VIEW assignment_list_fields AS
     SELECT
@@ -301,6 +307,10 @@ CREATE VIEW assignment_list_fields AS
         assignments.unlock_at,
         assignments.due_at,
         assignments.lock_at,
+        CASE
+            WHEN assignments.unlock_at IS NOT NULL AND datetime(assignments.unlock_at) > CURRENT_TIMESTAMP THEN 0
+            ELSE 1
+        END AS download_available,
         problem_sets.problem_set_note,
         courses.course_name,
         users.user_name,
@@ -312,6 +322,30 @@ CREATE VIEW assignment_list_fields AS
     NATURAL JOIN courses
     NATURAL JOIN users
     NATURAL JOIN problem_sets;
+
+CREATE VIEW accessible_assignment_fields AS
+    SELECT
+        accessible_assignments.viewer_user_id,
+        accessible_assignments.assignment_user_id,
+        accessible_assignments.course_id,
+        accessible_assignments.problem_set_id,
+        accessible_assignments.is_owner,
+        accessible_assignments.is_course_instructor,
+        accessible_assignments.restricted,
+        assignment_list_fields.unlock_at,
+        assignment_list_fields.due_at,
+        assignment_list_fields.lock_at,
+        assignment_list_fields.download_available,
+        assignment_list_fields.problem_set_note,
+        assignment_list_fields.course_name,
+        assignment_list_fields.user_name,
+        assignment_list_fields.user_login,
+        assignment_list_fields.search_text
+    FROM accessible_assignments
+    JOIN assignment_list_fields
+        ON assignment_list_fields.user_id = accessible_assignments.assignment_user_id
+        AND assignment_list_fields.course_id = accessible_assignments.course_id
+        AND assignment_list_fields.problem_set_id = accessible_assignments.problem_set_id;
 
 CREATE VIEW assignment_scores AS
 WITH problem_step_scores AS (
@@ -423,6 +457,51 @@ SELECT
     ) AS whitelist
 FROM problem_steps;
 
+CREATE VIEW workspace_step_context AS
+    SELECT
+        assignment_problem_progress.user_id,
+        assignment_problem_progress.course_id,
+        assignment_problem_progress.problem_set_id,
+        assignment_problem_progress.problem_id,
+        assignment_problem_progress.problem_note,
+        assignment_problem_progress.current_step_number,
+        assignment_problem_progress.total_steps,
+        problem_steps.step_number,
+        problem_steps.problem_type,
+        problem_steps.step_note,
+        problem_steps.step_weight,
+        problem_step_whitelist.whitelist
+    FROM assignment_problem_progress
+    JOIN problem_steps
+        ON problem_steps.problem_id = assignment_problem_progress.problem_id
+    JOIN problem_step_whitelist
+        ON problem_step_whitelist.problem_id = problem_steps.problem_id
+        AND problem_step_whitelist.step_number = problem_steps.step_number;
+
+CREATE VIEW grading_step_context AS
+    SELECT
+        problem_set_problems.problem_set_id,
+        problem_set_problems.problem_id,
+        problem_steps.step_number,
+        problems.problem_note,
+        problems.problem_options,
+        problem_steps.problem_type,
+        problem_types.container,
+        COALESCE(problem_total_steps.total_steps, 1) AS total_steps,
+        problem_step_whitelist.whitelist
+    FROM problem_set_problems
+    JOIN problems
+        ON problems.problem_id = problem_set_problems.problem_id
+    JOIN problem_steps
+        ON problem_steps.problem_id = problem_set_problems.problem_id
+    JOIN problem_types
+        ON problem_types.problem_type = problem_steps.problem_type
+    LEFT JOIN problem_total_steps
+        ON problem_total_steps.problem_id = problem_set_problems.problem_id
+    JOIN problem_step_whitelist
+        ON problem_step_whitelist.problem_id = problem_steps.problem_id
+        AND problem_step_whitelist.step_number = problem_steps.step_number;
+
 CREATE VIEW problem_set_search_fields AS
     SELECT problem_sets.problem_set_id,
         problem_sets.problem_set_id || ',' ||
@@ -430,8 +509,24 @@ CREATE VIEW problem_set_search_fields AS
         problem_sets.problem_set_tags || ',' ||
         group_concat(problems.problem_id, ',') || ',' ||
         group_concat(problems.problem_note, ',') || ',' ||
-        group_concat(problems.problem_tags, ',')
+        group_concat(problems.problem_tags, ',') AS search_text
     FROM problem_sets
     NATURAL JOIN problem_set_problems
     NATURAL JOIN problems
     GROUP BY problem_sets.problem_set_id;
+
+CREATE VIEW problem_catalog_rows AS
+    SELECT
+        problem_sets.problem_set_id,
+        problem_sets.problem_set_note,
+        problem_sets.problem_set_tags,
+        problem_set_problems.problem_id,
+        problem_set_problems.problem_weight,
+        problems.problem_note,
+        problem_steps.step_number,
+        problem_steps.step_note,
+        problem_steps.step_weight
+    FROM problem_sets
+    NATURAL JOIN problem_set_problems
+    NATURAL JOIN problems
+    NATURAL JOIN problem_steps;

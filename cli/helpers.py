@@ -288,6 +288,16 @@ def find_dotfile(start_dir: Path) -> tuple[DotFileInfo, Path, Path | None]:
     return _dotfile_from_raw(dotfile_path, raw_obj), problem_set_dir, problem_dir
 
 
+def load_dotfile(path: Path) -> DotFileInfo:
+    try:
+        raw_obj = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        fail(f"error reading/parsing {path}: {clean_error(exc)}")
+    if not isinstance(raw_obj, dict):
+        fail(f"error parsing {path}: root is not an object")
+    return _dotfile_from_raw(path, raw_obj)
+
+
 def save_dotfile(dotfile: DotFileInfo) -> None:
     payload = {
         "assignmentRef": {

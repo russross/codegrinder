@@ -111,12 +111,12 @@ def clean_workspace_tree(directory: Path, official_paths: set[str]) -> None:
         path.unlink()
 
 
-def save_student_workspace(client: CodeGrinderClient, student: StudentWorkspace, note: str) -> None:
+def save_student_workspace(client: CodeGrinderClient, student: StudentWorkspace, note: str) -> pb.SaveUngradedCommitResponse:
     commit = student.commit
     commit.action = ""
     commit.note = note
     unsigned = pb.GradingCommit(user_id=client.session.user.user_id, commit=commit)
-    client.save_ungraded_commit(unsigned)
+    return client.save_ungraded_commit(unsigned)
 
 
 def get_workspace(

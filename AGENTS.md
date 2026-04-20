@@ -21,7 +21,18 @@ For protocol changes:
 - The config file is TOML and is created on login.
 - Login updates only the auth cookie/token and server URL; preserve user-editable settings such as workspace root and instructor mode when the file already exists.
 - The workspace root setting controls where per-course assignment directories are created. Default it to `$HOME` and explicitly write that default to the config file.
+- `grind get` has no assignment selector or directory override; it always uses the configured workspace root. Students who want a different root edit the config file by hand.
 - Instructor mode is an optional TOML boolean line. Omit it for normal student configs; missing means `false`.
+
+
+# Assignment Availability and Locking
+
+- Assignment download availability is server-provided in list responses and should be derived consistently from database views. The CLI should not duplicate open/locked time policy.
+- `unlock_at` controls whether an assignment is available for download. If it is present and in the future, the server should mark the assignment unavailable for download and refuse workspace download.
+- `lock_at` does not hide assignments and does not prevent workspace download or daycare actions, including grade.
+- After `lock_at`, student-owned assignment commits must not be persisted and grade passback must not run, but daycare actions should still run so students can see results.
+- After a locked `grind grade`, the final line shown to the student must clearly say the results were not saved because the assignment is locked.
+- `grind clean` should still delete local unofficial files even when the assignment is locked; it preserves student-owned files and remains useful for removing local testing artifacts.
 
 
 # Protocol Naming

@@ -19,6 +19,12 @@ from signatures import encode_signed_runtime_bundle
 SIGNED_COMMIT_TIMEOUT = timedelta(minutes=15)
 
 
+@dataclass(slots=True)
+class SaveGradingCommitResult:
+    bundle: pb.RuntimeBundle
+    save_status: pb.CommitSaveStatus.ValueType
+
+
 def _timestamp_now() -> datetime:
     return datetime.now(tz=UTC)
 
@@ -38,6 +44,13 @@ def _set_ts(ts: object, value: datetime) -> None:
 
 def _rfc3339_round_sec(ts: datetime) -> str:
     return ts.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _assignment_is_locked(assignment: sqlite3.Row, now: datetime) -> bool:
+    raw_lock_at = assignment["lock_at"]
+    if raw_lock_at is None:
+        return False
+    return parse_time(raw_lock_at) <= now
 
 
 def _json_load(raw: Any, fallback: Any) -> Any:
@@ -430,12 +443,11 @@ def save_problem(
         step.step = idx
         step_weight = _require_positive_int_weight(float(step.weight), f"step {idx} weight")
         existing = tx.execute(
-            "UPDATE problem_steps SET problem_type = ?, step_note = ?, step_instructions = ?, step_weight = ? "
+            "UPDATE problem_steps SET problem_type = ?, step_note = ?, step_weight = ? "
             "WHERE problem_id = ? AND step_number = ?",
             (
                 step.problem_type,
                 step.note,
-                "",
                 step_weight,
                 step.problem_id,
                 step.step,
@@ -443,14 +455,13 @@ def save_problem(
         )
         if existing.rowcount == 0:
             tx.execute(
-                "INSERT INTO problem_steps(problem_id, step_number, problem_type, step_note, step_instructions, step_weight) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO problem_steps(problem_id, step_number, problem_type, step_note, step_weight) "
+                "VALUES (?, ?, ?, ?, ?)",
                 (
                     step.problem_id,
                     step.step,
                     step.problem_type,
                     step.note,
-                    "",
                     step_weight,
                 ),
             )
@@ -592,57 +603,51 @@ def save_grading_commit_common(
     assign_host: Callable[[set[str]], str],
     load_problem_type_files: Callable[[str], dict[str, bytes]],
     graded: bool,
-) -> pb.RuntimeBundle:
+) -> SaveGradingCommitResult:
     if bundle.user_id != current_user_id:
         raise ValueError("bundle must include user's ID")
     commit = bundle.commit
     assignment = tx.execute(
-        "SELECT * FROM assignments WHERE user_id = ? AND course_id = ? AND problem_set_id = ?",
-        (commit.assignment.user_id, commit.assignment.course_id, commit.assignment.problem_set_id),
+        "SELECT assignments.*, accessible_assignments.is_owner, "
+        "accessible_assignments.is_course_instructor, accessible_assignments.restricted AS viewer_restricted "
+        "FROM assignments "
+        "JOIN accessible_assignments "
+        "ON accessible_assignments.assignment_user_id = assignments.user_id "
+        "AND accessible_assignments.course_id = assignments.course_id "
+        "AND accessible_assignments.problem_set_id = assignments.problem_set_id "
+        "WHERE accessible_assignments.viewer_user_id = ? "
+        "AND assignments.user_id = ? AND assignments.course_id = ? AND assignments.problem_set_id = ?",
+        (current_user_id, commit.assignment.user_id, commit.assignment.course_id, commit.assignment.problem_set_id),
     ).fetchone()
-    is_instructor = False
-    if assignment is None:
-        uc = tx.execute(
-            "SELECT 1 FROM user_courses WHERE user_id = ? AND course_id = ? AND is_instructor",
-            (current_user_id, commit.assignment.course_id),
-        ).fetchone()
-        if uc is not None:
-            assignment = tx.execute(
-                "SELECT * FROM assignments WHERE user_id = ? AND course_id = ? AND problem_set_id = ?",
-                (commit.assignment.user_id, commit.assignment.course_id, commit.assignment.problem_set_id),
-            ).fetchone()
-            is_instructor = assignment is not None
     if assignment is None:
         raise sqlite3.Error("not found")
-    if (not ip_allowed) and bool(assignment["restricted"]) and (not is_instructor):
+    if (not ip_allowed) and bool(assignment["viewer_restricted"]):
         raise ValueError("assignment access restricted")
+    now = _timestamp_now()
+    is_owner = bool(assignment["is_owner"])
+    is_locked = _assignment_is_locked(assignment, now)
+    should_save_commit = is_owner and not is_locked
+    save_status = pb.COMMIT_SAVE_STATUS_SAVED
+    if is_locked and is_owner:
+        save_status = pb.COMMIT_SAVE_STATUS_NOT_SAVED_LOCKED
+    elif not is_owner:
+        save_status = pb.COMMIT_SAVE_STATUS_NOT_SAVED_NOT_OWNER
 
-    problem = tx.execute("SELECT * FROM problems WHERE problem_id = ?", (commit.problem_id,)).fetchone()
-    if problem is None:
-        raise sqlite3.Error("not found")
-    step_row = tx.execute(
-        "SELECT problem_steps.*, problem_step_whitelist.whitelist FROM problem_steps "
-        "NATURAL JOIN problem_step_whitelist "
-        "WHERE problem_steps.problem_id = ? AND problem_steps.step_number = ?",
-        (commit.problem_id, commit.step),
+    step_context = tx.execute(
+        "SELECT * FROM grading_step_context "
+        "WHERE problem_set_id = ? AND problem_id = ? AND step_number = ?",
+        (commit.assignment.problem_set_id, commit.problem_id, int(commit.step)),
     ).fetchone()
-    if step_row is None:
-        raise sqlite3.Error("not found")
-    membership = tx.execute(
-        "SELECT 1 FROM problem_set_problems WHERE problem_set_id = ? AND problem_id = ?",
-        (commit.assignment.problem_set_id, commit.problem_id),
-    ).fetchone()
-    if membership is None:
+    if step_context is None:
         raise sqlite3.Error("not found")
 
-    whitelist = _json_load(step_row["whitelist"], {})
+    whitelist = _json_load(step_context["whitelist"], {})
     allowed_paths = {str(k) for k, v in whitelist.items() if bool(v)} if isinstance(whitelist, dict) else set()
     submitted_paths = {str(path) for path in dict(commit.files)}
     unexpected_paths = sorted(submitted_paths - allowed_paths)
     if unexpected_paths:
         raise ValueError("commit includes non-student-owned files: " + ", ".join(unexpected_paths))
 
-    now = _timestamp_now()
     if not commit.HasField("created_at"):
         _set_ts(commit.created_at, now)
     _set_ts(commit.updated_at, now)
@@ -651,7 +656,7 @@ def save_grading_commit_common(
     if not graded:
         commit.action = ""
 
-    if not is_instructor:
+    if should_save_commit:
         tx.execute(
             "INSERT OR REPLACE INTO commits(user_id, course_id, problem_set_id, problem_id, step_number, action, note, transcript, report_card, score, commit_created_at, commit_updated_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -681,31 +686,27 @@ def save_grading_commit_common(
         )
     commit.action = action_name
 
-    total_steps_row = tx.execute(
-        "SELECT MAX(step_number) AS total_steps FROM problem_steps WHERE problem_id = ?",
-        (commit.problem_id,),
-    ).fetchone()
-    total_steps = max(1, int(total_steps_row["total_steps"] or 0)) if total_steps_row is not None else 1
-    problem_options_raw = _json_load(problem["problem_options"], [])
+    total_steps = max(1, int(step_context["total_steps"] or 0))
+    problem_options_raw = _json_load(step_context["problem_options"], [])
     problem_options = [str(v) for v in problem_options_raw] if isinstance(problem_options_raw, list) else []
     if action_name == "" and not graded:
         runtime_commit = pb.Commit()
         runtime_commit.CopyFrom(commit)
-        return pb.RuntimeBundle(
-            user_id=bundle.user_id,
-            assignment=commit.assignment,
-            problem_id=commit.problem_id,
-            problem_note=str(problem["problem_note"]),
-            problem_options=problem_options,
-            step_number=int(commit.step),
-            total_steps=total_steps,
-            commit=runtime_commit,
+        return SaveGradingCommitResult(
+            save_status=save_status,
+            bundle=pb.RuntimeBundle(
+                user_id=bundle.user_id,
+                assignment=commit.assignment,
+                problem_id=commit.problem_id,
+                problem_note=str(step_context["problem_note"]),
+                problem_options=problem_options,
+                step_number=int(commit.step),
+                total_steps=total_steps,
+                commit=runtime_commit,
+            ),
         )
 
-    problem_type = tx.execute("SELECT * FROM problem_types WHERE problem_type = ?", (step_row["problem_type"],)).fetchone()
-    if problem_type is None:
-        raise sqlite3.Error("not found")
-    action_rows = tx.execute("SELECT * FROM problem_type_actions WHERE problem_type = ?", (step_row["problem_type"],)).fetchall()
+    action_rows = tx.execute("SELECT * FROM problem_type_actions WHERE problem_type = ?", (step_context["problem_type"],)).fetchall()
     actions: dict[str, pb.ProblemTypeAction] = {}
     for row in action_rows:
         actions[str(row["action"])] = pb.ProblemTypeAction(
@@ -720,30 +721,33 @@ def save_grading_commit_common(
     runtime_action_name = action_name if action_name != "" else "grade"
     runtime_action = actions.get(runtime_action_name)
     if runtime_action is None:
-        raise ValueError(f'action "{runtime_action_name}" not defined for problem type {step_row["problem_type"]}')
+        raise ValueError(f'action "{runtime_action_name}" not defined for problem type {step_context["problem_type"]}')
 
     runtime_files: dict[str, bytes] = {}
-    runtime_files.update(load_problem_type_files(str(step_row["problem_type"])))
+    runtime_files.update(load_problem_type_files(str(step_context["problem_type"])))
     runtime_files.update(load_problem_step_files(tx, commit.problem_id, int(commit.step), ProblemStepFileType.REGULAR))
     runtime_files.update({str(path): bytes(content or b"") for path, content in dict(commit.files).items()})
-    runtime_hostname = bundle.hostname or assign_host({str(step_row["problem_type"])})
+    runtime_hostname = bundle.hostname or assign_host({str(step_context["problem_type"])})
     runtime_commit = pb.Commit()
     runtime_commit.CopyFrom(commit)
     runtime_commit.action = runtime_action_name
-    return _runtime_bundle_from_parts(
-        hostname=runtime_hostname,
-        user_id=bundle.user_id,
-        assignment=commit.assignment,
-        problem_id=commit.problem_id,
-        problem_note=str(problem["problem_note"]),
-        problem_options=problem_options,
-        step_number=int(commit.step),
-        total_steps=total_steps,
-        action_name=runtime_action_name,
-        action=runtime_action,
-        container=str(problem_type["container"]),
-        files=runtime_files,
-        commit=runtime_commit,
+    return SaveGradingCommitResult(
+        save_status=save_status,
+        bundle=_runtime_bundle_from_parts(
+            hostname=runtime_hostname,
+            user_id=bundle.user_id,
+            assignment=commit.assignment,
+            problem_id=commit.problem_id,
+            problem_note=str(step_context["problem_note"]),
+            problem_options=problem_options,
+            step_number=int(commit.step),
+            total_steps=total_steps,
+            action_name=runtime_action_name,
+            action=runtime_action,
+            container=str(step_context["container"]),
+            files=runtime_files,
+            commit=runtime_commit,
+        ),
     )
 
 
@@ -753,7 +757,7 @@ def save_runtime_bundle_common(
     runtime: pb.RuntimeBundle,
     ip_allowed: bool,
     graded: bool,
-) -> pb.RuntimeBundle:
+) -> SaveGradingCommitResult:
     grading = pb.GradingCommit(user_id=runtime.user_id, hostname=runtime.hostname, commit=runtime.commit)
     saved = save_grading_commit_common(
         tx,
@@ -765,8 +769,8 @@ def save_runtime_bundle_common(
         lambda _problem_type: {},
         graded,
     )
-    runtime.commit.CopyFrom(saved.commit)
-    return runtime
+    runtime.commit.CopyFrom(saved.bundle.commit)
+    return SaveGradingCommitResult(bundle=runtime, save_status=saved.save_status)
 
 
 

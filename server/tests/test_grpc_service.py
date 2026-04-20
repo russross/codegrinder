@@ -73,14 +73,14 @@ def _seed(conn: sqlite3.Connection) -> None:
         ("p1", "Problem Note", '["tag"]', "[]", now, now),
     )
     conn.execute(
-        "INSERT INTO problem_steps(problem_id, step_number, problem_type, step_note, step_instructions, step_weight) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        ("p1", 1, "python3unittest", "Step 1", "Step 1 Instructions", 1),
+        "INSERT INTO problem_steps(problem_id, step_number, problem_type, step_note, step_weight) "
+        "VALUES (?, ?, ?, ?, ?)",
+        ("p1", 1, "python3unittest", "Step 1", 1),
     )
     conn.execute(
-        "INSERT INTO problem_steps(problem_id, step_number, problem_type, step_note, step_instructions, step_weight) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        ("p1", 2, "python3unittest", "Step 2", "Step 2 Instructions", 1),
+        "INSERT INTO problem_steps(problem_id, step_number, problem_type, step_note, step_weight) "
+        "VALUES (?, ?, ?, ?, ?)",
+        ("p1", 2, "python3unittest", "Step 2", 1),
     )
     conn.execute(
         "INSERT INTO problem_step_files(problem_id, step_number, file_type, path, content) VALUES (?, ?, ?, ?, ?)",
@@ -215,6 +215,8 @@ class GrpcServiceTests(unittest.TestCase):
         self.assertEqual(student_reply.items[0].problem_set_note, "Set Note")
         self.assertEqual(student_reply.items[0].user_name, "")
         self.assertEqual(student_reply.items[0].user_login, "")
+        self.assertEqual(student_reply.items[0].download_status, pb.ASSIGNMENT_DOWNLOAD_STATUS_AVAILABLE)
+        self.assertEqual([problem.problem_id for problem in student_reply.items[0].problems], ["p1"])
 
         instructor_ctx = cast(grpc.ServicerContext, self._auth_context("u2"))
         instructor_reply = self.service.ListAssignments(
@@ -387,7 +389,220 @@ class GrpcServiceTests(unittest.TestCase):
         signed = encode_signed_runtime_bundle(runtime, "daycare-secret")
         ctx = cast(grpc.ServicerContext, self._auth_context())
         reply = self.service.SaveGradedCommit(pb.SaveGradedCommitRequest(bundle=signed), ctx)
-        self.assertEqual(reply.ListFields(), [])
+        self.assertEqual(reply.save_status, pb.COMMIT_SAVE_STATUS_SAVED)
+
+    def test_non_owner_student_cannot_save_to_another_students_assignment(self) -> None:
+        self.conn.execute("INSERT INTO users(user_id, user_name, user_login) VALUES (?, ?, ?)", ("u3", "Student B", "stud-b"))
+        self.conn.execute("INSERT INTO user_courses(user_id, course_id, course_roles) VALUES (?, ?, ?)", ("u3", "c1", "Student"))
+        self.conn.commit()
+        commit = pb.Commit(
+            assignment=self._assignment_key(),
+            problem_id="p1",
+            step=2,
+            action="",
+            note="student attempt",
+            files={"main.py": b"print('bad')\n", "helper.py": b"print('helper')\n"},
+        )
+
+        with self.assertRaises(_AbortError):
+            self.service.SaveUngradedCommit(
+                pb.SaveUngradedCommitRequest(commit=pb.GradingCommit(user_id="u3", commit=commit)),
+                cast(grpc.ServicerContext, self._auth_context("u3")),
+            )
+        row = self.conn.execute(
+            "SELECT COUNT(1) AS c FROM commits WHERE user_id = ? AND course_id = ? AND problem_set_id = ? AND problem_id = ? AND step_number = ?",
+            ("u1", "c1", "ps1", "p1", 2),
+        ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(int(row["c"]), 0)
+
+    def test_instructor_can_grade_student_assignment_without_persisting_commit(self) -> None:
+        now = datetime(2026, 2, 16, 10, 0, 0, tzinfo=UTC)
+        assignment = self._assignment_key()
+        ungraded_commit = pb.Commit(
+            assignment=assignment,
+            problem_id="p1",
+            step=2,
+            action="grade",
+            note="instructor run",
+            files={"main.py": b"print('instructor')\n", "helper.py": b"print('helper')\n"},
+            created_at=now,
+            updated_at=now,
+        )
+        ctx = cast(grpc.ServicerContext, self._auth_context("u2"))
+        ungraded = self.service.SaveUngradedCommit(
+            pb.SaveUngradedCommitRequest(commit=pb.GradingCommit(user_id="u2", commit=ungraded_commit)),
+            ctx,
+        )
+        self.assertTrue(ungraded.HasField("bundle"))
+
+        graded_commit = pb.Commit()
+        graded_commit.CopyFrom(ungraded_commit)
+        graded_commit.report_card.CopyFrom(pb.ReportCard(passed=True, note="ok"))
+        graded_commit.score = 1.0
+        runtime = pb.RuntimeBundle(
+            hostname="example.invalid",
+            user_id="u2",
+            assignment=assignment,
+            problem_id="p1",
+            problem_note="Problem Note",
+            problem_options=[],
+            step_number=2,
+            total_steps=2,
+            action="grade",
+            container="img",
+            command="make grade",
+            parser="xunit",
+            limits=pb.RuntimeLimits(max_cpu=10, max_fd=100, max_file_size=10, max_memory=256, max_threads=20),
+            files={"Makefile": b"all:\n", "main.py": b"print('instructor')\n", "helper.py": b"print('helper')\n"},
+            commit=graded_commit,
+        )
+        signed = encode_signed_runtime_bundle(runtime, "daycare-secret")
+        reply = self.service.SaveGradedCommit(pb.SaveGradedCommitRequest(bundle=signed), ctx)
+        self.assertEqual(reply.save_status, pb.COMMIT_SAVE_STATUS_NOT_SAVED_NOT_OWNER)
+
+        commit_row = self.conn.execute(
+            "SELECT COUNT(1) AS c FROM commits WHERE user_id = ? AND course_id = ? AND problem_set_id = ? AND problem_id = ? AND step_number = ?",
+            ("u1", "c1", "ps1", "p1", 2),
+        ).fetchone()
+        file_row = self.conn.execute(
+            "SELECT COUNT(1) AS c FROM commit_files WHERE user_id = ? AND course_id = ? AND problem_set_id = ? AND problem_id = ? AND step_number = ?",
+            ("u1", "c1", "ps1", "p1", 2),
+        ).fetchone()
+        self.assertIsNotNone(commit_row)
+        self.assertIsNotNone(file_row)
+        self.assertEqual(int(commit_row["c"]), 0)
+        self.assertEqual(int(file_row["c"]), 0)
+
+    def test_future_unlock_marks_assignment_unavailable_and_blocks_workspace_download(self) -> None:
+        self.conn.execute(
+            "UPDATE assignments SET unlock_at = ? WHERE user_id = ? AND course_id = ? AND problem_set_id = ?",
+            ("2999-02-15T10:00:00Z", "u1", "c1", "ps1"),
+        )
+        self.conn.commit()
+        ctx = cast(grpc.ServicerContext, self._auth_context())
+        listed = self.service.ListAssignments(pb.ListAssignmentsRequest(search=[], include_student_context=False), ctx)
+        self.assertEqual(len(listed.items), 1)
+        self.assertEqual(listed.items[0].download_status, pb.ASSIGNMENT_DOWNLOAD_STATUS_NOT_OPEN)
+
+        with self.assertRaises(_AbortError) as err:
+            self.service.GetWorkspace(
+                pb.GetWorkspaceRequest(
+                    assignment=self._assignment_key(),
+                    problem_id="p1",
+                    step_number=2,
+                    file_state=pb.WORKSPACE_FILE_STATE_CURRENT,
+                    include_contents=True,
+                    include_solution_files=False,
+                ),
+                ctx,
+            )
+        self.assertEqual(err.exception.code, grpc.StatusCode.PERMISSION_DENIED)
+
+    def test_locked_assignment_can_run_daycare_but_does_not_persist(self) -> None:
+        self.conn.execute(
+            "UPDATE assignments SET lock_at = ? WHERE user_id = ? AND course_id = ? AND problem_set_id = ?",
+            ("2020-02-15T10:00:00Z", "u1", "c1", "ps1"),
+        )
+        self.conn.commit()
+        assignment = self._assignment_key()
+        ungraded_commit = pb.Commit(
+            assignment=assignment,
+            problem_id="p1",
+            step=2,
+            action="grade",
+            note="locked run",
+            files={"main.py": b"print('locked')\n", "helper.py": b"print('helper')\n"},
+        )
+        ctx = cast(grpc.ServicerContext, self._auth_context("u1"))
+        ungraded = self.service.SaveUngradedCommit(
+            pb.SaveUngradedCommitRequest(commit=pb.GradingCommit(user_id="u1", commit=ungraded_commit)),
+            ctx,
+        )
+        self.assertEqual(ungraded.save_status, pb.COMMIT_SAVE_STATUS_NOT_SAVED_LOCKED)
+        self.assertTrue(ungraded.HasField("bundle"))
+
+        graded_commit = pb.Commit()
+        graded_commit.CopyFrom(ungraded_commit)
+        graded_commit.report_card.CopyFrom(pb.ReportCard(passed=True, note="ok"))
+        graded_commit.score = 1.0
+        runtime = pb.RuntimeBundle(
+            hostname="example.invalid",
+            user_id="u1",
+            assignment=assignment,
+            problem_id="p1",
+            problem_note="Problem Note",
+            problem_options=[],
+            step_number=2,
+            total_steps=2,
+            action="grade",
+            container="img",
+            command="make grade",
+            parser="xunit",
+            limits=pb.RuntimeLimits(max_cpu=10, max_fd=100, max_file_size=10, max_memory=256, max_threads=20),
+            files={"Makefile": b"all:\n", "main.py": b"print('locked')\n", "helper.py": b"print('helper')\n"},
+            commit=graded_commit,
+        )
+        signed = encode_signed_runtime_bundle(runtime, "daycare-secret")
+        graded = self.service.SaveGradedCommit(pb.SaveGradedCommitRequest(bundle=signed), ctx)
+        self.assertEqual(graded.save_status, pb.COMMIT_SAVE_STATUS_NOT_SAVED_LOCKED)
+
+        commit_row = self.conn.execute(
+            "SELECT COUNT(1) AS c FROM commits WHERE user_id = ? AND course_id = ? AND problem_set_id = ? AND problem_id = ? AND step_number = ?",
+            ("u1", "c1", "ps1", "p1", 2),
+        ).fetchone()
+        file_row = self.conn.execute(
+            "SELECT COUNT(1) AS c FROM commit_files WHERE user_id = ? AND course_id = ? AND problem_set_id = ? AND problem_id = ? AND step_number = ?",
+            ("u1", "c1", "ps1", "p1", 2),
+        ).fetchone()
+        self.assertIsNotNone(commit_row)
+        self.assertIsNotNone(file_row)
+        self.assertEqual(int(commit_row["c"]), 0)
+        self.assertEqual(int(file_row["c"]), 0)
+
+    def test_instructor_own_assignment_persists_like_student_flow(self) -> None:
+        now = datetime(2026, 2, 16, 10, 0, 0, tzinfo=UTC)
+        assignment = pb.AssignmentKey(user_id="u2", course_id="c1", problem_set_id="ps1")
+        commit = pb.Commit(
+            assignment=assignment,
+            problem_id="p1",
+            step=2,
+            action="grade",
+            note="instructor own grade",
+            files={"main.py": b"print('own')\n", "helper.py": b"print('helper')\n"},
+            report_card=pb.ReportCard(passed=True, note="ok"),
+            score=1.0,
+            created_at=now,
+            updated_at=now,
+        )
+        runtime = pb.RuntimeBundle(
+            hostname="example.invalid",
+            user_id="u2",
+            assignment=assignment,
+            problem_id="p1",
+            problem_note="Problem Note",
+            problem_options=[],
+            step_number=2,
+            total_steps=2,
+            action="grade",
+            container="img",
+            command="make grade",
+            parser="xunit",
+            limits=pb.RuntimeLimits(max_cpu=10, max_fd=100, max_file_size=10, max_memory=256, max_threads=20),
+            files={"Makefile": b"all:\n", "main.py": b"print('own')\n", "helper.py": b"print('helper')\n"},
+            commit=commit,
+        )
+        signed = encode_signed_runtime_bundle(runtime, "daycare-secret")
+        ctx = cast(grpc.ServicerContext, self._auth_context("u2"))
+        self.service.SaveGradedCommit(pb.SaveGradedCommitRequest(bundle=signed), ctx)
+
+        row = self.conn.execute(
+            "SELECT note, score FROM commits WHERE user_id = ? AND course_id = ? AND problem_set_id = ? AND problem_id = ? AND step_number = ?",
+            ("u2", "c1", "ps1", "p1", 2),
+        ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(str(row["note"]), "instructor own grade")
+        self.assertEqual(float(row["score"]), 1.0)
 
 
     def test_prepare_problem_overlays_type_files_then_filters_gitignore(self) -> None:

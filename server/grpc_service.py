@@ -638,7 +638,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
             working.commit.created_at.FromDatetime(now)
             working.commit.updated_at.FromDatetime(now)
             try:
-                bundle = save_grading_commit_common(
+                result = save_grading_commit_common(
                     tx,
                     str(current_user["user_id"]),
                     working,
@@ -650,8 +650,10 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                 )
             except Exception as exc:
                 context.abort(grpc.StatusCode.INTERNAL, f"db error saving ungraded commit: {exc}")
+            bundle = result.bundle
             self._log_commit_request(current_user, bundle, request_signed=False)
-            passback_target = self._build_grade_passback_target(tx, str(current_user["user_id"]), bundle)
+            if result.save_status == pb.COMMIT_SAVE_STATUS_SAVED:
+                passback_target = self._build_grade_passback_target(tx, str(current_user["user_id"]), bundle)
             if passback_target is not None:
                 passback_html = build_grade_report_html(
                     bundle.commit,
@@ -664,7 +666,10 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                         bundle.commit.assignment.problem_set_id,
                     ),
                 )
-            return pb.SaveUngradedCommitResponse(bundle=encode_signed_runtime_bundle(bundle, self._config.daycare_secret))
+            return pb.SaveUngradedCommitResponse(
+                bundle=encode_signed_runtime_bundle(bundle, self._config.daycare_secret),
+                save_status=result.save_status,
+            )
 
         response = self._with_tx(fn)
         if passback_target is not None:
@@ -686,7 +691,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
             current_user = self._current_user_row(tx, context)
             try:
                 runtime = decode_signed_runtime_bundle(request.bundle, self._config.daycare_secret)
-                bundle = save_runtime_bundle_common(
+                result = save_runtime_bundle_common(
                     tx,
                     str(current_user["user_id"]),
                     runtime,
@@ -697,8 +702,10 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                 context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"invalid graded commit: {exc}")
             except Exception as exc:
                 context.abort(grpc.StatusCode.INTERNAL, f"db error saving graded commit: {exc}")
+            bundle = result.bundle
             self._log_commit_request(current_user, bundle, request_signed=True)
-            passback_target = self._build_grade_passback_target(tx, str(current_user["user_id"]), bundle)
+            if result.save_status == pb.COMMIT_SAVE_STATUS_SAVED:
+                passback_target = self._build_grade_passback_target(tx, str(current_user["user_id"]), bundle)
             if passback_target is not None:
                 passback_html = build_grade_report_html(
                     bundle.commit,
@@ -711,7 +718,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                         bundle.commit.assignment.problem_set_id,
                     ),
                 )
-            return pb.SaveGradedCommitResponse()
+            return pb.SaveGradedCommitResponse(save_status=result.save_status)
 
         response = self._with_tx(fn)
         if passback_target is not None:
