@@ -3,8 +3,10 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 import codegrinder_pb2 as pb
@@ -17,7 +19,6 @@ from helpers import (
     clean_error,
     course_directory,
     dump_message,
-    grpc_time_now,
     load_dotfile,
     load_config,
     load_config_or_default,
@@ -34,7 +35,7 @@ from student_workspace import (
     gather_student,
     get_workspace,
     resolve_student_problem,
-    save_student_workspace,
+    save_current_student_files,
     workspace_file_map,
     workspace_official_paths,
 )
@@ -138,6 +139,18 @@ def dotfile_matches_problems(dotfile: DotFileInfo, problems: Sequence[pb.Assignm
     return {info.problem_id for info in dotfile.problems.values()} == {problem.problem_id for problem in problems}
 
 
+def dotfile_matches_assignment_summary(dotfile: DotFileInfo, info_resp: pb.GetAssignmentResponse) -> bool:
+    expected = {
+        problem.problem_id: ProblemInfo(
+            problem_id=problem.problem_id,
+            step=int(problem.current_step_number),
+            total_steps=int(problem.total_steps),
+        )
+        for problem in info_resp.problems
+    }
+    return dotfile.problems == expected
+
+
 def unpack_assignment(client: CodeGrinderClient, info_resp: pb.GetAssignmentResponse, root_dir: Path, pretty_full: str) -> Path:
     print(f"unpacking problem set in {pretty_full}")
 
@@ -185,20 +198,38 @@ def unpack_assignment(client: CodeGrinderClient, info_resp: pb.GetAssignmentResp
     return change_to
 
 
+def download_assignment_summary(client: CodeGrinderClient, info_resp: pb.GetAssignmentResponse, root_dir: Path, pretty_full: str) -> Path:
+    if info_resp.download_status != pb.ASSIGNMENT_DOWNLOAD_STATUS_AVAILABLE:
+        fail(f"assignment {pretty_full} is not open yet")
+    root_dir.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=f".{root_dir.name}.", dir=root_dir.parent))
+    try:
+        change_to = unpack_assignment(client, info_resp, staging, pretty_full)
+        if root_dir.exists():
+            fail(f"directory {pretty_full} already exists\ndelete it first if you want to re-download the assignment")
+        staging.rename(root_dir)
+        if change_to == staging:
+            return root_dir
+        return root_dir / change_to.relative_to(staging)
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+
+
 def download_assignment(client: CodeGrinderClient, assignment: pb.AssignmentKey, root_dir: Path, pretty_full: str) -> Path:
-    return unpack_assignment(client, client.get_assignment(assignment), root_dir, pretty_full)
+    return download_assignment_summary(client, client.get_assignment(assignment), root_dir, pretty_full)
 
 
-def get_assignment(client: CodeGrinderClient, assignment: pb.AssignmentKey, root_dir: Path, pretty_root: str) -> Path:
+def download_assignment_to_root(client: CodeGrinderClient, assignment: pb.AssignmentKey, root_dir: Path, pretty_root: str) -> Path:
     info_resp = client.get_assignment(assignment)
     target_dir = assignment_directory(root_dir, info_resp.course_name, info_resp.assignment.problem_set_id)
     pretty_full = str(Path(pretty_root) / course_directory(info_resp.course_name) / info_resp.assignment.problem_set_id)
     if target_dir.exists():
         fail(f"directory {pretty_full} already exists\ndelete it first if you want to re-download the assignment")
-    return unpack_assignment(client, info_resp, target_dir, pretty_full)
+    return download_assignment_summary(client, info_resp, target_dir, pretty_full)
 
 
-def existing_assignment_warning(item: pb.AssignmentListItem, target_dir: Path) -> str | None:
+def existing_assignment_warning(item: pb.AssignmentListItem, target_dir: Path, info_resp: pb.GetAssignmentResponse | None = None) -> str | None:
     label = assignment_label(item.course_name, item.assignment.problem_set_id)
     dotfile_path = target_dir / ".grind"
     if not dotfile_path.exists():
@@ -209,7 +240,9 @@ def existing_assignment_warning(item: pb.AssignmentListItem, target_dir: Path) -
         return f"warning: assignment {label} has invalid .grind metadata; skipping"
     if not dotfile_matches_assignment(dotfile, item.assignment):
         return f"warning: assignment {label} directory belongs to a different assignment; skipping"
-    if not dotfile_matches_problems(dotfile, item.problems):
+    if info_resp is not None and not dotfile_matches_assignment_summary(dotfile, info_resp):
+        return f"warning: assignment {label} has different problem metadata; skipping"
+    if info_resp is None and not dotfile_matches_problems(dotfile, item.problems):
         return f"warning: assignment {label} has different problem metadata; skipping"
     return None
 
@@ -233,7 +266,7 @@ def command_get(args: argparse.Namespace) -> None:
             target_dir = assignment_directory(root_dir, item.course_name, item.assignment.problem_set_id)
             pretty_full = str(Path(pretty_root) / course_directory(item.course_name) / item.assignment.problem_set_id)
             if target_dir.exists():
-                warning = existing_assignment_warning(item, target_dir)
+                warning = existing_assignment_warning(item, target_dir, client.get_assignment(item.assignment))
                 if warning is not None:
                     print(warning)
                 continue
@@ -248,26 +281,11 @@ def command_sync(args: argparse.Namespace) -> None:
     with managed_session(config) as session:
         client = CodeGrinderClient(config, session)
         student = gather_student(client, Path("."))
-        response = save_student_workspace(client, student, "grind sync")
-        if response.save_status == pb.COMMIT_SAVE_STATUS_NOT_SAVED_LOCKED:
-            print("work was not saved because the assignment is locked")
-        elif response.save_status == pb.COMMIT_SAVE_STATUS_SAVED:
-            print(f"problem {student.workspace.problem_id} step {student.commit.step} synced")
-
-
-def command_clean(args: argparse.Namespace) -> None:
-    if args.extra:
-        _usage_error(args.parser)
-
-    config = load_command_config(args)
-    with managed_session(config) as session:
-        client = CodeGrinderClient(config, session)
-        student = gather_student(client, Path("."))
-        response = save_student_workspace(client, student, "grind clean")
+        response = save_current_student_files(client, student, "grind sync")
         if response.save_status == pb.COMMIT_SAVE_STATUS_NOT_SAVED_LOCKED:
             print("work was not saved because the assignment is locked")
         clean_workspace_tree(student.problem_dir, workspace_official_paths(student.workspace))
-        print(f"problem {student.workspace.problem_id} step {student.commit.step} cleaned")
+        print(f"problem {student.workspace.problem_id} step {student.commit.step} synced")
 
 
 def command_grade(args: argparse.Namespace) -> None:
@@ -592,7 +610,7 @@ def download_student_assignment(client: CodeGrinderClient, item: pb.AssignmentLi
     root_dir = Path("/tmp") / f"grind-tmp.{os.getpid()}"
     root_dir.mkdir(mode=0o700, exist_ok=False)
     try:
-        change_to = get_assignment(client, assignment, root_dir, str(root_dir))
+        change_to = download_assignment_to_root(client, assignment, root_dir, str(root_dir))
         shell = os.environ.get("SHELL", "/bin/bash")
         print("exit shell when finished")
         subprocess.run([shell], cwd=change_to, check=True)
@@ -621,11 +639,10 @@ def command_create(args: argparse.Namespace) -> None:
             save_problem_set(client, Path(pset), is_update)
             return
 
-        now = grpc_time_now()
         if is_update and action:
             fail("you specified --update, which is not valid when running an action")
 
-        draft, step_dir, step_num = gather_author(now, action, Path("."))
+        draft, step_dir, step_num = gather_author(action, Path("."))
 
         signed_resp = client.prepare_problem(draft, action)
         signed = signed_resp.bundle
@@ -638,12 +655,12 @@ def command_create(args: argparse.Namespace) -> None:
                 fail("to use --action, you must run from within a step directory")
             print(f"running interactive session for action {action!r} on step {step_num}")
 
-            handle_daycare_stream(client, signed.signed_grading_commits[step_num - 1], [], step_dir, True)
+            handle_daycare_stream(client, signed.signed_validation_bundles[step_num - 1], [], step_dir, True)
             return
 
         for n in range(len(signed.problem_steps)):
             print(f"validating solution for step {n + 1}")
-            validated = handle_daycare_stream(client, signed.signed_grading_commits[n], [], Path(""), False)
+            validated = handle_daycare_stream(client, signed.signed_validation_bundles[n], [], Path(""), False)
             if validated is None:
                 fail("the server ended the connection without sending a report card")
             validated_commit = pb.RuntimeBundle()
@@ -661,8 +678,8 @@ def command_create(args: argparse.Namespace) -> None:
                 print(dump_transcript(validated_commit.commit), end="")
                 fail("please fix solution and try again")
 
-            signed.commits[n].CopyFrom(validated_commit.commit)
-            signed.signed_grading_commits[n].CopyFrom(validated)
+            signed.solution_commits[n].CopyFrom(validated_commit.commit)
+            signed.signed_validation_bundles[n].CopyFrom(validated)
 
         print("problem and solution confirmed successfully")
 
@@ -703,13 +720,12 @@ def _build_parser() -> argparse.ArgumentParser:
     get_cmd.add_argument("extra", nargs="*")
     get_cmd.set_defaults(func=command_get)
 
-    sync_cmd = subs.add_parser("sync", help="save your work to the server and update local problem files")
+    sync_cmd = subs.add_parser(
+        "sync",
+        help="save your work, update local problem files, and remove files outside the official workspace set",
+    )
     sync_cmd.add_argument("extra", nargs="*")
     sync_cmd.set_defaults(func=command_sync)
-
-    clean_cmd = subs.add_parser("clean", help="save your work and remove files outside the official workspace set")
-    clean_cmd.add_argument("extra", nargs="*")
-    clean_cmd.set_defaults(func=command_clean)
 
     grade_cmd = subs.add_parser("grade", help="save your work and submit it for grading")
     grade_cmd.add_argument("extra", nargs="*")

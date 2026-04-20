@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Sequence, cast
+from unittest.mock import patch
 
 import grpc
 
@@ -15,7 +16,7 @@ from config import ServerConfig
 from db import setup_db
 from grpc_service import CodeGrinderService
 from problem_files import ProblemStepFileType
-from signatures import encode_signed_runtime_bundle
+from signatures import decode_signed_runtime_bundle, encode_signed_runtime_bundle
 from sessions import LoginRecords, encode_session, new_session
 
 
@@ -45,6 +46,15 @@ class _FakeContext:
 
     def abort(self, code: grpc.StatusCode, details: str) -> None:
         raise _AbortError(code, details)
+
+
+def _mark_author_validation_passed(bundle: pb.ProblemBundle) -> None:
+    for index, signed in enumerate(bundle.signed_validation_bundles):
+        runtime = decode_signed_runtime_bundle(signed, "daycare-secret")
+        runtime.commit.report_card.passed = True
+        runtime.commit.score = 1.0
+        bundle.solution_commits[index].CopyFrom(runtime.commit)
+        bundle.signed_validation_bundles[index].CopyFrom(encode_signed_runtime_bundle(runtime, "daycare-secret"))
 
 
 def _apply_schema(conn: sqlite3.Connection) -> None:
@@ -254,6 +264,7 @@ class GrpcServiceTests(unittest.TestCase):
         self.assertEqual(reply.assignment.problem_set_id, "ps1")
         self.assertEqual(reply.course_name, "Course 101")
         self.assertEqual(reply.problem_set_note, "Set Note")
+        self.assertEqual(reply.download_status, pb.ASSIGNMENT_DOWNLOAD_STATUS_AVAILABLE)
         self.assertEqual(len(reply.problems), 1)
         self.assertEqual(reply.problems[0].problem_id, "p1")
         self.assertEqual(reply.problems[0].current_step_number, 2)
@@ -292,6 +303,22 @@ class GrpcServiceTests(unittest.TestCase):
             ctx,
         )
         self.assertEqual(reply.step_number, 2)
+
+    def test_step_files_rejects_invalid_file_state(self) -> None:
+        ctx = cast(grpc.ServicerContext, self._auth_context())
+        with self.assertRaises(_AbortError) as err:
+            self.service.GetWorkspace(
+                pb.GetWorkspaceRequest(
+                    assignment=self._assignment_key(),
+                    problem_id="p1",
+                    step_number=2,
+                    file_state=cast(pb.WorkspaceFileState.ValueType, 99),
+                    include_contents=True,
+                    include_solution_files=False,
+                ),
+                ctx,
+            )
+        self.assertEqual(err.exception.code, grpc.StatusCode.INVALID_ARGUMENT)
 
     def test_step_files_can_skip_contents(self) -> None:
         ctx = cast(grpc.ServicerContext, self._auth_context())
@@ -355,6 +382,60 @@ class GrpcServiceTests(unittest.TestCase):
         self.assertEqual(student_files.get("main.py"), b"print('step2-reset')\n")
         self.assertEqual(student_files.get("helper.py"), b"print('helper')\n")
 
+    def test_save_workspace_commit_persists_student_files_without_grading_artifacts(self) -> None:
+        now = datetime(2026, 2, 16, 10, 0, 0, tzinfo=UTC)
+        commit = pb.Commit(
+            assignment=self._assignment_key(),
+            problem_id="p1",
+            step=2,
+            note="grind sync",
+            files={"main.py": b"print('sync')\n", "helper.py": b"print('helper')\n"},
+            transcript=[pb.EventMessage(event="reportcard")],
+            report_card=pb.ReportCard(passed=True, note="should be ignored"),
+            score=1.0,
+            created_at=now,
+            updated_at=now,
+        )
+
+        reply = self.service.SaveWorkspaceCommit(
+            pb.SaveWorkspaceCommitRequest(commit=commit),
+            cast(grpc.ServicerContext, self._auth_context()),
+        )
+
+        self.assertEqual(reply.save_status, pb.COMMIT_SAVE_STATUS_SAVED)
+        row = self.conn.execute(
+            "SELECT action, note, transcript, report_card, score FROM commits "
+            "WHERE user_id = ? AND course_id = ? AND problem_set_id = ? AND problem_id = ? AND step_number = ?",
+            ("u1", "c1", "ps1", "p1", 2),
+        ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(dict(row), {"action": "", "note": "grind sync", "transcript": "[]", "report_card": "null", "score": 0.0})
+        files = self.conn.execute(
+            "SELECT path, content FROM commit_files "
+            "WHERE user_id = ? AND course_id = ? AND problem_set_id = ? AND problem_id = ? AND step_number = ? "
+            "ORDER BY path",
+            ("u1", "c1", "ps1", "p1", 2),
+        ).fetchall()
+        self.assertEqual([(row["path"], row["content"]) for row in files], [("helper.py", b"print('helper')\n"), ("main.py", b"print('sync')\n")])
+
+    def test_save_workspace_commit_rejects_action_requests(self) -> None:
+        commit = pb.Commit(
+            assignment=self._assignment_key(),
+            problem_id="p1",
+            step=2,
+            action="grade",
+            note="bad sync",
+            files={"main.py": b"print('bad')\n", "helper.py": b"print('helper')\n"},
+        )
+
+        with self.assertRaises(_AbortError) as err:
+            self.service.SaveWorkspaceCommit(
+                pb.SaveWorkspaceCommitRequest(commit=commit),
+                cast(grpc.ServicerContext, self._auth_context()),
+            )
+
+        self.assertEqual(err.exception.code, grpc.StatusCode.INVALID_ARGUMENT)
+
     def test_save_graded_commit_returns_empty_success_response(self) -> None:
         now = datetime(2026, 2, 16, 10, 0, 0, tzinfo=UTC)
         commit = pb.Commit(
@@ -415,6 +496,24 @@ class GrpcServiceTests(unittest.TestCase):
         ).fetchone()
         self.assertIsNotNone(row)
         self.assertEqual(int(row["c"]), 0)
+
+    def test_ungraded_commit_does_not_post_grade_passback(self) -> None:
+        commit = pb.Commit(
+            assignment=self._assignment_key(),
+            problem_id="p1",
+            step=2,
+            action="grade",
+            note="pre-grade save",
+            files={"main.py": b"print('attempt')\n", "helper.py": b"print('helper')\n"},
+        )
+        with patch("grpc_service.save_grade_async") as save_grade:
+            reply = self.service.SaveUngradedCommit(
+                pb.SaveUngradedCommitRequest(commit=pb.GradingCommit(user_id="u1", commit=commit)),
+                cast(grpc.ServicerContext, self._auth_context("u1")),
+            )
+
+        self.assertEqual(reply.save_status, pb.COMMIT_SAVE_STATUS_SAVED)
+        save_grade.assert_not_called()
 
     def test_instructor_can_grade_student_assignment_without_persisting_commit(self) -> None:
         now = datetime(2026, 2, 16, 10, 0, 0, tzinfo=UTC)
@@ -484,6 +583,8 @@ class GrpcServiceTests(unittest.TestCase):
         listed = self.service.ListAssignments(pb.ListAssignmentsRequest(search=[], include_student_context=False), ctx)
         self.assertEqual(len(listed.items), 1)
         self.assertEqual(listed.items[0].download_status, pb.ASSIGNMENT_DOWNLOAD_STATUS_NOT_OPEN)
+        summary = self.service.GetAssignment(pb.GetAssignmentRequest(assignment=self._assignment_key()), ctx)
+        self.assertEqual(summary.download_status, pb.ASSIGNMENT_DOWNLOAD_STATUS_NOT_OPEN)
 
         with self.assertRaises(_AbortError) as err:
             self.service.GetWorkspace(
@@ -647,7 +748,7 @@ class GrpcServiceTests(unittest.TestCase):
             },
         )
         self.assertEqual(dict(step.starter_files), {"main.py": b"print('starter')\n"})
-        self.assertEqual(dict(reply.bundle.commits[0].files), {"main.py": b"print('solution')\n"})
+        self.assertEqual(dict(reply.bundle.solution_commits[0].files), {"main.py": b"print('solution')\n"})
         self.assertEqual(reply.bundle.problem_types["python3unittest"].files["Makefile"], b"all:\n")
 
     def test_prepare_problem_allows_later_step_starter_reset_for_existing_student_file(self) -> None:
@@ -684,7 +785,7 @@ class GrpcServiceTests(unittest.TestCase):
         step_two = reply.bundle.problem_steps[1]
         self.assertEqual(dict(step_two.starter_files), {"main.py": b"print('step2-reset')\n"})
         self.assertEqual(dict(step_two.whitelist), {"main.py": True})
-        self.assertEqual(dict(reply.bundle.commits[1].files), {"main.py": b"print('step2-solution')\n"})
+        self.assertEqual(dict(reply.bundle.solution_commits[1].files), {"main.py": b"print('step2-solution')\n"})
 
     def test_prepare_and_save_problem_persist_starter_and_solution_files(self) -> None:
         author_ctx = cast(grpc.ServicerContext, self._auth_context("u2"))
@@ -712,6 +813,7 @@ class GrpcServiceTests(unittest.TestCase):
             ),
             author_ctx,
         )
+        _mark_author_validation_passed(prepared.bundle)
         saved = self.service.SaveProblem(
             pb.SaveProblemRequest(mode=pb.SAVE_MODE_CREATE, bundle=prepared.bundle),
             author_ctx,
@@ -739,6 +841,115 @@ class GrpcServiceTests(unittest.TestCase):
             )
         self.assertEqual(err.exception.code, grpc.StatusCode.INVALID_ARGUMENT)
 
+    def test_save_problem_rejects_unvalidated_author_bundle(self) -> None:
+        author_ctx = cast(grpc.ServicerContext, self._auth_context("u2"))
+        prepared = self.service.PrepareProblem(
+            pb.PrepareProblemRequest(
+                draft=pb.AuthorProblemDraft(
+                    problem_id="unvalidated-problem",
+                    problem_note="Unvalidated Problem",
+                    steps=[
+                        pb.AuthorProblemStepDraft(
+                            step_number=1,
+                            problem_type="python3unittest",
+                            note="Step 1",
+                            weight=1.0,
+                            files=[pb.AuthorFile(path="main.py", content=b"print('solution')\n")],
+                            starter_files=[pb.AuthorFile(path="main.py", content=b"print('starter')\n")],
+                        )
+                    ],
+                )
+            ),
+            author_ctx,
+        )
+
+        with self.assertRaises(_AbortError) as err:
+            self.service.SaveProblem(
+                pb.SaveProblemRequest(mode=pb.SAVE_MODE_CREATE, bundle=prepared.bundle),
+                author_ctx,
+            )
+
+        self.assertEqual(err.exception.code, grpc.StatusCode.INVALID_ARGUMENT)
+        self.assertIn("validation has no report card", err.exception.details)
+        row = self.conn.execute("SELECT COUNT(1) AS c FROM problems WHERE problem_id = ?", ("unvalidated-problem",)).fetchone()
+        self.assertEqual(int(row["c"]), 0)
+
+    def test_save_problem_rejects_files_changed_after_validation(self) -> None:
+        author_ctx = cast(grpc.ServicerContext, self._auth_context("u2"))
+        prepared = self.service.PrepareProblem(
+            pb.PrepareProblemRequest(
+                draft=pb.AuthorProblemDraft(
+                    problem_id="tampered-problem",
+                    problem_note="Tampered Problem",
+                    steps=[
+                        pb.AuthorProblemStepDraft(
+                            step_number=1,
+                            problem_type="python3unittest",
+                            note="Step 1",
+                            weight=1.0,
+                            files=[
+                                pb.AuthorFile(path="README.md", content=b"validated docs\n"),
+                                pb.AuthorFile(path="main.py", content=b"print('solution')\n"),
+                            ],
+                            starter_files=[pb.AuthorFile(path="main.py", content=b"print('starter')\n")],
+                        )
+                    ],
+                )
+            ),
+            author_ctx,
+        )
+        _mark_author_validation_passed(prepared.bundle)
+        prepared.bundle.problem_steps[0].files["README.md"] = b"changed after validation\n"
+
+        with self.assertRaises(_AbortError) as err:
+            self.service.SaveProblem(
+                pb.SaveProblemRequest(mode=pb.SAVE_MODE_CREATE, bundle=prepared.bundle),
+                author_ctx,
+            )
+
+        self.assertEqual(err.exception.code, grpc.StatusCode.INVALID_ARGUMENT)
+        self.assertIn("validated runtime files mismatch", err.exception.details)
+        row = self.conn.execute("SELECT COUNT(1) AS c FROM problems WHERE problem_id = ?", ("tampered-problem",)).fetchone()
+        self.assertEqual(int(row["c"]), 0)
+
+    def test_save_problem_rejects_starter_files_changed_after_validation(self) -> None:
+        author_ctx = cast(grpc.ServicerContext, self._auth_context("u2"))
+        prepared = self.service.PrepareProblem(
+            pb.PrepareProblemRequest(
+                draft=pb.AuthorProblemDraft(
+                    problem_id="tampered-starter-problem",
+                    problem_note="Tampered Starter Problem",
+                    steps=[
+                        pb.AuthorProblemStepDraft(
+                            step_number=1,
+                            problem_type="python3unittest",
+                            note="Step 1",
+                            weight=1.0,
+                            files=[pb.AuthorFile(path="main.py", content=b"print('solution')\n")],
+                            starter_files=[pb.AuthorFile(path="main.py", content=b"print('starter')\n")],
+                        )
+                    ],
+                )
+            ),
+            author_ctx,
+        )
+        _mark_author_validation_passed(prepared.bundle)
+        prepared.bundle.problem_steps[0].starter_files["main.py"] = b"changed starter\n"
+
+        with self.assertRaises(_AbortError) as err:
+            self.service.SaveProblem(
+                pb.SaveProblemRequest(mode=pb.SAVE_MODE_CREATE, bundle=prepared.bundle),
+                author_ctx,
+            )
+
+        self.assertEqual(err.exception.code, grpc.StatusCode.INVALID_ARGUMENT)
+        self.assertIn("validated starter files mismatch", err.exception.details)
+        row = self.conn.execute(
+            "SELECT COUNT(1) AS c FROM problems WHERE problem_id = ?",
+            ("tampered-starter-problem",),
+        ).fetchone()
+        self.assertEqual(int(row["c"]), 0)
+
     def test_save_problem_update_preserves_created_at(self) -> None:
         author_ctx = cast(grpc.ServicerContext, self._auth_context("u2"))
         prepared = self.service.PrepareProblem(
@@ -762,16 +973,35 @@ class GrpcServiceTests(unittest.TestCase):
             ),
             author_ctx,
         )
+        _mark_author_validation_passed(prepared.bundle)
         saved = self.service.SaveProblem(
             pb.SaveProblemRequest(mode=pb.SAVE_MODE_CREATE, bundle=prepared.bundle),
             author_ctx,
         )
         original_created_at = saved.bundle.problem.created_at.ToDatetime(tzinfo=UTC)
 
-        prepared.bundle.problem.problem_note = "Updated Note"
-        prepared.bundle.problem.updated_at.FromDatetime(datetime(2026, 2, 17, 10, 0, 0, tzinfo=UTC))
-        prepared.bundle.problem_steps[0].note = "Updated Step 1"
-        prepared.bundle.commits[0].note = "updated"
+        prepared = self.service.PrepareProblem(
+            pb.PrepareProblemRequest(
+                draft=pb.AuthorProblemDraft(
+                    problem_id="update-problem",
+                    problem_note="Updated Note",
+                    problem_tags=[],
+                    problem_options=[],
+                    steps=[
+                        pb.AuthorProblemStepDraft(
+                            step_number=1,
+                            problem_type="python3unittest",
+                            note="Updated Step 1",
+                            weight=1.0,
+                            files=[pb.AuthorFile(path="main.py", content=b"print('solution')\n")],
+                            starter_files=[pb.AuthorFile(path="main.py", content=b"print('starter')\n")],
+                        )
+                    ],
+                )
+            ),
+            author_ctx,
+        )
+        _mark_author_validation_passed(prepared.bundle)
 
         updated = self.service.SaveProblem(
             pb.SaveProblemRequest(mode=pb.SAVE_MODE_UPDATE, bundle=prepared.bundle),

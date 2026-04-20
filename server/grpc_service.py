@@ -20,10 +20,11 @@ from grade_passback import GradePassbackTarget, build_grade_report_html, save_gr
 from ipfilter import IPFilter, extract_ip_from_peer
 from mutations import (
     prepare_problem,
-    save_grading_commit_common,
+    save_graded_runtime_bundle,
     save_problem,
     save_problem_set,
-    save_runtime_bundle_common,
+    save_ungraded_commit,
+    save_workspace_commit,
 )
 from read_store import (
     get_assignment_list_items_pb,
@@ -436,6 +437,8 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                 )
             except PermissionError as exc:
                 context.abort(grpc.StatusCode.PERMISSION_DENIED, str(exc))
+            except ValueError as exc:
+                context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
             except sqlite3.Error as exc:
                 if _is_db_not_found(exc):
                     context.abort(grpc.StatusCode.NOT_FOUND, "not found")
@@ -580,6 +583,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                 bundle = save_problem(
                     tx,
                     str(current_user["user_id"]),
+                    self._config.daycare_secret,
                     request.mode,
                     request.bundle,
                 )
@@ -622,11 +626,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "commit is required")
             raise AssertionError("unreachable")
 
-        passback_target: GradePassbackTarget | None = None
-        passback_html = ""
-
         def fn(tx: sqlite3.Connection) -> pb.SaveUngradedCommitResponse:
-            nonlocal passback_target, passback_html
             current_user = self._current_user_row(tx, context)
             working = pb.GradingCommit()
             working.CopyFrom(request.commit)
@@ -638,43 +638,73 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
             working.commit.created_at.FromDatetime(now)
             working.commit.updated_at.FromDatetime(now)
             try:
-                result = save_grading_commit_common(
+                result = save_ungraded_commit(
                     tx,
                     str(current_user["user_id"]),
                     working,
-                    self._config.daycare_secret,
                     self._ip_allowed(context),
                     self._select_daycare_host,
                     self._problem_type_files,
-                    graded=False,
                 )
+            except ValueError as exc:
+                context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"invalid ungraded commit: {exc}")
+            except sqlite3.Error as exc:
+                if _is_db_not_found(exc):
+                    context.abort(grpc.StatusCode.NOT_FOUND, "commit target not found")
+                context.abort(grpc.StatusCode.INTERNAL, f"db error saving ungraded commit: {exc}")
             except Exception as exc:
                 context.abort(grpc.StatusCode.INTERNAL, f"db error saving ungraded commit: {exc}")
             bundle = result.bundle
             self._log_commit_request(current_user, bundle, request_signed=False)
-            if result.save_status == pb.COMMIT_SAVE_STATUS_SAVED:
-                passback_target = self._build_grade_passback_target(tx, str(current_user["user_id"]), bundle)
-            if passback_target is not None:
-                passback_html = build_grade_report_html(
-                    bundle.commit,
-                    bundle.problem_id,
-                    bundle.total_steps,
-                    self._problem_count_for_assignment(
-                        tx,
-                        bundle.commit.assignment.user_id,
-                        bundle.commit.assignment.course_id,
-                        bundle.commit.assignment.problem_set_id,
-                    ),
-                )
             return pb.SaveUngradedCommitResponse(
                 bundle=encode_signed_runtime_bundle(bundle, self._config.daycare_secret),
                 save_status=result.save_status,
             )
 
-        response = self._with_tx(fn)
-        if passback_target is not None:
-            save_grade_async(passback_target, passback_html, self._config.lti_secret)
-        return response
+        return self._with_tx(fn)
+
+    def rpc_save_workspace_commit(
+        self, request: pb.SaveWorkspaceCommitRequest, context: grpc.ServicerContext
+    ) -> pb.SaveWorkspaceCommitResponse:
+        if request is None or not request.HasField("commit"):
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "commit is required")
+            raise AssertionError("unreachable")
+
+        def fn(tx: sqlite3.Connection) -> pb.SaveWorkspaceCommitResponse:
+            current_user = self._current_user_row(tx, context)
+            working = pb.Commit()
+            working.CopyFrom(request.commit)
+            now = datetime.now(tz=UTC)
+            working.created_at.FromDatetime(now)
+            working.updated_at.FromDatetime(now)
+            try:
+                result = save_workspace_commit(
+                    tx,
+                    str(current_user["user_id"]),
+                    working,
+                    self._ip_allowed(context),
+                )
+            except ValueError as exc:
+                context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"invalid workspace commit: {exc}")
+            except sqlite3.Error as exc:
+                if _is_db_not_found(exc):
+                    context.abort(grpc.StatusCode.NOT_FOUND, "commit target not found")
+                context.abort(grpc.StatusCode.INTERNAL, f"db error saving workspace commit: {exc}")
+            except Exception as exc:
+                context.abort(grpc.StatusCode.INTERNAL, f"db error saving workspace commit: {exc}")
+            note = ""
+            if result.commit.note != "":
+                note = f" ({result.commit.note})"
+            logging.info(
+                "sync request: user %s syncing %s step %d%s",
+                current_user["user_name"],
+                result.problem_note,
+                int(result.commit.step),
+                note,
+            )
+            return pb.SaveWorkspaceCommitResponse(save_status=result.save_status)
+
+        return self._with_tx(fn)
 
     def rpc_save_graded_commit(
         self, request: pb.SaveGradedCommitRequest, context: grpc.ServicerContext
@@ -691,15 +721,18 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
             current_user = self._current_user_row(tx, context)
             try:
                 runtime = decode_signed_runtime_bundle(request.bundle, self._config.daycare_secret)
-                result = save_runtime_bundle_common(
+                result = save_graded_runtime_bundle(
                     tx,
                     str(current_user["user_id"]),
                     runtime,
                     self._ip_allowed(context),
-                    graded=True,
                 )
             except ValueError as exc:
                 context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"invalid graded commit: {exc}")
+            except sqlite3.Error as exc:
+                if _is_db_not_found(exc):
+                    context.abort(grpc.StatusCode.NOT_FOUND, "commit target not found")
+                context.abort(grpc.StatusCode.INTERNAL, f"db error saving graded commit: {exc}")
             except Exception as exc:
                 context.abort(grpc.StatusCode.INTERNAL, f"db error saving graded commit: {exc}")
             bundle = result.bundle
@@ -760,6 +793,11 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
 
     def SaveProblemSet(self, request: pb.SaveProblemSetRequest, context: grpc.ServicerContext) -> pb.SaveProblemSetResponse:
         return self.rpc_save_problem_set(request, context)
+
+    def SaveWorkspaceCommit(
+        self, request: pb.SaveWorkspaceCommitRequest, context: grpc.ServicerContext
+    ) -> pb.SaveWorkspaceCommitResponse:
+        return self.rpc_save_workspace_commit(request, context)
 
     def SaveUngradedCommit(
         self, request: pb.SaveUngradedCommitRequest, context: grpc.ServicerContext

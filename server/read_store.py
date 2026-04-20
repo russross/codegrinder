@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Any, Callable
 
 import codegrinder_pb2 as pb
@@ -170,7 +170,23 @@ def load_commit_files(
         "SELECT path, content FROM commit_files WHERE user_id = ? AND course_id = ? AND problem_set_id = ? AND problem_id = ? AND step_number = ?",
         (user_id, course_id, problem_set_id, problem_id, step),
     )
-    return {str(row["path"]): bytes(row["content"] or b"") for row in rows}
+    return {_normalize_workspace_path(str(row["path"])): bytes(row["content"] or b"") for row in rows}
+
+
+def _normalize_workspace_path(raw: str) -> str:
+    if "\\" in raw:
+        raise ValueError(f"invalid workspace path: {raw!r}")
+    path = PurePosixPath(raw)
+    if raw.strip() == "" or path.is_absolute():
+        raise ValueError(f"invalid workspace path: {raw!r}")
+    parts = path.parts
+    if not parts or any(part in ("", ".", "..") for part in parts):
+        raise ValueError(f"invalid workspace path: {raw!r}")
+    return path.as_posix()
+
+
+def _normalize_file_map(files: dict[str, bytes]) -> dict[str, bytes]:
+    return {_normalize_workspace_path(path): content for path, content in files.items()}
 
 
 def _starter_student_files(
@@ -201,8 +217,8 @@ def _starter_student_files(
         else:
             files = load_problem_step_files(conn, problem_id, step_number - 1, ProblemStepFileType.SOLUTION)
     for path, content in starter_files.items():
-        files[path] = content
-    return files
+        files[_normalize_workspace_path(path)] = content
+    return _normalize_file_map(files)
 
 
 def _system_owned_files_for_step(
@@ -210,10 +226,9 @@ def _system_owned_files_for_step(
     problem_type: str,
     step_files: dict[str, bytes],
 ) -> dict[str, bytes]:
-    files: dict[str, bytes] = {}
-    files.update(step_files)
+    files: dict[str, bytes] = _normalize_file_map(step_files)
     for path, content in load_problem_type_files(problem_type).items():
-        files[str(Path(path))] = content
+        files[_normalize_workspace_path(path)] = content
     return files
 
 
@@ -226,7 +241,7 @@ def get_assignment_summary_pb(
     assignment_row = _q1(
         conn,
         "SELECT "
-        "assignment_user_id, course_id, problem_set_id, course_name, problem_set_note "
+        "assignment_user_id, course_id, problem_set_id, course_name, problem_set_note, download_available "
         "FROM accessible_assignment_fields "
         "WHERE assignment_user_id = ? AND course_id = ? AND problem_set_id = ? "
         "AND viewer_user_id = ? AND (? OR NOT restricted)",
@@ -265,7 +280,89 @@ def get_assignment_summary_pb(
         problem_set_note=str(assignment_row["problem_set_note"]),
         course_name=str(assignment_row["course_name"]),
         problems=problems,
+        download_status=(
+            pb.ASSIGNMENT_DOWNLOAD_STATUS_AVAILABLE
+            if bool(assignment_row["download_available"])
+            else pb.ASSIGNMENT_DOWNLOAD_STATUS_NOT_OPEN
+        ),
     )
+
+
+def _workspace_reset_to_step_start(file_state: pb.WorkspaceFileState.ValueType) -> bool:
+    if file_state == pb.WORKSPACE_FILE_STATE_CURRENT:
+        return False
+    if file_state == pb.WORKSPACE_FILE_STATE_STEP_START:
+        return True
+    raise ValueError("workspace file state is invalid")
+
+
+def _load_workspace_step_row(
+    conn: sqlite3.Connection,
+    assignment: pb.AssignmentKey,
+    problem_id: str,
+    step_number: int,
+) -> sqlite3.Row:
+    return _q1(
+        conn,
+        "SELECT * FROM workspace_step_context "
+        "WHERE user_id = ? AND course_id = ? AND problem_set_id = ? AND problem_id = ? "
+        "AND step_number = CASE WHEN ? = 0 THEN current_step_number ELSE ? END",
+        (
+            assignment.user_id,
+            assignment.course_id,
+            assignment.problem_set_id,
+            problem_id,
+            step_number,
+            step_number,
+        ),
+    )
+
+
+def _student_owned_files_for_workspace(
+    conn: sqlite3.Connection,
+    assignment: pb.AssignmentKey,
+    problem_id: str,
+    step_number: int,
+    starter_files: dict[str, bytes],
+    reset_to_step_start: bool,
+) -> dict[str, bytes]:
+    if reset_to_step_start:
+        return _starter_student_files(
+            conn,
+            assignment.user_id,
+            assignment.course_id,
+            assignment.problem_set_id,
+            problem_id,
+            step_number,
+            starter_files,
+        )
+    commit_row = conn.execute(
+        "SELECT user_id, course_id, problem_set_id, problem_id, step_number FROM commits "
+        "WHERE user_id = ? AND course_id = ? AND problem_set_id = ? AND problem_id = ? AND step_number = ?",
+        (assignment.user_id, assignment.course_id, assignment.problem_set_id, problem_id, step_number),
+    ).fetchone()
+    if commit_row is None:
+        return _starter_student_files(
+            conn,
+            assignment.user_id,
+            assignment.course_id,
+            assignment.problem_set_id,
+            problem_id,
+            step_number,
+            starter_files,
+        )
+    return load_commit_files(
+        conn,
+        str(commit_row["user_id"]),
+        str(commit_row["course_id"]),
+        str(commit_row["problem_set_id"]),
+        str(commit_row["problem_id"]),
+        int(commit_row["step_number"]),
+    )
+
+
+def _assignment_step_files(files: dict[str, bytes]) -> list[pb.AssignmentStepFile]:
+    return [pb.AssignmentStepFile(path=path, content=content) for path, content in sorted(_normalize_file_map(files).items())]
 
 
 def get_workspace_pb(
@@ -280,24 +377,11 @@ def get_workspace_pb(
     ip_allowed: bool,
     load_problem_type_files: Callable[[str], dict[str, bytes]],
 ) -> pb.GetWorkspaceResponse:
-    reset_to_step_start = file_state == pb.WORKSPACE_FILE_STATE_STEP_START
+    reset_to_step_start = _workspace_reset_to_step_start(file_state)
     assignment_access = get_assignment_access_row(conn, current_user, assignment, ip_allowed)
     if not bool(assignment_access["download_available"]):
         raise PermissionError("assignment is not open yet")
-    step_row = _q1(
-        conn,
-        "SELECT * FROM workspace_step_context "
-        "WHERE user_id = ? AND course_id = ? AND problem_set_id = ? AND problem_id = ? "
-        "AND step_number = CASE WHEN ? = 0 THEN current_step_number ELSE ? END",
-        (
-            assignment.user_id,
-            assignment.course_id,
-            assignment.problem_set_id,
-            problem_id,
-            step_number,
-            step_number,
-        ),
-    )
+    step_row = _load_workspace_step_row(conn, assignment, problem_id, step_number)
     resolved_step_number = int(step_row["step_number"])
     total_steps = max(1, int(step_row["total_steps"] or 0))
     step_files = load_problem_step_files(conn, problem_id, resolved_step_number, ProblemStepFileType.REGULAR)
@@ -307,42 +391,14 @@ def get_workspace_pb(
         str(step_row["problem_type"]),
         step_files,
     )
-    student_owned_files: dict[str, bytes]
-    if reset_to_step_start:
-        student_owned_files = _starter_student_files(
-            conn,
-            assignment.user_id,
-            assignment.course_id,
-            assignment.problem_set_id,
-            problem_id,
-            resolved_step_number,
-            starter_files,
-        )
-    else:
-        commit_row = conn.execute(
-            "SELECT user_id, course_id, problem_set_id, problem_id, step_number FROM commits "
-            "WHERE user_id = ? AND course_id = ? AND problem_set_id = ? AND problem_id = ? AND step_number = ?",
-            (assignment.user_id, assignment.course_id, assignment.problem_set_id, problem_id, resolved_step_number),
-        ).fetchone()
-        if commit_row is None:
-            student_owned_files = _starter_student_files(
-                conn,
-                assignment.user_id,
-                assignment.course_id,
-                assignment.problem_set_id,
-                problem_id,
-                resolved_step_number,
-                starter_files,
-            )
-        else:
-            student_owned_files = load_commit_files(
-                conn,
-                str(commit_row["user_id"]),
-                str(commit_row["course_id"]),
-                str(commit_row["problem_set_id"]),
-                str(commit_row["problem_id"]),
-                int(commit_row["step_number"]),
-            )
+    student_owned_files = _student_owned_files_for_workspace(
+        conn,
+        assignment,
+        problem_id,
+        resolved_step_number,
+        starter_files,
+        reset_to_step_start,
+    )
     if not include_contents:
         system_owned_files = {path: b"" for path in system_owned_files}
         student_owned_files = {path: b"" for path in student_owned_files}
@@ -367,18 +423,9 @@ def get_workspace_pb(
         step_note=str(step_row["step_note"]),
         step_weight=float(step_row["step_weight"]),
         actions=sorted(str(row["action"]) for row in action_rows),
-        system_owned_files=[
-            pb.AssignmentStepFile(path=path, content=content)
-            for path, content in sorted(system_owned_files.items())
-        ],
-        student_owned_files=[
-            pb.AssignmentStepFile(path=path, content=content)
-            for path, content in sorted(student_owned_files.items())
-        ],
-        solution_files=[
-            pb.AssignmentStepFile(path=path, content=content)
-            for path, content in sorted(solution_files.items())
-        ],
+        system_owned_files=_assignment_step_files(system_owned_files),
+        student_owned_files=_assignment_step_files(student_owned_files),
+        solution_files=_assignment_step_files(solution_files),
     )
 
 

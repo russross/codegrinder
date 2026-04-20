@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import tomllib
 from pathlib import Path
 
@@ -64,7 +63,7 @@ def test_load_config_or_default_handles_missing_file(monkeypatch, tmp_path: Path
     assert not config.instructor
 
 
-def test_dotfile_round_trip_matches_go_shape(tmp_path: Path) -> None:
+def test_dotfile_round_trip_uses_toml(tmp_path: Path) -> None:
     dotfile_path = tmp_path / ".grind"
     dotfile = DotFileInfo(
         assignment_ref=AssignmentRef(
@@ -80,10 +79,10 @@ def test_dotfile_round_trip_matches_go_shape(tmp_path: Path) -> None:
     )
     helpers.save_dotfile(dotfile)
 
-    raw = json.loads(dotfile_path.read_text(encoding="utf-8"))
-    assert raw["assignmentRef"] == {"userID": "u1", "courseID": "c1", "problemSetID": "ps1"}
-    assert raw["problems"]["p1"] == {"problemID": "p101", "step": 1, "totalSteps": 2}
-    assert raw["problems"]["p2"] == {"problemID": "p202", "step": 3, "totalSteps": 3}
+    raw = tomllib.loads(dotfile_path.read_text(encoding="utf-8"))
+    assert raw["assignment"] == {"user_id": "u1", "course_id": "c1", "problem_set_id": "ps1"}
+    assert raw["problems"]["p1"] == {"problem_id": "p101", "step": 1, "total_steps": 2}
+    assert raw["problems"]["p2"] == {"problem_id": "p202", "step": 3, "total_steps": 3}
 
     parsed, _, _ = helpers.find_dotfile(tmp_path)
     assert parsed.assignment_ref.problem_set_id == "ps1"

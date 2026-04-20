@@ -93,10 +93,9 @@ message ProblemStep {
    double weight = 6;
    map<string, bytes> files = 7;
    map<string, bool> whitelist = 8;
-   map<string, bytes> solution = 9;
    map<string, bytes> starter_files = 10;
-   reserved 5;
-   reserved "instructions";
+   reserved 5, 9;
+   reserved "instructions", "solution";
 }
 
 // ProblemSetProblem represents a problem in a problem set.
@@ -160,8 +159,8 @@ message ProblemBundle {
    map<string, ProblemType> problem_types = 3;
    string hostname = 5;
    string user_id = 6;
-   repeated Commit commits = 7;
-   repeated SignedRuntimeBundle signed_grading_commits = 8;
+   repeated Commit solution_commits = 7;
+   repeated SignedRuntimeBundle signed_validation_bundles = 8;
 }
 
 // ProblemSetBundle represents a bundle of problem set data.
@@ -172,9 +171,8 @@ message ProblemSetBundle {
 
 // GradingCommit represents one commit together with the grading context daycare needs.
 message GradingCommit {
-    ProblemType problem_type = 1;
-    Problem problem = 2;
-    repeated ProblemStep problem_steps = 3;
+    reserved 1, 2, 3;
+    reserved "problem_type", "problem", "problem_steps";
     string hostname = 4;
     string user_id = 5;
     Commit commit = 6;
@@ -206,14 +204,7 @@ message RuntimeBundle {
    RuntimeLimits limits = 13;
    map<string, bytes> files = 14;
    Commit commit = 15;
-}
-
-// SignedGradingCommit carries protobuf-encoded grading commit bytes plus an HMAC
-// signature. Clients may decode the bytes for inspection, but must forward the
-// encoded bytes unchanged to preserve the signature.
-message SignedGradingCommit {
-    bytes commit = 1;
-    string signature = 2;
+   map<string, bytes> starter_files = 16;
 }
 
 // SignedRuntimeBundle carries protobuf-encoded runtime bundle bytes plus an HMAC
@@ -298,6 +289,8 @@ service CodeGrinderService {
    rpc SaveProblem(SaveProblemRequest) returns (SaveProblemResponse);
    // SaveProblemSet persists an authored problem set bundle.
    rpc SaveProblemSet(SaveProblemSetRequest) returns (SaveProblemSetResponse);
+   // SaveWorkspaceCommit persists current student-owned workspace files.
+   rpc SaveWorkspaceCommit(SaveWorkspaceCommitRequest) returns (SaveWorkspaceCommitResponse);
    // SaveUngradedCommit handles an ungraded commit before daycare processing.
    rpc SaveUngradedCommit(SaveUngradedCommitRequest) returns (SaveUngradedCommitResponse);
    // SaveGradedCommit handles a graded commit returned by daycare.
@@ -428,6 +421,7 @@ message GetAssignmentResponse {
    string problem_set_note = 2;
    string course_name = 3;
    repeated AssignmentProblemProgress problems = 4;
+   AssignmentDownloadStatus download_status = 5;
 }
 
 // AssignmentStepFile is one file path/content pair.
@@ -512,13 +506,24 @@ message SaveUngradedCommitRequest {
    GradingCommit commit = 2;
 }
 
-// Response for SaveUngradedCommit
 enum CommitSaveStatus {
   COMMIT_SAVE_STATUS_SAVED = 0;
   COMMIT_SAVE_STATUS_NOT_SAVED_LOCKED = 1;
   COMMIT_SAVE_STATUS_NOT_SAVED_NOT_OWNER = 2;
 }
 
+// Request for SaveWorkspaceCommit
+message SaveWorkspaceCommitRequest {
+   string session_cookie = 1;
+   Commit commit = 2;
+}
+
+// Response for SaveWorkspaceCommit
+message SaveWorkspaceCommitResponse {
+   CommitSaveStatus save_status = 1;
+}
+
+// Response for SaveUngradedCommit
 message SaveUngradedCommitResponse {
    SignedRuntimeBundle bundle = 1;
    CommitSaveStatus save_status = 2;

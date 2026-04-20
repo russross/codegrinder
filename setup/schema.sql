@@ -347,6 +347,37 @@ CREATE VIEW accessible_assignment_fields AS
         AND assignment_list_fields.course_id = accessible_assignments.course_id
         AND assignment_list_fields.problem_set_id = accessible_assignments.problem_set_id;
 
+CREATE VIEW accessible_assignment_commit_policy AS
+    SELECT
+        viewer_user_id,
+        assignment_user_id,
+        course_id,
+        problem_set_id,
+        is_owner,
+        restricted,
+        CASE
+            WHEN lock_at IS NOT NULL AND datetime(lock_at) <= CURRENT_TIMESTAMP THEN 1
+            ELSE 0
+        END AS locked,
+        CASE
+            WHEN is_owner
+                AND NOT (lock_at IS NOT NULL AND datetime(lock_at) <= CURRENT_TIMESTAMP)
+            THEN 1
+            ELSE 0
+        END AS can_save_commit,
+        CASE
+            WHEN is_owner
+                AND lock_at IS NOT NULL
+                AND datetime(lock_at) <= CURRENT_TIMESTAMP
+            THEN 1
+            ELSE 0
+        END AS not_saved_locked,
+        CASE
+            WHEN NOT is_owner THEN 1
+            ELSE 0
+        END AS not_saved_not_owner
+    FROM accessible_assignment_fields;
+
 CREATE VIEW assignment_scores AS
 WITH problem_step_scores AS (
     SELECT

@@ -10,7 +10,7 @@ from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
 import grpc
@@ -140,7 +140,7 @@ def check_version(version: pb.Version) -> None:
 def _sanitize_map(data: Any) -> None:
     if isinstance(data, dict):
         for key, value in list(data.items()):
-            if key in {"files", "solution", "starter_files"} and isinstance(value, dict):
+            if key in {"files", "starter_files"} and isinstance(value, dict):
                 for name in list(value.keys()):
                     value[name] = "..."
             _sanitize_map(value)
@@ -217,15 +217,15 @@ def plural(count: int) -> str:
 
 
 def _dotfile_from_raw(path: Path, raw: dict[str, object]) -> DotFileInfo:
-    assignment_ref_raw = raw.get("assignmentRef")
+    assignment_ref_raw = raw.get("assignment")
     if not isinstance(assignment_ref_raw, dict):
-        fail(f"error parsing {path}: missing assignmentRef")
+        fail(f"error parsing {path}: missing assignment")
     assignment_ref_map = cast(dict[str, object], assignment_ref_raw)
-    assignment_user_id = assignment_ref_map.get("userID")
-    assignment_course_id = assignment_ref_map.get("courseID")
-    assignment_problem_set_id = assignment_ref_map.get("problemSetID")
+    assignment_user_id = assignment_ref_map.get("user_id")
+    assignment_course_id = assignment_ref_map.get("course_id")
+    assignment_problem_set_id = assignment_ref_map.get("problem_set_id")
     if not isinstance(assignment_user_id, str) or not isinstance(assignment_course_id, str) or not isinstance(assignment_problem_set_id, str):
-        fail(f"error parsing {path}: invalid assignmentRef")
+        fail(f"error parsing {path}: invalid assignment")
 
     problems_raw = raw.get("problems")
     if not isinstance(problems_raw, dict):
@@ -237,9 +237,9 @@ def _dotfile_from_raw(path: Path, raw: dict[str, object]) -> DotFileInfo:
         if not isinstance(unique, str) or not isinstance(info, dict):
             fail(f"error parsing {path}: invalid problem entry")
         info_map = cast(dict[str, object], info)
-        pid = info_map.get("problemID")
+        pid = info_map.get("problem_id")
         step = info_map.get("step")
-        total_steps = info_map.get("totalSteps")
+        total_steps = info_map.get("total_steps")
         if not isinstance(pid, str) or not isinstance(step, int):
             fail(f"error parsing {path}: invalid problem entry for {unique}")
         normalized_total_steps = 1
@@ -280,7 +280,7 @@ def find_dotfile(start_dir: Path) -> tuple[DotFileInfo, Path, Path | None]:
 
     dotfile_path = problem_set_dir / PER_PROBLEM_SET_DOT_FILE
     try:
-        raw_obj = json.loads(dotfile_path.read_text(encoding="utf-8"))
+        raw_obj = tomllib.loads(dotfile_path.read_text(encoding="utf-8"))
     except Exception as exc:
         fail(f"error reading/parsing {dotfile_path}: {clean_error(exc)}")
     if not isinstance(raw_obj, dict):
@@ -290,7 +290,7 @@ def find_dotfile(start_dir: Path) -> tuple[DotFileInfo, Path, Path | None]:
 
 def load_dotfile(path: Path) -> DotFileInfo:
     try:
-        raw_obj = json.loads(path.read_text(encoding="utf-8"))
+        raw_obj = tomllib.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
         fail(f"error reading/parsing {path}: {clean_error(exc)}")
     if not isinstance(raw_obj, dict):
@@ -299,24 +299,42 @@ def load_dotfile(path: Path) -> DotFileInfo:
 
 
 def save_dotfile(dotfile: DotFileInfo) -> None:
-    payload = {
-        "assignmentRef": {
-            "userID": dotfile.assignment_ref.user_id,
-            "courseID": dotfile.assignment_ref.course_id,
-            "problemSetID": dotfile.assignment_ref.problem_set_id,
-        },
-        "problems": {
-            key: {"problemID": info.problem_id, "step": info.step, "totalSteps": info.total_steps}
-            for key, info in dotfile.problems.items()
-        },
-    }
+    lines = [
+        "[assignment]",
+        f"user_id = {_toml_string(dotfile.assignment_ref.user_id)}",
+        f"course_id = {_toml_string(dotfile.assignment_ref.course_id)}",
+        f"problem_set_id = {_toml_string(dotfile.assignment_ref.problem_set_id)}",
+    ]
+    for key, info in sorted(dotfile.problems.items()):
+        lines.extend(
+            [
+                "",
+                f"[problems.{_toml_string(key)}]",
+                f"problem_id = {_toml_string(info.problem_id)}",
+                f"step = {info.step}",
+                f"total_steps = {info.total_steps}",
+            ]
+        )
     target = Path(dotfile.path)
-    target.write_text(json.dumps(payload, indent=4) + "\n", encoding="utf-8")
+    target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def clean_relative_path(raw: str) -> Path:
+    if "\\" in raw:
+        fail(f"invalid path from server: {raw!r}")
+    path = PurePosixPath(raw)
+    if path.is_absolute() or raw.strip() == "":
+        fail(f"invalid path from server: {raw!r}")
+    parts = path.parts
+    if not parts or any(part in ("", ".", "..") for part in parts):
+        fail(f"invalid path from server: {raw!r}")
+    return Path(*parts)
 
 
 def update_files(directory: Path, files: dict[str, bytes], old_files: set[str] | None, chatty: bool) -> None:
     for name, contents in files.items():
-        path = directory / name
+        relative_path = clean_relative_path(name)
+        path = directory / relative_path
         if not path.exists():
             if chatty:
                 print(f"saving file:   {name}")
@@ -335,12 +353,13 @@ def update_files(directory: Path, files: dict[str, bytes], old_files: set[str] |
     for name in old_files:
         if name in files:
             continue
-        path = directory / name
+        relative_path = clean_relative_path(name)
+        path = directory / relative_path
         if path.exists():
             if chatty:
                 print(f"removing file: {name}")
             path.unlink()
-        parent = Path(name).parent
+        parent = relative_path.parent
         if parent != Path("."):
             maybe = directory / parent
             try:

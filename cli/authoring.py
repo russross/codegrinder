@@ -7,15 +7,8 @@ import codegrinder_pb2 as pb
 
 from author_config import AuthorProblemConfig, PROBLEM_CONFIG_NAME, parse_author_problem_config, parse_author_problem_set_config
 from errors import fail
-from helpers import grpc_time_now, plural
+from helpers import plural
 from rpc_client import CodeGrinderClient
-
-
-def _set_proto_timestamp(target: object, now) -> None:
-    seconds = int(now.timestamp())
-    nanos = int((now.timestamp() - seconds) * 1_000_000_000)
-    setattr(target, "seconds", seconds)
-    setattr(target, "nanos", nanos)
 
 
 @dataclass(slots=True)
@@ -54,11 +47,9 @@ def resolve_author_problem_layout(start_dir: Path) -> AuthorProblemLayout | None
 
 
 def gather_author(
-    now,
     action: str,
     start_dir: Path,
 ) -> tuple[pb.AuthorProblemDraft, Path, int]:
-    _ = now
     layout = resolve_author_problem_layout(start_dir)
     if layout is None:
         fail(f"unable to find {PROBLEM_CONFIG_NAME} in current directory or one of its ancestors\n   you must run this in a problem directory")
@@ -154,7 +145,6 @@ def gather_author(
 
 
 def save_problem_set(client: CodeGrinderClient, path: Path, is_update: bool) -> None:
-    now = grpc_time_now()
     cfg = parse_author_problem_set_config(path)
 
     problem_set = pb.ProblemSet(
@@ -162,8 +152,6 @@ def save_problem_set(client: CodeGrinderClient, path: Path, is_update: bool) -> 
         problem_set_note=cfg.note,
         problem_set_tags=cfg.tags,
     )
-    _set_proto_timestamp(problem_set.created_at, now)
-    _set_proto_timestamp(problem_set.updated_at, now)
 
     if path.name != problem_set.problem_set_id + ".cfg":
         fail("the problem set file name must match the problem set unique ID")

@@ -2,15 +2,23 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from cli import _build_parser
 from student_workspace import clean_workspace_tree
 
 
-def test_clean_command_is_registered() -> None:
+def test_sync_command_is_registered() -> None:
     parser = _build_parser()
-    args = parser.parse_args(["clean"])
-    assert args.command == "clean"
+    args = parser.parse_args(["sync"])
+    assert args.command == "sync"
     assert args.extra == []
+
+
+def test_clean_command_is_not_registered() -> None:
+    parser = _build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["clean"])
 
 
 def test_clean_workspace_tree_removes_unofficial_files_and_empty_dirs(tmp_path: Path) -> None:

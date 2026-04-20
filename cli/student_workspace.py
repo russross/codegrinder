@@ -7,7 +7,7 @@ from collections.abc import Sequence
 import codegrinder_pb2 as pb
 
 from errors import fail
-from helpers import find_dotfile, grpc_time_now, update_files
+from helpers import clean_relative_path, find_dotfile, grpc_time_now, update_files
 from models import DotFileInfo, ProblemInfo
 from rpc_client import CodeGrinderClient
 
@@ -37,11 +37,12 @@ def build_commit_from_disk(
     files: dict[str, bytes] = {}
     missing: list[str] = []
     for name in student_owned_paths:
-        path = problem_dir / Path(name)
+        relative_path = clean_relative_path(name)
+        path = problem_dir / relative_path
         if not path.exists():
             missing.append(name)
             continue
-        files[name] = path.read_bytes()
+        files[relative_path.as_posix()] = path.read_bytes()
 
     if missing:
         lines = ["did not find all the expected files"] + [f"  {name} not found" for name in missing]
@@ -86,12 +87,12 @@ def resolve_student_problem(start_dir: Path) -> tuple[DotFileInfo, Path, str, Pr
 
 
 def workspace_file_map(entries: Sequence[pb.AssignmentStepFile]) -> dict[str, bytes]:
-    return {str(Path(entry.path)): bytes(entry.content or b"") for entry in entries}
+    return {clean_relative_path(entry.path).as_posix(): bytes(entry.content or b"") for entry in entries}
 
 
 def workspace_official_paths(workspace: pb.GetWorkspaceResponse) -> set[str]:
-    paths = {str(Path(entry.path)) for entry in workspace.system_owned_files}
-    paths.update(str(Path(entry.path)) for entry in workspace.student_owned_files)
+    paths = {clean_relative_path(entry.path).as_posix() for entry in workspace.system_owned_files}
+    paths.update(clean_relative_path(entry.path).as_posix() for entry in workspace.student_owned_files)
     return paths
 
 
@@ -111,12 +112,11 @@ def clean_workspace_tree(directory: Path, official_paths: set[str]) -> None:
         path.unlink()
 
 
-def save_student_workspace(client: CodeGrinderClient, student: StudentWorkspace, note: str) -> pb.SaveUngradedCommitResponse:
+def save_current_student_files(client: CodeGrinderClient, student: StudentWorkspace, note: str) -> pb.SaveWorkspaceCommitResponse:
     commit = student.commit
     commit.action = ""
     commit.note = note
-    unsigned = pb.GradingCommit(user_id=client.session.user.user_id, commit=commit)
-    return client.save_ungraded_commit(unsigned)
+    return client.save_workspace_commit(commit)
 
 
 def get_workspace(

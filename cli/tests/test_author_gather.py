@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -32,7 +31,7 @@ def test_gather_author_uses_standard_layout_and_reports_whitespace(tmp_path: Pat
     starter_dir.mkdir()
     starter_dir.joinpath("main.py").write_text("print('starter')\n", encoding="utf-8")
 
-    draft, step_dir, step_num = gather_author(datetime.now(tz=UTC), "", root)
+    draft, step_dir, step_num = gather_author("", root)
 
     assert step_dir == root
     assert step_num == 1
@@ -64,5 +63,5 @@ def test_gather_author_rejects_legacy_solution_layout(tmp_path: Path) -> None:
     starter_dir.joinpath("main.py").write_text("print('starter')\n", encoding="utf-8")
 
     with pytest.raises(CliError) as err:
-        gather_author(datetime.now(tz=UTC), "", root)
+        gather_author("", root)
     assert "legacy _solution authoring layout is no longer supported" in str(err.value)

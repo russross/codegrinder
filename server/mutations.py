@@ -14,7 +14,7 @@ from google.protobuf.json_format import MessageToDict
 from problem_files import ProblemStepFileType
 from read_store import load_problem_step_files
 from proto_conv import parse_time
-from signatures import encode_signed_runtime_bundle
+from signatures import decode_signed_runtime_bundle, encode_signed_runtime_bundle
 
 SIGNED_COMMIT_TIMEOUT = timedelta(minutes=15)
 
@@ -23,6 +23,23 @@ SIGNED_COMMIT_TIMEOUT = timedelta(minutes=15)
 class SaveGradingCommitResult:
     bundle: pb.RuntimeBundle
     save_status: pb.CommitSaveStatus.ValueType
+
+
+@dataclass(slots=True)
+class SaveWorkspaceCommitResult:
+    commit: pb.Commit
+    save_status: pb.CommitSaveStatus.ValueType
+    problem_note: str
+
+
+@dataclass(slots=True)
+class _SavedGradingCommit:
+    commit: pb.Commit
+    save_status: pb.CommitSaveStatus.ValueType
+    step_context: sqlite3.Row
+    action_name: str
+    total_steps: int
+    problem_options: list[str]
 
 
 def _timestamp_now() -> datetime:
@@ -44,13 +61,6 @@ def _set_ts(ts: object, value: datetime) -> None:
 
 def _rfc3339_round_sec(ts: datetime) -> str:
     return ts.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def _assignment_is_locked(assignment: sqlite3.Row, now: datetime) -> bool:
-    raw_lock_at = assignment["lock_at"]
-    if raw_lock_at is None:
-        return False
-    return parse_time(raw_lock_at) <= now
 
 
 def _json_load(raw: Any, fallback: Any) -> Any:
@@ -158,10 +168,19 @@ class _IgnoreRule:
     directory_only: bool
 
 
+@dataclass(slots=True)
+class _AuthorStepFiles:
+    regular: dict[str, bytes]
+    starter: dict[str, bytes]
+    solution: dict[str, bytes]
+
+
 def _normalize_rel_path(path: str, *, label: str) -> str:
     raw = path.strip()
     if raw == "":
         raise ValueError(f"{label} path must not be empty")
+    if "\\" in raw:
+        raise ValueError(f"{label} path must not contain backslashes: {path!r}")
     normalized = PurePosixPath(raw)
     if normalized.is_absolute():
         raise ValueError(f"{label} path must be relative: {path!r}")
@@ -301,6 +320,62 @@ def _build_problem_from_draft(draft: pb.AuthorProblemDraft) -> pb.Problem:
     return problem
 
 
+def _build_effective_author_tree(
+    step_draft: pb.AuthorProblemStepDraft,
+    problem_type: pb.ProblemType,
+    step_index: int,
+) -> dict[str, _UploadedEntry]:
+    uploaded_tree: dict[str, _UploadedEntry] = {}
+    for path, content in _collect_author_files(list(step_draft.files), label=f"step {step_index} file").items():
+        uploaded_tree[path] = _UploadedEntry(content=content, source="uploaded")
+    for path, content in _collect_author_files(
+        list(step_draft.starter_files), label=f"step {step_index} starter file"
+    ).items():
+        uploaded_tree[f"_starter/{path}"] = _UploadedEntry(content=content, source="starter")
+    for path, content in dict(problem_type.files).items():
+        normalized = _normalize_rel_path(str(path), label=f"problem type {problem_type.problem_type} file")
+        uploaded_tree[normalized] = _UploadedEntry(content=bytes(content or b""), source="problem_type")
+    return _filter_ignored_entries(uploaded_tree)
+
+
+def _partition_author_step_files(
+    *,
+    filtered_tree: dict[str, _UploadedEntry],
+    problem_type: pb.ProblemType,
+    prior_solution_paths: set[str],
+    step_index: int,
+) -> _AuthorStepFiles:
+    starter_files: dict[str, bytes] = {}
+    for path, entry in filtered_tree.items():
+        if entry.source != "starter":
+            continue
+        logical_path = _normalize_rel_path(path.removeprefix("_starter/"), label=f"step {step_index} starter file")
+        if logical_path in problem_type.files:
+            raise ValueError(
+                f"step {step_index} starter file {logical_path!r} conflicts with problem type file {logical_path!r}"
+            )
+        starter_files[logical_path] = entry.content
+
+    student_owned_paths = prior_solution_paths | set(starter_files.keys())
+    solution_files: dict[str, bytes] = {}
+    regular_files: dict[str, bytes] = {}
+    for path, entry in filtered_tree.items():
+        if entry.source != "uploaded":
+            continue
+        if path in student_owned_paths:
+            solution_files[path] = entry.content
+        else:
+            regular_files[path] = entry.content
+
+    missing = [path for path in sorted(student_owned_paths) if path not in solution_files]
+    if missing:
+        lines = [f"step {step_index} solution is missing required student files:"]
+        lines.extend(f"  {path}" for path in missing)
+        raise ValueError("\n".join(lines))
+
+    return _AuthorStepFiles(regular=regular_files, starter=starter_files, solution=solution_files)
+
+
 def prepare_problem(
     tx: sqlite3.Connection,
     current_user_id: str,
@@ -331,45 +406,13 @@ def prepare_problem(
         problem_type = _load_problem_type_from_store(tx, step_draft.problem_type, load_problem_type_files)
         bundle.problem_types[problem_type.problem_type].CopyFrom(problem_type)
 
-        uploaded_tree: dict[str, _UploadedEntry] = {}
-        for path, content in _collect_author_files(list(step_draft.files), label=f"step {index} file").items():
-            uploaded_tree[path] = _UploadedEntry(content=content, source="uploaded")
-        for path, content in _collect_author_files(
-            list(step_draft.starter_files), label=f"step {index} starter file"
-        ).items():
-            uploaded_tree[f"_starter/{path}"] = _UploadedEntry(content=content, source="starter")
-        for path, content in dict(problem_type.files).items():
-            normalized = _normalize_rel_path(str(path), label=f"problem type {problem_type.problem_type} file")
-            uploaded_tree[normalized] = _UploadedEntry(content=bytes(content or b""), source="problem_type")
-
-        filtered_tree = _filter_ignored_entries(uploaded_tree)
-        starter_files: dict[str, bytes] = {}
-        for path, entry in filtered_tree.items():
-            if entry.source != "starter":
-                continue
-            logical_path = _normalize_rel_path(path.removeprefix("_starter/"), label=f"step {index} starter file")
-            if logical_path in problem_type.files:
-                raise ValueError(
-                    f"step {index} starter file {logical_path!r} conflicts with problem type file {logical_path!r}"
-                )
-            starter_files[logical_path] = entry.content
-
-        student_owned_paths = prior_solution_paths | set(starter_files.keys())
-        solution_files: dict[str, bytes] = {}
-        step_files: dict[str, bytes] = {}
-        for path, entry in filtered_tree.items():
-            if entry.source != "uploaded":
-                continue
-            if path in student_owned_paths:
-                solution_files[path] = entry.content
-            else:
-                step_files[path] = entry.content
-
-        missing = [path for path in sorted(student_owned_paths) if path not in solution_files]
-        if missing:
-            lines = [f"step {index} solution is missing required student files:"]
-            lines.extend(f"  {path}" for path in missing)
-            raise ValueError("\n".join(lines))
+        filtered_tree = _build_effective_author_tree(step_draft, problem_type, index)
+        files = _partition_author_step_files(
+            filtered_tree=filtered_tree,
+            problem_type=problem_type,
+            prior_solution_paths=prior_solution_paths,
+            step_index=index,
+        )
 
         step = pb.ProblemStep(
             problem_id=problem.problem_id,
@@ -377,12 +420,12 @@ def prepare_problem(
             problem_type=problem_type.problem_type,
             note=step_note,
             weight=float(step_weight),
-            files=step_files,
-            starter_files=starter_files,
-            whitelist={path: True for path in sorted(solution_files)},
+            files=files.regular,
+            starter_files=files.starter,
+            whitelist={path: True for path in sorted(files.solution)},
         )
         bundle.problem_steps.append(step)
-        prior_solution_paths = set(solution_files)
+        prior_solution_paths = set(files.solution)
 
         commit = pb.Commit(
             step=index,
@@ -391,22 +434,72 @@ def prepare_problem(
             if action == ""
             else f"author solution tested with action {action} via grind",
             problem_id=problem.problem_id,
-            files=solution_files,
+            files=files.solution,
         )
         _set_ts(commit.created_at, now)
         _set_ts(commit.updated_at, now)
-        bundle.commits.append(commit)
+        bundle.solution_commits.append(commit)
 
-    del bundle.signed_grading_commits[:]
-    for index, commit in enumerate(bundle.commits):
+    del bundle.signed_validation_bundles[:]
+    for index, commit in enumerate(bundle.solution_commits):
         grading_commit = _grading_commit_from_problem_bundle(bundle=bundle, step_index=index, commit=commit)
-        bundle.signed_grading_commits.append(encode_signed_runtime_bundle(grading_commit, daycare_secret))
+        bundle.signed_validation_bundles.append(encode_signed_runtime_bundle(grading_commit, daycare_secret))
     return bundle
+
+
+def _bytes_map(value: Any) -> dict[str, bytes]:
+    return {str(path): bytes(content or b"") for path, content in dict(value).items()}
+
+
+def _require_validated_solution_commit(
+    *,
+    current_user_id: str,
+    daycare_secret: str,
+    bundle: pb.ProblemBundle,
+    step_index: int,
+) -> pb.Commit:
+    step_number = step_index + 1
+    solution_commit = bundle.solution_commits[step_index]
+    signed = bundle.signed_validation_bundles[step_index]
+    runtime = decode_signed_runtime_bundle(signed, daycare_secret)
+    expected_runtime = _grading_commit_from_problem_bundle(
+        bundle=bundle,
+        step_index=step_index,
+        commit=solution_commit,
+    )
+    validated = runtime.commit
+
+    if runtime.user_id != current_user_id:
+        raise ValueError(f"step {step_number} validation user mismatch")
+    if runtime.problem_id != bundle.problem.problem_id:
+        raise ValueError(f"step {step_number} validation problem mismatch")
+    if int(runtime.step_number) != step_number:
+        raise ValueError(f"step {step_number} validation step mismatch")
+    if int(runtime.total_steps) != len(bundle.problem_steps):
+        raise ValueError(f"step {step_number} validation total step mismatch")
+    if runtime.action != "grade" or validated.action != "grade":
+        raise ValueError(f"step {step_number} validation must be a grade action")
+    if validated.problem_id != bundle.problem.problem_id:
+        raise ValueError(f"step {step_number} validated commit problem mismatch")
+    if int(validated.step) != step_number:
+        raise ValueError(f"step {step_number} validated commit step mismatch")
+    if _bytes_map(validated.files) != _bytes_map(solution_commit.files):
+        raise ValueError(f"step {step_number} validated solution files mismatch")
+    if _bytes_map(runtime.files) != _bytes_map(expected_runtime.files):
+        raise ValueError(f"step {step_number} validated runtime files mismatch")
+    if _bytes_map(runtime.starter_files) != _bytes_map(bundle.problem_steps[step_index].starter_files):
+        raise ValueError(f"step {step_number} validated starter files mismatch")
+    if not validated.HasField("report_card"):
+        raise ValueError(f"step {step_number} validation has no report card")
+    if not validated.report_card.passed or validated.score != 1.0:
+        raise ValueError(f"step {step_number} solution did not pass validation")
+    return validated
 
 
 def save_problem(
     tx: sqlite3.Connection,
     current_user_id: str,
+    daycare_secret: str,
     mode: pb.SaveMode.ValueType,
     bundle: pb.ProblemBundle,
 ) -> pb.ProblemBundle:
@@ -414,8 +507,23 @@ def save_problem(
         raise ValueError("bundle must include user's ID")
     if bundle.problem.problem_id == "":
         raise ValueError("problem_id is required")
+    if len(bundle.problem_steps) == 0:
+        raise ValueError("problem must include at least one step")
+    if len(bundle.solution_commits) != len(bundle.problem_steps):
+        raise ValueError("problem must include one solution commit per step")
+    if len(bundle.signed_validation_bundles) != len(bundle.problem_steps):
+        raise ValueError("problem must include one signed validation bundle per step")
     if mode == pb.SAVE_MODE_UNSPECIFIED:
         raise ValueError("save mode is required")
+    validated_commits = [
+        _require_validated_solution_commit(
+            current_user_id=current_user_id,
+            daycare_secret=daycare_secret,
+            bundle=bundle,
+            step_index=idx,
+        )
+        for idx in range(len(bundle.problem_steps))
+    ]
     values = _problem_to_row(bundle.problem)
     if mode == pb.SAVE_MODE_CREATE:
         try:
@@ -465,9 +573,7 @@ def save_problem(
                     step_weight,
                 ),
             )
-        if idx > len(bundle.commits):
-            raise ValueError(f"missing commit for step {idx}")
-        commit = bundle.commits[idx - 1]
+        commit = validated_commits[idx - 1]
         if int(commit.step) != idx:
             raise ValueError(f"commit step mismatch for step {idx}")
         _save_problem_step_files(tx, step.problem_id, step.step, ProblemStepFileType.REGULAR, dict(step.files))
@@ -574,6 +680,7 @@ def _runtime_bundle_from_parts(
     container: str,
     files: dict[str, bytes],
     commit: pb.Commit,
+    starter_files: dict[str, bytes] | None = None,
 ) -> pb.RuntimeBundle:
     return pb.RuntimeBundle(
         hostname=hostname,
@@ -591,63 +698,87 @@ def _runtime_bundle_from_parts(
         limits=_runtime_limits_from_action(action),
         files=files,
         commit=commit,
+        starter_files={} if starter_files is None else starter_files,
     )
 
 
-def save_grading_commit_common(
+def _load_assignment_commit_policy(
     tx: sqlite3.Connection,
     current_user_id: str,
-    bundle: pb.GradingCommit,
-    daycare_secret: str,
+    assignment: pb.AssignmentKey,
     ip_allowed: bool,
-    assign_host: Callable[[set[str]], str],
-    load_problem_type_files: Callable[[str], dict[str, bytes]],
-    graded: bool,
-) -> SaveGradingCommitResult:
-    if bundle.user_id != current_user_id:
-        raise ValueError("bundle must include user's ID")
-    commit = bundle.commit
-    assignment = tx.execute(
-        "SELECT assignments.*, accessible_assignments.is_owner, "
-        "accessible_assignments.is_course_instructor, accessible_assignments.restricted AS viewer_restricted "
-        "FROM assignments "
-        "JOIN accessible_assignments "
-        "ON accessible_assignments.assignment_user_id = assignments.user_id "
-        "AND accessible_assignments.course_id = assignments.course_id "
-        "AND accessible_assignments.problem_set_id = assignments.problem_set_id "
-        "WHERE accessible_assignments.viewer_user_id = ? "
-        "AND assignments.user_id = ? AND assignments.course_id = ? AND assignments.problem_set_id = ?",
-        (current_user_id, commit.assignment.user_id, commit.assignment.course_id, commit.assignment.problem_set_id),
+) -> sqlite3.Row:
+    row = tx.execute(
+        "SELECT * FROM accessible_assignment_commit_policy "
+        "WHERE viewer_user_id = ? AND assignment_user_id = ? AND course_id = ? AND problem_set_id = ? "
+        "AND (? OR NOT restricted)",
+        (
+            current_user_id,
+            assignment.user_id,
+            assignment.course_id,
+            assignment.problem_set_id,
+            1 if ip_allowed else 0,
+        ),
     ).fetchone()
-    if assignment is None:
+    if row is None:
         raise sqlite3.Error("not found")
-    if (not ip_allowed) and bool(assignment["viewer_restricted"]):
-        raise ValueError("assignment access restricted")
-    now = _timestamp_now()
-    is_owner = bool(assignment["is_owner"])
-    is_locked = _assignment_is_locked(assignment, now)
-    should_save_commit = is_owner and not is_locked
-    save_status = pb.COMMIT_SAVE_STATUS_SAVED
-    if is_locked and is_owner:
-        save_status = pb.COMMIT_SAVE_STATUS_NOT_SAVED_LOCKED
-    elif not is_owner:
-        save_status = pb.COMMIT_SAVE_STATUS_NOT_SAVED_NOT_OWNER
+    return row
 
-    step_context = tx.execute(
+
+def _commit_save_status(policy: sqlite3.Row) -> pb.CommitSaveStatus.ValueType:
+    if bool(policy["not_saved_locked"]):
+        return pb.COMMIT_SAVE_STATUS_NOT_SAVED_LOCKED
+    if bool(policy["not_saved_not_owner"]):
+        return pb.COMMIT_SAVE_STATUS_NOT_SAVED_NOT_OWNER
+    return pb.COMMIT_SAVE_STATUS_SAVED
+
+
+def _load_grading_step_context(tx: sqlite3.Connection, commit: pb.Commit) -> sqlite3.Row:
+    row = tx.execute(
         "SELECT * FROM grading_step_context "
         "WHERE problem_set_id = ? AND problem_id = ? AND step_number = ?",
         (commit.assignment.problem_set_id, commit.problem_id, int(commit.step)),
     ).fetchone()
-    if step_context is None:
+    if row is None:
         raise sqlite3.Error("not found")
+    return row
 
+
+def _normalize_commit_files(files: dict[str, bytes]) -> dict[str, bytes]:
+    return {_normalize_rel_path(str(path), label="commit file"): bytes(content or b"") for path, content in files.items()}
+
+
+def _require_student_owned_files(commit_files: dict[str, bytes], step_context: sqlite3.Row) -> None:
     whitelist = _json_load(step_context["whitelist"], {})
     allowed_paths = {str(k) for k, v in whitelist.items() if bool(v)} if isinstance(whitelist, dict) else set()
-    submitted_paths = {str(path) for path in dict(commit.files)}
-    unexpected_paths = sorted(submitted_paths - allowed_paths)
+    unexpected_paths = sorted(set(commit_files) - allowed_paths)
     if unexpected_paths:
         raise ValueError("commit includes non-student-owned files: " + ", ".join(unexpected_paths))
 
+
+def _replace_commit_files(commit: pb.Commit, files: dict[str, bytes]) -> None:
+    commit.files.clear()
+    commit.files.update(files)
+
+
+def _save_grading_commit(
+    tx: sqlite3.Connection,
+    current_user_id: str,
+    bundle: pb.GradingCommit,
+    ip_allowed: bool,
+    graded: bool,
+) -> _SavedGradingCommit:
+    if bundle.user_id != current_user_id:
+        raise ValueError("bundle must include user's ID")
+    commit = bundle.commit
+    policy = _load_assignment_commit_policy(tx, current_user_id, commit.assignment, ip_allowed)
+    save_status = _commit_save_status(policy)
+    step_context = _load_grading_step_context(tx, commit)
+    commit_files = _normalize_commit_files(dict(commit.files))
+    _require_student_owned_files(commit_files, step_context)
+    _replace_commit_files(commit, commit_files)
+
+    now = _timestamp_now()
     if not commit.HasField("created_at"):
         _set_ts(commit.created_at, now)
     _set_ts(commit.updated_at, now)
@@ -656,7 +787,7 @@ def save_grading_commit_common(
     if not graded:
         commit.action = ""
 
-    if should_save_commit:
+    if bool(policy["can_save_commit"]):
         tx.execute(
             "INSERT OR REPLACE INTO commits(user_id, course_id, problem_set_id, problem_id, step_number, action, note, transcript, report_card, score, commit_created_at, commit_updated_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -682,30 +813,49 @@ def save_grading_commit_common(
             commit.assignment.problem_set_id,
             commit.problem_id,
             int(commit.step),
-            dict(commit.files),
+            commit_files,
         )
     commit.action = action_name
 
     total_steps = max(1, int(step_context["total_steps"] or 0))
     problem_options_raw = _json_load(step_context["problem_options"], [])
     problem_options = [str(v) for v in problem_options_raw] if isinstance(problem_options_raw, list) else []
-    if action_name == "" and not graded:
-        runtime_commit = pb.Commit()
-        runtime_commit.CopyFrom(commit)
-        return SaveGradingCommitResult(
-            save_status=save_status,
-            bundle=pb.RuntimeBundle(
-                user_id=bundle.user_id,
-                assignment=commit.assignment,
-                problem_id=commit.problem_id,
-                problem_note=str(step_context["problem_note"]),
-                problem_options=problem_options,
-                step_number=int(commit.step),
-                total_steps=total_steps,
-                commit=runtime_commit,
-            ),
-        )
+    saved_commit = pb.Commit()
+    saved_commit.CopyFrom(commit)
+    return _SavedGradingCommit(
+        commit=saved_commit,
+        save_status=save_status,
+        step_context=step_context,
+        action_name=action_name,
+        total_steps=total_steps,
+        problem_options=problem_options,
+    )
 
+
+def _commit_metadata_bundle(bundle: pb.GradingCommit, saved: _SavedGradingCommit) -> pb.RuntimeBundle:
+    return pb.RuntimeBundle(
+        user_id=bundle.user_id,
+        assignment=saved.commit.assignment,
+        problem_id=saved.commit.problem_id,
+        problem_note=str(saved.step_context["problem_note"]),
+        problem_options=saved.problem_options,
+        step_number=int(saved.commit.step),
+        total_steps=saved.total_steps,
+        commit=saved.commit,
+    )
+
+
+def _runtime_bundle_for_commit(
+    tx: sqlite3.Connection,
+    bundle: pb.GradingCommit,
+    saved: _SavedGradingCommit,
+    assign_host: Callable[[set[str]], str],
+    load_problem_type_files: Callable[[str], dict[str, bytes]],
+) -> SaveGradingCommitResult:
+    if saved.action_name == "":
+        return SaveGradingCommitResult(bundle=_commit_metadata_bundle(bundle, saved), save_status=saved.save_status)
+
+    step_context = saved.step_context
     action_rows = tx.execute("SELECT * FROM problem_type_actions WHERE problem_type = ?", (step_context["problem_type"],)).fetchall()
     actions: dict[str, pb.ProblemTypeAction] = {}
     for row in action_rows:
@@ -718,30 +868,30 @@ def save_grading_commit_common(
             max_memory=int(row["max_memory"]),
             max_threads=int(row["max_threads"]),
         )
-    runtime_action_name = action_name if action_name != "" else "grade"
+    runtime_action_name = saved.action_name
     runtime_action = actions.get(runtime_action_name)
     if runtime_action is None:
         raise ValueError(f'action "{runtime_action_name}" not defined for problem type {step_context["problem_type"]}')
 
     runtime_files: dict[str, bytes] = {}
     runtime_files.update(load_problem_type_files(str(step_context["problem_type"])))
-    runtime_files.update(load_problem_step_files(tx, commit.problem_id, int(commit.step), ProblemStepFileType.REGULAR))
-    runtime_files.update({str(path): bytes(content or b"") for path, content in dict(commit.files).items()})
+    runtime_files.update(load_problem_step_files(tx, saved.commit.problem_id, int(saved.commit.step), ProblemStepFileType.REGULAR))
+    runtime_files.update(dict(saved.commit.files))
     runtime_hostname = bundle.hostname or assign_host({str(step_context["problem_type"])})
     runtime_commit = pb.Commit()
-    runtime_commit.CopyFrom(commit)
+    runtime_commit.CopyFrom(saved.commit)
     runtime_commit.action = runtime_action_name
     return SaveGradingCommitResult(
-        save_status=save_status,
+        save_status=saved.save_status,
         bundle=_runtime_bundle_from_parts(
             hostname=runtime_hostname,
             user_id=bundle.user_id,
-            assignment=commit.assignment,
-            problem_id=commit.problem_id,
+            assignment=saved.commit.assignment,
+            problem_id=saved.commit.problem_id,
             problem_note=str(step_context["problem_note"]),
-            problem_options=problem_options,
-            step_number=int(commit.step),
-            total_steps=total_steps,
+            problem_options=saved.problem_options,
+            step_number=int(saved.commit.step),
+            total_steps=saved.total_steps,
             action_name=runtime_action_name,
             action=runtime_action,
             container=str(step_context["container"]),
@@ -751,25 +901,49 @@ def save_grading_commit_common(
     )
 
 
-def save_runtime_bundle_common(
+def save_ungraded_commit(
+    tx: sqlite3.Connection,
+    current_user_id: str,
+    bundle: pb.GradingCommit,
+    ip_allowed: bool,
+    assign_host: Callable[[set[str]], str],
+    load_problem_type_files: Callable[[str], dict[str, bytes]],
+) -> SaveGradingCommitResult:
+    saved = _save_grading_commit(tx, current_user_id, bundle, ip_allowed, graded=False)
+    return _runtime_bundle_for_commit(tx, bundle, saved, assign_host, load_problem_type_files)
+
+
+def save_workspace_commit(
+    tx: sqlite3.Connection,
+    current_user_id: str,
+    commit: pb.Commit,
+    ip_allowed: bool,
+) -> SaveWorkspaceCommitResult:
+    if commit.action != "":
+        raise ValueError("workspace commit action must be empty")
+    working = pb.Commit()
+    working.CopyFrom(commit)
+    del working.transcript[:]
+    working.ClearField("report_card")
+    working.score = 0.0
+    grading = pb.GradingCommit(user_id=current_user_id, commit=working)
+    saved = _save_grading_commit(tx, current_user_id, grading, ip_allowed, graded=False)
+    return SaveWorkspaceCommitResult(
+        commit=saved.commit,
+        save_status=saved.save_status,
+        problem_note=str(saved.step_context["problem_note"]),
+    )
+
+
+def save_graded_runtime_bundle(
     tx: sqlite3.Connection,
     current_user_id: str,
     runtime: pb.RuntimeBundle,
     ip_allowed: bool,
-    graded: bool,
 ) -> SaveGradingCommitResult:
     grading = pb.GradingCommit(user_id=runtime.user_id, hostname=runtime.hostname, commit=runtime.commit)
-    saved = save_grading_commit_common(
-        tx,
-        current_user_id,
-        grading,
-        "",
-        ip_allowed,
-        lambda _problem_types: runtime.hostname,
-        lambda _problem_type: {},
-        graded,
-    )
-    runtime.commit.CopyFrom(saved.bundle.commit)
+    saved = _save_grading_commit(tx, current_user_id, grading, ip_allowed, graded=True)
+    runtime.commit.CopyFrom(saved.commit)
     return SaveGradingCommitResult(bundle=runtime, save_status=saved.save_status)
 
 
@@ -809,4 +983,5 @@ def _grading_commit_from_problem_bundle(
         container=problem_type.container,
         files=runtime_files,
         commit=runtime_commit,
+        starter_files=_bytes_map(step.starter_files),
     )

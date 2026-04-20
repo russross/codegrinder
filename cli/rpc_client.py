@@ -93,6 +93,13 @@ class CodeGrinderClient:
             pb.SaveProblemSetRequest(mode=mode, bundle=bundle),
         )
 
+    def save_workspace_commit(self, commit: pb.Commit) -> pb.SaveWorkspaceCommitResponse:
+        return self.call(
+            "SaveWorkspaceCommit",
+            self.session.stub.SaveWorkspaceCommit,
+            pb.SaveWorkspaceCommitRequest(commit=commit),
+        )
+
     def save_ungraded_commit(self, commit: pb.GradingCommit) -> pb.SaveUngradedCommitResponse:
         return self.call(
             "SaveUngradedCommit",
