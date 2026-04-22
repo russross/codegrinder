@@ -2,14 +2,31 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from collections.abc import Sequence
+from typing import Protocol
 
 import codegrinder_pb2 as pb
 
 from errors import fail
-from helpers import clean_relative_path, find_dotfile, grpc_time_now, update_files
+from helpers import find_dotfile, grpc_time_now
 from models import DotFileInfo, ProblemInfo
 from rpc_client import CodeGrinderClient
+from workspace_files import clean_relative_path, update_files, workspace_file_map, workspace_official_paths
+
+
+class WorkspaceClient(Protocol):
+    def get_workspace(
+        self,
+        assignment: pb.AssignmentKey,
+        problem_id: str,
+        step_number: int,
+        file_state: pb.WorkspaceFileState.ValueType,
+        include_contents: bool,
+        include_solution_files: bool,
+    ) -> pb.GetWorkspaceResponse: ...
+
+
+class WorkspaceSaveClient(Protocol):
+    def save_workspace_commit(self, commit: pb.Commit) -> pb.SaveWorkspaceCommitResponse: ...
 
 
 @dataclass(slots=True)
@@ -18,6 +35,16 @@ class StudentWorkspace:
     commit: pb.Commit
     dotfile: DotFileInfo
     problem_dir: Path
+
+
+@dataclass(slots=True)
+class StudentCommandContext:
+    workspace: pb.GetWorkspaceResponse
+    commit: pb.Commit
+    dotfile: DotFileInfo
+    problem_dir: Path
+    problem_info: ProblemInfo
+    current_paths: set[str]
 
 
 def _set_proto_timestamp(target: object, now) -> None:
@@ -38,7 +65,7 @@ def build_commit_from_disk(
     missing: list[str] = []
     for name in student_owned_paths:
         relative_path = clean_relative_path(name)
-        path = problem_dir / relative_path
+        path = problem_dir / relative_path.path
         if not path.exists():
             missing.append(name)
             continue
@@ -86,33 +113,11 @@ def resolve_student_problem(start_dir: Path) -> tuple[DotFileInfo, Path, str, Pr
     return dotfile, problem_dir, info.problem_id, info
 
 
-def workspace_file_map(entries: Sequence[pb.AssignmentStepFile]) -> dict[str, bytes]:
-    return {clean_relative_path(entry.path).as_posix(): bytes(entry.content or b"") for entry in entries}
-
-
-def workspace_official_paths(workspace: pb.GetWorkspaceResponse) -> set[str]:
-    paths = {clean_relative_path(entry.path).as_posix() for entry in workspace.system_owned_files}
-    paths.update(clean_relative_path(entry.path).as_posix() for entry in workspace.student_owned_files)
-    return paths
-
-
-def clean_workspace_tree(directory: Path, official_paths: set[str]) -> None:
-    official = {Path(path) for path in official_paths}
-    for path in sorted(directory.rglob("*"), key=lambda item: len(item.parts), reverse=True):
-        rel = path.relative_to(directory)
-        if path.is_dir():
-            try:
-                path.rmdir()
-            except OSError:
-                pass
-            continue
-        if rel in official:
-            continue
-        print(f"removing file: {rel}")
-        path.unlink()
-
-
-def save_current_student_files(client: CodeGrinderClient, student: StudentWorkspace, note: str) -> pb.SaveWorkspaceCommitResponse:
+def save_current_student_files(
+    client: WorkspaceSaveClient,
+    student: StudentCommandContext,
+    note: str,
+) -> pb.SaveWorkspaceCommitResponse:
     commit = student.commit
     commit.action = ""
     commit.note = note
@@ -120,7 +125,7 @@ def save_current_student_files(client: CodeGrinderClient, student: StudentWorksp
 
 
 def get_workspace(
-    client: CodeGrinderClient,
+    client: WorkspaceClient,
     assignment: pb.AssignmentKey,
     problem_id: str,
     step_number: int,
@@ -138,7 +143,7 @@ def get_workspace(
     )
 
 
-def gather_student(client: CodeGrinderClient, start_dir: Path) -> StudentWorkspace:
+def gather_student_context(client: WorkspaceClient, start_dir: Path) -> StudentCommandContext:
     dotfile, problem_dir, problem_id, info = resolve_student_problem(start_dir)
     workspace = get_workspace(
         client,
@@ -159,4 +164,33 @@ def gather_student(client: CodeGrinderClient, start_dir: Path) -> StudentWorkspa
         workspace.problem_id,
         int(workspace.step_number),
     )
-    return StudentWorkspace(workspace=workspace, commit=commit, dotfile=dotfile, problem_dir=problem_dir)
+    current_paths = workspace_official_paths(workspace)
+    return StudentCommandContext(
+        workspace=workspace,
+        commit=commit,
+        dotfile=dotfile,
+        problem_dir=problem_dir,
+        problem_info=info,
+        current_paths=current_paths,
+    )
+
+
+def gather_student(client: CodeGrinderClient, start_dir: Path) -> StudentWorkspace:
+    context = gather_student_context(client, start_dir)
+    return StudentWorkspace(
+        workspace=context.workspace,
+        commit=context.commit,
+        dotfile=context.dotfile,
+        problem_dir=context.problem_dir,
+    )
+
+
+def build_grading_commit(
+    user_id: str,
+    student: StudentCommandContext,
+    action: str,
+    note: str,
+) -> pb.GradingCommit:
+    student.commit.action = action
+    student.commit.note = note
+    return pb.GradingCommit(user_id=user_id, commit=student.commit)

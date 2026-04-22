@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from cli import _build_parser
-from student_workspace import clean_workspace_tree
+from workspace_files import clean_workspace_tree
 
 
 def test_sync_command_is_registered() -> None:

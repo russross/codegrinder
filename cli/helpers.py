@@ -10,7 +10,7 @@ from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, cast
 
 import grpc
@@ -317,55 +317,6 @@ def save_dotfile(dotfile: DotFileInfo) -> None:
         )
     target = Path(dotfile.path)
     target.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def clean_relative_path(raw: str) -> Path:
-    if "\\" in raw:
-        fail(f"invalid path from server: {raw!r}")
-    path = PurePosixPath(raw)
-    if path.is_absolute() or raw.strip() == "":
-        fail(f"invalid path from server: {raw!r}")
-    parts = path.parts
-    if not parts or any(part in ("", ".", "..") for part in parts):
-        fail(f"invalid path from server: {raw!r}")
-    return Path(*parts)
-
-
-def update_files(directory: Path, files: dict[str, bytes], old_files: set[str] | None, chatty: bool) -> None:
-    for name, contents in files.items():
-        relative_path = clean_relative_path(name)
-        path = directory / relative_path
-        if not path.exists():
-            if chatty:
-                print(f"saving file:   {name}")
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(contents)
-            continue
-
-        on_disk = path.read_bytes()
-        if on_disk != contents:
-            if chatty:
-                print(f"updating file: {name}")
-            path.write_bytes(contents)
-
-    if old_files is None:
-        return
-    for name in old_files:
-        if name in files:
-            continue
-        relative_path = clean_relative_path(name)
-        path = directory / relative_path
-        if path.exists():
-            if chatty:
-                print(f"removing file: {name}")
-            path.unlink()
-        parent = relative_path.parent
-        if parent != Path("."):
-            maybe = directory / parent
-            try:
-                maybe.rmdir()
-            except OSError:
-                pass
 
 
 def grpc_time_now() -> datetime:
