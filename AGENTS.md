@@ -30,9 +30,8 @@ For protocol changes:
 - Student-visible commands are `version`, `login`, `list`, `get`, `sync`, `grade`, `action`, and `reset`.
 - Instructor-mode commands are additionally `create`, `student`, `solve`, `problem`, and `type`.
 - Instructor-only flags `--api` and `--api-dump` report or dump API traffic; they must not change command semantics.
-- There is no current `grind clean` command. Workspace cleanup is part of `grind sync`.
 - Commands that operate on a local assignment must discover the assignment by finding `.grind` in the current directory or an ancestor.
-- Multi-problem assignments require problem-specific commands to run from inside a concrete problem directory; single-problem assignments use the assignment root as the problem directory.
+- Multi-problem assignments require problem-specific author commands to run from inside a concrete problem directory; single-problem assignments use the assignment root as the problem directory.
 - Client-side workspace path handling must normalize paths before reading or writing local files. Server-side validation remains authoritative and must reject invalid submitted paths.
 - Non-login commands that load the server session must call `Hello` through `managed_session`, enforce version checks, and use the configured session cookie as the authentication source.
 
@@ -56,6 +55,7 @@ For protocol changes:
 - `grind list` takes no arguments.
 - It lists assignments visible to the logged-in user by calling `ListAssignments` with no search terms and without student context.
 - The server owns assignment visibility, ordering-independent content, availability status, due dates, and user authorization.
+- Some assignments may be hidden from the student by the server when their IP address is filtered, but instructors see all assignments for the courses where they are instructors
 - The CLI sorts the returned assignment items for presentation only; sorting must not change which assignments exist or which are downloadable.
 - If no assignments are returned, the CLI explains that assignments must be launched from Canvas before CLI access.
 
@@ -67,24 +67,25 @@ For protocol changes:
 - `lock_at` does not hide assignments and does not prevent workspace download or daycare actions, including grade.
 - After `lock_at`, student-owned assignment commits must not be persisted and grade passback must not run, but daycare actions should still run so students can see results.
 - After a locked `grind grade`, the final line shown to the student must clearly say the results were not saved because the assignment is locked.
+- `lock_at` and `unlock_at` do not apply to instructors for the course.
 
 
 # `grind get`
 
-- `grind get` takes no assignment selector or destination argument. It downloads all currently available assignments owned by the logged-in user into the configured workspace root.
+- `grind get` downloads all currently available assignments owned by the logged-in user into the configured workspace root.
 - The CLI must use `ListAssignments` download status to decide which assignments to attempt; it must not reimplement `unlock_at` policy.
 - `GetAssignment` must also report assignment download status so assignment summaries and workspace download use one server-owned availability concept.
 - The server must enforce download availability again in `GetWorkspace`; list filtering is not a security boundary.
 - Assignment directories are `$workspace_root/$course_directory/$problem_set_id`.
 - Downloads must stage into a temporary sibling directory and rename into place only after all files and `.grind` metadata are written.
 - A partially downloaded assignment directory without valid `.grind` metadata must not be treated as a completed assignment.
-- `.grind` is TOML, not JSON. It records assignment identity and per-problem `problem_id`, current `step`, and `total_steps`.
+- `.grind` is TOML. It records assignment identity and per-problem `problem_id`, current `step`, and `total_steps`.
 - Existing assignment directories are skipped only when `.grind` assignment identity and problem metadata match the server's current assignment summary.
 - Workspace file state has three current meanings: unspecified/missing request state, current saved/student state, and step-start reset state.
-- `WORKSPACE_FILE_STATE_UNSPECIFIED` is not a future placeholder. It means the caller omitted a required choice and `GetWorkspace` must reject it.
+- `WORKSPACE_FILE_STATE_UNSPECIFIED` means the caller omitted a required choice and `GetWorkspace` must reject it.
 - `GetWorkspace` must reject unspecified and unknown file-state enum values.
 - Workspace paths returned by the server and written by the CLI must be relative, normalized, and must not contain absolute paths, `.` components, `..` components, or backslashes.
-- `lock_at` does not prevent `grind get`; only `unlock_at` controls download availability.
+- `lock_at` does not prevent `grind get`; only `unlock_at` controls download availability, and only for students.
 
 # `grind sync`
 
@@ -95,7 +96,7 @@ For protocol changes:
 - `SaveWorkspaceCommit` must reject non-empty `action`.
 - `SaveWorkspaceCommit` must ignore transcript, report-card, and score fields. It saves files, note, and timestamps only.
 - Commit save policy belongs in SQLite views. Python maps the view result to `CommitSaveStatus` and does not duplicate lock ownership policy.
-- After `lock_at`, sync must return `COMMIT_SAVE_STATUS_NOT_SAVED_LOCKED` and persist no files.
+- After `lock_at`, sync must return `COMMIT_SAVE_STATUS_NOT_SAVED_LOCKED` and persist no files. This does not apply to instructors, who are unaffected by `lock_at` and `unlock_at`.
 - Non-owner saves must not persist files and must not silently become owner saves.
 - Submitted commit paths must be normalized server-side and must be student-owned paths from the problem-step solution whitelist.
 - On saved sync, CLI prints `problem {problem_id} step {step} synced`.
