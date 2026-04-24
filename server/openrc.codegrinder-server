@@ -32,18 +32,6 @@ start() {
 
 stop() {
     ebegin "Stopping ${name}"
-    local legacy_uv
-    local legacy_logger
-    legacy_uv="/usr/bin/uv run python main.py --config ${config_path} --bind ${grpc_bind} --http-bind ${http_bind}"
-    legacy_logger="/usr/bin/logger -t codegrinder-server"
-
     start-stop-daemon --stop --pidfile "${pidfile}" --retry TERM/30/KILL/5
-    local rc=$?
-
-    # Cleanup for old script versions that launched via a shell pipeline and
-    # sometimes left untracked processes without a pidfile.
-    pkill -f "${legacy_uv}" 2>/dev/null || true
-    pkill -f "${legacy_logger}" 2>/dev/null || true
-
-    eend ${rc}
+    eend $?
 }

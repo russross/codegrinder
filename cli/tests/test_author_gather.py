@@ -51,17 +51,17 @@ def test_gather_author_uses_standard_layout_and_reports_whitespace(tmp_path: Pat
     assert "warning: step 1 file main.py has non-Unix line endings, trailing spaces" in output
 
 
-def test_gather_author_rejects_legacy_solution_layout(tmp_path: Path) -> None:
-    root = tmp_path / "legacy-problem"
+def test_gather_author_rejects_solution_layout_directory(tmp_path: Path) -> None:
+    root = tmp_path / "unsupported-solution-layout"
     root.mkdir()
     _write_problem_cfg(root)
     solution_dir = root / "_solution"
     solution_dir.mkdir()
-    solution_dir.joinpath("main.py").write_text("print('legacy')\n", encoding="utf-8")
+    solution_dir.joinpath("main.py").write_text("print('unsupported')\n", encoding="utf-8")
     starter_dir = root / "_starter"
     starter_dir.mkdir()
     starter_dir.joinpath("main.py").write_text("print('starter')\n", encoding="utf-8")
 
     with pytest.raises(CliError) as err:
         gather_author("", root)
-    assert "legacy _solution authoring layout is no longer supported" in str(err.value)
+    assert "the _solution authoring layout is not supported" in str(err.value)

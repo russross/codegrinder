@@ -99,7 +99,7 @@ def gather_author(
                 continue
             parts = rel.parts
             if parts[0] == "_solution":
-                fail("legacy _solution authoring layout is no longer supported")
+                fail("the _solution authoring layout is not supported")
             content = path.read_bytes()
             if parts[0] == "_starter":
                 if len(parts) == 1:

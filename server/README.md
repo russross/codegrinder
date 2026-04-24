@@ -45,7 +45,7 @@ cp /home/russ/codegrinder/server/config.example.json /home/russ/codegrinder/conf
 
 Set secrets in `/home/russ/codegrinder/config.json` (`daycareSecret`, `ltiSecret`, `sessionSecret`) before starting the service.
 Set `containerEngine` to `doas podman` for rootful Podman execution from an unprivileged server process. Daycare containers are launched unprivileged (`--user 1001:1001`, dropped capabilities, `no-new-privileges`).
-When using Podman, unqualified image names (for example `codegrinder/riscv`) are automatically run as `localhost/codegrinder/riscv` for compatibility with Podman local image resolution.
+When using Podman, unqualified image names (for example `codegrinder/riscv`) are automatically resolved as `localhost/codegrinder/riscv`.
 Daycare always runs containers with `--pull=never` and only tries local image candidates, so it will not trigger remote image pulls.
 
 ## 4. Sync Python environment

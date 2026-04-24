@@ -302,7 +302,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
         )
 
     # gRPC-native names
-    def rpc_hello(self, request: pb.HelloRequest, context: grpc.ServicerContext) -> pb.HelloResponse:
+    def Hello(self, request: pb.HelloRequest, context: grpc.ServicerContext) -> pb.HelloResponse:
         version = self._version.to_pb()
         if request.key:
             try:
@@ -344,7 +344,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
 
         return self._with_tx(fn2)
 
-    def rpc_list_assignments(
+    def ListAssignments(
         self, request: pb.ListAssignmentsRequest, context: grpc.ServicerContext
     ) -> pb.ListAssignmentsResponse:
         def fn(tx: sqlite3.Connection) -> pb.ListAssignmentsResponse:
@@ -363,7 +363,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
 
         return self._with_tx(fn)
 
-    def rpc_search_problem_catalog(
+    def SearchProblemCatalog(
         self, request: pb.SearchProblemCatalogRequest, context: grpc.ServicerContext
     ) -> pb.SearchProblemCatalogResponse:
         def fn(tx: sqlite3.Connection) -> pb.SearchProblemCatalogResponse:
@@ -376,7 +376,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
 
         return self._with_tx(fn)
 
-    def rpc_problem_types(self, _request: pb.GetProblemTypesRequest, context: grpc.ServicerContext) -> pb.GetProblemTypesResponse:
+    def GetProblemTypes(self, request: pb.GetProblemTypesRequest, context: grpc.ServicerContext) -> pb.GetProblemTypesResponse:
         def fn(tx: sqlite3.Connection) -> pb.GetProblemTypesResponse:
             try:
                 rows = get_problem_types_rows(tx)
@@ -387,7 +387,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
 
         return self._with_tx(fn)
 
-    def rpc_problem_type(self, request: pb.GetProblemTypeRequest, context: grpc.ServicerContext) -> pb.GetProblemTypeResponse:
+    def GetProblemType(self, request: pb.GetProblemTypeRequest, context: grpc.ServicerContext) -> pb.GetProblemTypeResponse:
         def fn(tx: sqlite3.Connection) -> pb.GetProblemTypeResponse:
             try:
                 problem_type = self._load_problem_type(tx, request.problem_type)
@@ -400,7 +400,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
 
         return self._with_tx(fn)
 
-    def rpc_assignment(self, request: pb.GetAssignmentRequest, context: grpc.ServicerContext) -> pb.GetAssignmentResponse:
+    def GetAssignment(self, request: pb.GetAssignmentRequest, context: grpc.ServicerContext) -> pb.GetAssignmentResponse:
         def fn(tx: sqlite3.Connection) -> pb.GetAssignmentResponse:
             current_user = self._current_user_row(tx, context)
             try:
@@ -419,7 +419,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
 
         return self._with_tx(fn)
 
-    def rpc_workspace(self, request: pb.GetWorkspaceRequest, context: grpc.ServicerContext) -> pb.GetWorkspaceResponse:
+    def GetWorkspace(self, request: pb.GetWorkspaceRequest, context: grpc.ServicerContext) -> pb.GetWorkspaceResponse:
         def fn(tx: sqlite3.Connection) -> pb.GetWorkspaceResponse:
             current_user = self._current_user_row(tx, context)
             try:
@@ -543,7 +543,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                 note,
             )
 
-    def rpc_prepare_problem(
+    def PrepareProblem(
         self, request: pb.PrepareProblemRequest, context: grpc.ServicerContext
     ) -> pb.PrepareProblemResponse:
         if request is None or not request.HasField("draft"):
@@ -571,7 +571,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
 
         return self._with_tx(fn)
 
-    def rpc_save_problem(self, request: pb.SaveProblemRequest, context: grpc.ServicerContext) -> pb.SaveProblemResponse:
+    def SaveProblem(self, request: pb.SaveProblemRequest, context: grpc.ServicerContext) -> pb.SaveProblemResponse:
         if request is None or not request.HasField("bundle"):
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "bundle is required")
             raise AssertionError("unreachable")
@@ -595,7 +595,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
 
         return self._with_tx(fn)
 
-    def rpc_save_problem_set(
+    def SaveProblemSet(
         self, request: pb.SaveProblemSetRequest, context: grpc.ServicerContext
     ) -> pb.SaveProblemSetResponse:
         if request is None or not request.HasField("bundle"):
@@ -619,7 +619,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
 
         return self._with_tx(fn)
 
-    def rpc_save_ungraded_commit(
+    def SaveUngradedCommit(
         self, request: pb.SaveUngradedCommitRequest, context: grpc.ServicerContext
     ) -> pb.SaveUngradedCommitResponse:
         if request is None or not request.HasField("commit"):
@@ -663,7 +663,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
 
         return self._with_tx(fn)
 
-    def rpc_save_workspace_commit(
+    def SaveWorkspaceCommit(
         self, request: pb.SaveWorkspaceCommitRequest, context: grpc.ServicerContext
     ) -> pb.SaveWorkspaceCommitResponse:
         if request is None or not request.HasField("commit"):
@@ -706,7 +706,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
 
         return self._with_tx(fn)
 
-    def rpc_save_graded_commit(
+    def SaveGradedCommit(
         self, request: pb.SaveGradedCommitRequest, context: grpc.ServicerContext
     ) -> pb.SaveGradedCommitResponse:
         if request is None or not request.HasField("bundle"):
@@ -758,56 +758,5 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
             save_grade_async(passback_target, passback_html, self._config.lti_secret)
         return response
 
-    def rpc_daycare_stream(self, request: pb.DaycareRequest, context: grpc.ServicerContext) -> Iterator[pb.DaycareResponse]:
-        yield from self._daycare.stream(request, context)
-
-    # protobuf service interface mapping
-    def Hello(self, request: pb.HelloRequest, context: grpc.ServicerContext) -> pb.HelloResponse:
-        return self.rpc_hello(request, context)
-
-    def ListAssignments(self, request: pb.ListAssignmentsRequest, context: grpc.ServicerContext) -> pb.ListAssignmentsResponse:
-        return self.rpc_list_assignments(request, context)
-
-    def SearchProblemCatalog(
-        self, request: pb.SearchProblemCatalogRequest, context: grpc.ServicerContext
-    ) -> pb.SearchProblemCatalogResponse:
-        return self.rpc_search_problem_catalog(request, context)
-
-    def GetProblemTypes(self, request: pb.GetProblemTypesRequest, context: grpc.ServicerContext) -> pb.GetProblemTypesResponse:
-        return self.rpc_problem_types(request, context)
-
-    def GetProblemType(self, request: pb.GetProblemTypeRequest, context: grpc.ServicerContext) -> pb.GetProblemTypeResponse:
-        return self.rpc_problem_type(request, context)
-
-    def GetAssignment(self, request: pb.GetAssignmentRequest, context: grpc.ServicerContext) -> pb.GetAssignmentResponse:
-        return self.rpc_assignment(request, context)
-
-    def GetWorkspace(self, request: pb.GetWorkspaceRequest, context: grpc.ServicerContext) -> pb.GetWorkspaceResponse:
-        return self.rpc_workspace(request, context)
-
-    def PrepareProblem(self, request: pb.PrepareProblemRequest, context: grpc.ServicerContext) -> pb.PrepareProblemResponse:
-        return self.rpc_prepare_problem(request, context)
-
-    def SaveProblem(self, request: pb.SaveProblemRequest, context: grpc.ServicerContext) -> pb.SaveProblemResponse:
-        return self.rpc_save_problem(request, context)
-
-    def SaveProblemSet(self, request: pb.SaveProblemSetRequest, context: grpc.ServicerContext) -> pb.SaveProblemSetResponse:
-        return self.rpc_save_problem_set(request, context)
-
-    def SaveWorkspaceCommit(
-        self, request: pb.SaveWorkspaceCommitRequest, context: grpc.ServicerContext
-    ) -> pb.SaveWorkspaceCommitResponse:
-        return self.rpc_save_workspace_commit(request, context)
-
-    def SaveUngradedCommit(
-        self, request: pb.SaveUngradedCommitRequest, context: grpc.ServicerContext
-    ) -> pb.SaveUngradedCommitResponse:
-        return self.rpc_save_ungraded_commit(request, context)
-
-    def SaveGradedCommit(
-        self, request: pb.SaveGradedCommitRequest, context: grpc.ServicerContext
-    ) -> pb.SaveGradedCommitResponse:
-        return self.rpc_save_graded_commit(request, context)
-
     def Daycare(self, request: pb.DaycareRequest, context: grpc.ServicerContext) -> Iterator[pb.DaycareResponse]:
-        yield from self.rpc_daycare_stream(request, context)
+        yield from self._daycare.stream(request, context)

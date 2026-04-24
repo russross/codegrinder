@@ -4,8 +4,8 @@ package codegrinder;
 
 option go_package = "github.com/russross/codegrinder/protocol";
 
-import "google/protobuf/timestamp.proto";
 import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
 
 // User represents a single user as defined by LTI.
 message User {
@@ -19,6 +19,15 @@ message User {
 message Course {
   string course_id = 1;
   string course_name = 2;
+}
+
+// Version represents version information.
+message Version {
+  string version = 1;
+  string grind_version_required = 2;
+  string grind_version_recommended = 3;
+  string thonny_version_required = 4;
+  string thonny_version_recommended = 5;
 }
 
 // AssignmentKey is the natural key for one assignment.
@@ -45,273 +54,226 @@ message Assignment {
 
 // ProblemSet represents a set of problems.
 message ProblemSet {
-   string problem_set_id = 1;
-   string problem_set_note = 2;
-   repeated string problem_set_tags = 3;
-   google.protobuf.Timestamp created_at = 4;
-   google.protobuf.Timestamp updated_at = 5;
-   string continues_problem_set_id = 6;
+  string problem_set_id = 1;
+  string problem_set_note = 2;
+  repeated string problem_set_tags = 3;
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  string continues_problem_set_id = 6;
 }
 
-// ProblemType defines one type of problem.
-message ProblemType {
-   string problem_type = 1;
-   string container = 2;
-   map<string, bytes> files = 3;
-   map<string, ProblemTypeAction> actions = 4;
+// Problem represents a single problem.
+message Problem {
+  string problem_id = 1;
+  string problem_note = 2;
+  repeated string problem_tags = 3;
+  repeated string problem_options = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+// ProblemStep represents a single step of a problem.
+message ProblemStep {
+  string problem_id = 1;
+  int64 step = 2;
+  string problem_type = 3;
+  string note = 4;
+  double weight = 5;
+  map<string, bytes> files = 6;
+  map<string, bool> whitelist = 7;
+  map<string, bytes> starter_files = 8;
+}
+
+// ProblemSetProblem represents a problem in a problem set.
+message ProblemSetProblem {
+  string problem_set_id = 1;
+  string problem_id = 2;
+  double weight = 3;
+  int64 first_step = 4;
+  int64 last_step = 5;
 }
 
 // ProblemTypeAction defines parser/command and execution limits for a
 // single problem type action.
 message ProblemTypeAction {
-   string command = 3;
-   string parser = 4;
-   int64 max_cpu = 7;
-   int64 max_fd = 10;
-   int64 max_file_size = 11;
-   int64 max_memory = 12;
-   int64 max_threads = 13;
-   reserved 1, 2, 5, 6, 8, 9;
-   reserved "problem_type", "action", "message", "interactive", "max_session", "max_timeout";
+  string command = 1;
+  string parser = 2;
+  int64 max_cpu = 3;
+  int64 max_fd = 4;
+  int64 max_file_size = 5;
+  int64 max_memory = 6;
+  int64 max_threads = 7;
 }
 
-// Problem represents a single problem.
-message Problem {
-   string problem_id = 1;
-   string problem_note = 2;
-   repeated string problem_tags = 3;
-   repeated string problem_options = 4;
-   google.protobuf.Timestamp created_at = 5;
-   google.protobuf.Timestamp updated_at = 6;
-}
-
-// ProblemStep represents a single step of a problem.
-message ProblemStep {
-   string problem_id = 1;
-   int64 step = 2;
-   string problem_type = 3;
-   string note = 4;
-   double weight = 6;
-   map<string, bytes> files = 7;
-   map<string, bool> whitelist = 8;
-   map<string, bytes> starter_files = 10;
-   reserved 5, 9;
-   reserved "instructions", "solution";
-}
-
-// ProblemSetProblem represents a problem in a problem set.
-message ProblemSetProblem {
-   string problem_set_id = 1;
-   string problem_id = 2;
-   double weight = 3;
-   int64 first_step = 4;
-   int64 last_step = 5;
-}
-
-// ReportCard gives the results of a graded run
-message ReportCard {
-   bool passed = 1;
-   string note = 2;
-   google.protobuf.Duration duration = 3;
-   repeated ReportCardResult results = 4;
+// ProblemType defines one type of problem.
+message ProblemType {
+  string problem_type = 1;
+  string container = 2;
+  map<string, bytes> files = 3;
+  map<string, ProblemTypeAction> actions = 4;
 }
 
 // ReportCardResult Outcomes:
 // passed, failed, error, skipped
 message ReportCardResult {
-   string name = 1;
-   string outcome = 2;
-   string details = 3;
-   string context = 4;
+  string name = 1;
+  string outcome = 2;
+  string details = 3;
+  string context = 4;
+}
+
+// ReportCard gives the results of a graded run
+message ReportCard {
+  bool passed = 1;
+  string note = 2;
+  google.protobuf.Duration duration = 3;
+  repeated ReportCardResult results = 4;
 }
 
 // EventMessage follows one of these forms:
 // exec ExecCommand, exit ExitStatus, stdin StreamData, stdout StreamData,
 // stderr StreamData, stdinclosed, error Error, reportcard ReportCard, files Files
 message EventMessage {
-   google.protobuf.Timestamp time = 1;
-   string event = 2;
-   repeated string exec_command = 3;
-   int32 exit_status = 4;
-   bytes stream_data = 5;
-   string error = 6;
-   ReportCard report_card = 7;
-   map<string, bytes> files = 8;
+  google.protobuf.Timestamp time = 1;
+  string event = 2;
+  repeated string exec_command = 3;
+  int32 exit_status = 4;
+  bytes stream_data = 5;
+  string error = 6;
+  ReportCard report_card = 7;
+  map<string, bytes> files = 8;
 }
 
 // Commit defines an attempt at solving one step of a Problem.
 message Commit {
-   int64 id = 1;
-   AssignmentKey assignment = 2;
-   string problem_id = 3;
-   int64 step = 4;
-   string action = 5;
-   string note = 6;
-   map<string, bytes> files = 7;
-   repeated EventMessage transcript = 8;
-   ReportCard report_card = 9;
-   double score = 10;
-   google.protobuf.Timestamp created_at = 11;
-   google.protobuf.Timestamp updated_at = 12;
-}
-
-// ProblemBundle represents a bundle of problem data.
-message ProblemBundle {
-   Problem problem = 1;
-   repeated ProblemStep problem_steps = 2;
-   map<string, ProblemType> problem_types = 3;
-   string hostname = 5;
-   string user_id = 6;
-   repeated Commit solution_commits = 7;
-   repeated SignedRuntimeBundle signed_validation_bundles = 8;
-}
-
-// ProblemSetBundle represents a bundle of problem set data.
-message ProblemSetBundle {
-   ProblemSet problem_set = 1;
-   repeated ProblemSetProblem problem_set_problems = 2;
-}
-
-// GradingCommit represents one commit together with the grading context daycare needs.
-message GradingCommit {
-    reserved 1, 2, 3;
-    reserved "problem_type", "problem", "problem_steps";
-    string hostname = 4;
-    string user_id = 5;
-    Commit commit = 6;
+  int64 id = 1;
+  AssignmentKey assignment = 2;
+  string problem_id = 3;
+  int64 step = 4;
+  string action = 5;
+  string note = 6;
+  map<string, bytes> files = 7;
+  repeated EventMessage transcript = 8;
+  ReportCard report_card = 9;
+  double score = 10;
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp updated_at = 12;
 }
 
 // RuntimeLimits carries container limits for one runtime action.
 message RuntimeLimits {
-   int64 max_cpu = 1;
-   int64 max_fd = 2;
-   int64 max_file_size = 3;
-   int64 max_memory = 4;
-   int64 max_threads = 5;
+  int64 max_cpu = 1;
+  int64 max_fd = 2;
+  int64 max_file_size = 3;
+  int64 max_memory = 4;
+  int64 max_threads = 5;
 }
 
 // RuntimeBundle is the complete signed execution request consumed by daycare.
 message RuntimeBundle {
-   string hostname = 1;
-   string user_id = 2;
-   AssignmentKey assignment = 3;
-   string problem_id = 4;
-   string problem_note = 5;
-   repeated string problem_options = 6;
-   int64 step_number = 7;
-   int64 total_steps = 8;
-   string action = 9;
-   string container = 10;
-   string command = 11;
-   string parser = 12;
-   RuntimeLimits limits = 13;
-   map<string, bytes> files = 14;
-   Commit commit = 15;
-   map<string, bytes> starter_files = 16;
+  string hostname = 1;
+  string user_id = 2;
+  AssignmentKey assignment = 3;
+  string problem_id = 4;
+  string problem_note = 5;
+  repeated string problem_options = 6;
+  int64 step_number = 7;
+  int64 total_steps = 8;
+  string action = 9;
+  string container = 10;
+  string command = 11;
+  string parser = 12;
+  RuntimeLimits limits = 13;
+  map<string, bytes> files = 14;
+  Commit commit = 15;
+  map<string, bytes> starter_files = 16;
 }
 
 // SignedRuntimeBundle carries protobuf-encoded runtime bundle bytes plus an HMAC
 // signature. Clients may decode the bytes for inspection, but must forward the
 // encoded bytes unchanged to preserve the signature.
 message SignedRuntimeBundle {
-    bytes bundle = 1;
-    string signature = 2;
+  bytes bundle = 1;
+  string signature = 2;
 }
 
 // DaycareRequest represents a request for the daycare service.
 message DaycareRequest {
-    SignedRuntimeBundle bundle = 1;
-    repeated string args = 2;
+  SignedRuntimeBundle bundle = 1;
+  repeated string args = 2;
 }
 
 // DaycareResponse represents a response from the daycare service.
 message DaycareResponse {
-    oneof response {
-        EventMessage event = 1;
-        string error = 2;
-        SignedRuntimeBundle bundle = 3;
-    }
+  oneof response {
+    EventMessage event = 1;
+    string error = 2;
+    SignedRuntimeBundle bundle = 3;
+  }
 }
 
-// Version represents version information.
-message Version {
-   string version = 1;
-   string grind_version_required = 2;
-   string grind_version_recommended = 3;
-   string thonny_version_required = 4;
-   string thonny_version_recommended = 5;
+// GradingCommit represents one commit together with the grading context daycare needs.
+message GradingCommit {
+  string hostname = 1;
+  string user_id = 2;
+  Commit commit = 3;
 }
 
 enum SaveMode {
-   SAVE_MODE_UNSPECIFIED = 0;
-   SAVE_MODE_CREATE = 1;
-   SAVE_MODE_UPDATE = 2;
+  SAVE_MODE_UNSPECIFIED = 0;
+  SAVE_MODE_CREATE = 1;
+  SAVE_MODE_UPDATE = 2;
 }
 
 message AuthorFile {
-   string path = 1;
-   bytes content = 2;
+  string path = 1;
+  bytes content = 2;
 }
 
 message AuthorProblemStepDraft {
-   int64 step_number = 1;
-   string problem_type = 2;
-   string note = 3;
-   double weight = 4;
-   repeated AuthorFile files = 5;
-   repeated AuthorFile starter_files = 6;
+  int64 step_number = 1;
+  string problem_type = 2;
+  string note = 3;
+  double weight = 4;
+  repeated AuthorFile files = 5;
+  repeated AuthorFile starter_files = 6;
 }
 
 message AuthorProblemDraft {
-   string problem_id = 1;
-   string problem_note = 2;
-   repeated string problem_tags = 3;
-   repeated string problem_options = 4;
-   repeated AuthorProblemStepDraft steps = 5;
+  string problem_id = 1;
+  string problem_note = 2;
+  repeated string problem_tags = 3;
+  repeated string problem_options = 4;
+  repeated AuthorProblemStepDraft steps = 5;
 }
 
-// CodeGrinderService provides CodeGrinder operations
-service CodeGrinderService {
-   // Hello performs session validation/exchange and returns server info
-   rpc Hello(HelloRequest) returns (HelloResponse);
-   // ListAssignments retrieves assignment-focused list rows for list/student flows.
-   rpc ListAssignments(ListAssignmentsRequest) returns (ListAssignmentsResponse);
-   // SearchProblemCatalog retrieves problem sets with nested problem and step summaries.
-   rpc SearchProblemCatalog(SearchProblemCatalogRequest) returns (SearchProblemCatalogResponse);
-   // GetProblemTypes retrieves all problem types
-   rpc GetProblemTypes(GetProblemTypesRequest) returns (GetProblemTypesResponse);
-   // GetProblemType retrieves a specific problem type
-   rpc GetProblemType(GetProblemTypeRequest) returns (GetProblemTypeResponse);
-   // GetAssignment retrieves assignment metadata and per-problem step progress.
-   rpc GetAssignment(GetAssignmentRequest) returns (GetAssignmentResponse);
-   // GetWorkspace retrieves canonical local workspace context for one assignment step.
-   rpc GetWorkspace(GetWorkspaceRequest) returns (GetWorkspaceResponse);
-   // PrepareProblem validates author source material and signs daycare bundles.
-   rpc PrepareProblem(PrepareProblemRequest) returns (PrepareProblemResponse);
-   // SaveProblem persists a prepared author problem bundle.
-   rpc SaveProblem(SaveProblemRequest) returns (SaveProblemResponse);
-   // SaveProblemSet persists an authored problem set bundle.
-   rpc SaveProblemSet(SaveProblemSetRequest) returns (SaveProblemSetResponse);
-   // SaveWorkspaceCommit persists current student-owned workspace files.
-   rpc SaveWorkspaceCommit(SaveWorkspaceCommitRequest) returns (SaveWorkspaceCommitResponse);
-   // SaveUngradedCommit handles an ungraded commit before daycare processing.
-   rpc SaveUngradedCommit(SaveUngradedCommitRequest) returns (SaveUngradedCommitResponse);
-   // SaveGradedCommit handles a graded commit returned by daycare.
-   rpc SaveGradedCommit(SaveGradedCommitRequest) returns (SaveGradedCommitResponse);
-   // Daycare handles streaming daycare requests
-   rpc Daycare(DaycareRequest) returns (stream DaycareResponse);
+// ProblemBundle represents a bundle of problem data.
+message ProblemBundle {
+  Problem problem = 1;
+  repeated ProblemStep problem_steps = 2;
+  map<string, ProblemType> problem_types = 3;
+  string hostname = 4;
+  string user_id = 5;
+  repeated Commit solution_commits = 6;
+  repeated SignedRuntimeBundle signed_validation_bundles = 7;
+}
+
+// ProblemSetBundle represents a bundle of problem set data.
+message ProblemSetBundle {
+  ProblemSet problem_set = 1;
+  repeated ProblemSetProblem problem_set_problems = 2;
 }
 
 // Request for Hello
 message HelloRequest {
-   string key = 1;
+  string key = 1;
 }
 
 // Response for Hello
 message HelloResponse {
-   string cookie = 1;
-   User user = 2;
-   Version version = 3;
+  string cookie = 1;
+  User user = 2;
+  Version version = 3;
 }
 
 // Request for ListAssignments
@@ -388,130 +350,123 @@ message SearchProblemCatalogResponse {
 
 // Request for GetProblemTypes
 message GetProblemTypesRequest {
-   string session_cookie = 1;
+  string session_cookie = 1;
 }
 
 // Response for GetProblemTypes
 message GetProblemTypesResponse {
-   repeated ProblemType problem_types = 1;
+  repeated ProblemType problem_types = 1;
 }
 
 // Request for GetProblemType
 message GetProblemTypeRequest {
-   string session_cookie = 1;
-   string problem_type = 2;
+  string session_cookie = 1;
+  string problem_type = 2;
 }
 
 // Response for GetProblemType
 message GetProblemTypeResponse {
-   ProblemType problem_type = 1;
+  ProblemType problem_type = 1;
 }
 
 // Request for GetAssignment
 message GetAssignmentRequest {
-   string session_cookie = 1;
-   AssignmentKey assignment = 2;
+  string session_cookie = 1;
+  AssignmentKey assignment = 2;
 }
 
 // AssignmentProblemProgress reports one problem's progress in the assignment.
 message AssignmentProblemProgress {
-   string problem_id = 1;
-   string problem_note = 2;
-   int64 current_step_number = 3;
-   int64 first_step_number = 4;
-   int64 last_step_number = 5;
+  string problem_id = 1;
+  string problem_note = 2;
+  int64 current_step_number = 3;
+  int64 first_step_number = 4;
+  int64 last_step_number = 5;
 }
 
 // Response for GetAssignment
 message GetAssignmentResponse {
-   AssignmentKey assignment = 1;
-   string problem_set_note = 2;
-   string course_name = 3;
-   repeated AssignmentProblemProgress problems = 4;
-   AssignmentDownloadStatus download_status = 5;
+  AssignmentKey assignment = 1;
+  string problem_set_note = 2;
+  string course_name = 3;
+  repeated AssignmentProblemProgress problems = 4;
+  AssignmentDownloadStatus download_status = 5;
 }
 
 // AssignmentStepFile is one file path/content pair.
 message AssignmentStepFile {
-   string path = 1;
-   bytes content = 2;
+  string path = 1;
+  bytes content = 2;
 }
 
 enum WorkspaceFileState {
-   WORKSPACE_FILE_STATE_UNSPECIFIED = 0;
-   WORKSPACE_FILE_STATE_CURRENT = 1;
-   WORKSPACE_FILE_STATE_STEP_START = 2;
+  WORKSPACE_FILE_STATE_UNSPECIFIED = 0;
+  WORKSPACE_FILE_STATE_CURRENT = 1;
+  WORKSPACE_FILE_STATE_STEP_START = 2;
 }
 
 // Request for GetWorkspace
 message GetWorkspaceRequest {
-   string session_cookie = 1;
-   AssignmentKey assignment = 2;
-   string problem_id = 3;
-   int64 step_number = 4; // 0 means use the student's current step for this problem.
-   WorkspaceFileState file_state = 5;
-   bool include_contents = 6;
-   bool include_solution_files = 7;
+  string session_cookie = 1;
+  AssignmentKey assignment = 2;
+  string problem_id = 3;
+  int64 step_number = 4; // 0 means use the student's current step for this problem.
+  WorkspaceFileState file_state = 5;
+  bool include_contents = 6;
+  bool include_solution_files = 7;
 }
 
 // Response for GetWorkspace
 message GetWorkspaceResponse {
-   AssignmentKey assignment = 1;
-   string problem_id = 2;
-   string problem_note = 3;
-   int64 step_number = 4;
-   string problem_type = 6;
-   string step_note = 7;
-   double step_weight = 8;
-   repeated string actions = 9;
-   repeated AssignmentStepFile system_owned_files = 10;
-   repeated AssignmentStepFile student_owned_files = 11;
-   repeated AssignmentStepFile solution_files = 12;
-   int64 first_step_number = 13;
-   int64 last_step_number = 14;
+  AssignmentKey assignment = 1;
+  string problem_id = 2;
+  string problem_note = 3;
+  int64 step_number = 4;
+  string problem_type = 5;
+  string step_note = 6;
+  double step_weight = 7;
+  repeated string actions = 8;
+  repeated AssignmentStepFile system_owned_files = 9;
+  repeated AssignmentStepFile student_owned_files = 10;
+  repeated AssignmentStepFile solution_files = 11;
+  int64 first_step_number = 12;
+  int64 last_step_number = 13;
 }
-
 
 // Request for PrepareProblem
 message PrepareProblemRequest {
-   string session_cookie = 1;
-   AuthorProblemDraft draft = 2;
-   string action = 3;
+  string session_cookie = 1;
+  AuthorProblemDraft draft = 2;
+  string action = 3;
 }
 
 // Response for PrepareProblem
 message PrepareProblemResponse {
-   ProblemBundle bundle = 1;
+  ProblemBundle bundle = 1;
 }
 
 // Request for SaveProblem
 message SaveProblemRequest {
-   string session_cookie = 1;
-   SaveMode mode = 2;
-   ProblemBundle bundle = 3;
+  string session_cookie = 1;
+  SaveMode mode = 2;
+  ProblemBundle bundle = 3;
 }
 
 // Response for SaveProblem
 message SaveProblemResponse {
-   ProblemBundle bundle = 1;
+  ProblemBundle bundle = 1;
 }
 
 // Request for SaveProblemSet
 message SaveProblemSetRequest {
-   string session_cookie = 1;
-   SaveMode mode = 2;
-   ProblemSetBundle bundle = 3;
+  string session_cookie = 1;
+  SaveMode mode = 2;
+  ProblemSetBundle bundle = 3;
 }
 
 // Response for SaveProblemSet
 message SaveProblemSetResponse {
-   ProblemSetBundle bundle = 1;
-}
-
-// Request for SaveUngradedCommit
-message SaveUngradedCommitRequest {
-   string session_cookie = 1;
-   GradingCommit commit = 2;
+  ProblemSetBundle bundle = 1;
 }
 
 enum CommitSaveStatus {
@@ -522,28 +477,66 @@ enum CommitSaveStatus {
 
 // Request for SaveWorkspaceCommit
 message SaveWorkspaceCommitRequest {
-   string session_cookie = 1;
-   Commit commit = 2;
+  string session_cookie = 1;
+  Commit commit = 2;
 }
 
 // Response for SaveWorkspaceCommit
 message SaveWorkspaceCommitResponse {
-   CommitSaveStatus save_status = 1;
+  CommitSaveStatus save_status = 1;
+}
+
+// Request for SaveUngradedCommit
+message SaveUngradedCommitRequest {
+  string session_cookie = 1;
+  GradingCommit commit = 2;
 }
 
 // Response for SaveUngradedCommit
 message SaveUngradedCommitResponse {
-   SignedRuntimeBundle bundle = 1;
-   CommitSaveStatus save_status = 2;
+  SignedRuntimeBundle bundle = 1;
+  CommitSaveStatus save_status = 2;
 }
 
 // Request for SaveGradedCommit
 message SaveGradedCommitRequest {
-   string session_cookie = 1;
-   SignedRuntimeBundle bundle = 2;
+  string session_cookie = 1;
+  SignedRuntimeBundle bundle = 2;
 }
 
 // Response for SaveGradedCommit
 message SaveGradedCommitResponse {
-   CommitSaveStatus save_status = 1;
+  CommitSaveStatus save_status = 1;
+}
+
+// CodeGrinderService provides CodeGrinder operations
+service CodeGrinderService {
+  // Hello performs session validation/exchange and returns server info
+  rpc Hello(HelloRequest) returns (HelloResponse);
+  // ListAssignments retrieves assignment-focused list rows for list/student flows.
+  rpc ListAssignments(ListAssignmentsRequest) returns (ListAssignmentsResponse);
+  // SearchProblemCatalog retrieves problem sets with nested problem and step summaries.
+  rpc SearchProblemCatalog(SearchProblemCatalogRequest) returns (SearchProblemCatalogResponse);
+  // GetProblemTypes retrieves all problem types
+  rpc GetProblemTypes(GetProblemTypesRequest) returns (GetProblemTypesResponse);
+  // GetProblemType retrieves a specific problem type
+  rpc GetProblemType(GetProblemTypeRequest) returns (GetProblemTypeResponse);
+  // GetAssignment retrieves assignment metadata and per-problem step progress.
+  rpc GetAssignment(GetAssignmentRequest) returns (GetAssignmentResponse);
+  // GetWorkspace retrieves canonical local workspace context for one assignment step.
+  rpc GetWorkspace(GetWorkspaceRequest) returns (GetWorkspaceResponse);
+  // PrepareProblem validates author source material and signs daycare bundles.
+  rpc PrepareProblem(PrepareProblemRequest) returns (PrepareProblemResponse);
+  // SaveProblem persists a prepared author problem bundle.
+  rpc SaveProblem(SaveProblemRequest) returns (SaveProblemResponse);
+  // SaveProblemSet persists an authored problem set bundle.
+  rpc SaveProblemSet(SaveProblemSetRequest) returns (SaveProblemSetResponse);
+  // SaveWorkspaceCommit persists current student-owned workspace files.
+  rpc SaveWorkspaceCommit(SaveWorkspaceCommitRequest) returns (SaveWorkspaceCommitResponse);
+  // SaveUngradedCommit handles an ungraded commit before daycare processing.
+  rpc SaveUngradedCommit(SaveUngradedCommitRequest) returns (SaveUngradedCommitResponse);
+  // SaveGradedCommit handles a graded commit returned by daycare.
+  rpc SaveGradedCommit(SaveGradedCommitRequest) returns (SaveGradedCommitResponse);
+  // Daycare handles streaming daycare requests
+  rpc Daycare(DaycareRequest) returns (stream DaycareResponse);
 }
