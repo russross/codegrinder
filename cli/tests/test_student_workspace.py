@@ -33,7 +33,7 @@ def test_gather_student_context_refreshes_system_files_and_builds_commit(tmp_pat
     save_dotfile(
         DotFileInfo(
             assignment_ref=AssignmentRef(user_id="u1", course_id="c1", problem_set_id="ps1"),
-            problems={"problem-a": ProblemInfo(problem_id="problem-a", step=2, total_steps=3)},
+            problems={"problem-a": ProblemInfo(problem_id="problem-a", step=2)},
             path=str(tmp_path / ".grind"),
         )
     )
@@ -43,7 +43,7 @@ def test_gather_student_context_refreshes_system_files_and_builds_commit(tmp_pat
         assignment=pb.AssignmentKey(user_id="u1", course_id="c1", problem_set_id="ps1"),
         problem_id="problem-a",
         step_number=2,
-        total_steps=3,
+        last_step_number=3,
         system_owned_files=[pb.AssignmentStepFile(path="README.md", content=b"fresh\n")],
         student_owned_files=[pb.AssignmentStepFile(path="main.py", content=b"starter\n")],
     )
@@ -52,7 +52,7 @@ def test_gather_student_context_refreshes_system_files_and_builds_commit(tmp_pat
     context = gather_student_context(client, tmp_path)
 
     assert (tmp_path / "README.md").read_text(encoding="utf-8") == "fresh\n"
-    assert context.problem_info == ProblemInfo(problem_id="problem-a", step=2, total_steps=3)
+    assert context.problem_info == ProblemInfo(problem_id="problem-a", step=2)
     assert context.current_paths == {"README.md", "main.py"}
     assert dict(context.commit.files) == {"main.py": b"student\n"}
     assert client.requests == [("problem-a", 2, False)]
@@ -62,7 +62,7 @@ def test_build_grading_commit_sets_action_note_and_user_without_rebuilding_files
     save_dotfile(
         DotFileInfo(
             assignment_ref=AssignmentRef(user_id="u1", course_id="c1", problem_set_id="ps1"),
-            problems={"problem-a": ProblemInfo(problem_id="problem-a", step=1, total_steps=1)},
+            problems={"problem-a": ProblemInfo(problem_id="problem-a", step=1)},
             path=str(tmp_path / ".grind"),
         )
     )
@@ -71,7 +71,7 @@ def test_build_grading_commit_sets_action_note_and_user_without_rebuilding_files
         assignment=pb.AssignmentKey(user_id="u1", course_id="c1", problem_set_id="ps1"),
         problem_id="problem-a",
         step_number=1,
-        total_steps=1,
+        last_step_number=1,
         student_owned_files=[pb.AssignmentStepFile(path="main.py", content=b"starter\n")],
     )
     context = gather_student_context(_StudentClient(workspace), tmp_path)

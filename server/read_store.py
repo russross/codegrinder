@@ -42,6 +42,17 @@ def add_where_like(where: str, args: list[Any], label: str, value: str) -> tuple
     return where, args
 
 
+def _assignment_download_status(value: Any) -> pb.AssignmentDownloadStatus:
+    status = int(value)
+    if status == int(pb.ASSIGNMENT_DOWNLOAD_STATUS_AVAILABLE):
+        return pb.ASSIGNMENT_DOWNLOAD_STATUS_AVAILABLE
+    if status == int(pb.ASSIGNMENT_DOWNLOAD_STATUS_NOT_OPEN):
+        return pb.ASSIGNMENT_DOWNLOAD_STATUS_NOT_OPEN
+    if status == int(pb.ASSIGNMENT_DOWNLOAD_STATUS_PREREQ_NOT_READY):
+        return pb.ASSIGNMENT_DOWNLOAD_STATUS_PREREQ_NOT_READY
+    raise ValueError(f"unknown assignment download status: {status}")
+
+
 def load_user_by_id(conn: sqlite3.Connection, user_id: str) -> sqlite3.Row:
     return _q1(
         conn,
@@ -75,7 +86,7 @@ def get_assignment_list_items_pb(
         conn,
         "SELECT "
         "assignment_user_id, course_id, problem_set_id, "
-        "unlock_at, due_at, lock_at, download_available, "
+        "unlock_at, due_at, lock_at, download_status, "
         "problem_set_note, course_name, "
         "user_name, user_login "
         "FROM accessible_assignment_fields "
@@ -98,11 +109,7 @@ def get_assignment_list_items_pb(
             course_name=str(row["course_name"] or ""),
             user_name=str(row["user_name"] or ""),
             user_login=str(row["user_login"] or ""),
-            download_status=(
-                pb.ASSIGNMENT_DOWNLOAD_STATUS_AVAILABLE
-                if bool(row["download_available"])
-                else pb.ASSIGNMENT_DOWNLOAD_STATUS_NOT_OPEN
-            ),
+            download_status=_assignment_download_status(row["download_status"]),
         )
         for row in rows
     ]
@@ -111,14 +118,20 @@ def get_assignment_list_items_pb(
         placeholders = ", ".join("?" for _ in problem_set_ids)
         problem_rows = _q(
             conn,
-            "SELECT problem_set_id, problem_id FROM problem_set_problems "
+            "SELECT problem_set_id, problem_id, first_step, last_step FROM problem_set_problems "
             f"WHERE problem_set_id IN ({placeholders}) "
             "ORDER BY problem_set_id, problem_id",
             tuple(problem_set_ids),
         )
         problems_by_set: dict[str, list[pb.AssignmentListProblem]] = {problem_set_id: [] for problem_set_id in problem_set_ids}
         for row in problem_rows:
-            problems_by_set[str(row["problem_set_id"])].append(pb.AssignmentListProblem(problem_id=str(row["problem_id"])))
+            problems_by_set[str(row["problem_set_id"])].append(
+                pb.AssignmentListProblem(
+                    problem_id=str(row["problem_id"]),
+                    first_step=int(row["first_step"] or 0),
+                    last_step=int(row["last_step"] or 0),
+                )
+            )
         for item in items:
             item.problems.extend(problems_by_set.get(item.assignment.problem_set_id, []))
     if include_student_context:
@@ -139,7 +152,7 @@ def get_assignment_access_row(
         conn,
         "SELECT assignments.*, accessible_assignment_fields.is_owner, "
         "accessible_assignment_fields.is_course_instructor, accessible_assignment_fields.restricted AS viewer_restricted, "
-        "accessible_assignment_fields.download_available "
+        "accessible_assignment_fields.download_status, accessible_assignment_fields.download_available "
         "FROM assignments "
         "JOIN accessible_assignment_fields "
         "ON assignments.user_id = accessible_assignment_fields.assignment_user_id "
@@ -215,7 +228,30 @@ def _starter_student_files(
                 int(prev["step_number"]),
             )
         else:
-            files = load_problem_step_files(conn, problem_id, step_number - 1, ProblemStepFileType.SOLUTION)
+            continuation = conn.execute(
+                "SELECT previous_slice.problem_set_id, previous_slice.last_step "
+                "FROM problem_sets "
+                "JOIN problem_set_problems AS current_slice "
+                "ON current_slice.problem_set_id = problem_sets.problem_set_id "
+                "JOIN problem_set_problems AS previous_slice "
+                "ON previous_slice.problem_set_id = problem_sets.continues_problem_set_id "
+                "AND previous_slice.problem_id = current_slice.problem_id "
+                "AND previous_slice.last_step = current_slice.first_step - 1 "
+                "WHERE problem_sets.problem_set_id = ? AND current_slice.problem_id = ? "
+                "AND current_slice.first_step = ?",
+                (problem_set_id, problem_id, step_number),
+            ).fetchone()
+            if continuation is not None:
+                files = load_commit_files(
+                    conn,
+                    user_id,
+                    course_id,
+                    str(continuation["problem_set_id"]),
+                    problem_id,
+                    int(continuation["last_step"]),
+                )
+            else:
+                files = load_problem_step_files(conn, problem_id, step_number - 1, ProblemStepFileType.SOLUTION)
     for path, content in starter_files.items():
         files[_normalize_workspace_path(path)] = content
     return _normalize_file_map(files)
@@ -241,7 +277,7 @@ def get_assignment_summary_pb(
     assignment_row = _q1(
         conn,
         "SELECT "
-        "assignment_user_id, course_id, problem_set_id, course_name, problem_set_note, download_available "
+        "assignment_user_id, course_id, problem_set_id, course_name, problem_set_note, download_status "
         "FROM accessible_assignment_fields "
         "WHERE assignment_user_id = ? AND course_id = ? AND problem_set_id = ? "
         "AND viewer_user_id = ? AND (? OR NOT restricted)",
@@ -255,7 +291,7 @@ def get_assignment_summary_pb(
     )
     problem_rows = _q(
         conn,
-        "SELECT problem_id, problem_note, current_step_number, total_steps "
+        "SELECT problem_id, problem_note, current_step_number, first_step_number, last_step_number "
         "FROM assignment_problem_progress "
         "WHERE user_id = ? AND course_id = ? AND problem_set_id = ? "
         "ORDER BY problem_id",
@@ -268,7 +304,8 @@ def get_assignment_summary_pb(
                 problem_id=str(row["problem_id"]),
                 problem_note=str(row["problem_note"]),
                 current_step_number=int(row["current_step_number"]),
-                total_steps=int(row["total_steps"]),
+                first_step_number=int(row["first_step_number"]),
+                last_step_number=int(row["last_step_number"]),
             )
         )
     return pb.GetAssignmentResponse(
@@ -280,11 +317,7 @@ def get_assignment_summary_pb(
         problem_set_note=str(assignment_row["problem_set_note"]),
         course_name=str(assignment_row["course_name"]),
         problems=problems,
-        download_status=(
-            pb.ASSIGNMENT_DOWNLOAD_STATUS_AVAILABLE
-            if bool(assignment_row["download_available"])
-            else pb.ASSIGNMENT_DOWNLOAD_STATUS_NOT_OPEN
-        ),
+        download_status=_assignment_download_status(assignment_row["download_status"]),
     )
 
 
@@ -380,10 +413,11 @@ def get_workspace_pb(
     reset_to_step_start = _workspace_reset_to_step_start(file_state)
     assignment_access = get_assignment_access_row(conn, current_user, assignment, ip_allowed)
     if not bool(assignment_access["download_available"]):
+        if int(assignment_access["download_status"]) == pb.ASSIGNMENT_DOWNLOAD_STATUS_PREREQ_NOT_READY:
+            raise PermissionError("assignment prerequisite is not ready")
         raise PermissionError("assignment is not open yet")
     step_row = _load_workspace_step_row(conn, assignment, problem_id, step_number)
     resolved_step_number = int(step_row["step_number"])
-    total_steps = max(1, int(step_row["total_steps"] or 0))
     step_files = load_problem_step_files(conn, problem_id, resolved_step_number, ProblemStepFileType.REGULAR)
     starter_files = load_problem_step_files(conn, problem_id, resolved_step_number, ProblemStepFileType.STARTER)
     system_owned_files = _system_owned_files_for_step(
@@ -418,7 +452,6 @@ def get_workspace_pb(
         problem_id=problem_id,
         problem_note=str(step_row["problem_note"]),
         step_number=resolved_step_number,
-        total_steps=total_steps,
         problem_type=str(step_row["problem_type"]),
         step_note=str(step_row["step_note"]),
         step_weight=float(step_row["step_weight"]),
@@ -426,6 +459,8 @@ def get_workspace_pb(
         system_owned_files=_assignment_step_files(system_owned_files),
         student_owned_files=_assignment_step_files(student_owned_files),
         solution_files=_assignment_step_files(solution_files),
+        first_step_number=int(step_row["first_step_number"]),
+        last_step_number=int(step_row["last_step_number"]),
     )
 
 

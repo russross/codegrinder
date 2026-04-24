@@ -268,7 +268,101 @@ class GrpcServiceTests(unittest.TestCase):
         self.assertEqual(len(reply.problems), 1)
         self.assertEqual(reply.problems[0].problem_id, "p1")
         self.assertEqual(reply.problems[0].current_step_number, 2)
-        self.assertEqual(reply.problems[0].total_steps, 2)
+        self.assertEqual(reply.problems[0].first_step_number, 1)
+        self.assertEqual(reply.problems[0].last_step_number, 2)
+
+    def test_continuation_problem_set_reports_prereq_not_ready(self) -> None:
+        now = "2026-02-15T10:00:00+00:00"
+        self.conn.execute(
+            "INSERT INTO problem_sets(problem_set_id, problem_set_note, problem_set_tags, problem_set_created_at, problem_set_updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("ps-part-1", "Part 1", "[]", now, now),
+        )
+        self.conn.execute(
+            "INSERT INTO problem_sets(problem_set_id, problem_set_note, problem_set_tags, continues_problem_set_id, problem_set_created_at, problem_set_updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            ("ps-part-2", "Part 2", "[]", "ps-part-1", now, now),
+        )
+        self.conn.execute(
+            "INSERT INTO problem_set_problems(problem_set_id, problem_id, problem_weight, first_step, last_step) VALUES (?, ?, ?, ?, ?)",
+            ("ps-part-1", "p1", 1, 1, 1),
+        )
+        self.conn.execute(
+            "INSERT INTO problem_set_problems(problem_set_id, problem_id, problem_weight, first_step, last_step) VALUES (?, ?, ?, ?, ?)",
+            ("ps-part-2", "p1", 1, 2, 2),
+        )
+        self.conn.execute(
+            "INSERT INTO assignments(user_id, course_id, problem_set_id, restricted, grade_id, outcome_url, outcome_ext_accepted, consumer_key, unlock_at, due_at, lock_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)",
+            ("u1", "c1", "ps-part-2", 0, "g-part-2", "https://canvas.invalid/outcome", "text", "key"),
+        )
+        self.conn.commit()
+        ctx = cast(grpc.ServicerContext, self._auth_context())
+
+        listed = self.service.ListAssignments(pb.ListAssignmentsRequest(search=["part-2"], include_student_context=False), ctx)
+
+        self.assertEqual(listed.items[0].download_status, pb.ASSIGNMENT_DOWNLOAD_STATUS_PREREQ_NOT_READY)
+
+    def test_continuation_problem_set_uses_previous_slice_commit_as_start(self) -> None:
+        now = "2026-02-15T10:00:00+00:00"
+        self.conn.execute(
+            "INSERT INTO problem_step_files(problem_id, step_number, file_type, path, content) VALUES (?, ?, ?, ?, ?)",
+            ("p1", 2, ProblemStepFileType.SOLUTION, "carry.py", b"print('carry solution')\n"),
+        )
+        self.conn.execute(
+            "INSERT INTO problem_sets(problem_set_id, problem_set_note, problem_set_tags, problem_set_created_at, problem_set_updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("ps-part-1", "Part 1", "[]", now, now),
+        )
+        self.conn.execute(
+            "INSERT INTO problem_sets(problem_set_id, problem_set_note, problem_set_tags, continues_problem_set_id, problem_set_created_at, problem_set_updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            ("ps-part-2", "Part 2", "[]", "ps-part-1", now, now),
+        )
+        self.conn.execute(
+            "INSERT INTO problem_set_problems(problem_set_id, problem_id, problem_weight, first_step, last_step) VALUES (?, ?, ?, ?, ?)",
+            ("ps-part-1", "p1", 1, 1, 1),
+        )
+        self.conn.execute(
+            "INSERT INTO problem_set_problems(problem_set_id, problem_id, problem_weight, first_step, last_step) VALUES (?, ?, ?, ?, ?)",
+            ("ps-part-2", "p1", 1, 2, 2),
+        )
+        for problem_set_id, grade_id in (("ps-part-1", "g-part-1"), ("ps-part-2", "g-part-2")):
+            self.conn.execute(
+                "INSERT INTO assignments(user_id, course_id, problem_set_id, restricted, grade_id, outcome_url, outcome_ext_accepted, consumer_key, unlock_at, due_at, lock_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)",
+                ("u1", "c1", problem_set_id, 0, grade_id, "https://canvas.invalid/outcome", "text", "key"),
+            )
+        self.conn.execute(
+            "INSERT INTO commits(user_id, course_id, problem_set_id, problem_id, step_number, action, note, transcript, report_card, score, commit_created_at, commit_updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("u1", "c1", "ps-part-1", "p1", 1, "grade", "ok", "[]", '{"passed": true}', 1.0, now, now),
+        )
+        self.conn.execute(
+            "INSERT INTO commit_files(user_id, course_id, problem_set_id, problem_id, step_number, path, content) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("u1", "c1", "ps-part-1", "p1", 1, "carry.py", b"print('carried')\n"),
+        )
+        self.conn.commit()
+        ctx = cast(grpc.ServicerContext, self._auth_context())
+
+        reply = self.service.GetWorkspace(
+            pb.GetWorkspaceRequest(
+                assignment=pb.AssignmentKey(user_id="u1", course_id="c1", problem_set_id="ps-part-2"),
+                problem_id="p1",
+                step_number=0,
+                file_state=pb.WORKSPACE_FILE_STATE_CURRENT,
+                include_contents=True,
+                include_solution_files=False,
+            ),
+            ctx,
+        )
+
+        self.assertEqual(reply.step_number, 2)
+        self.assertEqual(reply.first_step_number, 2)
+        self.assertEqual(reply.last_step_number, 2)
+        student_files = {item.path: item.content for item in reply.student_owned_files}
+        self.assertEqual(student_files.get("carry.py"), b"print('carried')\n")
+        self.assertEqual(student_files.get("main.py"), b"print('step2-reset')\n")
 
     def test_step_files_current_falls_back_to_starter(self) -> None:
         ctx = cast(grpc.ServicerContext, self._auth_context())
@@ -284,7 +378,8 @@ class GrpcServiceTests(unittest.TestCase):
             ctx,
         )
         self.assertEqual(reply.step_number, 2)
-        self.assertEqual(reply.total_steps, 2)
+        self.assertEqual(reply.first_step_number, 1)
+        self.assertEqual(reply.last_step_number, 2)
         student_files = {item.path: item.content for item in reply.student_owned_files}
         self.assertEqual(student_files.get("main.py"), b"print('step2-reset')\n")
         self.assertEqual(student_files.get("helper.py"), b"print('helper')\n")

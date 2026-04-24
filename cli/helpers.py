@@ -239,13 +239,9 @@ def _dotfile_from_raw(path: Path, raw: dict[str, object]) -> DotFileInfo:
         info_map = cast(dict[str, object], info)
         pid = info_map.get("problem_id")
         step = info_map.get("step")
-        total_steps = info_map.get("total_steps")
         if not isinstance(pid, str) or not isinstance(step, int):
             fail(f"error parsing {path}: invalid problem entry for {unique}")
-        normalized_total_steps = 1
-        if isinstance(total_steps, int) and total_steps > 0:
-            normalized_total_steps = total_steps
-        problems[unique] = ProblemInfo(problem_id=pid, step=step, total_steps=normalized_total_steps)
+        problems[unique] = ProblemInfo(problem_id=pid, step=step)
     return DotFileInfo(
         assignment_ref=AssignmentRef(
             user_id=assignment_user_id,
@@ -312,7 +308,6 @@ def save_dotfile(dotfile: DotFileInfo) -> None:
                 f"[problems.{_toml_string(key)}]",
                 f"problem_id = {_toml_string(info.problem_id)}",
                 f"step = {info.step}",
-                f"total_steps = {info.total_steps}",
             ]
         )
     target = Path(dotfile.path)

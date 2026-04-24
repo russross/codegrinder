@@ -71,7 +71,7 @@ def command_grade(args: argparse.Namespace) -> None:
             print(f"step {saved_commit.step} passed")
             if locked:
                 print("results were not saved because the assignment is locked")
-            elif int(workspace.step_number) >= int(workspace.total_steps):
+            elif int(workspace.step_number) >= int(workspace.last_step_number):
                 print("you have completed all steps for this problem")
             else:
                 next_step_number = int(workspace.step_number) + 1
@@ -89,7 +89,6 @@ def command_grade(args: argparse.Namespace) -> None:
                 files.update(workspace_file_map(next_workspace.student_owned_files))
                 update_files(Path("."), files, student.current_paths, False)
                 info.step = next_step_number
-                info.total_steps = int(next_workspace.total_steps)
                 save_dotfile(student.dotfile)
         else:
             print(f"  solution for step {saved_commit.step} failed")

@@ -78,5 +78,28 @@ weight = 2.5
 
     parsed = parse_author_problem_set_config(cfg)
     assert parsed.problem_set_id == "cs1400-ps1"
-    assert parsed.problems["p-one"] == 2.5
-    assert parsed.problems["p-two"] == 1.0
+    assert [(problem.problem_id, problem.weight) for problem in parsed.problems] == [("p-one", 2.5), ("p-two", 1.0)]
+
+
+def test_parse_problem_set_cfg_reads_slice_continuation(tmp_path: Path) -> None:
+    cfg = tmp_path / "set.cfg"
+    cfg.write_text(
+        """
+[problemset]
+unique = loops-part-2
+note = Loops part 2
+continues = loops-part-1
+
+[problem \"loops\"]
+steps = 3-5
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    parsed = parse_author_problem_set_config(cfg)
+    assert parsed.continues_problem_set_id == "loops-part-1"
+    assert len(parsed.problems) == 1
+    assert parsed.problems[0].problem_id == "loops"
+    assert parsed.problems[0].first_step == 3
+    assert parsed.problems[0].last_step == 5

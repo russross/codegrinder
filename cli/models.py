@@ -18,7 +18,6 @@ class Config:
 class ProblemInfo:
     problem_id: str
     step: int
-    total_steps: int
 
 
 @dataclass(slots=True)

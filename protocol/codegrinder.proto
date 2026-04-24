@@ -50,6 +50,7 @@ message ProblemSet {
    repeated string problem_set_tags = 3;
    google.protobuf.Timestamp created_at = 4;
    google.protobuf.Timestamp updated_at = 5;
+   string continues_problem_set_id = 6;
 }
 
 // ProblemType defines one type of problem.
@@ -103,6 +104,8 @@ message ProblemSetProblem {
    string problem_set_id = 1;
    string problem_id = 2;
    double weight = 3;
+   int64 first_step = 4;
+   int64 last_step = 5;
 }
 
 // ReportCard gives the results of a graded run
@@ -321,11 +324,14 @@ message ListAssignmentsRequest {
 // AssignmentListItem returns assignment list data shaped for list/student commands.
 message AssignmentListProblem {
   string problem_id = 1;
+  int64 first_step = 2;
+  int64 last_step = 3;
 }
 
 enum AssignmentDownloadStatus {
   ASSIGNMENT_DOWNLOAD_STATUS_AVAILABLE = 0;
   ASSIGNMENT_DOWNLOAD_STATUS_NOT_OPEN = 1;
+  ASSIGNMENT_DOWNLOAD_STATUS_PREREQ_NOT_READY = 2;
 }
 
 message AssignmentListItem {
@@ -412,7 +418,8 @@ message AssignmentProblemProgress {
    string problem_id = 1;
    string problem_note = 2;
    int64 current_step_number = 3;
-   int64 total_steps = 4;
+   int64 first_step_number = 4;
+   int64 last_step_number = 5;
 }
 
 // Response for GetAssignment
@@ -453,7 +460,6 @@ message GetWorkspaceResponse {
    string problem_id = 2;
    string problem_note = 3;
    int64 step_number = 4;
-   int64 total_steps = 5;
    string problem_type = 6;
    string step_note = 7;
    double step_weight = 8;
@@ -461,6 +467,8 @@ message GetWorkspaceResponse {
    repeated AssignmentStepFile system_owned_files = 10;
    repeated AssignmentStepFile student_owned_files = 11;
    repeated AssignmentStepFile solution_files = 12;
+   int64 first_step_number = 13;
+   int64 last_step_number = 14;
 }
 
 

@@ -96,14 +96,18 @@ CREATE TABLE problem_sets (
     problem_set_id          text NOT NULL,
     problem_set_note        text NOT NULL,
     problem_set_tags        text NOT NULL,
+    continues_problem_set_id text,
 
     problem_set_created_at  datetime NOT NULL,
     problem_set_updated_at  datetime NOT NULL,
 
     PRIMARY KEY (problem_set_id),
+    FOREIGN KEY (continues_problem_set_id) REFERENCES problem_sets (problem_set_id) ON DELETE RESTRICT ON UPDATE CASCADE,
     CHECK (trim(problem_set_id) = problem_set_id AND length(problem_set_id) > 0),
     CHECK (trim(problem_set_note) = problem_set_note),
+    CHECK (continues_problem_set_id IS NULL OR (trim(continues_problem_set_id) = continues_problem_set_id AND length(continues_problem_set_id) > 0)),
     CHECK (json_valid(problem_set_tags) AND json_type(problem_set_tags) = 'array'),
+    CHECK (continues_problem_set_id IS NULL OR continues_problem_set_id <> problem_set_id),
     CHECK (problem_set_created_at <= problem_set_updated_at)
 ) WITHOUT ROWID;
 
@@ -111,12 +115,17 @@ CREATE TABLE problem_set_problems (
     problem_set_id          text NOT NULL,
     problem_id              text NOT NULL,
     problem_weight          integer NOT NULL,
+    first_step              integer,
+    last_step               integer,
 
     PRIMARY KEY (problem_set_id, problem_id),
     FOREIGN KEY (problem_set_id) REFERENCES problem_sets (problem_set_id) ON DELETE CASCADE ON UPDATE CASCADE,
     FOREIGN KEY (problem_id) REFERENCES problems (problem_id) ON DELETE CASCADE ON UPDATE CASCADE,
     CHECK (problem_weight > 0),
-    CHECK (typeof(problem_weight) = 'integer')
+    CHECK (typeof(problem_weight) = 'integer'),
+    CHECK ((first_step IS NULL AND last_step IS NULL) OR (first_step IS NOT NULL AND last_step IS NOT NULL)),
+    CHECK (first_step IS NULL OR (first_step >= 1 AND typeof(first_step) = 'integer')),
+    CHECK (last_step IS NULL OR (last_step >= first_step AND typeof(last_step) = 'integer'))
 ) WITHOUT ROWID;
 CREATE INDEX problem_set_problems_problem_id ON problem_set_problems (problem_id);
 
@@ -299,6 +308,23 @@ CREATE VIEW accessible_problems AS
     FROM accessible_problem_sets
     NATURAL JOIN problem_set_problems;
 
+CREATE VIEW problem_set_step_scope AS
+    SELECT
+        problem_set_problems.problem_set_id,
+        problem_set_problems.problem_id,
+        problem_set_problems.problem_weight,
+        problem_set_problems.first_step,
+        problem_set_problems.last_step,
+        problem_steps.step_number,
+        problem_steps.problem_type,
+        problem_steps.step_note,
+        problem_steps.step_weight
+    FROM problem_set_problems
+    JOIN problem_steps
+        ON problem_steps.problem_id = problem_set_problems.problem_id
+        AND (problem_set_problems.first_step IS NULL OR problem_steps.step_number >= problem_set_problems.first_step)
+        AND (problem_set_problems.last_step IS NULL OR problem_steps.step_number <= problem_set_problems.last_step);
+
 CREATE VIEW assignment_list_fields AS
     SELECT
         assignments.user_id,
@@ -310,7 +336,29 @@ CREATE VIEW assignment_list_fields AS
         CASE
             WHEN assignments.unlock_at IS NOT NULL AND datetime(assignments.unlock_at) > CURRENT_TIMESTAMP THEN 0
             ELSE 1
-        END AS download_available,
+        END AS download_open,
+        CASE
+            WHEN problem_sets.continues_problem_set_id IS NULL THEN 1
+            WHEN EXISTS (
+                SELECT 1
+                FROM problem_set_problems AS current_slice
+                JOIN problem_set_problems AS previous_slice
+                    ON previous_slice.problem_set_id = problem_sets.continues_problem_set_id
+                    AND previous_slice.problem_id = current_slice.problem_id
+                    AND current_slice.first_step IS NOT NULL
+                    AND previous_slice.last_step = current_slice.first_step - 1
+                JOIN commits AS previous_commit
+                    ON previous_commit.user_id = assignments.user_id
+                    AND previous_commit.course_id = assignments.course_id
+                    AND previous_commit.problem_set_id = previous_slice.problem_set_id
+                    AND previous_commit.problem_id = previous_slice.problem_id
+                    AND previous_commit.step_number = previous_slice.last_step
+                    AND json_extract(previous_commit.report_card, '$.passed') = 1
+                    AND previous_commit.score = 1.0
+                WHERE current_slice.problem_set_id = assignments.problem_set_id
+            ) THEN 1
+            ELSE 0
+        END AS prereq_ready,
         problem_sets.problem_set_note,
         courses.course_name,
         users.user_name,
@@ -335,7 +383,17 @@ CREATE VIEW accessible_assignment_fields AS
         assignment_list_fields.unlock_at,
         assignment_list_fields.due_at,
         assignment_list_fields.lock_at,
-        assignment_list_fields.download_available,
+        CASE
+            WHEN accessible_assignments.is_course_instructor THEN 0
+            WHEN NOT assignment_list_fields.download_open THEN 1
+            WHEN NOT assignment_list_fields.prereq_ready THEN 2
+            ELSE 0
+        END AS download_status,
+        CASE
+            WHEN accessible_assignments.is_course_instructor THEN 1
+            WHEN assignment_list_fields.download_open AND assignment_list_fields.prereq_ready THEN 1
+            ELSE 0
+        END AS download_available,
         assignment_list_fields.problem_set_note,
         assignment_list_fields.course_name,
         assignment_list_fields.user_name,
@@ -384,14 +442,13 @@ WITH problem_step_scores AS (
         assignments.user_id,
         assignments.course_id,
         assignments.problem_set_id,
-        problem_set_problems.problem_id,
-        CAST(problem_set_problems.problem_weight AS REAL) AS problem_weight,
-        problem_steps.step_number,
-        CAST(problem_steps.step_weight AS REAL) AS step_weight,
+        problem_set_step_scope.problem_id,
+        CAST(problem_set_step_scope.problem_weight AS REAL) AS problem_weight,
+        problem_set_step_scope.step_number,
+        CAST(problem_set_step_scope.step_weight AS REAL) AS step_weight,
         commits.score AS commit_score
     FROM assignments
-    NATURAL JOIN problem_set_problems
-    NATURAL JOIN problem_steps
+    NATURAL JOIN problem_set_step_scope
     NATURAL LEFT JOIN commits
 ),
 problem_scores AS (
@@ -436,37 +493,35 @@ CREATE VIEW assignment_problem_progress AS
         assignments.user_id,
         assignments.course_id,
         assignments.problem_set_id,
-        problem_set_problems.problem_id,
+        problem_set_step_scope.problem_id,
         problems.problem_note,
-        COALESCE(problem_total_steps.total_steps, 1) AS total_steps,
+        MIN(problem_set_step_scope.step_number) AS first_step_number,
+        MAX(problem_set_step_scope.step_number) AS last_step_number,
         COALESCE(
             MIN(
                 CASE
-                    WHEN problem_steps.step_number IS NOT NULL
+                    WHEN problem_set_step_scope.step_number IS NOT NULL
                         AND passed_commit_steps.step_number IS NULL
-                    THEN problem_steps.step_number
+                    THEN problem_set_step_scope.step_number
                 END
             ),
-            COALESCE(problem_total_steps.total_steps, 1)
+            MAX(problem_set_step_scope.step_number)
         ) AS current_step_number
     FROM assignments
-    NATURAL JOIN problem_set_problems
-    JOIN problems ON problems.problem_id = problem_set_problems.problem_id
-    LEFT JOIN problem_total_steps ON problem_total_steps.problem_id = problem_set_problems.problem_id
-    LEFT JOIN problem_steps ON problem_steps.problem_id = problem_set_problems.problem_id
+    NATURAL JOIN problem_set_step_scope
+    JOIN problems ON problems.problem_id = problem_set_step_scope.problem_id
     LEFT JOIN passed_commit_steps
         ON passed_commit_steps.user_id = assignments.user_id
         AND passed_commit_steps.course_id = assignments.course_id
         AND passed_commit_steps.problem_set_id = assignments.problem_set_id
-        AND passed_commit_steps.problem_id = problem_set_problems.problem_id
-        AND passed_commit_steps.step_number = problem_steps.step_number
+        AND passed_commit_steps.problem_id = problem_set_step_scope.problem_id
+        AND passed_commit_steps.step_number = problem_set_step_scope.step_number
     GROUP BY
         assignments.user_id,
         assignments.course_id,
         assignments.problem_set_id,
-        problem_set_problems.problem_id,
-        problems.problem_note,
-        problem_total_steps.total_steps;
+        problem_set_step_scope.problem_id,
+        problems.problem_note;
 
 CREATE VIEW problem_step_whitelist AS
 SELECT
@@ -496,42 +551,42 @@ CREATE VIEW workspace_step_context AS
         assignment_problem_progress.problem_id,
         assignment_problem_progress.problem_note,
         assignment_problem_progress.current_step_number,
-        assignment_problem_progress.total_steps,
-        problem_steps.step_number,
-        problem_steps.problem_type,
-        problem_steps.step_note,
-        problem_steps.step_weight,
+        assignment_problem_progress.first_step_number,
+        assignment_problem_progress.last_step_number,
+        problem_set_step_scope.step_number,
+        problem_set_step_scope.problem_type,
+        problem_set_step_scope.step_note,
+        problem_set_step_scope.step_weight,
         problem_step_whitelist.whitelist
     FROM assignment_problem_progress
-    JOIN problem_steps
-        ON problem_steps.problem_id = assignment_problem_progress.problem_id
+    JOIN problem_set_step_scope
+        ON problem_set_step_scope.problem_set_id = assignment_problem_progress.problem_set_id
+        AND problem_set_step_scope.problem_id = assignment_problem_progress.problem_id
     JOIN problem_step_whitelist
-        ON problem_step_whitelist.problem_id = problem_steps.problem_id
-        AND problem_step_whitelist.step_number = problem_steps.step_number;
+        ON problem_step_whitelist.problem_id = problem_set_step_scope.problem_id
+        AND problem_step_whitelist.step_number = problem_set_step_scope.step_number;
 
 CREATE VIEW grading_step_context AS
     SELECT
-        problem_set_problems.problem_set_id,
-        problem_set_problems.problem_id,
-        problem_steps.step_number,
+        problem_set_step_scope.problem_set_id,
+        problem_set_step_scope.problem_id,
+        problem_set_step_scope.step_number,
         problems.problem_note,
         problems.problem_options,
-        problem_steps.problem_type,
+        problem_set_step_scope.problem_type,
         problem_types.container,
         COALESCE(problem_total_steps.total_steps, 1) AS total_steps,
         problem_step_whitelist.whitelist
-    FROM problem_set_problems
+    FROM problem_set_step_scope
     JOIN problems
-        ON problems.problem_id = problem_set_problems.problem_id
-    JOIN problem_steps
-        ON problem_steps.problem_id = problem_set_problems.problem_id
+        ON problems.problem_id = problem_set_step_scope.problem_id
     JOIN problem_types
-        ON problem_types.problem_type = problem_steps.problem_type
+        ON problem_types.problem_type = problem_set_step_scope.problem_type
     LEFT JOIN problem_total_steps
-        ON problem_total_steps.problem_id = problem_set_problems.problem_id
+        ON problem_total_steps.problem_id = problem_set_step_scope.problem_id
     JOIN problem_step_whitelist
-        ON problem_step_whitelist.problem_id = problem_steps.problem_id
-        AND problem_step_whitelist.step_number = problem_steps.step_number;
+        ON problem_step_whitelist.problem_id = problem_set_step_scope.problem_id
+        AND problem_step_whitelist.step_number = problem_set_step_scope.step_number;
 
 CREATE VIEW problem_set_search_fields AS
     SELECT problem_sets.problem_set_id,
@@ -551,13 +606,22 @@ CREATE VIEW problem_catalog_rows AS
         problem_sets.problem_set_id,
         problem_sets.problem_set_note,
         problem_sets.problem_set_tags,
-        problem_set_problems.problem_id,
-        problem_set_problems.problem_weight,
+        problem_set_step_scope.problem_id,
+        problem_set_step_scope.problem_weight,
         problems.problem_note,
-        problem_steps.step_number,
-        problem_steps.step_note,
-        problem_steps.step_weight
+        problem_set_step_scope.step_number,
+        problem_set_step_scope.step_note,
+        problem_set_step_scope.step_weight
     FROM problem_sets
-    NATURAL JOIN problem_set_problems
+    NATURAL JOIN problem_set_step_scope
     NATURAL JOIN problems
-    NATURAL JOIN problem_steps;
+    GROUP BY
+        problem_sets.problem_set_id,
+        problem_sets.problem_set_note,
+        problem_sets.problem_set_tags,
+        problem_set_step_scope.problem_id,
+        problem_set_step_scope.problem_weight,
+        problems.problem_note,
+        problem_set_step_scope.step_number,
+        problem_set_step_scope.step_note,
+        problem_set_step_scope.step_weight;

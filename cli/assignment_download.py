@@ -55,7 +55,6 @@ def dotfile_matches_assignment_summary(dotfile: DotFileInfo, info_resp: pb.GetAs
         problem.problem_id: ProblemInfo(
             problem_id=problem.problem_id,
             step=int(problem.current_step_number),
-            total_steps=int(problem.total_steps),
         )
         for problem in info_resp.problems
     }
@@ -77,7 +76,6 @@ def unpack_assignment(
         infos[problem_info.problem_id] = ProblemInfo(
             problem_id=problem_info.problem_id,
             step=int(problem_info.current_step_number),
-            total_steps=int(problem_info.total_steps),
         )
         target = root_dir if total_problems == 1 else root_dir / problem_info.problem_id
         if total_problems > 1:
@@ -120,6 +118,8 @@ def download_assignment_summary(
     pretty_full: str,
 ) -> Path:
     if info_resp.download_status != pb.ASSIGNMENT_DOWNLOAD_STATUS_AVAILABLE:
+        if info_resp.download_status == pb.ASSIGNMENT_DOWNLOAD_STATUS_PREREQ_NOT_READY:
+            fail(f"assignment {pretty_full} prerequisite is not ready")
         fail(f"assignment {pretty_full} is not open yet")
     root_dir.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=f".{root_dir.name}.", dir=root_dir.parent))

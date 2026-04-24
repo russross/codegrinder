@@ -597,13 +597,16 @@ def save_problem_set(
         raise ValueError("problem_set_id is required")
     if mode == pb.SAVE_MODE_UNSPECIFIED:
         raise ValueError("save mode is required")
+    _validate_problem_set_slice(tx, bundle)
     now_sql = _rfc3339_round_sec(_timestamp_now())
     tags_json = json.dumps(list(pset.problem_set_tags))
+    continues_problem_set_id = pset.continues_problem_set_id or None
     if mode == pb.SAVE_MODE_CREATE:
         try:
             tx.execute(
-                "INSERT INTO problem_sets(problem_set_id, problem_set_note, problem_set_tags, problem_set_created_at, problem_set_updated_at) VALUES (?, ?, ?, ?, ?)",
-                (pset.problem_set_id, pset.problem_set_note, tags_json, now_sql, now_sql),
+                "INSERT INTO problem_sets(problem_set_id, problem_set_note, problem_set_tags, continues_problem_set_id, problem_set_created_at, problem_set_updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (pset.problem_set_id, pset.problem_set_note, tags_json, continues_problem_set_id, now_sql, now_sql),
             )
         except sqlite3.IntegrityError as exc:
             raise ValueError(f"problem set {pset.problem_set_id!r} already exists") from exc
@@ -611,8 +614,8 @@ def save_problem_set(
         if mode != pb.SAVE_MODE_UPDATE:
             raise ValueError("save mode is required")
         updated = tx.execute(
-            "UPDATE problem_sets SET problem_set_note = ?, problem_set_tags = ?, problem_set_updated_at = ? WHERE problem_set_id = ?",
-            (pset.problem_set_note, tags_json, now_sql, pset.problem_set_id),
+            "UPDATE problem_sets SET problem_set_note = ?, problem_set_tags = ?, continues_problem_set_id = ?, problem_set_updated_at = ? WHERE problem_set_id = ?",
+            (pset.problem_set_note, tags_json, continues_problem_set_id, now_sql, pset.problem_set_id),
         )
         if updated.rowcount == 0:
             raise ValueError(f"problem set {pset.problem_set_id!r} does not exist")
@@ -625,14 +628,62 @@ def save_problem_set(
             raise ValueError(f"problem {psp.problem_id!r} listed more than once")
         seen_problem_ids.add(psp.problem_id)
         problem_weight = _require_positive_int_weight(float(psp.weight), f"problem {psp.problem_id} weight")
+        first_step = int(psp.first_step) if int(psp.first_step) > 0 else None
+        last_step = int(psp.last_step) if int(psp.last_step) > 0 else None
         try:
             tx.execute(
-                "INSERT INTO problem_set_problems(problem_set_id, problem_id, problem_weight) VALUES (?, ?, ?)",
-                (psp.problem_set_id, psp.problem_id, problem_weight),
+                "INSERT INTO problem_set_problems(problem_set_id, problem_id, problem_weight, first_step, last_step) VALUES (?, ?, ?, ?, ?)",
+                (psp.problem_set_id, psp.problem_id, problem_weight, first_step, last_step),
             )
         except sqlite3.IntegrityError as exc:
             raise ValueError(f"problem {psp.problem_id!r} does not exist") from exc
     return bundle
+
+
+def _validate_problem_set_slice(tx: sqlite3.Connection, bundle: pb.ProblemSetBundle) -> None:
+    pset = bundle.problem_set
+    problems = list(bundle.problem_set_problems)
+    sliced = [problem for problem in problems if int(problem.first_step) > 0 or int(problem.last_step) > 0]
+    if pset.continues_problem_set_id and not sliced:
+        raise ValueError("continues_problem_set_id requires a sliced problem set")
+    if not sliced:
+        return
+    if len(problems) != 1 or len(sliced) != 1:
+        raise ValueError("step slicing is only supported for unary problem sets")
+    problem = sliced[0]
+    first_step = int(problem.first_step)
+    last_step = int(problem.last_step)
+    if first_step <= 0 or last_step <= 0:
+        raise ValueError("sliced problem sets require first_step and last_step")
+    if last_step < first_step:
+        raise ValueError("last_step must be greater than or equal to first_step")
+    max_step_row = tx.execute("SELECT MAX(step_number) AS max_step FROM problem_steps WHERE problem_id = ?", (problem.problem_id,)).fetchone()
+    max_step = int(max_step_row["max_step"] or 0) if max_step_row is not None else 0
+    if max_step == 0:
+        raise ValueError(f"problem {problem.problem_id!r} does not exist")
+    if last_step > max_step:
+        raise ValueError(f"slice ends after final step for problem {problem.problem_id!r}")
+    if first_step == 1:
+        if pset.continues_problem_set_id:
+            raise ValueError("first slice must not continue another problem set")
+        return
+    if not pset.continues_problem_set_id:
+        raise ValueError("sliced problem sets after step 1 require continues_problem_set_id")
+    previous = tx.execute(
+        "SELECT problem_set_problems.problem_id, problem_set_problems.first_step, problem_set_problems.last_step "
+        "FROM problem_set_problems "
+        "WHERE problem_set_problems.problem_set_id = ?",
+        (pset.continues_problem_set_id,),
+    ).fetchall()
+    if len(previous) != 1:
+        raise ValueError("continued problem set must be a unary sliced problem set")
+    previous_problem = previous[0]
+    if str(previous_problem["problem_id"]) != problem.problem_id:
+        raise ValueError("continued problem set must use the same problem")
+    if previous_problem["first_step"] is None or previous_problem["last_step"] is None:
+        raise ValueError("continued problem set must be sliced")
+    if int(previous_problem["last_step"]) != first_step - 1:
+        raise ValueError("continued problem set must end at the previous step")
 
 
 def _save_commit_files(

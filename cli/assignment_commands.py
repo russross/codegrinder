@@ -44,6 +44,9 @@ def command_get(args: argparse.Namespace) -> None:
             if item.assignment.user_id != session.user.user_id:
                 continue
             if item.download_status != pb.ASSIGNMENT_DOWNLOAD_STATUS_AVAILABLE:
+                if item.download_status == pb.ASSIGNMENT_DOWNLOAD_STATUS_PREREQ_NOT_READY:
+                    label = f"{course_directory(item.course_name)}/{item.assignment.problem_set_id}"
+                    print(f"warning: assignment {label} prerequisite is not ready; skipping")
                 continue
             target_dir = assignment_directory(root_dir, item.course_name, item.assignment.problem_set_id)
             pretty_full = str(Path(pretty_root) / course_directory(item.course_name) / item.assignment.problem_set_id)

@@ -64,6 +64,8 @@ For protocol changes:
 
 - Assignment download availability is server-provided in list responses and should be derived consistently from database views. The CLI should not duplicate open/locked time policy.
 - `unlock_at` controls whether an assignment is available for download. If it is present and in the future, the server should mark the assignment unavailable for download and refuse workspace download.
+- Problem-set continuation prerequisites also affect download availability. If a sliced problem set continues an earlier sliced problem set and the required previous step is not passed, the server should mark the assignment `ASSIGNMENT_DOWNLOAD_STATUS_PREREQ_NOT_READY` and refuse workspace download.
+- LMS launch should still create or update the assignment row for a prerequisite-blocked continuation; readiness is enforced by `ListAssignments`, `GetAssignment`, and `GetWorkspace`, not by rejecting the launch.
 - `lock_at` does not hide assignments and does not prevent workspace download or daycare actions, including grade.
 - After `lock_at`, student-owned assignment commits must not be persisted and grade passback must not run, but daycare actions should still run so students can see results.
 - After a locked `grind grade`, the final line shown to the student must clearly say the results were not saved because the assignment is locked.
@@ -79,13 +81,14 @@ For protocol changes:
 - Assignment directories are `$workspace_root/$course_directory/$problem_set_id`.
 - Downloads must stage into a temporary sibling directory and rename into place only after all files and `.grind` metadata are written.
 - A partially downloaded assignment directory without valid `.grind` metadata must not be treated as a completed assignment.
-- `.grind` is TOML. It records assignment identity and per-problem `problem_id`, current `step`, and `total_steps`.
+- `.grind` is TOML. It records assignment identity and per-problem `problem_id` and current `step`; assignment progress does not expose full problem `total_steps`.
 - Existing assignment directories are skipped only when `.grind` assignment identity and problem metadata match the server's current assignment summary.
 - Workspace file state has three current meanings: unspecified/missing request state, current saved/student state, and step-start reset state.
 - `WORKSPACE_FILE_STATE_UNSPECIFIED` means the caller omitted a required choice and `GetWorkspace` must reject it.
 - `GetWorkspace` must reject unspecified and unknown file-state enum values.
 - Workspace paths returned by the server and written by the CLI must be relative, normalized, and must not contain absolute paths, `.` components, `..` components, or backslashes.
 - `lock_at` does not prevent `grind get`; only `unlock_at` controls download availability, and only for students.
+- `grind get` skips `ASSIGNMENT_DOWNLOAD_STATUS_PREREQ_NOT_READY` assignments and prints a warning that the prerequisite assignment is not ready.
 
 # `grind sync`
 
@@ -150,6 +153,12 @@ For protocol changes:
 # Authoring Semantics
 
 - Authoring requests are shaped around uploaded author source material, not around stored database rows or daycare package internals.
+- Problem sets are the LMS-visible work unit. A problem set may either bundle one or more complete problems, or represent a step slice of exactly one problem.
+- Sliced problem sets define inclusive `first_step` and `last_step` bounds on their single problem. Later slices explicitly link to the previous slice with `continues_problem_set_id`.
+- A sliced problem set with `first_step > 1` must continue a sliced problem set for the same problem whose `last_step` is exactly `first_step - 1`.
+- Multi-problem problem sets must not use step slicing. This keeps continuation semantics unary.
+- Assignment scoring, progress, workspace reads, and grading context must use the problem-set step scope, not all steps of the underlying problem.
+- Continuation slices do not migrate commits. The first step of a continuation slice uses the previous slice's passed final-step commit files as the current starting student-owned files until the new slice has its own commit.
 - The CLI uploads only:
   - problem/problem-set metadata from `.cfg`
   - ordered steps
@@ -190,7 +199,8 @@ For protocol changes:
   - Persisted regular files must match the runtime files that were validated; persisted starter files must match the starter files carried in the signed validation bundle.
   - `SaveProblem` requires exactly one problem step, one solution commit, and one signed validation bundle per step.
   - `grind create --action ACTION` is validation-only/interactive; it must not persist problem data.
-  - `grind create PSET.cfg` saves only the problem set membership/weights; it does not prepare or validate problem source material.
+- `grind create PSET.cfg` saves only the problem set membership/weights; it does not prepare or validate problem source material.
+- `grind create PSET.cfg` may save either a complete-problem bundle or a unary step-sliced problem set. It must reject configs that mix multiple problems with slicing.
 - Author save requests must carry explicit intent:
   - create request => error if problem/problem set already exists
   - update request => error if problem/problem set does not exist

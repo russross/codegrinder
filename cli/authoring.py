@@ -151,6 +151,7 @@ def save_problem_set(client: CodeGrinderClient, path: Path, is_update: bool) -> 
         problem_set_id=cfg.problem_set_id,
         problem_set_note=cfg.note,
         problem_set_tags=cfg.tags,
+        continues_problem_set_id=cfg.continues_problem_set_id,
     )
 
     if path.name != problem_set.problem_set_id + ".cfg":
@@ -161,9 +162,14 @@ def save_problem_set(client: CodeGrinderClient, path: Path, is_update: bool) -> 
     if not cfg.problems:
         fail("a problem set must contain at least one problem")
 
-    for unique, weight in cfg.problems.items():
+    for problem in cfg.problems:
         bundle.problem_set_problems.append(
-            pb.ProblemSetProblem(problem_id=unique, weight=weight if weight > 0.0 else 1.0)
+            pb.ProblemSetProblem(
+                problem_id=problem.problem_id,
+                weight=problem.weight if problem.weight > 0.0 else 1.0,
+                first_step=problem.first_step,
+                last_step=problem.last_step,
+            )
         )
 
     mode = pb.SAVE_MODE_UPDATE if is_update else pb.SAVE_MODE_CREATE

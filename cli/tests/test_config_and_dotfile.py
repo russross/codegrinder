@@ -72,8 +72,8 @@ def test_dotfile_round_trip_uses_toml(tmp_path: Path) -> None:
             problem_set_id="ps1",
         ),
         problems={
-            "p1": ProblemInfo(problem_id="p101", step=1, total_steps=2),
-            "p2": ProblemInfo(problem_id="p202", step=3, total_steps=3),
+            "p1": ProblemInfo(problem_id="p101", step=1),
+            "p2": ProblemInfo(problem_id="p202", step=3),
         },
         path=str(dotfile_path),
     )
@@ -81,8 +81,8 @@ def test_dotfile_round_trip_uses_toml(tmp_path: Path) -> None:
 
     raw = tomllib.loads(dotfile_path.read_text(encoding="utf-8"))
     assert raw["assignment"] == {"user_id": "u1", "course_id": "c1", "problem_set_id": "ps1"}
-    assert raw["problems"]["p1"] == {"problem_id": "p101", "step": 1, "total_steps": 2}
-    assert raw["problems"]["p2"] == {"problem_id": "p202", "step": 3, "total_steps": 3}
+    assert raw["problems"]["p1"] == {"problem_id": "p101", "step": 1}
+    assert raw["problems"]["p2"] == {"problem_id": "p202", "step": 3}
 
     parsed, _, _ = helpers.find_dotfile(tmp_path)
     assert parsed.assignment_ref.problem_set_id == "ps1"
