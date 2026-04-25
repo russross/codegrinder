@@ -32,7 +32,7 @@ def setup_db(path: Path) -> sqlite3.Connection:
 
 
 @contextmanager
-def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
+def transaction(conn: sqlite3.Connection, *, label: str | None = None) -> Iterator[sqlite3.Connection]:
     with _DB_LOCK:
         start = time.monotonic()
         conn.execute("BEGIN")
@@ -47,4 +47,7 @@ def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
             elapsed_seconds = time.monotonic() - start
             if elapsed_seconds > 0.5:
                 elapsed = format_duration_for_log(timedelta(seconds=elapsed_seconds))
-                logging.info("transaction took %s", elapsed)
+                if label is None:
+                    logging.info("transaction took %s", elapsed)
+                else:
+                    logging.info("transaction %s took %s", label, elapsed)

@@ -6,7 +6,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, Iterator, TypeVar
+from typing import Any, Callable, Iterator, NoReturn, TypeVar
 
 import grpc
 
@@ -87,6 +87,20 @@ class VersionInfo:
             thonny_version_required=self.thonny_version_required,
             thonny_version_recommended=self.thonny_version_recommended,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class RpcState:
+    tx: sqlite3.Connection
+    current_user: sqlite3.Row | None = None
+    ip_allowed: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class _PassbackWork:
+    response: pb.SaveGradedCommitResponse
+    target: GradePassbackTarget | None = None
+    html: str = ""
 
 
 class IPFilterInterceptor(grpc.ServerInterceptor):
@@ -238,16 +252,52 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
             ip = _extract_ip_for_filter(context)
             return bool(ip and self.ip_filter.allows_ip(ip))
 
-    def _with_tx(self, fn: Callable[[sqlite3.Connection], T]) -> T:
-        with transaction(self._conn) as tx:
+    def _with_tx(self, label: str, fn: Callable[[sqlite3.Connection], T]) -> T:
+        with transaction(self._conn, label=label) as tx:
             return fn(tx)
+
+    def _run_rpc(
+        self,
+        context: grpc.ServicerContext,
+        *,
+        label: str,
+        load_user: bool = False,
+        require_author: bool = False,
+        include_ip: bool = False,
+        fn: Callable[[RpcState], T],
+    ) -> T:
+        ip_allowed = self._ip_allowed(context) if include_ip else True
+
+        def run(tx: sqlite3.Connection) -> T:
+            current_user = self._current_user_row(tx, context) if load_user or require_author else None
+            if require_author and current_user is not None:
+                self._require_author(current_user, context)
+            return fn(RpcState(tx=tx, current_user=current_user, ip_allowed=ip_allowed))
+
+        return self._with_tx(label, run)
+
+    def _abort(self, context: grpc.ServicerContext, code: grpc.StatusCode, details: str) -> NoReturn:
+        context.abort(code, details)
+        raise AssertionError("unreachable")
+
+    def _abort_sqlite(
+        self,
+        context: grpc.ServicerContext,
+        exc: sqlite3.Error,
+        *,
+        internal: str,
+        not_found: str | None = None,
+    ) -> NoReturn:
+        if not_found is not None and _is_db_not_found(exc):
+            self._abort(context, grpc.StatusCode.NOT_FOUND, not_found)
+        self._abort(context, grpc.StatusCode.INTERNAL, f"{internal}: {exc}")
 
     def _require_author(self, user_row: sqlite3.Row, context: grpc.ServicerContext) -> None:
         is_admin = bool(user_row["admin"]) if "admin" in user_row.keys() else False
         is_author = bool(user_row["author"]) if "author" in user_row.keys() else False
         if is_admin or is_author:
             return
-        context.abort(grpc.StatusCode.PERMISSION_DENIED, "user is not an author")
+        self._abort(context, grpc.StatusCode.PERMISSION_DENIED, "user is not an author")
 
     def _get_cookie_value(self, context: grpc.ServicerContext) -> str:
         md = context.invocation_metadata()
@@ -256,27 +306,24 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
             if item.key.lower() == "cookie":
                 cookies.append(item.value)
         if not cookies:
-            context.abort(grpc.StatusCode.UNAUTHENTICATED, "missing session cookie")
+            self._abort(context, grpc.StatusCode.UNAUTHENTICATED, "missing session cookie")
         for cookie_header in cookies:
             for part in cookie_header.split(";"):
                 chunk = part.strip()
                 if chunk.startswith(COOKIE_NAME + "="):
                     return chunk[len(COOKIE_NAME) + 1 :]
-        context.abort(grpc.StatusCode.UNAUTHENTICATED, "missing session cookie")
-        raise AssertionError("unreachable")
+        self._abort(context, grpc.StatusCode.UNAUTHENTICATED, "missing session cookie")
 
     def _current_user_row(self, tx: sqlite3.Connection, context: grpc.ServicerContext) -> sqlite3.Row:
         cookie_value = self._get_cookie_value(context)
         try:
             session = decode_session(cookie_value, self._config.session_secret, datetime.now(tz=UTC))
         except SessionError as exc:
-            context.abort(grpc.StatusCode.UNAUTHENTICATED, str(exc))
-            raise AssertionError("unreachable")
+            self._abort(context, grpc.StatusCode.UNAUTHENTICATED, str(exc))
         try:
             return load_user_by_id(tx, session.user_id)
         except sqlite3.Error as exc:
-            context.abort(grpc.StatusCode.INTERNAL, f"db error loading user: {exc}")
-            raise AssertionError("unreachable")
+            self._abort(context, grpc.StatusCode.INTERNAL, f"db error loading user: {exc}")
 
     def _problem_type_files(self, problem_type: str) -> dict[str, bytes]:
         files: dict[str, bytes] = {}
@@ -301,6 +348,25 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
             action_rows,
         )
 
+    def _user_pb(self, user_row: sqlite3.Row) -> pb.User:
+        return pb.User(
+            user_id=str(user_row["user_id"]),
+            user_name=str(user_row["user_name"]),
+            user_login=str(user_row["user_login"]),
+            author=bool(user_row["author"]) if "author" in user_row.keys() else False,
+        )
+
+    def _require_field(
+        self,
+        request: Any,
+        *,
+        field: str,
+        label: str,
+        context: grpc.ServicerContext,
+    ) -> None:
+        if request is None or not request.HasField(field):
+            self._abort(context, grpc.StatusCode.INVALID_ARGUMENT, f"{label} is required")
+
     # gRPC-native names
     def Hello(self, request: pb.HelloRequest, context: grpc.ServicerContext) -> pb.HelloResponse:
         version = self._version.to_pb()
@@ -308,123 +374,108 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
             try:
                 user_id = self._login_records.get(request.key, datetime.now(tz=UTC))
             except SessionError as exc:
-                context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+                self._abort(context, grpc.StatusCode.INVALID_ARGUMENT, str(exc))
             session = new_session(user_id, datetime.now(tz=UTC), self._config.sessions_expire)
             cookie_value = encode_session(session, self._config.session_secret)
 
-            def fn(tx: sqlite3.Connection) -> pb.HelloResponse:
+            def fn(state: RpcState) -> pb.HelloResponse:
                 try:
-                    user_row = load_user_by_id(tx, user_id)
+                    user_row = load_user_by_id(state.tx, user_id)
                 except sqlite3.Error as exc:
-                    context.abort(grpc.StatusCode.INTERNAL, f"db error getting user me: {exc}")
+                    self._abort_sqlite(context, exc, internal="db error getting user me")
                 return pb.HelloResponse(
                     cookie=f"{COOKIE_NAME}={cookie_value}",
-                    user=pb.User(
-                        user_id=str(user_row["user_id"]),
-                        user_name=str(user_row["user_name"]),
-                        user_login=str(user_row["user_login"]),
-                        author=bool(user_row["author"]) if "author" in user_row.keys() else False,
-                    ),
+                    user=self._user_pb(user_row),
                     version=version,
                 )
 
-            return self._with_tx(fn)
+            return self._run_rpc(context, label="Hello", fn=fn)
 
-        def fn2(tx: sqlite3.Connection) -> pb.HelloResponse:
-            user_row = self._current_user_row(tx, context)
-            return pb.HelloResponse(
-                user=pb.User(
-                    user_id=str(user_row["user_id"]),
-                    user_name=str(user_row["user_name"]),
-                    user_login=str(user_row["user_login"]),
-                    author=bool(user_row["author"]) if "author" in user_row.keys() else False,
-                ),
-                version=version,
-            )
+        def fn(state: RpcState) -> pb.HelloResponse:
+            current_user = state.current_user
+            assert current_user is not None
+            return pb.HelloResponse(user=self._user_pb(current_user), version=version)
 
-        return self._with_tx(fn2)
+        return self._run_rpc(context, label="Hello", load_user=True, fn=fn)
 
     def ListAssignments(
         self, request: pb.ListAssignmentsRequest, context: grpc.ServicerContext
     ) -> pb.ListAssignmentsResponse:
-        def fn(tx: sqlite3.Connection) -> pb.ListAssignmentsResponse:
-            current_user = self._current_user_row(tx, context)
+        def fn(state: RpcState) -> pb.ListAssignmentsResponse:
+            current_user = state.current_user
+            assert current_user is not None
             try:
                 items = get_assignment_list_items_pb(
-                    tx,
+                    state.tx,
                     current_user,
                     list(request.search),
                     bool(request.include_student_context),
-                    self._ip_allowed(context),
+                    state.ip_allowed,
                 )
             except sqlite3.Error as exc:
-                context.abort(grpc.StatusCode.INTERNAL, f"db error listing assignments: {exc}")
+                self._abort_sqlite(context, exc, internal="db error listing assignments")
             return pb.ListAssignmentsResponse(items=items)
 
-        return self._with_tx(fn)
+        return self._run_rpc(context, label="ListAssignments", load_user=True, include_ip=True, fn=fn)
 
     def SearchProblemCatalog(
         self, request: pb.SearchProblemCatalogRequest, context: grpc.ServicerContext
     ) -> pb.SearchProblemCatalogResponse:
-        def fn(tx: sqlite3.Connection) -> pb.SearchProblemCatalogResponse:
-            current_user = self._current_user_row(tx, context)
+        def fn(state: RpcState) -> pb.SearchProblemCatalogResponse:
+            current_user = state.current_user
+            assert current_user is not None
             try:
-                response = search_problem_catalog_pb(tx, current_user, list(request.search))
+                return search_problem_catalog_pb(state.tx, current_user, list(request.search))
             except sqlite3.Error as exc:
-                context.abort(grpc.StatusCode.INTERNAL, f"db error searching problem catalog: {exc}")
-            return response
+                self._abort_sqlite(context, exc, internal="db error searching problem catalog")
 
-        return self._with_tx(fn)
+        return self._run_rpc(context, label="SearchProblemCatalog", load_user=True, fn=fn)
 
     def GetProblemTypes(self, request: pb.GetProblemTypesRequest, context: grpc.ServicerContext) -> pb.GetProblemTypesResponse:
-        def fn(tx: sqlite3.Connection) -> pb.GetProblemTypesResponse:
+        def fn(state: RpcState) -> pb.GetProblemTypesResponse:
             try:
-                rows = get_problem_types_rows(tx)
-                types = [self._load_problem_type(tx, str(row["problem_type"])) for row in rows]
-            except sqlite3.Error as exc:
-                context.abort(grpc.StatusCode.INTERNAL, f"db error getting problem types: {exc}")
-            return pb.GetProblemTypesResponse(problem_types=types)
-
-        return self._with_tx(fn)
-
-    def GetProblemType(self, request: pb.GetProblemTypeRequest, context: grpc.ServicerContext) -> pb.GetProblemTypeResponse:
-        def fn(tx: sqlite3.Connection) -> pb.GetProblemTypeResponse:
-            try:
-                problem_type = self._load_problem_type(tx, request.problem_type)
-            except sqlite3.Error as exc:
-                if _is_db_not_found(exc):
-                    context.abort(grpc.StatusCode.NOT_FOUND, "not found")
-                    raise AssertionError("unreachable")
-                context.abort(grpc.StatusCode.INTERNAL, f"db error getting problem type: {exc}")
-            return pb.GetProblemTypeResponse(problem_type=problem_type)
-
-        return self._with_tx(fn)
-
-    def GetAssignment(self, request: pb.GetAssignmentRequest, context: grpc.ServicerContext) -> pb.GetAssignmentResponse:
-        def fn(tx: sqlite3.Connection) -> pb.GetAssignmentResponse:
-            current_user = self._current_user_row(tx, context)
-            try:
-                asst = get_assignment_summary_pb(
-                    tx,
-                    current_user,
-                    request.assignment,
-                    self._ip_allowed(context),
+                rows = get_problem_types_rows(state.tx)
+                return pb.GetProblemTypesResponse(
+                    problem_types=[self._load_problem_type(state.tx, str(row["problem_type"])) for row in rows]
                 )
             except sqlite3.Error as exc:
-                if _is_db_not_found(exc):
-                    context.abort(grpc.StatusCode.NOT_FOUND, "not found")
-                    raise AssertionError("unreachable")
-                context.abort(grpc.StatusCode.INTERNAL, f"db error getting assignment: {exc}")
-            return asst
+                self._abort_sqlite(context, exc, internal="db error getting problem types")
 
-        return self._with_tx(fn)
+        return self._run_rpc(context, label="GetProblemTypes", fn=fn)
+
+    def GetProblemType(self, request: pb.GetProblemTypeRequest, context: grpc.ServicerContext) -> pb.GetProblemTypeResponse:
+        def fn(state: RpcState) -> pb.GetProblemTypeResponse:
+            try:
+                problem_type = self._load_problem_type(state.tx, request.problem_type)
+            except sqlite3.Error as exc:
+                self._abort_sqlite(context, exc, internal="db error getting problem type", not_found="not found")
+            return pb.GetProblemTypeResponse(problem_type=problem_type)
+
+        return self._run_rpc(context, label="GetProblemType", fn=fn)
+
+    def GetAssignment(self, request: pb.GetAssignmentRequest, context: grpc.ServicerContext) -> pb.GetAssignmentResponse:
+        def fn(state: RpcState) -> pb.GetAssignmentResponse:
+            current_user = state.current_user
+            assert current_user is not None
+            try:
+                return get_assignment_summary_pb(
+                    state.tx,
+                    current_user,
+                    request.assignment,
+                    state.ip_allowed,
+                )
+            except sqlite3.Error as exc:
+                self._abort_sqlite(context, exc, internal="db error getting assignment", not_found="not found")
+
+        return self._run_rpc(context, label="GetAssignment", load_user=True, include_ip=True, fn=fn)
 
     def GetWorkspace(self, request: pb.GetWorkspaceRequest, context: grpc.ServicerContext) -> pb.GetWorkspaceResponse:
-        def fn(tx: sqlite3.Connection) -> pb.GetWorkspaceResponse:
-            current_user = self._current_user_row(tx, context)
+        def fn(state: RpcState) -> pb.GetWorkspaceResponse:
+            current_user = state.current_user
+            assert current_user is not None
             try:
                 return get_workspace_pb(
-                    tx,
+                    state.tx,
                     current_user,
                     request.assignment,
                     request.problem_id,
@@ -432,28 +483,24 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                     request.file_state,
                     bool(request.include_contents),
                     bool(request.include_solution_files),
-                    self._ip_allowed(context),
+                    state.ip_allowed,
                     self._problem_type_files,
                 )
             except PermissionError as exc:
-                context.abort(grpc.StatusCode.PERMISSION_DENIED, str(exc))
+                self._abort(context, grpc.StatusCode.PERMISSION_DENIED, str(exc))
             except ValueError as exc:
-                context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+                self._abort(context, grpc.StatusCode.INVALID_ARGUMENT, str(exc))
             except sqlite3.Error as exc:
-                if _is_db_not_found(exc):
-                    context.abort(grpc.StatusCode.NOT_FOUND, "not found")
-                    raise AssertionError("unreachable")
-                context.abort(grpc.StatusCode.INTERNAL, f"db error getting workspace: {exc}")
-            raise AssertionError("unreachable")
+                self._abort_sqlite(context, exc, internal="db error getting workspace", not_found="not found")
 
-        return self._with_tx(fn)
+        return self._run_rpc(context, label="GetWorkspace", load_user=True, include_ip=True, fn=fn)
 
     def _select_daycare_host(self, _problem_types: set[str]) -> str:
         if self._daycare_registry is not None:
             try:
                 return self._daycare_registry.assign(_problem_types)
             except Exception:
-                pass
+                logging.exception("daycare registry assignment failed")
         return self._config.hostname
 
     def _problem_count_for_assignment(
@@ -546,16 +593,14 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
     def PrepareProblem(
         self, request: pb.PrepareProblemRequest, context: grpc.ServicerContext
     ) -> pb.PrepareProblemResponse:
-        if request is None or not request.HasField("draft"):
-            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "draft is required")
-            raise AssertionError("unreachable")
+        self._require_field(request, field="draft", label="draft", context=context)
 
-        def fn(tx: sqlite3.Connection) -> pb.PrepareProblemResponse:
-            current_user = self._current_user_row(tx, context)
-            self._require_author(current_user, context)
+        def fn(state: RpcState) -> pb.PrepareProblemResponse:
+            current_user = state.current_user
+            assert current_user is not None
             try:
                 bundle = prepare_problem(
-                    tx,
+                    state.tx,
                     str(current_user["user_id"]),
                     request.draft,
                     request.action,
@@ -564,70 +609,63 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                     self._problem_type_files,
                 )
             except ValueError as exc:
-                context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"invalid problem draft: {exc}")
+                self._abort(context, grpc.StatusCode.INVALID_ARGUMENT, f"invalid problem draft: {exc}")
             except Exception as exc:
-                context.abort(grpc.StatusCode.INTERNAL, f"db error preparing problem: {exc}")
+                self._abort(context, grpc.StatusCode.INTERNAL, f"db error preparing problem: {exc}")
             return pb.PrepareProblemResponse(bundle=bundle)
 
-        return self._with_tx(fn)
+        return self._run_rpc(context, label="PrepareProblem", require_author=True, fn=fn)
 
     def SaveProblem(self, request: pb.SaveProblemRequest, context: grpc.ServicerContext) -> pb.SaveProblemResponse:
-        if request is None or not request.HasField("bundle"):
-            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "bundle is required")
-            raise AssertionError("unreachable")
+        self._require_field(request, field="bundle", label="bundle", context=context)
 
-        def fn(tx: sqlite3.Connection) -> pb.SaveProblemResponse:
-            current_user = self._current_user_row(tx, context)
-            self._require_author(current_user, context)
+        def fn(state: RpcState) -> pb.SaveProblemResponse:
+            current_user = state.current_user
+            assert current_user is not None
             try:
                 bundle = save_problem(
-                    tx,
+                    state.tx,
                     str(current_user["user_id"]),
                     self._config.daycare_secret,
                     request.mode,
                     request.bundle,
                 )
             except ValueError as exc:
-                context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"invalid problem save: {exc}")
+                self._abort(context, grpc.StatusCode.INVALID_ARGUMENT, f"invalid problem save: {exc}")
             except Exception as exc:
-                context.abort(grpc.StatusCode.INTERNAL, f"db error saving problem: {exc}")
+                self._abort(context, grpc.StatusCode.INTERNAL, f"db error saving problem: {exc}")
             return pb.SaveProblemResponse(bundle=bundle)
 
-        return self._with_tx(fn)
+        return self._run_rpc(context, label="SaveProblem", require_author=True, fn=fn)
 
     def SaveProblemSet(
         self, request: pb.SaveProblemSetRequest, context: grpc.ServicerContext
     ) -> pb.SaveProblemSetResponse:
-        if request is None or not request.HasField("bundle"):
-            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "bundle is required")
-            raise AssertionError("unreachable")
+        self._require_field(request, field="bundle", label="bundle", context=context)
 
-        def fn(tx: sqlite3.Connection) -> pb.SaveProblemSetResponse:
-            current_user = self._current_user_row(tx, context)
-            self._require_author(current_user, context)
+        def fn(state: RpcState) -> pb.SaveProblemSetResponse:
             try:
                 bundle = save_problem_set(
-                    tx,
+                    state.tx,
                     request.mode,
                     request.bundle,
                 )
             except ValueError as exc:
-                context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"invalid problem set save: {exc}")
+                self._abort(context, grpc.StatusCode.INVALID_ARGUMENT, f"invalid problem set save: {exc}")
             except Exception as exc:
-                context.abort(grpc.StatusCode.INTERNAL, f"db error saving problem set: {exc}")
+                self._abort(context, grpc.StatusCode.INTERNAL, f"db error saving problem set: {exc}")
             return pb.SaveProblemSetResponse(bundle=bundle)
 
-        return self._with_tx(fn)
+        return self._run_rpc(context, label="SaveProblemSet", require_author=True, fn=fn)
 
     def SaveUngradedCommit(
         self, request: pb.SaveUngradedCommitRequest, context: grpc.ServicerContext
     ) -> pb.SaveUngradedCommitResponse:
-        if request is None or not request.HasField("commit"):
-            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "commit is required")
-            raise AssertionError("unreachable")
+        self._require_field(request, field="commit", label="commit", context=context)
 
-        def fn(tx: sqlite3.Connection) -> pb.SaveUngradedCommitResponse:
-            current_user = self._current_user_row(tx, context)
+        def fn(state: RpcState) -> pb.SaveUngradedCommitResponse:
+            current_user = state.current_user
+            assert current_user is not None
             working = pb.GradingCommit()
             working.CopyFrom(request.commit)
             working.hostname = ""
@@ -639,21 +677,24 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
             working.commit.updated_at.FromDatetime(now)
             try:
                 result = save_ungraded_commit(
-                    tx,
+                    state.tx,
                     str(current_user["user_id"]),
                     working,
-                    self._ip_allowed(context),
+                    state.ip_allowed,
                     self._select_daycare_host,
                     self._problem_type_files,
                 )
             except ValueError as exc:
-                context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"invalid ungraded commit: {exc}")
+                self._abort(context, grpc.StatusCode.INVALID_ARGUMENT, f"invalid ungraded commit: {exc}")
             except sqlite3.Error as exc:
-                if _is_db_not_found(exc):
-                    context.abort(grpc.StatusCode.NOT_FOUND, "commit target not found")
-                context.abort(grpc.StatusCode.INTERNAL, f"db error saving ungraded commit: {exc}")
+                self._abort_sqlite(
+                    context,
+                    exc,
+                    internal="db error saving ungraded commit",
+                    not_found="commit target not found",
+                )
             except Exception as exc:
-                context.abort(grpc.StatusCode.INTERNAL, f"db error saving ungraded commit: {exc}")
+                self._abort(context, grpc.StatusCode.INTERNAL, f"db error saving ungraded commit: {exc}")
             bundle = result.bundle
             self._log_commit_request(current_user, bundle, request_signed=False)
             return pb.SaveUngradedCommitResponse(
@@ -661,17 +702,16 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                 save_status=result.save_status,
             )
 
-        return self._with_tx(fn)
+        return self._run_rpc(context, label="SaveUngradedCommit", load_user=True, include_ip=True, fn=fn)
 
     def SaveWorkspaceCommit(
         self, request: pb.SaveWorkspaceCommitRequest, context: grpc.ServicerContext
     ) -> pb.SaveWorkspaceCommitResponse:
-        if request is None or not request.HasField("commit"):
-            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "commit is required")
-            raise AssertionError("unreachable")
+        self._require_field(request, field="commit", label="commit", context=context)
 
-        def fn(tx: sqlite3.Connection) -> pb.SaveWorkspaceCommitResponse:
-            current_user = self._current_user_row(tx, context)
+        def fn(state: RpcState) -> pb.SaveWorkspaceCommitResponse:
+            current_user = state.current_user
+            assert current_user is not None
             working = pb.Commit()
             working.CopyFrom(request.commit)
             now = datetime.now(tz=UTC)
@@ -679,19 +719,22 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
             working.updated_at.FromDatetime(now)
             try:
                 result = save_workspace_commit(
-                    tx,
+                    state.tx,
                     str(current_user["user_id"]),
                     working,
-                    self._ip_allowed(context),
+                    state.ip_allowed,
                 )
             except ValueError as exc:
-                context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"invalid workspace commit: {exc}")
+                self._abort(context, grpc.StatusCode.INVALID_ARGUMENT, f"invalid workspace commit: {exc}")
             except sqlite3.Error as exc:
-                if _is_db_not_found(exc):
-                    context.abort(grpc.StatusCode.NOT_FOUND, "commit target not found")
-                context.abort(grpc.StatusCode.INTERNAL, f"db error saving workspace commit: {exc}")
+                self._abort_sqlite(
+                    context,
+                    exc,
+                    internal="db error saving workspace commit",
+                    not_found="commit target not found",
+                )
             except Exception as exc:
-                context.abort(grpc.StatusCode.INTERNAL, f"db error saving workspace commit: {exc}")
+                self._abort(context, grpc.StatusCode.INTERNAL, f"db error saving workspace commit: {exc}")
             note = ""
             if result.commit.note != "":
                 note = f" ({result.commit.note})"
@@ -704,59 +747,64 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
             )
             return pb.SaveWorkspaceCommitResponse(save_status=result.save_status)
 
-        return self._with_tx(fn)
+        return self._run_rpc(context, label="SaveWorkspaceCommit", load_user=True, include_ip=True, fn=fn)
 
     def SaveGradedCommit(
         self, request: pb.SaveGradedCommitRequest, context: grpc.ServicerContext
     ) -> pb.SaveGradedCommitResponse:
-        if request is None or not request.HasField("bundle"):
-            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "bundle is required")
-            raise AssertionError("unreachable")
+        self._require_field(request, field="bundle", label="bundle", context=context)
 
-        passback_target: GradePassbackTarget | None = None
-        passback_html = ""
-
-        def fn(tx: sqlite3.Connection) -> pb.SaveGradedCommitResponse:
-            nonlocal passback_target, passback_html
-            current_user = self._current_user_row(tx, context)
+        def fn(state: RpcState) -> _PassbackWork:
+            current_user = state.current_user
+            assert current_user is not None
             try:
                 runtime = decode_signed_runtime_bundle(request.bundle, self._config.daycare_secret)
                 result = save_graded_runtime_bundle(
-                    tx,
+                    state.tx,
                     str(current_user["user_id"]),
                     runtime,
-                    self._ip_allowed(context),
+                    state.ip_allowed,
                 )
             except ValueError as exc:
-                context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"invalid graded commit: {exc}")
+                self._abort(context, grpc.StatusCode.INVALID_ARGUMENT, f"invalid graded commit: {exc}")
             except sqlite3.Error as exc:
-                if _is_db_not_found(exc):
-                    context.abort(grpc.StatusCode.NOT_FOUND, "commit target not found")
-                context.abort(grpc.StatusCode.INTERNAL, f"db error saving graded commit: {exc}")
+                self._abort_sqlite(
+                    context,
+                    exc,
+                    internal="db error saving graded commit",
+                    not_found="commit target not found",
+                )
             except Exception as exc:
-                context.abort(grpc.StatusCode.INTERNAL, f"db error saving graded commit: {exc}")
+                self._abort(context, grpc.StatusCode.INTERNAL, f"db error saving graded commit: {exc}")
             bundle = result.bundle
             self._log_commit_request(current_user, bundle, request_signed=True)
-            if result.save_status == pb.COMMIT_SAVE_STATUS_SAVED:
-                passback_target = self._build_grade_passback_target(tx, str(current_user["user_id"]), bundle)
-            if passback_target is not None:
-                passback_html = build_grade_report_html(
+            passback_target = (
+                self._build_grade_passback_target(state.tx, str(current_user["user_id"]), bundle)
+                if result.save_status == pb.COMMIT_SAVE_STATUS_SAVED
+                else None
+            )
+            if passback_target is None:
+                return _PassbackWork(response=pb.SaveGradedCommitResponse(save_status=result.save_status))
+            return _PassbackWork(
+                response=pb.SaveGradedCommitResponse(save_status=result.save_status),
+                target=passback_target,
+                html=build_grade_report_html(
                     bundle.commit,
                     bundle.problem_id,
                     bundle.total_steps,
                     self._problem_count_for_assignment(
-                        tx,
+                        state.tx,
                         bundle.commit.assignment.user_id,
                         bundle.commit.assignment.course_id,
                         bundle.commit.assignment.problem_set_id,
                     ),
-                )
-            return pb.SaveGradedCommitResponse(save_status=result.save_status)
+                ),
+            )
 
-        response = self._with_tx(fn)
-        if passback_target is not None:
-            save_grade_async(passback_target, passback_html, self._config.lti_secret)
-        return response
+        work = self._run_rpc(context, label="SaveGradedCommit", load_user=True, include_ip=True, fn=fn)
+        if work.target is not None:
+            save_grade_async(work.target, work.html, self._config.lti_secret)
+        return work.response
 
     def Daycare(self, request: pb.DaycareRequest, context: grpc.ServicerContext) -> Iterator[pb.DaycareResponse]:
         yield from self._daycare.stream(request, context)

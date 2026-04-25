@@ -777,11 +777,13 @@ def _load_assignment_commit_policy(
 
 
 def _commit_save_status(policy: sqlite3.Row) -> pb.CommitSaveStatus.ValueType:
-    if bool(policy["not_saved_locked"]):
-        return pb.COMMIT_SAVE_STATUS_NOT_SAVED_LOCKED
-    if bool(policy["not_saved_not_owner"]):
-        return pb.COMMIT_SAVE_STATUS_NOT_SAVED_NOT_OWNER
-    return pb.COMMIT_SAVE_STATUS_SAVED
+    match (bool(policy["not_saved_locked"]), bool(policy["not_saved_not_owner"])):
+        case (True, _):
+            return pb.COMMIT_SAVE_STATUS_NOT_SAVED_LOCKED
+        case (False, True):
+            return pb.COMMIT_SAVE_STATUS_NOT_SAVED_NOT_OWNER
+        case _:
+            return pb.COMMIT_SAVE_STATUS_SAVED
 
 
 def _load_grading_step_context(tx: sqlite3.Connection, commit: pb.Commit) -> sqlite3.Row:
@@ -810,6 +812,21 @@ def _require_student_owned_files(commit_files: dict[str, bytes], step_context: s
 def _replace_commit_files(commit: pb.Commit, files: dict[str, bytes]) -> None:
     commit.files.clear()
     commit.files.update(files)
+
+
+def _problem_type_actions_pb(action_rows: list[sqlite3.Row]) -> dict[str, pb.ProblemTypeAction]:
+    return {
+        str(row["action"]): pb.ProblemTypeAction(
+            command=str(row["command"]),
+            parser=str(row["parser"] or ""),
+            max_cpu=int(row["max_cpu"]),
+            max_fd=int(row["max_fd"]),
+            max_file_size=int(row["max_file_size"]),
+            max_memory=int(row["max_memory"]),
+            max_threads=int(row["max_threads"]),
+        )
+        for row in action_rows
+    }
 
 
 def _save_grading_commit(
@@ -907,27 +924,19 @@ def _runtime_bundle_for_commit(
         return SaveGradingCommitResult(bundle=_commit_metadata_bundle(bundle, saved), save_status=saved.save_status)
 
     step_context = saved.step_context
-    action_rows = tx.execute("SELECT * FROM problem_type_actions WHERE problem_type = ?", (step_context["problem_type"],)).fetchall()
-    actions: dict[str, pb.ProblemTypeAction] = {}
-    for row in action_rows:
-        actions[str(row["action"])] = pb.ProblemTypeAction(
-            command=str(row["command"]),
-            parser=str(row["parser"] or ""),
-            max_cpu=int(row["max_cpu"]),
-            max_fd=int(row["max_fd"]),
-            max_file_size=int(row["max_file_size"]),
-            max_memory=int(row["max_memory"]),
-            max_threads=int(row["max_threads"]),
-        )
+    actions = _problem_type_actions_pb(
+        tx.execute("SELECT * FROM problem_type_actions WHERE problem_type = ?", (step_context["problem_type"],)).fetchall()
+    )
     runtime_action_name = saved.action_name
     runtime_action = actions.get(runtime_action_name)
     if runtime_action is None:
         raise ValueError(f'action "{runtime_action_name}" not defined for problem type {step_context["problem_type"]}')
 
-    runtime_files: dict[str, bytes] = {}
-    runtime_files.update(load_problem_type_files(str(step_context["problem_type"])))
-    runtime_files.update(load_problem_step_files(tx, saved.commit.problem_id, int(saved.commit.step), ProblemStepFileType.REGULAR))
-    runtime_files.update(dict(saved.commit.files))
+    runtime_files = (
+        load_problem_type_files(str(step_context["problem_type"]))
+        | load_problem_step_files(tx, saved.commit.problem_id, int(saved.commit.step), ProblemStepFileType.REGULAR)
+        | dict(saved.commit.files)
+    )
     runtime_hostname = bundle.hostname or assign_host({str(step_context["problem_type"])})
     runtime_commit = pb.Commit()
     runtime_commit.CopyFrom(saved.commit)

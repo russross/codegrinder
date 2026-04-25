@@ -22,24 +22,8 @@ def _q1(conn: sqlite3.Connection, sql: str, args: tuple[Any, ...] = ()) -> sqlit
     return row
 
 
-def add_where_eq(where: str, args: list[Any], label: str, value: Any) -> tuple[str, list[Any]]:
-    if where == "":
-        where = " WHERE"
-    else:
-        where += " AND"
-    where += f" {label} = ?"
-    args.append(value)
-    return where, args
-
-
-def add_where_like(where: str, args: list[Any], label: str, value: str) -> tuple[str, list[Any]]:
-    if where == "":
-        where = " WHERE"
-    else:
-        where += " AND"
-    where += f" {label} LIKE ?"
-    args.append(f"%{value.lower()}%")
-    return where, args
+def _where_clause(conditions: list[str]) -> str:
+    return "" if not conditions else " WHERE " + " AND ".join(conditions)
 
 
 def _assignment_download_status(value: Any) -> pb.AssignmentDownloadStatus:
@@ -68,19 +52,14 @@ def get_assignment_list_items_pb(
     include_student_context: bool,
     ip_allowed: bool,
 ) -> list[pb.AssignmentListItem]:
-    where = ""
-    args: list[Any] = []
+    conditions = ["accessible_assignment_fields.viewer_user_id = ?", "(? OR NOT accessible_assignment_fields.restricted)"]
+    args: list[Any] = [str(current_user["user_id"]), 1 if ip_allowed else 0]
     for term in search_terms:
-        where, args = add_where_like(where, args, "accessible_assignment_fields.search_text", term)
-    where, args = add_where_eq(where, args, "accessible_assignment_fields.viewer_user_id", str(current_user["user_id"]))
+        conditions.append("accessible_assignment_fields.search_text LIKE ?")
+        args.append(f"%{term.lower()}%")
     if not include_student_context:
-        where, args = add_where_eq(where, args, "accessible_assignment_fields.assignment_user_id", str(current_user["user_id"]))
-    if where == "":
-        where = " WHERE"
-    else:
-        where += " AND"
-    where += " (? OR NOT accessible_assignment_fields.restricted)"
-    args.append(1 if ip_allowed else 0)
+        conditions.append("accessible_assignment_fields.assignment_user_id = ?")
+        args.append(str(current_user["user_id"]))
 
     rows = _q(
         conn,
@@ -90,7 +69,7 @@ def get_assignment_list_items_pb(
         "problem_set_note, course_name, "
         "user_name, user_login "
         "FROM accessible_assignment_fields "
-        + where
+        + _where_clause(conditions)
         + " ORDER BY course_id, due_at, lock_at, "
         "assignment_user_id, problem_set_id",
         tuple(args),
@@ -116,15 +95,14 @@ def get_assignment_list_items_pb(
     problem_set_ids = sorted({item.assignment.problem_set_id for item in items})
     if problem_set_ids:
         placeholders = ", ".join("?" for _ in problem_set_ids)
-        problem_rows = _q(
+        problems_by_set: dict[str, list[pb.AssignmentListProblem]] = {problem_set_id: [] for problem_set_id in problem_set_ids}
+        for row in _q(
             conn,
             "SELECT problem_set_id, problem_id, first_step, last_step FROM problem_set_problems "
             f"WHERE problem_set_id IN ({placeholders}) "
             "ORDER BY problem_set_id, problem_id",
             tuple(problem_set_ids),
-        )
-        problems_by_set: dict[str, list[pb.AssignmentListProblem]] = {problem_set_id: [] for problem_set_id in problem_set_ids}
-        for row in problem_rows:
+        ):
             problems_by_set[str(row["problem_set_id"])].append(
                 pb.AssignmentListProblem(
                     problem_id=str(row["problem_id"]),
@@ -297,17 +275,16 @@ def get_assignment_summary_pb(
         "ORDER BY problem_id",
         (assignment.user_id, assignment.course_id, assignment.problem_set_id),
     )
-    problems: list[pb.AssignmentProblemProgress] = []
-    for row in problem_rows:
-        problems.append(
-            pb.AssignmentProblemProgress(
-                problem_id=str(row["problem_id"]),
-                problem_note=str(row["problem_note"]),
-                current_step_number=int(row["current_step_number"]),
-                first_step_number=int(row["first_step_number"]),
-                last_step_number=int(row["last_step_number"]),
-            )
+    problems = [
+        pb.AssignmentProblemProgress(
+            problem_id=str(row["problem_id"]),
+            problem_note=str(row["problem_note"]),
+            current_step_number=int(row["current_step_number"]),
+            first_step_number=int(row["first_step_number"]),
+            last_step_number=int(row["last_step_number"]),
         )
+        for row in problem_rows
+    ]
     return pb.GetAssignmentResponse(
         assignment=pb.AssignmentKey(
             user_id=str(assignment_row["assignment_user_id"]),
@@ -322,11 +299,13 @@ def get_assignment_summary_pb(
 
 
 def _workspace_reset_to_step_start(file_state: pb.WorkspaceFileState.ValueType) -> bool:
-    if file_state == pb.WORKSPACE_FILE_STATE_CURRENT:
-        return False
-    if file_state == pb.WORKSPACE_FILE_STATE_STEP_START:
-        return True
-    raise ValueError("workspace file state is invalid")
+    match file_state:
+        case pb.WORKSPACE_FILE_STATE_CURRENT:
+            return False
+        case pb.WORKSPACE_FILE_STATE_STEP_START:
+            return True
+        case _:
+            raise ValueError("workspace file state is invalid")
 
 
 def _load_workspace_step_row(
@@ -374,8 +353,8 @@ def _student_owned_files_for_workspace(
         "WHERE user_id = ? AND course_id = ? AND problem_set_id = ? AND problem_id = ? AND step_number = ?",
         (assignment.user_id, assignment.course_id, assignment.problem_set_id, problem_id, step_number),
     ).fetchone()
-    if commit_row is None:
-        return _starter_student_files(
+    return (
+        _starter_student_files(
             conn,
             assignment.user_id,
             assignment.course_id,
@@ -384,13 +363,15 @@ def _student_owned_files_for_workspace(
             step_number,
             starter_files,
         )
-    return load_commit_files(
+        if commit_row is None
+        else load_commit_files(
         conn,
         str(commit_row["user_id"]),
         str(commit_row["course_id"]),
         str(commit_row["problem_set_id"]),
         str(commit_row["problem_id"]),
         int(commit_row["step_number"]),
+    )
     )
 
 
@@ -491,38 +472,35 @@ def search_problem_catalog_pb(
     current_user: sqlite3.Row,
     search_terms: list[str],
 ) -> pb.SearchProblemCatalogResponse:
-    where = ""
+    conditions: list[str] = []
     args: list[Any] = []
     for term in search_terms:
-        where, args = add_where_like(where, args, "LOWER(problem_set_search_fields.search_text)", term)
+        conditions.append("LOWER(problem_set_search_fields.search_text) LIKE ?")
+        args.append(f"%{term.lower()}%")
 
     if bool(current_user["author"]):
         set_rows = _q(
             conn,
             "SELECT problem_sets.* FROM problem_sets "
             "JOIN problem_set_search_fields ON problem_set_search_fields.problem_set_id = problem_sets.problem_set_id"
-            + where
+            + _where_clause(conditions)
             + " ORDER BY problem_sets.problem_set_id",
             tuple(args),
         )
     else:
-        if where == "":
-            where = " WHERE"
-        else:
-            where += " AND"
-        where += " accessible_problem_sets.viewer_user_id = ?"
+        conditions = [*conditions, "accessible_problem_sets.viewer_user_id = ?"]
         args.append(str(current_user["user_id"]))
         set_rows = _q(
             conn,
             "SELECT problem_sets.* FROM problem_sets "
             "JOIN accessible_problem_sets ON accessible_problem_sets.problem_set_id = problem_sets.problem_set_id"
             " JOIN problem_set_search_fields ON problem_set_search_fields.problem_set_id = problem_sets.problem_set_id"
-            + where
+            + _where_clause(conditions)
             + " ORDER BY problem_sets.problem_set_id",
             tuple(args),
         )
 
-    if len(set_rows) == 0:
+    if not set_rows:
         return pb.SearchProblemCatalogResponse(problem_sets=[])
 
     set_items: list[pb.ProblemCatalogSet] = []
@@ -578,9 +556,8 @@ def search_problem_catalog_pb(
 
 
 def problem_type_pb(problem_type: str, container: str, files: dict[str, bytes], action_rows: list[sqlite3.Row]) -> pb.ProblemType:
-    actions: dict[str, pb.ProblemTypeAction] = {}
-    for row in action_rows:
-        actions[str(row["action"])] = pb.ProblemTypeAction(
+    actions = {
+        str(row["action"]): pb.ProblemTypeAction(
             command=str(row["command"]),
             parser=str(row["parser"] or ""),
             max_cpu=int(row["max_cpu"]),
@@ -589,4 +566,6 @@ def problem_type_pb(problem_type: str, container: str, files: dict[str, bytes], 
             max_memory=int(row["max_memory"]),
             max_threads=int(row["max_threads"]),
         )
+        for row in action_rows
+    }
     return pb.ProblemType(problem_type=problem_type, container=container, files=files, actions=actions)
