@@ -5,13 +5,12 @@ from pathlib import Path
 
 import codegrinder_pb2 as pb
 
-from command_support import load_command_config, usage_error
+from command_support import managed_client, usage_error
 from daycare_client import handle_daycare_stream
 from daycare_flow import commit_passed, parse_signed_runtime_bundle
 from errors import fail
-from helpers import managed_session, program_name, save_dotfile
+from helpers import program_name, save_dotfile
 from protocol import dump_transcript
-from rpc_client import CodeGrinderClient
 from student_workspace import (
     assignment_key_from_dotfile,
     build_grading_commit,
@@ -27,11 +26,9 @@ def command_sync(args: argparse.Namespace) -> None:
     if args.extra:
         usage_error(args.parser)
 
-    config = load_command_config(args)
-    with managed_session(config) as session:
-        client = CodeGrinderClient(config, session)
-        student = gather_student_context(client, Path("."))
-        response = save_current_student_files(client, student, "grind sync")
+    with managed_client(args) as env:
+        student = gather_student_context(env.client, Path("."))
+        response = save_current_student_files(env.client, student, "grind sync")
         if response.save_status == pb.COMMIT_SAVE_STATUS_NOT_SAVED_LOCKED:
             print("work was not saved because the assignment is locked")
         clean_workspace_tree(student.problem_dir, workspace_official_paths(student.workspace))
@@ -42,26 +39,22 @@ def command_grade(args: argparse.Namespace) -> None:
     if args.extra:
         usage_error(args.parser)
 
-    config = load_command_config(args)
-
-    with managed_session(config) as session:
-        client = CodeGrinderClient(config, session)
-        student = gather_student_context(client, Path("."))
+    with managed_client(args) as env:
+        student = gather_student_context(env.client, Path("."))
         workspace = student.workspace
         commit = student.commit
-        info = student.problem_info
-        unsigned = build_grading_commit(session.user.user_id, student, "grade", "grind grade")
+        unsigned = build_grading_commit(env.session.user.user_id, student, "grade", "grind grade")
 
-        signed_resp = client.save_ungraded_commit(unsigned)
+        signed_resp = env.client.save_ungraded_commit(unsigned)
         signed = signed_resp.bundle
         parse_signed_runtime_bundle(signed, "server was unable to find a suitable daycare, unable to grade")
 
         print(f"submitting {workspace.problem_id} step {commit.step} for grading")
-        graded = handle_daycare_stream(client, signed, [], Path(""), False)
+        graded = handle_daycare_stream(env.client, signed, [], Path(""), False)
         if graded is None:
             fail("the server ended the connection without sending a report card")
 
-        saved_resp = client.save_graded_commit(graded)
+        saved_resp = env.client.save_graded_commit(graded)
         graded_bundle = pb.RuntimeBundle()
         graded_bundle.ParseFromString(graded.bundle)
         saved_commit = graded_bundle.commit
@@ -77,7 +70,7 @@ def command_grade(args: argparse.Namespace) -> None:
                 next_step_number = int(workspace.step_number) + 1
                 print(f"moving to step {next_step_number}")
                 next_workspace = get_workspace(
-                    client,
+                    env.client,
                     commit.assignment,
                     workspace.problem_id,
                     next_step_number,
@@ -88,7 +81,7 @@ def command_grade(args: argparse.Namespace) -> None:
                 files = workspace_file_map(next_workspace.system_owned_files)
                 files.update(workspace_file_map(next_workspace.student_owned_files))
                 update_files(Path("."), files, student.current_paths, False)
-                info.step = next_step_number
+                student.problem_info.step = next_step_number
                 save_dotfile(student.dotfile)
         else:
             print(f"  solution for step {saved_commit.step} failed")
@@ -113,11 +106,8 @@ def command_action(args: argparse.Namespace) -> None:
             f"  to submit your code for grading, use '{program_name()} grade'"
         )
 
-    config = load_command_config(args)
-
-    with managed_session(config) as session:
-        client = CodeGrinderClient(config, session)
-        student = gather_student_context(client, Path("."))
+    with managed_client(args) as env:
+        student = gather_student_context(env.client, Path("."))
         workspace = student.workspace
         commit = student.commit
 
@@ -129,25 +119,22 @@ def command_action(args: argparse.Namespace) -> None:
                 print(f"   {name}")
             fail(f"use '{program_name()} action [action]' to initiate an action")
 
-        unsigned = build_grading_commit(session.user.user_id, student, action, "grind action " + action)
-        signed_resp = client.save_ungraded_commit(unsigned)
+        unsigned = build_grading_commit(env.session.user.user_id, student, action, f"grind action {action}")
+        signed_resp = env.client.save_ungraded_commit(unsigned)
         if signed_resp.save_status == pb.COMMIT_SAVE_STATUS_NOT_SAVED_LOCKED:
             print("warning: assignment is locked; action results will not be saved")
         signed = signed_resp.bundle
         parse_signed_runtime_bundle(signed, "server was unable to find a suitable daycare, unable to run action")
 
         print(f"starting interactive session for {workspace.problem_id} step {commit.step}")
-        handle_daycare_stream(client, signed, [], Path("."), True)
+        handle_daycare_stream(env.client, signed, [], Path("."), True)
 
 
 def command_reset(args: argparse.Namespace) -> None:
-    config = load_command_config(args)
-
-    with managed_session(config) as session:
-        client = CodeGrinderClient(config, session)
+    with managed_client(args) as env:
         dotfile, problem_dir, problem_id, info = resolve_student_problem(Path("."))
         reset_workspace = get_workspace(
-            client,
+            env.client,
             assignment_key_from_dotfile(dotfile),
             problem_id,
             info.step,
@@ -156,38 +143,33 @@ def command_reset(args: argparse.Namespace) -> None:
             False,
         )
 
-        listed: set[str] = set()
-        for requested in args.reset_args:
-            found = False
+        expected_student = workspace_file_map(reset_workspace.student_owned_files)
+        student_paths = list(expected_student)
+        exact_matches = {path: {path} for path in student_paths}
+        basename_matches: dict[str, set[str]] = {}
+        for path in student_paths:
+            basename_matches.setdefault(Path(path).name, set()).add(path)
+
+        def matches_for(requested: str) -> set[str]:
             clean = str(Path(requested))
-            for entry in reset_workspace.student_owned_files:
-                entry_path = str(Path(entry.path))
-                if clean == entry_path or (Path(clean).name == clean and Path(clean).name == Path(entry_path).name):
-                    listed.add(entry_path)
-                    found = True
-            if not found:
+            if Path(clean).name == clean:
+                return basename_matches.get(clean, exact_matches.get(clean, set()))
+            return exact_matches.get(clean, set())
+
+        requested_paths = {path for requested in args.reset_args for path in matches_for(requested)}
+        for requested in args.reset_args:
+            if not matches_for(requested):
                 fail(f"no file matching {requested!r} in the list of student files for this step")
 
-        files = workspace_file_map(reset_workspace.system_owned_files)
-        expected_student = workspace_file_map(reset_workspace.student_owned_files)
-        files.update(expected_student)
-
-        found_mod = False
-        for entry in reset_workspace.student_owned_files:
-            path_name = str(Path(entry.path))
-            expected = expected_student.get(path_name)
-            if expected is None:
-                fail(f"cannot find file {path_name!r} in the step but it is on the whitelist")
-            on_disk = problem_dir / Path(path_name)
-            if not on_disk.exists():
-                found_mod = True
-                continue
-            if on_disk.read_bytes() != expected:
-                found_mod = True
-                if path_name not in listed:
-                    print(f"file {path_name} has been modified")
-                    del files[path_name]
-
+        files = workspace_file_map(reset_workspace.system_owned_files) | expected_student
+        modified_paths = {
+            path
+            for path, expected in expected_student.items()
+            if not (problem_dir / Path(path)).exists() or (problem_dir / Path(path)).read_bytes() != expected
+        }
+        for path in sorted(modified_paths - requested_paths):
+            print(f"file {path} has been modified")
+            del files[path]
         update_files(problem_dir, files, None, True)
-        if not found_mod:
+        if not modified_paths:
             print("no student files have been modified since the beginning of this step")

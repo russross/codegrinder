@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import argparse
 import os
-import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import codegrinder_pb2 as pb
@@ -12,10 +12,10 @@ from assignment_download import download_assignment_to_root
 from author_config import PROBLEM_CONFIG_NAME
 from author_validation import validate_author_solution_bundle
 from authoring import gather_author, resolve_author_problem_layout, save_problem_set
-from command_support import load_command_config, usage_error
+from command_support import managed_client, usage_error
 from daycare_client import handle_daycare_stream
 from errors import fail
-from helpers import clean_error, managed_session, program_name
+from helpers import clean_error, program_name
 from presentation import print_problem_catalog, sorted_student_assignment_items
 from rpc_client import CodeGrinderClient
 from student_workspace import assignment_key_from_dotfile, get_workspace, resolve_student_problem
@@ -27,35 +27,29 @@ def command_problem(args: argparse.Namespace) -> None:
         fail(
             "you must specify search terms to find the problem set\n"
             "  terms will match against the problem set name, note,\n"
-            "  and tags, or agains the same attributes of a problem\n"
-            "  in the problem set. All searchs are case-insensitive.\n"
+            "  and tags, or against the same attributes of a problem\n"
+            "  in the problem set. All searches are case-insensitive.\n"
             f"  e.g.: '{program_name()} problem cs2810 formula'"
         )
 
-    config = load_command_config(args)
-
-    with managed_session(config) as session:
-        client = CodeGrinderClient(config, session)
-        catalog_resp = client.search_problem_catalog(args.problem_args)
+    with managed_client(args) as env:
+        catalog_resp = env.client.search_problem_catalog(args.problem_args)
         problem_sets = sorted(catalog_resp.problem_sets, key=lambda ps: ps.problem_set_id.lower())
         if not problem_sets:
             fail("no problem sets found matching the terms you gave")
-        print_problem_catalog(problem_sets, client.config.host)
+        print_problem_catalog(problem_sets, env.client.config.host)
 
 
 def command_solve(args: argparse.Namespace) -> None:
     if args.extra:
         usage_error(args.parser)
 
-    config = load_command_config(args)
-
-    with managed_session(config) as session:
-        client = CodeGrinderClient(config, session)
-        if not session.user.author:
+    with managed_client(args) as env:
+        if not env.session.user.author:
             fail("you must be an author to use this command")
         dotfile, problem_dir, problem_id, info = resolve_student_problem(Path("."))
         workspace = get_workspace(
-            client,
+            env.client,
             assignment_key_from_dotfile(dotfile),
             problem_id,
             info.step,
@@ -69,15 +63,12 @@ def command_solve(args: argparse.Namespace) -> None:
 
 
 def command_type(args: argparse.Namespace) -> None:
-    config = load_command_config(args)
-
-    with managed_session(config) as session:
-        client = CodeGrinderClient(config, session)
+    with managed_client(args) as env:
         if args.list:
             if args.type_args or args.remove:
                 print("warning: for a list request, other options will be ignored")
             print("Problem types:")
-            response = client.get_problem_types()
+            response = env.client.get_problem_types()
             if not response.problem_types:
                 fail("no problem types found")
             width = max(len(pt.problem_type) for pt in response.problem_types)
@@ -105,7 +96,7 @@ def command_type(args: argparse.Namespace) -> None:
         else:
             usage_error(args.parser)
 
-        response = client.get_problem_type(problem_type_name)
+        response = env.client.get_problem_type(problem_type_name)
         problem_type = response.problem_type
 
         if args.remove:
@@ -127,11 +118,8 @@ def command_student(args: argparse.Namespace) -> None:
             f"   e.g.: '{program_name()} student alice loops'"
         )
 
-    config = load_command_config(args)
-
-    with managed_session(config) as session:
-        client = CodeGrinderClient(config, session)
-        response = client.list_assignments(search=args.student_args, include_student_context=True)
+    with managed_client(args) as env:
+        response = env.client.list_assignments(search=args.student_args, include_student_context=True)
         items = sorted_student_assignment_items(response.items)
         if not items:
             fail("no assignments found matching the terms you gave")
@@ -155,14 +143,12 @@ def command_student(args: argparse.Namespace) -> None:
 
         if len(user_ids) == 1:
             most_recent = items[-1]
-            download_student_assignment(client, most_recent)
+            download_student_assignment(env.client, most_recent)
         else:
             fail(
                 "the search found assignments for more than one user\n"
-                f"   either pick the correct assignment number from the list\n"
-                f"   and run '{program_name()} student [number]'\n"
-                "   or repeat the search with additional terms\n"
-                "   to narrow the results"
+                "   repeat the search with additional terms\n"
+                "   to narrow the results to a single student"
             )
 
 
@@ -170,23 +156,19 @@ def download_student_assignment(client: CodeGrinderClient, item: pb.AssignmentLi
     assignment = item.assignment
     print(f"[{item.user_name}] assignment {assignment.course_id}/{assignment.problem_set_id}")
 
-    root_dir = Path("/tmp") / f"grind-tmp.{os.getpid()}"
-    root_dir.mkdir(mode=0o700, exist_ok=False)
-    try:
+    with tempfile.TemporaryDirectory(prefix="grind-tmp.", dir="/tmp") as root_name:
+        root_dir = Path(root_name)
         change_to = download_assignment_to_root(client, assignment, root_dir, str(root_dir))
         shell = os.environ.get("SHELL", "/bin/bash")
         print("exit shell when finished")
-        subprocess.run([shell], cwd=change_to, check=True)
-    except subprocess.CalledProcessError as exc:
-        fail(f"error waiting for shell to terminate: {clean_error(exc)}")
-    finally:
         print(f"deleting {root_dir}")
-        shutil.rmtree(root_dir, ignore_errors=True)
+        try:
+            subprocess.run([shell], cwd=change_to, check=True)
+        except subprocess.CalledProcessError as exc:
+            fail(f"error waiting for shell to terminate: {clean_error(exc)}")
 
 
 def command_create(args: argparse.Namespace) -> None:
-    config = load_command_config(args)
-
     pset = args.create_args[0] if len(args.create_args) == 1 else ""
     if len(args.create_args) > 1:
         usage_error(args.parser)
@@ -194,12 +176,11 @@ def command_create(args: argparse.Namespace) -> None:
     action = args.action
     is_update = bool(args.update)
 
-    with managed_session(config) as session:
-        client = CodeGrinderClient(config, session)
+    with managed_client(args) as env:
         if pset:
             if action:
                 fail("you cannot specify an action when creating a problem set")
-            save_problem_set(client, Path(pset), is_update)
+            save_problem_set(env.client, Path(pset), is_update)
             return
 
         if is_update and action:
@@ -207,7 +188,7 @@ def command_create(args: argparse.Namespace) -> None:
 
         draft, step_dir, step_num = gather_author(action, Path("."))
 
-        signed_resp = client.prepare_problem(draft, action)
+        signed_resp = env.client.prepare_problem(draft, action)
         signed = signed_resp.bundle
 
         if not signed.hostname:
@@ -218,15 +199,15 @@ def command_create(args: argparse.Namespace) -> None:
                 fail("to use --action, you must run from within a step directory")
             print(f"running interactive session for action {action!r} on step {step_num}")
 
-            handle_daycare_stream(client, signed.signed_validation_bundles[step_num - 1], [], step_dir, True)
+            handle_daycare_stream(env.client, signed.signed_validation_bundles[step_num - 1], [], step_dir, True)
             return
 
         validate_author_solution_bundle(
             signed,
-            lambda bundle: handle_daycare_stream(client, bundle, [], Path(""), False),
+            lambda bundle: handle_daycare_stream(env.client, bundle, [], Path(""), False),
         )
 
-        final_resp = client.save_problem(pb.SAVE_MODE_UPDATE if is_update else pb.SAVE_MODE_CREATE, signed)
+        final_resp = env.client.save_problem(pb.SAVE_MODE_UPDATE if is_update else pb.SAVE_MODE_CREATE, signed)
         final = final_resp.bundle
         if is_update:
             print(f"problem {final.problem.problem_id!r} saved and ready to use")

@@ -9,7 +9,6 @@ import codegrinder_pb2 as pb
 from errors import fail
 from helpers import find_dotfile, grpc_time_now
 from models import DotFileInfo, ProblemInfo
-from rpc_client import CodeGrinderClient
 from workspace_files import clean_relative_path, update_files, workspace_file_map, workspace_official_paths
 
 
@@ -27,14 +26,6 @@ class WorkspaceClient(Protocol):
 
 class WorkspaceSaveClient(Protocol):
     def save_workspace_commit(self, commit: pb.Commit) -> pb.SaveWorkspaceCommitResponse: ...
-
-
-@dataclass(slots=True)
-class StudentWorkspace:
-    workspace: pb.GetWorkspaceResponse
-    commit: pb.Commit
-    dotfile: DotFileInfo
-    problem_dir: Path
 
 
 @dataclass(slots=True)
@@ -118,10 +109,7 @@ def save_current_student_files(
     student: StudentCommandContext,
     note: str,
 ) -> pb.SaveWorkspaceCommitResponse:
-    commit = student.commit
-    commit.action = ""
-    commit.note = note
-    return client.save_workspace_commit(commit)
+    return client.save_workspace_commit(commit_with_metadata(student.commit, action="", note=note))
 
 
 def get_workspace(
@@ -175,14 +163,12 @@ def gather_student_context(client: WorkspaceClient, start_dir: Path) -> StudentC
     )
 
 
-def gather_student(client: CodeGrinderClient, start_dir: Path) -> StudentWorkspace:
-    context = gather_student_context(client, start_dir)
-    return StudentWorkspace(
-        workspace=context.workspace,
-        commit=context.commit,
-        dotfile=context.dotfile,
-        problem_dir=context.problem_dir,
-    )
+def commit_with_metadata(commit: pb.Commit, *, action: str, note: str) -> pb.Commit:
+    updated = pb.Commit()
+    updated.CopyFrom(commit)
+    updated.action = action
+    updated.note = note
+    return updated
 
 
 def build_grading_commit(
@@ -191,6 +177,4 @@ def build_grading_commit(
     action: str,
     note: str,
 ) -> pb.GradingCommit:
-    student.commit.action = action
-    student.commit.note = note
-    return pb.GradingCommit(user_id=user_id, commit=student.commit)
+    return pb.GradingCommit(user_id=user_id, commit=commit_with_metadata(student.commit, action=action, note=note))

@@ -5,7 +5,7 @@ from pathlib import Path
 import codegrinder_pb2 as pb
 from helpers import save_dotfile
 from models import AssignmentRef, DotFileInfo, ProblemInfo
-from student_workspace import build_grading_commit, gather_student_context
+from student_workspace import build_grading_commit, gather_student_context, save_current_student_files
 
 
 class _StudentClient:
@@ -82,3 +82,42 @@ def test_build_grading_commit_sets_action_note_and_user_without_rebuilding_files
     assert grading.commit.action == "grade"
     assert grading.commit.note == "grind grade"
     assert dict(grading.commit.files) == {"main.py": b"student\n"}
+    assert context.commit.action == ""
+    assert context.commit.note == ""
+
+
+class _SaveClient:
+    def __init__(self) -> None:
+        self.commit: pb.Commit | None = None
+
+    def save_workspace_commit(self, commit: pb.Commit) -> pb.SaveWorkspaceCommitResponse:
+        self.commit = commit
+        return pb.SaveWorkspaceCommitResponse()
+
+
+def test_save_current_student_files_sets_note_without_mutating_context_commit(tmp_path: Path) -> None:
+    save_dotfile(
+        DotFileInfo(
+            assignment_ref=AssignmentRef(user_id="u1", course_id="c1", problem_set_id="ps1"),
+            problems={"problem-a": ProblemInfo(problem_id="problem-a", step=1)},
+            path=str(tmp_path / ".grind"),
+        )
+    )
+    (tmp_path / "main.py").write_text("student\n", encoding="utf-8")
+    workspace = pb.GetWorkspaceResponse(
+        assignment=pb.AssignmentKey(user_id="u1", course_id="c1", problem_set_id="ps1"),
+        problem_id="problem-a",
+        step_number=1,
+        last_step_number=1,
+        student_owned_files=[pb.AssignmentStepFile(path="main.py", content=b"starter\n")],
+    )
+    context = gather_student_context(_StudentClient(workspace), tmp_path)
+    client = _SaveClient()
+
+    save_current_student_files(client, context, "grind sync")
+
+    assert client.commit is not None
+    assert client.commit.action == ""
+    assert client.commit.note == "grind sync"
+    assert context.commit.action == ""
+    assert context.commit.note == ""
