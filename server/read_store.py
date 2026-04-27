@@ -353,8 +353,8 @@ def _student_owned_files_for_workspace(
         "WHERE user_id = ? AND course_id = ? AND problem_set_id = ? AND problem_id = ? AND step_number = ?",
         (assignment.user_id, assignment.course_id, assignment.problem_set_id, problem_id, step_number),
     ).fetchone()
-    return (
-        _starter_student_files(
+    if commit_row is None:
+        return _starter_student_files(
             conn,
             assignment.user_id,
             assignment.course_id,
@@ -363,15 +363,13 @@ def _student_owned_files_for_workspace(
             step_number,
             starter_files,
         )
-        if commit_row is None
-        else load_commit_files(
+    return load_commit_files(
         conn,
         str(commit_row["user_id"]),
         str(commit_row["course_id"]),
         str(commit_row["problem_set_id"]),
         str(commit_row["problem_id"]),
         int(commit_row["step_number"]),
-    )
     )
 
 
@@ -419,11 +417,13 @@ def get_workspace_pb(
         student_owned_files = {path: b"" for path in student_owned_files}
 
     action_rows = get_problem_type_actions_rows(conn, str(step_row["problem_type"]))
-    solution_files: dict[str, bytes] = {}
-    if include_solution_files:
-        if not bool(current_user["author"]):
-            raise PermissionError("solution files require author access")
-        solution_files = load_problem_step_files(conn, problem_id, int(resolved_step_number), ProblemStepFileType.SOLUTION)
+    if include_solution_files and not bool(current_user["author"]):
+        raise PermissionError("solution files require author access")
+    solution_files = (
+        load_problem_step_files(conn, problem_id, int(resolved_step_number), ProblemStepFileType.SOLUTION)
+        if include_solution_files
+        else {}
+    )
 
     if not include_contents:
         solution_files = {path: b"" for path in solution_files}

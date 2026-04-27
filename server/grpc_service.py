@@ -71,6 +71,12 @@ def _context_has_grpc_status(context: grpc.ServicerContext) -> bool:
     return code is not None and code != grpc.StatusCode.OK
 
 
+def _is_rpc_abort(exc: Exception) -> bool:
+    if isinstance(exc, grpc.RpcError):
+        return True
+    return isinstance(getattr(exc, "code", None), grpc.StatusCode)
+
+
 @dataclass(slots=True)
 class VersionInfo:
     version: str = "2.8.0"
@@ -274,7 +280,13 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                 self._require_author(current_user, context)
             return fn(RpcState(tx=tx, current_user=current_user, ip_allowed=ip_allowed))
 
-        return self._with_tx(label, run)
+        try:
+            return self._with_tx(label, run)
+        except Exception as exc:
+            if _is_rpc_abort(exc) or _context_has_grpc_status(context):
+                raise
+            logging.exception("panic in gRPC handler %s", label)
+            self._abort(context, grpc.StatusCode.INTERNAL, "internal server error")
 
     def _abort(self, context: grpc.ServicerContext, code: grpc.StatusCode, details: str) -> NoReturn:
         context.abort(code, details)
@@ -610,8 +622,8 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                 )
             except ValueError as exc:
                 self._abort(context, grpc.StatusCode.INVALID_ARGUMENT, f"invalid problem draft: {exc}")
-            except Exception as exc:
-                self._abort(context, grpc.StatusCode.INTERNAL, f"db error preparing problem: {exc}")
+            except sqlite3.Error as exc:
+                self._abort_sqlite(context, exc, internal="db error preparing problem")
             return pb.PrepareProblemResponse(bundle=bundle)
 
         return self._run_rpc(context, label="PrepareProblem", require_author=True, fn=fn)
@@ -632,8 +644,8 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                 )
             except ValueError as exc:
                 self._abort(context, grpc.StatusCode.INVALID_ARGUMENT, f"invalid problem save: {exc}")
-            except Exception as exc:
-                self._abort(context, grpc.StatusCode.INTERNAL, f"db error saving problem: {exc}")
+            except sqlite3.Error as exc:
+                self._abort_sqlite(context, exc, internal="db error saving problem")
             return pb.SaveProblemResponse(bundle=bundle)
 
         return self._run_rpc(context, label="SaveProblem", require_author=True, fn=fn)
@@ -652,8 +664,8 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                 )
             except ValueError as exc:
                 self._abort(context, grpc.StatusCode.INVALID_ARGUMENT, f"invalid problem set save: {exc}")
-            except Exception as exc:
-                self._abort(context, grpc.StatusCode.INTERNAL, f"db error saving problem set: {exc}")
+            except sqlite3.Error as exc:
+                self._abort_sqlite(context, exc, internal="db error saving problem set")
             return pb.SaveProblemSetResponse(bundle=bundle)
 
         return self._run_rpc(context, label="SaveProblemSet", require_author=True, fn=fn)
@@ -693,8 +705,6 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                     internal="db error saving ungraded commit",
                     not_found="commit target not found",
                 )
-            except Exception as exc:
-                self._abort(context, grpc.StatusCode.INTERNAL, f"db error saving ungraded commit: {exc}")
             bundle = result.bundle
             self._log_commit_request(current_user, bundle, request_signed=False)
             return pb.SaveUngradedCommitResponse(
@@ -733,8 +743,6 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                     internal="db error saving workspace commit",
                     not_found="commit target not found",
                 )
-            except Exception as exc:
-                self._abort(context, grpc.StatusCode.INTERNAL, f"db error saving workspace commit: {exc}")
             note = ""
             if result.commit.note != "":
                 note = f" ({result.commit.note})"
@@ -774,8 +782,6 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                     internal="db error saving graded commit",
                     not_found="commit target not found",
                 )
-            except Exception as exc:
-                self._abort(context, grpc.StatusCode.INTERNAL, f"db error saving graded commit: {exc}")
             bundle = result.bundle
             self._log_commit_request(current_user, bundle, request_signed=True)
             passback_target = (

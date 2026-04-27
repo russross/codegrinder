@@ -70,13 +70,15 @@ def unpack_assignment(
     print(f"unpacking problem set in {pretty_full}")
 
     change_to = root_dir
-    infos: dict[str, ProblemInfo] = {}
     total_problems = len(info_resp.problems)
-    for problem_info in info_resp.problems:
-        infos[problem_info.problem_id] = ProblemInfo(
-            problem_id=problem_info.problem_id,
-            step=int(problem_info.current_step_number),
+    infos = {
+        problem.problem_id: ProblemInfo(
+            problem_id=problem.problem_id,
+            step=int(problem.current_step_number),
         )
+        for problem in info_resp.problems
+    }
+    for problem_info in info_resp.problems:
         target = root_dir if total_problems == 1 else root_dir / problem_info.problem_id
         if total_problems > 1:
             if problem_info.current_step_number > 1:
@@ -94,8 +96,7 @@ def unpack_assignment(
             True,
             False,
         )
-        files = workspace_file_map(workspace.system_owned_files)
-        files.update(workspace_file_map(workspace.student_owned_files))
+        files = workspace_file_map(workspace.system_owned_files) | workspace_file_map(workspace.student_owned_files)
         update_files(target, files, None, False)
 
     dotfile = DotFileInfo(
@@ -117,10 +118,13 @@ def download_assignment_summary(
     root_dir: Path,
     pretty_full: str,
 ) -> Path:
-    if info_resp.download_status != pb.ASSIGNMENT_DOWNLOAD_STATUS_AVAILABLE:
-        if info_resp.download_status == pb.ASSIGNMENT_DOWNLOAD_STATUS_PREREQ_NOT_READY:
+    match info_resp.download_status:
+        case pb.ASSIGNMENT_DOWNLOAD_STATUS_AVAILABLE:
+            pass
+        case pb.ASSIGNMENT_DOWNLOAD_STATUS_PREREQ_NOT_READY:
             fail(f"assignment {pretty_full} prerequisite is not ready")
-        fail(f"assignment {pretty_full} is not open yet")
+        case _:
+            fail(f"assignment {pretty_full} is not open yet")
     root_dir.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=f".{root_dir.name}.", dir=root_dir.parent))
     try:

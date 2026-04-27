@@ -109,7 +109,8 @@ def run(argv: Sequence[str] | None = None) -> int:
             print(exc.message, file=sys.stderr)
         return exc.exit_code
     except Exception as exc:
-        print(clean_error(exc), file=sys.stderr)
+        message = clean_error(exc) or exc.__class__.__name__
+        print(f"unexpected error: {message}", file=sys.stderr)
         return 1
 
 

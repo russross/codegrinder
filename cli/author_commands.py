@@ -77,24 +77,23 @@ def command_type(args: argparse.Namespace) -> None:
                 print(f"    {problem_type.problem_type:<{width}}  actions: {actions}")
             return
 
-        directory = Path(".")
-        problem_type_name = ""
-        if not args.type_args:
-            layout = resolve_author_problem_layout(Path("."))
-            if layout is None:
-                fail(f"you must supply the problem type or have a valid {PROBLEM_CONFIG_NAME} file already in place")
-            if not layout.config.single_step_layout and layout.active_step_number < 1:
-                fail("you must run this from within a step directory")
-            directory = layout.active_step_dir
-            problem_type_name = (
-                layout.config.steps[0].problem_type
-                if layout.config.single_step_layout
-                else layout.config.steps[layout.active_step_number - 1].problem_type
-            )
-        elif len(args.type_args) == 1:
-            problem_type_name = args.type_args[0]
-        else:
-            usage_error(args.parser)
+        match args.type_args:
+            case []:
+                layout = resolve_author_problem_layout(Path("."))
+                if layout is None:
+                    fail(f"you must supply the problem type or have a valid {PROBLEM_CONFIG_NAME} file already in place")
+                if not layout.config.single_step_layout and layout.active_step_number < 1:
+                    fail("you must run this from within a step directory")
+                directory = layout.active_step_dir
+                problem_type_name = (
+                    layout.config.steps[0].problem_type
+                    if layout.config.single_step_layout
+                    else layout.config.steps[layout.active_step_number - 1].problem_type
+                )
+            case [problem_type_name]:
+                directory = Path(".")
+            case _:
+                usage_error(args.parser)
 
         response = env.client.get_problem_type(problem_type_name)
         problem_type = response.problem_type
@@ -209,7 +208,5 @@ def command_create(args: argparse.Namespace) -> None:
 
         final_resp = env.client.save_problem(pb.SAVE_MODE_UPDATE if is_update else pb.SAVE_MODE_CREATE, signed)
         final = final_resp.bundle
-        if is_update:
-            print(f"problem {final.problem.problem_id!r} saved and ready to use")
-        else:
-            print(f"problem {final.problem.problem_id!r} created and ready to use")
+        verb = "saved" if is_update else "created"
+        print(f"problem {final.problem.problem_id!r} {verb} and ready to use")

@@ -254,25 +254,19 @@ def _match_ignore_rule(rule: _IgnoreRule, path: str) -> bool:
         for idx in range(1, len(parts) + 1):
             directory_candidates.append("/".join(parts[:idx]))
         candidate_paths.extend(directory_candidates)
-    for candidate in candidate_paths:
-        if candidate == "":
-            continue
-        if fnmatch.fnmatchcase(candidate, rule.pattern):
-            return True
-    return False
+    return any(
+        candidate != "" and fnmatch.fnmatchcase(candidate, rule.pattern)
+        for candidate in candidate_paths
+    )
 
 
 def _filter_ignored_entries(tree: dict[str, _UploadedEntry]) -> dict[str, _UploadedEntry]:
     rules = _parse_ignore_rules(tree)
-    out: dict[str, _UploadedEntry] = {}
-    for path, entry in tree.items():
-        ignored = False
-        for rule in rules:
-            if _match_ignore_rule(rule, path):
-                ignored = True
-        if not ignored:
-            out[path] = entry
-    return out
+    return {
+        path: entry
+        for path, entry in tree.items()
+        if not any(_match_ignore_rule(rule, path) for rule in rules)
+    }
 
 
 def _load_problem_type_from_store(
@@ -325,17 +319,25 @@ def _build_effective_author_tree(
     problem_type: pb.ProblemType,
     step_index: int,
 ) -> dict[str, _UploadedEntry]:
-    uploaded_tree: dict[str, _UploadedEntry] = {}
-    for path, content in _collect_author_files(list(step_draft.files), label=f"step {step_index} file").items():
-        uploaded_tree[path] = _UploadedEntry(content=content, source="uploaded")
-    for path, content in _collect_author_files(
-        list(step_draft.starter_files), label=f"step {step_index} starter file"
-    ).items():
-        uploaded_tree[f"_starter/{path}"] = _UploadedEntry(content=content, source="starter")
-    for path, content in dict(problem_type.files).items():
-        normalized = _normalize_rel_path(str(path), label=f"problem type {problem_type.problem_type} file")
-        uploaded_tree[normalized] = _UploadedEntry(content=bytes(content or b""), source="problem_type")
-    return _filter_ignored_entries(uploaded_tree)
+    uploaded_files = _collect_author_files(list(step_draft.files), label=f"step {step_index} file")
+    starter_files = _collect_author_files(list(step_draft.starter_files), label=f"step {step_index} starter file")
+    problem_type_files = {
+        _normalize_rel_path(str(path), label=f"problem type {problem_type.problem_type} file"): bytes(content or b"")
+        for path, content in dict(problem_type.files).items()
+    }
+    return _filter_ignored_entries(
+        {
+            **{path: _UploadedEntry(content=content, source="uploaded") for path, content in uploaded_files.items()},
+            **{
+                f"_starter/{path}": _UploadedEntry(content=content, source="starter")
+                for path, content in starter_files.items()
+            },
+            **{
+                path: _UploadedEntry(content=content, source="problem_type")
+                for path, content in problem_type_files.items()
+            },
+        }
+    )
 
 
 def _partition_author_step_files(
@@ -525,26 +527,27 @@ def save_problem(
         for idx in range(len(bundle.problem_steps))
     ]
     values = _problem_to_row(bundle.problem)
-    if mode == pb.SAVE_MODE_CREATE:
-        try:
-            tx.execute(
-                "INSERT INTO problems(problem_id, problem_note, problem_tags, problem_options, problem_created_at, problem_updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-                values,
+    match mode:
+        case pb.SAVE_MODE_CREATE:
+            try:
+                tx.execute(
+                    "INSERT INTO problems(problem_id, problem_note, problem_tags, problem_options, problem_created_at, problem_updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    values,
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError(f"problem {bundle.problem.problem_id!r} already exists") from exc
+        case pb.SAVE_MODE_UPDATE:
+            updated = tx.execute(
+                "UPDATE problems SET problem_note = ?, problem_tags = ?, problem_options = ?, problem_updated_at = ? "
+                "WHERE problem_id = ? RETURNING problem_created_at",
+                (values[1], values[2], values[3], values[5], values[0]),
             )
-        except sqlite3.IntegrityError as exc:
-            raise ValueError(f"problem {bundle.problem.problem_id!r} already exists") from exc
-    else:
-        if mode != pb.SAVE_MODE_UPDATE:
+            row = updated.fetchone()
+            if row is None:
+                raise ValueError(f"problem {bundle.problem.problem_id!r} does not exist")
+            _set_ts(bundle.problem.created_at, parse_time(row["problem_created_at"]))
+        case _:
             raise ValueError("save mode is required")
-        updated = tx.execute(
-            "UPDATE problems SET problem_note = ?, problem_tags = ?, problem_options = ?, problem_updated_at = ? "
-            "WHERE problem_id = ? RETURNING problem_created_at",
-            (values[1], values[2], values[3], values[5], values[0]),
-        )
-        row = updated.fetchone()
-        if row is None:
-            raise ValueError(f"problem {bundle.problem.problem_id!r} does not exist")
-        _set_ts(bundle.problem.created_at, parse_time(row["problem_created_at"]))
 
     for idx, step in enumerate(bundle.problem_steps, start=1):
         step.problem_id = bundle.problem.problem_id
@@ -601,24 +604,25 @@ def save_problem_set(
     now_sql = _rfc3339_round_sec(_timestamp_now())
     tags_json = json.dumps(list(pset.problem_set_tags))
     continues_problem_set_id = pset.continues_problem_set_id or None
-    if mode == pb.SAVE_MODE_CREATE:
-        try:
-            tx.execute(
-                "INSERT INTO problem_sets(problem_set_id, problem_set_note, problem_set_tags, continues_problem_set_id, problem_set_created_at, problem_set_updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (pset.problem_set_id, pset.problem_set_note, tags_json, continues_problem_set_id, now_sql, now_sql),
+    match mode:
+        case pb.SAVE_MODE_CREATE:
+            try:
+                tx.execute(
+                    "INSERT INTO problem_sets(problem_set_id, problem_set_note, problem_set_tags, continues_problem_set_id, problem_set_created_at, problem_set_updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (pset.problem_set_id, pset.problem_set_note, tags_json, continues_problem_set_id, now_sql, now_sql),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError(f"problem set {pset.problem_set_id!r} already exists") from exc
+        case pb.SAVE_MODE_UPDATE:
+            updated = tx.execute(
+                "UPDATE problem_sets SET problem_set_note = ?, problem_set_tags = ?, continues_problem_set_id = ?, problem_set_updated_at = ? WHERE problem_set_id = ?",
+                (pset.problem_set_note, tags_json, continues_problem_set_id, now_sql, pset.problem_set_id),
             )
-        except sqlite3.IntegrityError as exc:
-            raise ValueError(f"problem set {pset.problem_set_id!r} already exists") from exc
-    else:
-        if mode != pb.SAVE_MODE_UPDATE:
+            if updated.rowcount == 0:
+                raise ValueError(f"problem set {pset.problem_set_id!r} does not exist")
+        case _:
             raise ValueError("save mode is required")
-        updated = tx.execute(
-            "UPDATE problem_sets SET problem_set_note = ?, problem_set_tags = ?, continues_problem_set_id = ?, problem_set_updated_at = ? WHERE problem_set_id = ?",
-            (pset.problem_set_note, tags_json, continues_problem_set_id, now_sql, pset.problem_set_id),
-        )
-        if updated.rowcount == 0:
-            raise ValueError(f"problem set {pset.problem_set_id!r} does not exist")
 
     tx.execute("DELETE FROM problem_set_problems WHERE problem_set_id = ?", (pset.problem_set_id,))
     seen_problem_ids: set[str] = set()
@@ -1007,7 +1011,6 @@ def save_graded_runtime_bundle(
     return SaveGradingCommitResult(bundle=runtime, save_status=saved.save_status)
 
 
-
 def _grading_commit_from_problem_bundle(
     *,
     bundle: pb.ProblemBundle,
@@ -1020,10 +1023,7 @@ def _grading_commit_from_problem_bundle(
     action = problem_type.actions.get(runtime_action_name)
     if action is None:
         raise ValueError(f'action "{runtime_action_name}" not defined for problem type {problem_type.problem_type}')
-    runtime_files: dict[str, bytes] = {}
-    runtime_files.update({str(path): bytes(content or b"") for path, content in dict(problem_type.files).items()})
-    runtime_files.update({str(path): bytes(content or b"") for path, content in dict(step.files).items()})
-    runtime_files.update({str(path): bytes(content or b"") for path, content in dict(commit.files).items()})
+    runtime_files = _bytes_map(problem_type.files) | _bytes_map(step.files) | _bytes_map(commit.files)
     runtime_commit = pb.Commit()
     runtime_commit.CopyFrom(commit)
     runtime_commit.problem_id = bundle.problem.problem_id

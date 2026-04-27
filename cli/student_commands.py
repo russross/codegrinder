@@ -43,8 +43,8 @@ def command_grade(args: argparse.Namespace) -> None:
         student = gather_student_context(env.client, Path("."))
         workspace = student.workspace
         commit = student.commit
-        unsigned = build_grading_commit(env.session.user.user_id, student, "grade", "grind grade")
 
+        unsigned = build_grading_commit(env.session.user.user_id, student, "grade", "grind grade")
         signed_resp = env.client.save_ungraded_commit(unsigned)
         signed = signed_resp.bundle
         parse_signed_runtime_bundle(signed, "server was unable to find a suitable daycare, unable to grade")
@@ -78,8 +78,9 @@ def command_grade(args: argparse.Namespace) -> None:
                     True,
                     False,
                 )
-                files = workspace_file_map(next_workspace.system_owned_files)
-                files.update(workspace_file_map(next_workspace.student_owned_files))
+                files = workspace_file_map(next_workspace.system_owned_files) | workspace_file_map(
+                    next_workspace.student_owned_files
+                )
                 update_files(Path("."), files, student.current_paths, False)
                 student.problem_info.step = next_step_number
                 save_dotfile(student.dotfile)
@@ -110,12 +111,11 @@ def command_action(args: argparse.Namespace) -> None:
         student = gather_student_context(env.client, Path("."))
         workspace = student.workspace
         commit = student.commit
+        non_grade_actions = sorted(action for action in workspace.actions if action != "grade")
 
         if action not in workspace.actions:
             print("available actions for this step:")
-            for name in sorted(workspace.actions):
-                if name == "grade":
-                    continue
+            for name in non_grade_actions:
                 print(f"   {name}")
             fail(f"use '{program_name()} action [action]' to initiate an action")
 

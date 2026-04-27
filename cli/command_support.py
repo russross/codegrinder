@@ -11,7 +11,7 @@ from models import Config
 from rpc_client import CodeGrinderClient
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class CommandClient:
     config: Config
     session: Session

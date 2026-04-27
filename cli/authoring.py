@@ -11,7 +11,7 @@ from helpers import plural
 from rpc_client import CodeGrinderClient
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class AuthorProblemLayout:
     root_dir: Path
     active_step_dir: Path
@@ -75,13 +75,12 @@ def gather_author(
             text = content.decode("utf-8")
         except UnicodeDecodeError:
             return
-        issues: list[str] = []
-        if "\r" in text:
-            issues.append("non-Unix line endings")
-        if text != "" and not text.endswith("\n"):
-            issues.append("missing final newline")
-        if any(line.endswith(" ") for line in text.splitlines()):
-            issues.append("trailing spaces")
+        checks = [
+            ("\r" in text, "non-Unix line endings"),
+            (text != "" and not text.endswith("\n"), "missing final newline"),
+            (any(line.endswith(" ") for line in text.splitlines()), "trailing spaces"),
+        ]
+        issues = [label for found, label in checks if found]
         if issues:
             print(f"warning: {path_label} has {', '.join(issues)}")
 
@@ -90,10 +89,8 @@ def gather_author(
             fail(f"missing step directory {step_directory}")
         authored_files: list[pb.AuthorFile] = []
         starter_files: list[pb.AuthorFile] = []
-        for path in sorted(step_directory.rglob("*")):
+        for path in sorted(path for path in step_directory.rglob("*") if path.is_file()):
             rel = path.relative_to(step_directory)
-            if path.is_dir():
-                continue
             rel_posix = rel.as_posix()
             if config.single_step_layout and rel_posix == PROBLEM_CONFIG_NAME:
                 continue
@@ -174,7 +171,5 @@ def save_problem_set(client: CodeGrinderClient, path: Path, is_update: bool) -> 
 
     mode = pb.SAVE_MODE_UPDATE if is_update else pb.SAVE_MODE_CREATE
     final = client.save_problem_set(mode, bundle)
-    if is_update:
-        print(f"problem set {final.bundle.problem_set.problem_set_id!r} saved and ready to use")
-    else:
-        print(f"problem set {final.bundle.problem_set.problem_set_id!r} created and ready to use")
+    verb = "saved" if is_update else "created"
+    print(f"problem set {final.bundle.problem_set.problem_set_id!r} {verb} and ready to use")
