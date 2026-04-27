@@ -40,7 +40,10 @@ def _assignment_download_status(value: Any) -> pb.AssignmentDownloadStatus:
 def load_user_by_id(conn: sqlite3.Connection, user_id: str) -> sqlite3.Row:
     return _q1(
         conn,
-        "SELECT users.*, EXISTS(SELECT 1 FROM authors WHERE authors.user_id = users.user_id) AS author FROM users WHERE users.user_id = ?",
+        "SELECT users.*, "
+        "EXISTS(SELECT 1 FROM authors WHERE authors.user_id = users.user_id) AS author, "
+        "EXISTS(SELECT 1 FROM user_courses WHERE user_courses.user_id = users.user_id AND user_courses.is_instructor) AS instructor "
+        "FROM users WHERE users.user_id = ?",
         (user_id,),
     )
 
@@ -373,8 +376,8 @@ def _student_owned_files_for_workspace(
     )
 
 
-def _assignment_step_files(files: dict[str, bytes]) -> list[pb.AssignmentStepFile]:
-    return [pb.AssignmentStepFile(path=path, content=content) for path, content in sorted(_normalize_file_map(files).items())]
+def _workspace_files_map(files: dict[str, bytes]) -> dict[str, bytes]:
+    return dict(sorted(_normalize_file_map(files).items()))
 
 
 def get_workspace_pb(
@@ -417,8 +420,10 @@ def get_workspace_pb(
         student_owned_files = {path: b"" for path in student_owned_files}
 
     action_rows = get_problem_type_actions_rows(conn, str(step_row["problem_type"]))
-    if include_solution_files and not bool(current_user["author"]):
-        raise PermissionError("solution files require author access")
+    if include_solution_files and not (
+        bool(current_user["author"]) or bool(assignment_access["is_course_instructor"])
+    ):
+        raise PermissionError("solution files require author or instructor access")
     solution_files = (
         load_problem_step_files(conn, problem_id, int(resolved_step_number), ProblemStepFileType.SOLUTION)
         if include_solution_files
@@ -437,9 +442,9 @@ def get_workspace_pb(
         step_note=str(step_row["step_note"]),
         step_weight=float(step_row["step_weight"]),
         actions=sorted(str(row["action"]) for row in action_rows),
-        system_owned_files=_assignment_step_files(system_owned_files),
-        student_owned_files=_assignment_step_files(student_owned_files),
-        solution_files=_assignment_step_files(solution_files),
+        system_owned_files=_workspace_files_map(system_owned_files),
+        student_owned_files=_workspace_files_map(student_owned_files),
+        solution_files=_workspace_files_map(solution_files),
         first_step_number=int(step_row["first_step_number"]),
         last_step_number=int(step_row["last_step_number"]),
     )

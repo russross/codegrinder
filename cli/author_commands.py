@@ -45,8 +45,8 @@ def command_solve(args: argparse.Namespace) -> None:
         usage_error(args.parser)
 
     with managed_client(args) as env:
-        if not env.session.user.author:
-            fail("you must be an author to use this command")
+        if not env.session.user.is_author and not env.session.user.is_instructor:
+            fail("you must be an author or instructor to use this command")
         dotfile, problem_dir, problem_id, info = resolve_student_problem(Path("."))
         workspace = get_workspace(
             env.client,

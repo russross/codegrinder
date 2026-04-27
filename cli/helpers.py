@@ -20,7 +20,7 @@ from packaging.version import Version
 import codegrinder_pb2 as pb
 import codegrinder_pb2_grpc as pb_grpc
 from errors import CliError, fail
-from models import AssignmentRef, Config, DotFileInfo, ProblemInfo
+from models import AssignmentRef, AuthenticatedUser, Config, DotFileInfo, ProblemInfo
 from version import CURRENT_VERSION
 
 PER_PROBLEM_SET_DOT_FILE = ".grind"
@@ -32,7 +32,7 @@ CONFIG_FILE = CONFIG_DIR / "config.toml"
 class Session:
     stub: pb_grpc.CodeGrinderServiceStub
     channel: grpc.Channel
-    user: pb.User
+    user: AuthenticatedUser
 
 
 def clean_error(exc: Exception) -> str:
@@ -65,18 +65,26 @@ def _config_from_raw(raw: dict[str, object]) -> Config:
     host = raw.get("host", "")
     cookie = raw.get("cookie", "")
     workspace_root = raw.get("workspace_root", str(Path.home()))
-    instructor = raw.get("instructor", False)
+    is_author = raw.get("is_author", False)
+    is_instructor = raw.get("is_instructor", False)
     if (
         not isinstance(host, str)
         or not isinstance(cookie, str)
         or not isinstance(workspace_root, str)
-        or not isinstance(instructor, bool)
+        or not isinstance(is_author, bool)
+        or not isinstance(is_instructor, bool)
     ):
         fail(
             f"failed to parse {CONFIG_FILE}: invalid config value type\n"
             f"you may wish to try deleting the file and running '{program_name()} login' again"
         )
-    return Config(host=host, cookie=cookie, workspace_root=Path(workspace_root).expanduser(), instructor=instructor)
+    return Config(
+        host=host,
+        cookie=cookie,
+        workspace_root=Path(workspace_root).expanduser(),
+        is_author=is_author,
+        is_instructor=is_instructor,
+    )
 
 
 def load_config() -> Config:
@@ -102,15 +110,18 @@ def write_config(config: Config) -> None:
         host=config.host,
         cookie=config.cookie,
         workspace_root=existing.workspace_root,
-        instructor=existing.instructor,
+        is_author=config.is_author,
+        is_instructor=config.is_instructor,
     )
     lines = [
         f"host = {_toml_string(merged.host)}",
         f"cookie = {_toml_string(merged.cookie)}",
         f"workspace_root = {_toml_string(str(merged.workspace_root))}",
     ]
-    if merged.instructor:
-        lines.append("instructor = true")
+    if merged.is_author:
+        lines.append("is_author = true")
+    if merged.is_instructor:
+        lines.append("is_instructor = true")
     CONFIG_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -176,6 +187,34 @@ def new_grpc_client(config: Config) -> tuple[pb_grpc.CodeGrinderServiceStub, grp
     return stub, channel
 
 
+def _user_from_hello(response: pb.HelloResponse) -> AuthenticatedUser:
+    if response.user_id == "":
+        fail("server returned no user")
+    return AuthenticatedUser(
+        user_id=response.user_id,
+        user_name=response.user_name,
+        user_login=response.user_login,
+        is_author=bool(response.is_author),
+        is_instructor=bool(response.is_instructor),
+    )
+
+
+def _sync_cached_roles(config: Config, user: AuthenticatedUser) -> None:
+    if config.is_author == user.is_author and config.is_instructor == user.is_instructor:
+        return
+    write_config(
+        Config(
+            host=config.host,
+            cookie=config.cookie,
+            workspace_root=config.workspace_root,
+            is_author=user.is_author,
+            is_instructor=user.is_instructor,
+        )
+    )
+    config.is_author = user.is_author
+    config.is_instructor = user.is_instructor
+
+
 def setup(config: Config) -> Session:
     if config.api_dump:
         config.api_report = True
@@ -190,10 +229,9 @@ def setup(config: Config) -> Session:
         raise CliError(clean_error(exc)) from exc
 
     check_version(response.version)
-    if not response.HasField("user"):
-        channel.close()
-        fail("server returned no user")
-    return Session(stub=stub, channel=channel, user=response.user)
+    user = _user_from_hello(response)
+    _sync_cached_roles(config, user)
+    return Session(stub=stub, channel=channel, user=user)
 
 
 @contextmanager

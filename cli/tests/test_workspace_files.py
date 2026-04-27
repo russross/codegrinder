@@ -24,10 +24,10 @@ def test_clean_relative_path_returns_validated_workspace_path_type() -> None:
 
 def test_workspace_file_map_normalizes_and_preserves_empty_content() -> None:
     files = workspace_file_map(
-        [
-            pb.AssignmentStepFile(path="src/main.py", content=b"print('x')\n"),
-            pb.AssignmentStepFile(path="empty.txt"),
-        ]
+        {
+            "src/main.py": b"print('x')\n",
+            "empty.txt": b"",
+        }
     )
 
     assert files == {"src/main.py": b"print('x')\n", "empty.txt": b""}
@@ -35,8 +35,8 @@ def test_workspace_file_map_normalizes_and_preserves_empty_content() -> None:
 
 def test_workspace_official_paths_combines_system_and_student_files() -> None:
     workspace = pb.GetWorkspaceResponse(
-        system_owned_files=[pb.AssignmentStepFile(path="README.md")],
-        student_owned_files=[pb.AssignmentStepFile(path="src/main.py")],
+        system_owned_files={"README.md": b""},
+        student_owned_files={"src/main.py": b""},
     )
 
     assert workspace_official_paths(workspace) == {"README.md", "src/main.py"}

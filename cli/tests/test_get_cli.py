@@ -61,8 +61,8 @@ def _workspace(problem_id: str, step: int) -> pb.GetWorkspaceResponse:
         problem_id=problem_id,
         step_number=step,
         last_step_number=2,
-        system_owned_files=[pb.AssignmentStepFile(path="README.md", content=f"{problem_id} docs\n".encode())],
-        student_owned_files=[pb.AssignmentStepFile(path="main.py", content=f"print({problem_id!r})\n".encode())],
+        system_owned_files={"README.md": f"{problem_id} docs\n".encode()},
+        student_owned_files={"main.py": f"print({problem_id!r})\n".encode()},
     )
 
 

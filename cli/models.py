@@ -9,9 +9,19 @@ class Config:
     host: str = ""
     cookie: str = ""
     workspace_root: Path = Path.home()
-    instructor: bool = False
+    is_author: bool = False
+    is_instructor: bool = False
     api_report: bool = False
     api_dump: bool = False
+
+
+@dataclass(slots=True)
+class AuthenticatedUser:
+    user_id: str
+    user_name: str
+    user_login: str
+    is_author: bool
+    is_instructor: bool
 
 
 @dataclass(slots=True)

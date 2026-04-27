@@ -34,11 +34,13 @@ def command_login(args: argparse.Namespace) -> None:
         response = stub.Hello(req)
         dump_message(config, "Hello", False, response)
         config.cookie = response.cookie
+        config.is_author = bool(response.is_author)
+        config.is_instructor = bool(response.is_instructor)
         check_version(response.version)
-        if not response.HasField("user"):
+        if response.user_id == "":
             fail("failed to fetch user: empty response")
         write_config(config)
-        print(f"login successful; welcome {response.user.user_name}")
+        print(f"login successful; welcome {response.user_name}")
     except CliError:
         raise
     except Exception as exc:

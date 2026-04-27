@@ -360,12 +360,15 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
             action_rows,
         )
 
-    def _user_pb(self, user_row: sqlite3.Row) -> pb.User:
-        return pb.User(
+    def _hello_response(self, user_row: sqlite3.Row, version: pb.Version, cookie: str = "") -> pb.HelloResponse:
+        return pb.HelloResponse(
+            cookie=cookie,
             user_id=str(user_row["user_id"]),
             user_name=str(user_row["user_name"]),
             user_login=str(user_row["user_login"]),
-            author=bool(user_row["author"]) if "author" in user_row.keys() else False,
+            is_author=bool(user_row["author"]) if "author" in user_row.keys() else False,
+            is_instructor=bool(user_row["instructor"]) if "instructor" in user_row.keys() else False,
+            version=version,
         )
 
     def _require_field(
@@ -395,18 +398,14 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                     user_row = load_user_by_id(state.tx, user_id)
                 except sqlite3.Error as exc:
                     self._abort_sqlite(context, exc, internal="db error getting user me")
-                return pb.HelloResponse(
-                    cookie=f"{COOKIE_NAME}={cookie_value}",
-                    user=self._user_pb(user_row),
-                    version=version,
-                )
+                return self._hello_response(user_row, version, f"{COOKIE_NAME}={cookie_value}")
 
             return self._run_rpc(context, label="Hello", fn=fn)
 
         def fn(state: RpcState) -> pb.HelloResponse:
             current_user = state.current_user
             assert current_user is not None
-            return pb.HelloResponse(user=self._user_pb(current_user), version=version)
+            return self._hello_response(current_user, version)
 
         return self._run_rpc(context, label="Hello", load_user=True, fn=fn)
 

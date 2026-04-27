@@ -3,7 +3,6 @@ import * as commonmark from "commonmark";
 import {
     AssignmentKey,
     AssignmentProblemProgress,
-    AssignmentStepFile,
     Commit,
     CommitSaveStatus,
     DaycareRequest,
@@ -200,11 +199,11 @@ function normalizeRelativePath(raw: string): string {
     return parts.join("/");
 }
 
-function assignmentStepFileMap(entries: readonly AssignmentStepFile[]): Map<string, Uint8Array> {
+function assignmentStepFileMap(entries: Record<string, Uint8Array>): Map<string, Uint8Array> {
     const result = new Map<string, Uint8Array>();
-    for (const entry of entries) {
-        const path = normalizeRelativePath(entry.path);
-        result.set(path, entry.content);
+    for (const [rawPath, content] of Object.entries(entries)) {
+        const path = normalizeRelativePath(rawPath);
+        result.set(path, content);
     }
     return result;
 }
@@ -237,8 +236,8 @@ function buildProblemData(summary: AssignmentProblemProgress, workspace: {
     stepNumber: string;
     problemType: string;
     actions: string[];
-    systemOwnedFiles: AssignmentStepFile[];
-    studentOwnedFiles: AssignmentStepFile[];
+    systemOwnedFiles: Record<string, Uint8Array>;
+    studentOwnedFiles: Record<string, Uint8Array>;
     firstStepNumber: string;
     lastStepNumber: string;
 }): ProblemData {
@@ -293,8 +292,8 @@ function applyWorkspaceRefresh(problem: ProblemData, workspace: {
     stepNumber: string;
     problemType: string;
     actions: string[];
-    systemOwnedFiles: AssignmentStepFile[];
-    studentOwnedFiles: AssignmentStepFile[];
+    systemOwnedFiles: Record<string, Uint8Array>;
+    studentOwnedFiles: Record<string, Uint8Array>;
     firstStepNumber: string;
     lastStepNumber: string;
 }): void {
@@ -320,8 +319,8 @@ function replaceProblemState(problem: ProblemData, workspace: {
     stepNumber: string;
     problemType: string;
     actions: string[];
-    systemOwnedFiles: AssignmentStepFile[];
-    studentOwnedFiles: AssignmentStepFile[];
+    systemOwnedFiles: Record<string, Uint8Array>;
+    studentOwnedFiles: Record<string, Uint8Array>;
     firstStepNumber: string;
     lastStepNumber: string;
 }): void {
@@ -398,8 +397,8 @@ async function fetchWorkspace(
     stepNumber: string;
     problemType: string;
     actions: string[];
-    systemOwnedFiles: AssignmentStepFile[];
-    studentOwnedFiles: AssignmentStepFile[];
+    systemOwnedFiles: Record<string, Uint8Array>;
+    studentOwnedFiles: Record<string, Uint8Array>;
     firstStepNumber: string;
     lastStepNumber: string;
 }> {
@@ -431,10 +430,10 @@ async function loadAssignment(): Promise<void> {
     const sessionKey = getSessionKeyFromUrl();
     const helloCall = await client.hello(HelloRequest.create({ key: sessionKey }), {});
     setCookieFromHello(helloCall.response.cookie);
-    if (helloCall.response.user === undefined) {
+    if (helloCall.response.userId === "") {
         throw new Error("User not returned from hello");
     }
-    userId = helloCall.response.user.userId;
+    userId = helloCall.response.userId;
 
     assignment = parseAssignmentKeyFromUrl();
     const assignmentCall = await client.getAssignment(GetAssignmentRequest.create({ assignment }), {});

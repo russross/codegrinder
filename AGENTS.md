@@ -13,27 +13,34 @@ For protocol changes:
 - Client does not know/care about database layout—protocol should minimize leaking relational database structure
 - Preserve `session_cookie` request fields where they help future web-gRPC integration, even if the current Python gRPC path authenticates through metadata instead
 
+For the exam interface under `www/exam`:
+
+- Use the project-local Node toolchain under `www/exam/.toolchain/node/bin` for npm/proto-generation/build commands when the system `node` is unavailable or mismatched.
+
 
 # CLI Config
 
 - CLI config uses XDG conventions: `$XDG_CONFIG_HOME/codegrinder/config.toml`, defaulting to `~/.config/codegrinder/config.toml`.
 - Do not use legacy `~/.codegrinderrc` or `~/.codegrinderinstructor` files.
 - The config file is TOML and is created on login.
-- Login updates only the auth cookie/token and server URL; preserve user-editable settings such as workspace root and instructor mode when the file already exists.
+- Login updates the auth cookie/token, server URL, and cached role flags returned by `Hello`; preserve user-editable settings such as workspace root when the file already exists.
 - The workspace root setting controls where per-course assignment directories are created. Default it to `$HOME` and explicitly write that default to the config file.
 - `grind get` has no assignment selector or directory override; it always uses the configured workspace root. Students who want a different root edit the config file by hand.
-- Instructor mode is an optional TOML boolean line. Omit it for normal student configs; missing means `false`.
+- Cached role flags are optional TOML boolean lines. Omit `is_instructor` and `is_author` when false; missing means `false`.
 
 # CLI Command Semantics
 
 - The CLI command surface is the contract. Every command should be described here before its behavior is changed.
 - Student-visible commands are `version`, `login`, `list`, `get`, `sync`, `grade`, `action`, and `reset`.
-- Instructor-mode commands are additionally `create`, `student`, `solve`, `problem`, and `type`.
+- Cached instructor visibility additionally enables `student`.
+- Cached author visibility additionally enables `create`, `problem`, and `type`.
+- Cached instructor or author visibility additionally enables `solve`.
 - Instructor-only flags `--api` and `--api-dump` report or dump API traffic; they must not change command semantics.
 - Commands that operate on a local assignment must discover the assignment by finding `.grind` in the current directory or an ancestor.
 - Multi-problem assignments require problem-specific author commands to run from inside a concrete problem directory; single-problem assignments use the assignment root as the problem directory.
 - Client-side workspace path handling must normalize paths before reading or writing local files. Server-side validation remains authoritative and must reject invalid submitted paths.
 - Non-login commands that load the server session must call `Hello` through `managed_session`, enforce version checks, and use the configured session cookie as the authentication source.
+- After a successful authenticated `Hello`, the CLI updates cached `is_instructor` and `is_author` config flags when they differ from the server response.
 
 # `grind version`
 
@@ -47,7 +54,7 @@ For protocol changes:
 - `grind login` with any argument shape other than exactly host and key prints login guidance and fails.
 - The server validates the login key, returns the authenticated user, session cookie, and version policy.
 - The CLI must reject an empty user response and must run normal version compatibility checks before writing config.
-- Login creates or updates the XDG TOML config. It updates only host and cookie/session fields that are part of authentication and preserves user-editable settings such as workspace root and instructor mode.
+- Login creates or updates the XDG TOML config. It updates host, cookie/session fields, and cached role flags from `Hello`, and preserves user-editable settings such as workspace root.
 - A successful login prints the authenticated user's display name.
 
 # `grind list`
@@ -219,7 +226,7 @@ For protocol changes:
 
 # `grind student`
 
-- `grind student SEARCH...` is an instructor-mode command for inspecting a student's assignment in a temporary local checkout.
+- `grind student SEARCH...` is an instructor-visible command for inspecting a student's assignment in a temporary local checkout.
 - It requires search terms; without terms it fails with guidance.
 - The CLI calls `ListAssignments` with the provided search terms and `include_student_context=True`.
 - The server owns which student assignments are visible to the instructor and returns the student context needed for presentation.
@@ -230,16 +237,16 @@ For protocol changes:
 
 # `grind solve`
 
-- `grind solve` is an instructor-mode author command for writing authoritative solution files into the current local problem step.
+- `grind solve` is an instructor-or-author command for writing authoritative solution files into the current local problem step.
 - It takes no arguments.
-- The CLI must require an authenticated author user.
+- The CLI must require an authenticated user whose cached `Hello` roles include `is_author` or `is_instructor`.
 - It resolves the current assignment/problem from `.grind` and fetches `GetWorkspace` with `WORKSPACE_FILE_STATE_CURRENT`, contents included, and solution files included.
-- The server decides whether solution files may be returned. The CLI must fail if no solution files are present.
+- The server decides whether solution files may be returned. Authors retain current `solve` semantics. Instructors may also fetch solution files, but only for assignments in courses where they are instructors. The CLI must fail if no solution files are present.
 - The CLI writes only the returned solution files into the local problem directory. It must not save a commit, run daycare, advance `.grind`, or modify server state.
 
 # `grind problem`
 
-- `grind problem SEARCH...` is an instructor-mode catalog search command.
+- `grind problem SEARCH...` is an author-visible catalog search command.
 - It requires one or more search terms. Terms search server-owned problem set and problem metadata such as names, notes, and tags.
 - The CLI calls `SearchProblemCatalog` and prints problem set URLs using the configured server host.
 - The server owns catalog visibility, search semantics, and returned metadata.

@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
-from itertools import chain
 from pathlib import Path, PurePosixPath
 
 import codegrinder_pb2 as pb
@@ -30,14 +29,14 @@ def clean_relative_path(raw: str) -> RelativeWorkspacePath:
     return RelativeWorkspacePath(Path(*parts))
 
 
-def workspace_file_map(entries: Sequence[pb.AssignmentStepFile]) -> dict[str, bytes]:
-    return {clean_relative_path(entry.path).as_posix(): bytes(entry.content or b"") for entry in entries}
+def workspace_file_map(entries: Mapping[str, bytes]) -> dict[str, bytes]:
+    return {clean_relative_path(path).as_posix(): bytes(content or b"") for path, content in entries.items()}
 
 
 def workspace_official_paths(workspace: pb.GetWorkspaceResponse) -> set[str]:
     return {
-        clean_relative_path(entry.path).as_posix()
-        for entry in chain(workspace.system_owned_files, workspace.student_owned_files)
+        clean_relative_path(path).as_posix()
+        for path in [*workspace.system_owned_files.keys(), *workspace.student_owned_files.keys()]
     }
 
 

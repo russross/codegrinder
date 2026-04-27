@@ -204,9 +204,16 @@ class GrpcServiceTests(unittest.TestCase):
         key = self.logins.insert("u1", datetime.now(tz=UTC))
         key_reply = self.service.Hello(pb.HelloRequest(key=key), cast(grpc.ServicerContext, _FakeContext()))
         self.assertIn("codegrinder=", key_reply.cookie)
-        self.assertEqual(key_reply.user.user_id, "u1")
+        self.assertEqual(key_reply.user_id, "u1")
+        self.assertFalse(key_reply.is_author)
+        self.assertFalse(key_reply.is_instructor)
         cookie_reply = self.service.Hello(pb.HelloRequest(), cast(grpc.ServicerContext, self._auth_context("u1")))
-        self.assertEqual(cookie_reply.user.user_id, "u1")
+        self.assertEqual(cookie_reply.user_id, "u1")
+
+        instructor_reply = self.service.Hello(pb.HelloRequest(), cast(grpc.ServicerContext, self._auth_context("u2")))
+        self.assertEqual(instructor_reply.user_id, "u2")
+        self.assertTrue(instructor_reply.is_author)
+        self.assertTrue(instructor_reply.is_instructor)
 
     def test_auth_required(self) -> None:
         with self.assertRaises(_AbortError) as err:
@@ -360,7 +367,7 @@ class GrpcServiceTests(unittest.TestCase):
         self.assertEqual(reply.step_number, 2)
         self.assertEqual(reply.first_step_number, 2)
         self.assertEqual(reply.last_step_number, 2)
-        student_files = {item.path: item.content for item in reply.student_owned_files}
+        student_files = dict(reply.student_owned_files)
         self.assertEqual(student_files.get("carry.py"), b"print('carried')\n")
         self.assertEqual(student_files.get("main.py"), b"print('step2-reset')\n")
 
@@ -380,7 +387,7 @@ class GrpcServiceTests(unittest.TestCase):
         self.assertEqual(reply.step_number, 2)
         self.assertEqual(reply.first_step_number, 1)
         self.assertEqual(reply.last_step_number, 2)
-        student_files = {item.path: item.content for item in reply.student_owned_files}
+        student_files = dict(reply.student_owned_files)
         self.assertEqual(student_files.get("main.py"), b"print('step2-reset')\n")
         self.assertEqual(student_files.get("helper.py"), b"print('helper')\n")
 
@@ -428,10 +435,8 @@ class GrpcServiceTests(unittest.TestCase):
             ),
             ctx,
         )
-        self.assertEqual([item.path for item in reply.system_owned_files], ["Makefile", "README.md"])
-        self.assertEqual([item.content for item in reply.system_owned_files], [b"", b""])
-        self.assertEqual([item.path for item in reply.student_owned_files], ["helper.py", "main.py"])
-        self.assertEqual([item.content for item in reply.student_owned_files], [b"", b""])
+        self.assertEqual(dict(reply.system_owned_files), {"Makefile": b"", "README.md": b""})
+        self.assertEqual(dict(reply.student_owned_files), {"helper.py": b"", "main.py": b""})
 
     def test_step_files_current_uses_saved_commit_when_present(self) -> None:
         now = "2026-02-16T10:00:00+00:00"
@@ -457,7 +462,7 @@ class GrpcServiceTests(unittest.TestCase):
             ),
             ctx,
         )
-        student_files = {item.path: item.content for item in reply.student_owned_files}
+        student_files = dict(reply.student_owned_files)
         self.assertEqual(student_files, {"main.py": b"print('step2-commit')\n"})
 
     def test_step_files_reset_uses_step_start_state(self) -> None:
@@ -473,9 +478,26 @@ class GrpcServiceTests(unittest.TestCase):
             ),
             ctx,
         )
-        student_files = {item.path: item.content for item in reply.student_owned_files}
+        student_files = dict(reply.student_owned_files)
         self.assertEqual(student_files.get("main.py"), b"print('step2-reset')\n")
         self.assertEqual(student_files.get("helper.py"), b"print('helper')\n")
+
+    def test_instructor_can_request_solution_files_for_course_assignment(self) -> None:
+        ctx = cast(grpc.ServicerContext, self._auth_context("u2"))
+
+        reply = self.service.GetWorkspace(
+            pb.GetWorkspaceRequest(
+                assignment=self._assignment_key(),
+                problem_id="p1",
+                step_number=2,
+                file_state=pb.WORKSPACE_FILE_STATE_CURRENT,
+                include_contents=True,
+                include_solution_files=True,
+            ),
+            ctx,
+        )
+
+        self.assertEqual(dict(reply.solution_files), {"helper.py": b"print('helper')\n", "main.py": b"print('step2-main')\n"})
 
     def test_save_workspace_commit_persists_student_files_without_grading_artifacts(self) -> None:
         now = datetime(2026, 2, 16, 10, 0, 0, tzinfo=UTC)

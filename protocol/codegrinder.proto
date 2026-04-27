@@ -7,20 +7,6 @@ option go_package = "github.com/russross/codegrinder/protocol";
 import "google/protobuf/duration.proto";
 import "google/protobuf/timestamp.proto";
 
-// User represents a single user as defined by LTI.
-message User {
-  string user_id = 1;
-  string user_name = 2;
-  string user_login = 3;
-  bool author = 4;
-}
-
-// Course represents a single instance of a course as defined by LTI.
-message Course {
-  string course_id = 1;
-  string course_name = 2;
-}
-
 // Version represents version information.
 message Version {
   string version = 1;
@@ -35,21 +21,6 @@ message AssignmentKey {
   string user_id = 1;
   string course_id = 2;
   string problem_set_id = 3;
-}
-
-// Assignment represents a single instance of a problem set for a student in a course.
-message Assignment {
-  string user_id = 1;
-  string course_id = 2;
-  string problem_set_id = 3;
-  bool restricted = 4;
-  string grade_id = 5;
-  string outcome_url = 6;
-  string outcome_ext_accepted = 7;
-  string consumer_key = 8;
-  google.protobuf.Timestamp unlock_at = 9;
-  google.protobuf.Timestamp due_at = 10;
-  google.protobuf.Timestamp lock_at = 11;
 }
 
 // ProblemSet represents a set of problems.
@@ -272,8 +243,12 @@ message HelloRequest {
 // Response for Hello
 message HelloResponse {
   string cookie = 1;
-  User user = 2;
-  Version version = 3;
+  string user_id = 2;
+  string user_name = 3;
+  string user_login = 4;
+  bool is_author = 5;
+  bool is_instructor = 6;
+  Version version = 7;
 }
 
 // Request for ListAssignments
@@ -393,12 +368,6 @@ message GetAssignmentResponse {
   AssignmentDownloadStatus download_status = 5;
 }
 
-// AssignmentStepFile is one file path/content pair.
-message AssignmentStepFile {
-  string path = 1;
-  bytes content = 2;
-}
-
 enum WorkspaceFileState {
   WORKSPACE_FILE_STATE_UNSPECIFIED = 0;
   WORKSPACE_FILE_STATE_CURRENT = 1;
@@ -426,9 +395,9 @@ message GetWorkspaceResponse {
   string step_note = 6;
   double step_weight = 7;
   repeated string actions = 8;
-  repeated AssignmentStepFile system_owned_files = 9;
-  repeated AssignmentStepFile student_owned_files = 10;
-  repeated AssignmentStepFile solution_files = 11;
+  map<string, bytes> system_owned_files = 9;
+  map<string, bytes> student_owned_files = 10;
+  map<string, bytes> solution_files = 11;
   int64 first_step_number = 12;
   int64 last_step_number = 13;
 }

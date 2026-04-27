@@ -147,7 +147,7 @@ def gather_student_context(client: WorkspaceClient, start_dir: Path) -> StudentC
 
     commit = build_commit_from_disk(
         problem_dir,
-        [str(Path(entry.path)) for entry in workspace.student_owned_files],
+        [clean_relative_path(path).as_posix() for path in workspace.student_owned_files],
         workspace.assignment,
         workspace.problem_id,
         int(workspace.step_number),

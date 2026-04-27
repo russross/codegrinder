@@ -17,7 +17,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="grind", description="A command-line tool to access CodeGrinder")
     parser.set_defaults(func=None)
 
-    is_instructor = load_config_or_default().instructor
+    config = load_config_or_default()
+    is_instructor = config.is_instructor
+    is_author = config.is_author
 
     if is_instructor:
         parser.add_argument("--api", action="store_true", help="report all API requests")
@@ -61,21 +63,24 @@ def _build_parser() -> argparse.ArgumentParser:
     reset_cmd.add_argument("reset_args", nargs="*")
     reset_cmd.set_defaults(func=command_reset)
 
-    if is_instructor:
+    if is_author:
         create_cmd = subs.add_parser("create", help="create a new problem/problem set (authors only)")
         create_cmd.add_argument("-u", "--update", action="store_true")
         create_cmd.add_argument("-a", "--action", default="")
         create_cmd.add_argument("create_args", nargs="*")
         create_cmd.set_defaults(func=command_create)
 
+    if is_instructor:
         student_cmd = subs.add_parser("student", help="download a student assignment (instructors only)")
         student_cmd.add_argument("student_args", nargs="*")
         student_cmd.set_defaults(func=command_student)
 
-        solve_cmd = subs.add_parser("solve", help="save the solution for the current problem step (authors only)")
+    if is_instructor or is_author:
+        solve_cmd = subs.add_parser("solve", help="write solution files for the current problem step")
         solve_cmd.add_argument("extra", nargs="*")
         solve_cmd.set_defaults(func=command_solve)
 
+    if is_author:
         problem_cmd = subs.add_parser("problem", help="find a problem set URL (authors only)")
         problem_cmd.add_argument("problem_args", nargs="*")
         problem_cmd.set_defaults(func=command_problem)

@@ -44,8 +44,8 @@ def test_gather_student_context_refreshes_system_files_and_builds_commit(tmp_pat
         problem_id="problem-a",
         step_number=2,
         last_step_number=3,
-        system_owned_files=[pb.AssignmentStepFile(path="README.md", content=b"fresh\n")],
-        student_owned_files=[pb.AssignmentStepFile(path="main.py", content=b"starter\n")],
+        system_owned_files={"README.md": b"fresh\n"},
+        student_owned_files={"main.py": b"starter\n"},
     )
     client = _StudentClient(workspace)
 
@@ -72,7 +72,7 @@ def test_build_grading_commit_sets_action_note_and_user_without_rebuilding_files
         problem_id="problem-a",
         step_number=1,
         last_step_number=1,
-        student_owned_files=[pb.AssignmentStepFile(path="main.py", content=b"starter\n")],
+        student_owned_files={"main.py": b"starter\n"},
     )
     context = gather_student_context(_StudentClient(workspace), tmp_path)
 
@@ -109,7 +109,7 @@ def test_save_current_student_files_sets_note_without_mutating_context_commit(tm
         problem_id="problem-a",
         step_number=1,
         last_step_number=1,
-        student_owned_files=[pb.AssignmentStepFile(path="main.py", content=b"starter\n")],
+        student_owned_files={"main.py": b"starter\n"},
     )
     context = gather_student_context(_StudentClient(workspace), tmp_path)
     client = _SaveClient()
