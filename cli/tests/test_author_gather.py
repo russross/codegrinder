@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import codegrinder_pb2 as pb
 import pytest
 
-from authoring import gather_author
+from authoring import gather_author, prepare_author_steps, resolve_author_problem_layout
 from errors import CliError
 
 
@@ -65,3 +66,44 @@ def test_gather_author_rejects_solution_layout_directory(tmp_path: Path) -> None
     with pytest.raises(CliError) as err:
         gather_author("", root)
     assert "the _solution authoring layout is not supported" in str(err.value)
+
+
+class _FakeProblemTypeClient:
+    def get_problem_type(self, problem_type: str) -> pb.GetProblemTypeResponse:
+        return pb.GetProblemTypeResponse(
+            problem_type=pb.ProblemType(
+                problem_type=problem_type,
+                files={"type_support.txt": b"canonical support\n"},
+            )
+        )
+
+
+def test_prepare_and_gather_author_prefilters_git_gitignore_and_problem_type_files(tmp_path: Path) -> None:
+    root = tmp_path / "filtered-problem"
+    root.mkdir()
+    _write_problem_cfg(root)
+    root.joinpath("main.py").write_text("print('hello')\n", encoding="utf-8")
+    root.joinpath(".gitignore").write_text("ignored.tmp\nignored_dir/\n", encoding="utf-8")
+    root.joinpath("ignored.tmp").write_text("ignore me\n", encoding="utf-8")
+    (root / "ignored_dir").mkdir()
+    root.joinpath("ignored_dir", "hidden.txt").write_text("hidden\n", encoding="utf-8")
+    (root / ".git").mkdir()
+    root.joinpath(".git", "config").write_text("[core]\n", encoding="utf-8")
+    root.joinpath("type_support.txt").write_text("stale\n", encoding="utf-8")
+    root.joinpath("build.out").write_text("artifact\n", encoding="utf-8")
+    root.joinpath("Makefile").write_text("clean:\n\trm -f build.out\n", encoding="utf-8")
+
+    layout = resolve_author_problem_layout(root)
+    assert layout is not None
+
+    prepared_steps = prepare_author_steps(_FakeProblemTypeClient(), layout)
+    assert root.joinpath("type_support.txt").read_text(encoding="utf-8") == "canonical support\n"
+    assert not root.joinpath("build.out").exists()
+
+    draft, _, _ = gather_author("", root, prepared_steps)
+
+    assert {item.path: item.content for item in draft.steps[0].files} == {
+        ".gitignore": b"ignored.tmp\nignored_dir/\n",
+        "Makefile": b"clean:\n\trm -f build.out\n",
+        "main.py": b"print('hello')\n",
+    }

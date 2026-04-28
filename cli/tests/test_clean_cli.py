@@ -36,3 +36,14 @@ def test_clean_workspace_tree_removes_unofficial_files_and_empty_dirs(tmp_path: 
     assert not (tmp_path / "src" / "scratch.txt").exists()
     assert not (tmp_path / "empty").exists()
     assert (tmp_path / "src").is_dir()
+
+
+def test_clean_workspace_tree_preserves_git_directory(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "config").write_text("[core]\n", encoding="utf-8")
+    (tmp_path / "scratch.txt").write_text("scratch", encoding="utf-8")
+
+    clean_workspace_tree(tmp_path, set())
+
+    assert (tmp_path / ".git" / "config").read_text(encoding="utf-8") == "[core]\n"
+    assert not (tmp_path / "scratch.txt").exists()

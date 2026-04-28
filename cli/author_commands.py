@@ -11,7 +11,7 @@ import codegrinder_pb2 as pb
 from assignment_download import download_assignment_to_root
 from author_config import PROBLEM_CONFIG_NAME
 from author_validation import validate_author_solution_bundle
-from authoring import gather_author, resolve_author_problem_layout, save_problem_set
+from authoring import gather_author, prepare_author_steps, resolve_author_problem_layout, save_problem_set
 from command_support import managed_client, usage_error
 from daycare_client import handle_daycare_stream
 from errors import fail
@@ -185,7 +185,11 @@ def command_create(args: argparse.Namespace) -> None:
         if is_update and action:
             fail("you specified --update, which is not valid when running an action")
 
-        draft, step_dir, step_num = gather_author(action, Path("."))
+        layout = resolve_author_problem_layout(Path("."))
+        if layout is None:
+            fail(f"unable to find {PROBLEM_CONFIG_NAME} in current directory or one of its ancestors\n   you must run this in a problem directory")
+        prepared_steps = prepare_author_steps(env.client, layout)
+        draft, step_dir, step_num = gather_author(action, Path("."), prepared_steps)
 
         signed_resp = env.client.prepare_problem(draft, action)
         signed = signed_resp.bundle

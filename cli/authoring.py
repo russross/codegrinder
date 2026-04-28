@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import subprocess
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 import codegrinder_pb2 as pb
+import pathspec
 
 from author_config import AuthorProblemConfig, PROBLEM_CONFIG_NAME, parse_author_problem_config, parse_author_problem_set_config
 from errors import fail
-from helpers import plural
+from helpers import clean_error, plural
 from rpc_client import CodeGrinderClient
+from workspace_files import update_files
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,6 +22,16 @@ class AuthorProblemLayout:
     active_step_dir: Path
     active_step_number: int
     config: AuthorProblemConfig
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedAuthorStep:
+    directory: Path
+    problem_type_files: frozenset[str]
+
+
+class ProblemTypeClient(Protocol):
+    def get_problem_type(self, problem_type: str) -> pb.GetProblemTypeResponse: ...
 
 
 def resolve_author_problem_layout(start_dir: Path) -> AuthorProblemLayout | None:
@@ -46,9 +61,66 @@ def resolve_author_problem_layout(start_dir: Path) -> AuthorProblemLayout | None
     )
 
 
+def prepare_author_steps(client: ProblemTypeClient, layout: AuthorProblemLayout) -> dict[int, PreparedAuthorStep]:
+    prepared_steps: dict[int, PreparedAuthorStep] = {}
+    for idx, step in enumerate(layout.config.steps, start=1):
+        step_directory = layout.root_dir if layout.config.single_step_layout else layout.root_dir / str(idx)
+        if not step_directory.is_dir():
+            fail(f"missing step directory {step_directory}")
+
+        print(f"refreshing problem type files for step {idx}")
+        response = client.get_problem_type(step.problem_type)
+        files = {str(Path(name)): contents for name, contents in response.problem_type.files.items()}
+        update_files(step_directory, files, None, True)
+
+        print(f"running make clean for step {idx}")
+        try:
+            subprocess.run(["make", "clean"], cwd=step_directory, check=True)
+        except FileNotFoundError as exc:
+            fail(f"error running make clean in {step_directory}: {clean_error(exc)}")
+        except subprocess.CalledProcessError as exc:
+            fail(f"error running make clean in {step_directory}: {clean_error(exc)}")
+
+        prepared_steps[idx] = PreparedAuthorStep(
+            directory=step_directory,
+            problem_type_files=frozenset(files),
+        )
+    return prepared_steps
+
+
+def _gitignore_spec(tree: dict[str, bytes]) -> pathspec.GitIgnoreSpec:
+    lines: list[str] = []
+    for path in sorted(tree.keys()):
+        if Path(path).name != ".gitignore":
+            continue
+        parent = Path(path).parent.as_posix()
+        prefix = "" if parent == "." else f"{parent}/"
+        for raw_line in tree[path].decode("utf-8", errors="replace").splitlines():
+            line = raw_line.rstrip("\r")
+            if prefix and line.startswith("/"):
+                lines.append(prefix + line[1:])
+            elif prefix and line.startswith("!"):
+                lines.append("!" + prefix + line[1:])
+            elif prefix:
+                lines.append(prefix + line)
+            else:
+                lines.append(line)
+    return pathspec.GitIgnoreSpec.from_lines(lines)
+
+
+def _filter_ignored_paths(tree: dict[str, bytes]) -> dict[str, bytes]:
+    spec = _gitignore_spec(tree)
+    return {
+        path: content
+        for path, content in tree.items()
+        if not spec.match_file(path)
+    }
+
+
 def gather_author(
     action: str,
     start_dir: Path,
+    prepared_steps: Mapping[int, PreparedAuthorStep] | None = None,
 ) -> tuple[pb.AuthorProblemDraft, Path, int]:
     layout = resolve_author_problem_layout(start_dir)
     if layout is None:
@@ -84,20 +156,33 @@ def gather_author(
         if issues:
             print(f"warning: {path_label} has {', '.join(issues)}")
 
-    def gather_step_tree(step_directory: Path, step_index: int) -> tuple[list[pb.AuthorFile], list[pb.AuthorFile]]:
+    def gather_step_tree(
+        step_directory: Path,
+        step_index: int,
+        problem_type_files: frozenset[str],
+    ) -> tuple[list[pb.AuthorFile], list[pb.AuthorFile]]:
         if not step_directory.is_dir():
             fail(f"missing step directory {step_directory}")
         authored_files: list[pb.AuthorFile] = []
         starter_files: list[pb.AuthorFile] = []
-        for path in sorted(path for path in step_directory.rglob("*") if path.is_file()):
+        all_paths = sorted(path for path in step_directory.rglob("*") if path.is_file() and ".git" not in path.parts)
+        gathered_files = {
+            rel_posix: path.read_bytes()
+            for path in all_paths
+            for rel_posix in [path.relative_to(step_directory).as_posix()]
+            if not (config.single_step_layout and rel_posix == PROBLEM_CONFIG_NAME)
+            if rel_posix not in problem_type_files
+        }
+        filtered_files = _filter_ignored_paths(gathered_files)
+        for path in all_paths:
             rel = path.relative_to(step_directory)
             rel_posix = rel.as_posix()
-            if config.single_step_layout and rel_posix == PROBLEM_CONFIG_NAME:
+            if rel_posix not in filtered_files:
                 continue
             parts = rel.parts
             if parts[0] == "_solution":
                 fail("the _solution authoring layout is not supported")
-            content = path.read_bytes()
+            content = filtered_files[rel_posix]
             if parts[0] == "_starter":
                 if len(parts) == 1:
                     fail("_starter must be a directory")
@@ -118,8 +203,13 @@ def gather_author(
 
     for idx, step in enumerate(config.steps, start=1):
         print(f"gathering step {idx}")
-        step_directory = directory if config.single_step_layout else directory / str(idx)
-        authored_files, starter_files = gather_step_tree(step_directory, idx)
+        prepared = prepared_steps[idx] if prepared_steps and idx in prepared_steps else None
+        step_directory = prepared.directory if prepared else directory if config.single_step_layout else directory / str(idx)
+        authored_files, starter_files = gather_step_tree(
+            step_directory,
+            idx,
+            prepared.problem_type_files if prepared else frozenset(),
+        )
         draft.steps.append(
             pb.AuthorProblemStepDraft(
                 step_number=idx,

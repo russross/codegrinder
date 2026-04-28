@@ -44,6 +44,8 @@ def clean_workspace_tree(directory: Path, official_paths: set[str]) -> None:
     official = {Path(path) for path in official_paths}
     for path in sorted(directory.rglob("*"), key=lambda item: len(item.parts), reverse=True):
         rel = path.relative_to(directory)
+        if ".git" in rel.parts:
+            continue
         if path.is_dir():
             try:
                 path.rmdir()

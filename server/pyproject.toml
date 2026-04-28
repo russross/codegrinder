@@ -5,6 +5,7 @@ description = "Python port scaffold for CodeGrinder server"
 requires-python = ">=3.13"
 dependencies = [
     "grpcio>=1.78.0",
+    "pathspec>=1.1.1",
     "protobuf>=6.33.5",
 ]
 

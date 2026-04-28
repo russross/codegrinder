@@ -112,6 +112,7 @@ For the exam interface under `www/exam`:
 - On saved sync, CLI prints `problem {problem_id} step {step} synced`.
 - On locked sync, CLI prints that work was not saved because the assignment is locked.
 - After saving, `grind sync` removes local files outside the official workspace path set for the current problem step and prunes empty directories.
+- Sync cleanup must preserve `.git` directories and their contents.
 - The cleanup phase must preserve current system-owned and student-owned files even when the assignment is locked.
 
 # `grind grade`
@@ -172,14 +173,17 @@ For the exam interface under `www/exam`:
   - per-step authored files from the main tree
   - per-step starter files from `_starter/`
   - explicit create/update intent
+- Before gathering each step for `grind create`, the CLI refreshes canonical problem type files for that step and runs `make clean` in the step directory.
 - The CLI does not attempt to identify solution files, system files, or cumulative student-owned files.
 - The CLI does not attempt to stitch together step-to-step continuity.
-- The server does all `.gitignore` processing.
+- The server remains canonical for `.gitignore` processing, but the CLI pre-filters files that local `.gitignore` rules would ignore before upload.
+- The helper that implements Git-style `.gitignore` matching must exist in both CLI and server as an exact copy for the `dict[str, bytes] -> filtered dict[str, bytes]` logic. If one copy changes, update the other in the same change.
 - The CLI reports whitespace issues but must not normalize file contents.
 - Whitespace normalization is removed completely. What the author supplies is what gets stored in the problem.
 - The CLI should report one log line per affected text file for whitespace issues such as non-Unix line endings and trailing spaces, but continue processing.
 - `.gitignore` handling is hierarchical and based on the effective overlaid step tree, not just the uploaded problem files.
 - Problem type files are authoritative and trump uploaded author files.
+- The CLI must not upload `.git` contents or canonical problem type files gathered from the refreshed step tree.
 - Server-side file processing order is:
   - start with the uploaded file set
   - overlay canonical problem type files on top
@@ -221,7 +225,7 @@ For the exam interface under `www/exam`:
 - `grind create --action ACTION` prepares the problem and runs one interactive validation action for the active step only. It must not persist problem data.
 - `grind create PSET.cfg` saves only problem set metadata and membership/weights. It must reject `--action` because problem-set saves do not have daycare actions.
 - Problem-set create/update calls `SaveProblemSet` with explicit `SAVE_MODE_CREATE` or `SAVE_MODE_UPDATE`; the server enforces existence semantics at save time.
-- Problem create/update uses the end-to-end authoring flow described above: gather author material, call `PrepareProblem`, run every signed validation bundle through daycare, require passing validation, attach the signed validation results, then call `SaveProblem`.
+- Problem create/update uses the end-to-end authoring flow described above: for each step refresh canonical type files, run `make clean`, gather author material with client-side pre-filtering for `.git`, `.gitignore`, and canonical type files, call `PrepareProblem`, run every signed validation bundle through daycare, require passing validation, attach the signed validation results, then call `SaveProblem`.
 - The client must not trust its own validation as persistence authority; `SaveProblem` verifies signed validation bundles before writing any problem rows.
 
 # `grind student`

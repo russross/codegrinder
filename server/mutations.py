@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-import fnmatch
 import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 import codegrinder_pb2 as pb
+import pathspec
 from google.protobuf.json_format import MessageToDict
 
 from problem_files import ProblemStepFileType
@@ -161,14 +161,6 @@ class _UploadedEntry:
 
 
 @dataclass(slots=True)
-class _IgnoreRule:
-    base_dir: str
-    pattern: str
-    anchored: bool
-    directory_only: bool
-
-
-@dataclass(slots=True)
 class _AuthorStepFiles:
     regular: dict[str, bytes]
     starter: dict[str, bytes]
@@ -201,71 +193,41 @@ def _collect_author_files(files: list[pb.AuthorFile], *, label: str) -> dict[str
     return out
 
 
-def _parse_ignore_rules(tree: dict[str, _UploadedEntry]) -> list[_IgnoreRule]:
-    rules: list[_IgnoreRule] = []
+def _gitignore_spec(tree: dict[str, bytes]) -> pathspec.GitIgnoreSpec:
+    lines: list[str] = []
     for path in sorted(tree.keys()):
-        if PurePosixPath(path).name != ".gitignore":
+        if Path(path).name != ".gitignore":
             continue
-        base_dir = PurePosixPath(path).parent.as_posix()
-        if base_dir == ".":
-            base_dir = ""
-        text = tree[path].content.decode("utf-8", errors="replace")
-        for raw_line in text.splitlines():
-            line = raw_line.strip()
-            if line == "" or line.startswith("#"):
-                continue
-            anchored = line.startswith("/")
-            if anchored:
-                line = line[1:]
-            directory_only = line.endswith("/")
-            if directory_only:
-                line = line[:-1]
-            if line == "":
-                continue
-            rules.append(_IgnoreRule(base_dir=base_dir, pattern=line, anchored=anchored, directory_only=directory_only))
-    return rules
-
-
-def _relative_to_base(path: str, base_dir: str) -> str | None:
-    if base_dir == "":
-        return path
-    if path == base_dir:
-        return ""
-    prefix = base_dir + "/"
-    if not path.startswith(prefix):
-        return None
-    return path[len(prefix) :]
-
-
-def _match_ignore_rule(rule: _IgnoreRule, path: str) -> bool:
-    rel_path = _relative_to_base(path, rule.base_dir)
-    if rel_path is None or rel_path == "":
-        return False
-    rel_obj = PurePosixPath(rel_path)
-    candidate_paths = [rel_obj.as_posix()]
-    if not rule.anchored and "/" not in rule.pattern:
-        candidate_paths.extend(part for part in rel_obj.parts)
-    if not rule.anchored and "/" in rule.pattern:
-        parts = rel_obj.parts
-        candidate_paths.extend("/".join(parts[idx:]) for idx in range(1, len(parts)))
-    if rule.directory_only:
-        directory_candidates = []
-        parts = rel_obj.parts[:-1]
-        for idx in range(1, len(parts) + 1):
-            directory_candidates.append("/".join(parts[:idx]))
-        candidate_paths.extend(directory_candidates)
-    return any(
-        candidate != "" and fnmatch.fnmatchcase(candidate, rule.pattern)
-        for candidate in candidate_paths
-    )
+        parent = Path(path).parent.as_posix()
+        prefix = "" if parent == "." else f"{parent}/"
+        for raw_line in tree[path].decode("utf-8", errors="replace").splitlines():
+            line = raw_line.rstrip("\r")
+            if prefix and line.startswith("/"):
+                lines.append(prefix + line[1:])
+            elif prefix and line.startswith("!"):
+                lines.append("!" + prefix + line[1:])
+            elif prefix:
+                lines.append(prefix + line)
+            else:
+                lines.append(line)
+    return pathspec.GitIgnoreSpec.from_lines(lines)
 
 
 def _filter_ignored_entries(tree: dict[str, _UploadedEntry]) -> dict[str, _UploadedEntry]:
-    rules = _parse_ignore_rules(tree)
+    filtered_paths = _filter_ignored_paths({path: entry.content for path, entry in tree.items()})
     return {
         path: entry
         for path, entry in tree.items()
-        if not any(_match_ignore_rule(rule, path) for rule in rules)
+        if path in filtered_paths
+    }
+
+
+def _filter_ignored_paths(tree: dict[str, bytes]) -> dict[str, bytes]:
+    spec = _gitignore_spec(tree)
+    return {
+        path: content
+        for path, content in tree.items()
+        if not spec.match_file(path)
     }
 
 
