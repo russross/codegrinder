@@ -25,6 +25,7 @@ def test_write_and_load_config_uses_xdg_path(monkeypatch, tmp_path: Path) -> Non
     assert loaded.workspace_root == Path.home()
     assert not loaded.is_instructor
     assert not loaded.is_author
+    assert not loaded.is_admin
 
 
 def test_login_config_update_preserves_user_settings(monkeypatch, tmp_path: Path) -> None:
@@ -39,11 +40,14 @@ def test_login_config_update_preserves_user_settings(monkeypatch, tmp_path: Path
         f'host = "old.example.edu"\n'
         f'cookie = "old-cookie"\n'
         f'workspace_root = "{workspace_root}"\n'
-        'is_author = true\n',
+        'is_author = true\n'
+        'is_admin = true\n',
         encoding="utf-8",
     )
 
-    helpers.write_config(helpers.Config(host="new.example.edu", cookie="new-cookie", is_instructor=True))
+    helpers.write_config(
+        helpers.Config(host="new.example.edu", cookie="new-cookie", is_instructor=True, is_admin=True)
+    )
 
     payload = tomllib.loads(cfg_file.read_text(encoding="utf-8"))
     assert payload == {
@@ -51,6 +55,7 @@ def test_login_config_update_preserves_user_settings(monkeypatch, tmp_path: Path
         "cookie": "new-cookie",
         "workspace_root": str(workspace_root),
         "is_instructor": True,
+        "is_admin": True,
     }
 
 
@@ -63,6 +68,7 @@ def test_load_config_or_default_handles_missing_file(monkeypatch, tmp_path: Path
     assert config.workspace_root == Path.home()
     assert not config.is_instructor
     assert not config.is_author
+    assert not config.is_admin
 
 
 def test_dotfile_round_trip_uses_toml(tmp_path: Path) -> None:

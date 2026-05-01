@@ -41,6 +41,7 @@ def load_user_by_id(conn: sqlite3.Connection, user_id: str) -> sqlite3.Row:
     return _q1(
         conn,
         "SELECT users.*, "
+        "users.admin AS admin, "
         "EXISTS(SELECT 1 FROM authors WHERE authors.user_id = users.user_id) AS author, "
         "EXISTS(SELECT 1 FROM user_courses WHERE user_courses.user_id = users.user_id AND user_courses.is_instructor) AS instructor "
         "FROM users WHERE users.user_id = ?",

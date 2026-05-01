@@ -26,7 +26,7 @@ For the exam interface under `www/exam`:
 - Login updates the auth cookie/token, server URL, and cached role flags returned by `Hello`; preserve user-editable settings such as workspace root when the file already exists.
 - The workspace root setting controls where per-course assignment directories are created. Default it to `$HOME` and explicitly write that default to the config file.
 - `grind get` has no assignment selector or directory override; it always uses the configured workspace root. Students who want a different root edit the config file by hand.
-- Cached role flags are optional TOML boolean lines. Omit `is_instructor` and `is_author` when false; missing means `false`.
+- Cached role flags are optional TOML boolean lines. Omit `is_instructor`, `is_author`, and `is_admin` when false; missing means `false`.
 
 # CLI Command Semantics
 
@@ -34,13 +34,14 @@ For the exam interface under `www/exam`:
 - Student-visible commands are `version`, `login`, `list`, `get`, `sync`, `grade`, `action`, and `reset`.
 - Cached instructor visibility additionally enables `student`.
 - Cached author visibility additionally enables `create`, `problem`, and `type`.
+- Cached admin visibility additionally enables admin-only commands. The server must enforce admin permissions for every admin RPC.
 - Cached instructor or author visibility additionally enables `solve`.
 - Instructor-only flags `--api` and `--api-dump` report or dump API traffic; they must not change command semantics.
 - Commands that operate on a local assignment must discover the assignment by finding `.grind` in the current directory or an ancestor.
 - Multi-problem assignments require problem-specific author commands to run from inside a concrete problem directory; single-problem assignments use the assignment root as the problem directory.
 - Client-side workspace path handling must normalize paths before reading or writing local files. Server-side validation remains authoritative and must reject invalid submitted paths.
 - Non-login commands that load the server session must call `Hello` through `managed_session`, enforce version checks, and use the configured session cookie as the authentication source.
-- After a successful authenticated `Hello`, the CLI updates cached `is_instructor` and `is_author` config flags when they differ from the server response.
+- After a successful authenticated `Hello`, the CLI updates cached `is_instructor`, `is_author`, and `is_admin` config flags when they differ from the server response.
 
 # `grind version`
 

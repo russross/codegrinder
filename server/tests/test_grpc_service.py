@@ -73,6 +73,7 @@ def _seed(conn: sqlite3.Connection) -> None:
     )
     conn.execute("INSERT INTO users(user_id, user_name, user_login) VALUES (?, ?, ?)", ("u1", "Student A", "stud"))
     conn.execute("INSERT INTO users(user_id, user_name, user_login) VALUES (?, ?, ?)", ("u2", "Instructor A", "inst"))
+    conn.execute("INSERT INTO users(user_id, user_name, user_login, admin) VALUES (?, ?, ?, ?)", ("u-admin", "Admin A", "admin", 1))
     conn.execute("INSERT INTO authors(user_id) VALUES (?)", ("u2",))
     conn.execute("INSERT INTO courses(course_id, course_name) VALUES (?, ?)", ("c1", "Course 101"))
     conn.execute("INSERT INTO user_courses(user_id, course_id, course_roles) VALUES (?, ?, ?)", ("u1", "c1", "Student"))
@@ -207,6 +208,7 @@ class GrpcServiceTests(unittest.TestCase):
         self.assertEqual(key_reply.user_id, "u1")
         self.assertFalse(key_reply.is_author)
         self.assertFalse(key_reply.is_instructor)
+        self.assertFalse(key_reply.is_admin)
         cookie_reply = self.service.Hello(pb.HelloRequest(), cast(grpc.ServicerContext, self._auth_context("u1")))
         self.assertEqual(cookie_reply.user_id, "u1")
 
@@ -214,6 +216,13 @@ class GrpcServiceTests(unittest.TestCase):
         self.assertEqual(instructor_reply.user_id, "u2")
         self.assertTrue(instructor_reply.is_author)
         self.assertTrue(instructor_reply.is_instructor)
+        self.assertFalse(instructor_reply.is_admin)
+
+        admin_reply = self.service.Hello(pb.HelloRequest(), cast(grpc.ServicerContext, self._auth_context("u-admin")))
+        self.assertEqual(admin_reply.user_id, "u-admin")
+        self.assertFalse(admin_reply.is_author)
+        self.assertFalse(admin_reply.is_instructor)
+        self.assertTrue(admin_reply.is_admin)
 
     def test_auth_required(self) -> None:
         with self.assertRaises(_AbortError) as err:

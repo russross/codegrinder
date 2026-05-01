@@ -67,12 +67,14 @@ def _config_from_raw(raw: dict[str, object]) -> Config:
     workspace_root = raw.get("workspace_root", str(Path.home()))
     is_author = raw.get("is_author", False)
     is_instructor = raw.get("is_instructor", False)
+    is_admin = raw.get("is_admin", False)
     if (
         not isinstance(host, str)
         or not isinstance(cookie, str)
         or not isinstance(workspace_root, str)
         or not isinstance(is_author, bool)
         or not isinstance(is_instructor, bool)
+        or not isinstance(is_admin, bool)
     ):
         fail(
             f"failed to parse {CONFIG_FILE}: invalid config value type\n"
@@ -84,6 +86,7 @@ def _config_from_raw(raw: dict[str, object]) -> Config:
         workspace_root=Path(workspace_root).expanduser(),
         is_author=is_author,
         is_instructor=is_instructor,
+        is_admin=is_admin,
     )
 
 
@@ -112,6 +115,7 @@ def write_config(config: Config) -> None:
         workspace_root=existing.workspace_root,
         is_author=config.is_author,
         is_instructor=config.is_instructor,
+        is_admin=config.is_admin,
     )
     lines = [
         f"host = {_toml_string(merged.host)}",
@@ -122,6 +126,8 @@ def write_config(config: Config) -> None:
         lines.append("is_author = true")
     if merged.is_instructor:
         lines.append("is_instructor = true")
+    if merged.is_admin:
+        lines.append("is_admin = true")
     CONFIG_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -196,11 +202,16 @@ def _user_from_hello(response: pb.HelloResponse) -> AuthenticatedUser:
         user_login=response.user_login,
         is_author=bool(response.is_author),
         is_instructor=bool(response.is_instructor),
+        is_admin=bool(response.is_admin),
     )
 
 
 def _sync_cached_roles(config: Config, user: AuthenticatedUser) -> None:
-    if config.is_author == user.is_author and config.is_instructor == user.is_instructor:
+    if (
+        config.is_author == user.is_author
+        and config.is_instructor == user.is_instructor
+        and config.is_admin == user.is_admin
+    ):
         return
     write_config(
         Config(
@@ -209,10 +220,12 @@ def _sync_cached_roles(config: Config, user: AuthenticatedUser) -> None:
             workspace_root=config.workspace_root,
             is_author=user.is_author,
             is_instructor=user.is_instructor,
+            is_admin=user.is_admin,
         )
     )
     config.is_author = user.is_author
     config.is_instructor = user.is_instructor
+    config.is_admin = user.is_admin
 
 
 def setup(config: Config) -> Session:

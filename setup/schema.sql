@@ -133,12 +133,14 @@ CREATE TABLE users (
     user_id                 text NOT NULL,
     user_name               text NOT NULL,
     user_login              text NOT NULL,
+    admin                   boolean NOT NULL DEFAULT 0,
 
     PRIMARY KEY (user_id),
     UNIQUE (user_login),
     CHECK (trim(user_id) = user_id AND length(user_id) > 0),
     CHECK (trim(user_name) = user_name AND length(user_name) > 0),
-    CHECK (trim(user_login) = user_login AND length(user_login) > 0)
+    CHECK (trim(user_login) = user_login AND length(user_login) > 0),
+    CHECK (admin IN (0, 1))
 ) WITHOUT ROWID;
 
 CREATE TABLE authors (

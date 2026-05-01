@@ -248,7 +248,8 @@ message HelloResponse {
   string user_login = 4;
   bool is_author = 5;
   bool is_instructor = 6;
-  Version version = 7;
+  bool is_admin = 7;
+  Version version = 8;
 }
 
 // Request for ListAssignments

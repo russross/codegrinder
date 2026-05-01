@@ -268,6 +268,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
         *,
         label: str,
         load_user: bool = False,
+        require_admin: bool = False,
         require_author: bool = False,
         include_ip: bool = False,
         fn: Callable[[RpcState], T],
@@ -275,7 +276,9 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
         ip_allowed = self._ip_allowed(context) if include_ip else True
 
         def run(tx: sqlite3.Connection) -> T:
-            current_user = self._current_user_row(tx, context) if load_user or require_author else None
+            current_user = self._current_user_row(tx, context) if load_user or require_admin or require_author else None
+            if require_admin and current_user is not None:
+                self._require_admin(current_user, context)
             if require_author and current_user is not None:
                 self._require_author(current_user, context)
             return fn(RpcState(tx=tx, current_user=current_user, ip_allowed=ip_allowed))
@@ -310,6 +313,12 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
         if is_admin or is_author:
             return
         self._abort(context, grpc.StatusCode.PERMISSION_DENIED, "user is not an author")
+
+    def _require_admin(self, user_row: sqlite3.Row, context: grpc.ServicerContext) -> None:
+        is_admin = bool(user_row["admin"]) if "admin" in user_row.keys() else False
+        if is_admin:
+            return
+        self._abort(context, grpc.StatusCode.PERMISSION_DENIED, "user is not an admin")
 
     def _get_cookie_value(self, context: grpc.ServicerContext) -> str:
         md = context.invocation_metadata()
@@ -368,6 +377,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
             user_login=str(user_row["user_login"]),
             is_author=bool(user_row["author"]) if "author" in user_row.keys() else False,
             is_instructor=bool(user_row["instructor"]) if "instructor" in user_row.keys() else False,
+            is_admin=bool(user_row["admin"]) if "admin" in user_row.keys() else False,
             version=version,
         )
 

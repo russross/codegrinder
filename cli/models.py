@@ -11,6 +11,7 @@ class Config:
     workspace_root: Path = Path.home()
     is_author: bool = False
     is_instructor: bool = False
+    is_admin: bool = False
     api_report: bool = False
     api_dump: bool = False
 
@@ -22,6 +23,7 @@ class AuthenticatedUser:
     user_login: str
     is_author: bool
     is_instructor: bool
+    is_admin: bool
 
 
 @dataclass(slots=True)

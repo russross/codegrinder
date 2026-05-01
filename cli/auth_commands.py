@@ -36,6 +36,7 @@ def command_login(args: argparse.Namespace) -> None:
         config.cookie = response.cookie
         config.is_author = bool(response.is_author)
         config.is_instructor = bool(response.is_instructor)
+        config.is_admin = bool(response.is_admin)
         check_version(response.version)
         if response.user_id == "":
             fail("failed to fetch user: empty response")
