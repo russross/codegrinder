@@ -64,6 +64,62 @@ def command_files(args: argparse.Namespace) -> None:
             print(f"{change.operation.name.lower()}: {change.path}")
 
 
+def command_problemtype(args: argparse.Namespace) -> None:
+    with managed_client(args) as env:
+        if not env.session.user.is_admin:
+            fail("you must be an admin to use this command")
+
+        match args.problemtype_command:
+            case "list":
+                _print_problem_type_list(list(env.client.get_problem_types().problem_types))
+            case "show":
+                response = env.client.get_problem_type(args.problem_type)
+                _print_problem_type(response.problem_type)
+            case "create":
+                change = pb.ProblemTypeChange(
+                    operation=pb.PROBLEM_TYPE_OPERATION_CREATE,
+                    problem_type=args.problem_type,
+                    container=args.container,
+                )
+                env.client.save_problem_type([change], [])
+                print(f"created problem type: {args.problem_type}")
+            case "delete":
+                change = pb.ProblemTypeChange(
+                    operation=pb.PROBLEM_TYPE_OPERATION_DELETE,
+                    problem_type=args.problem_type,
+                )
+                env.client.save_problem_type([change], [])
+                print(f"deleted problem type: {args.problem_type}")
+            case "action-add":
+                change = pb.ProblemTypeActionChange(
+                    operation=pb.PROBLEM_TYPE_ACTION_OPERATION_ADD,
+                    problem_type=args.problem_type,
+                    action=args.action,
+                    action_definition=_action_definition_from_args(args),
+                )
+                env.client.save_problem_type([], [change])
+                print(f"added action: {args.problem_type}/{args.action}")
+            case "action-update":
+                change = pb.ProblemTypeActionChange(
+                    operation=pb.PROBLEM_TYPE_ACTION_OPERATION_UPDATE,
+                    problem_type=args.problem_type,
+                    action=args.action,
+                    action_definition=_action_definition_from_args(args),
+                )
+                env.client.save_problem_type([], [change])
+                print(f"updated action: {args.problem_type}/{args.action}")
+            case "action-delete":
+                change = pb.ProblemTypeActionChange(
+                    operation=pb.PROBLEM_TYPE_ACTION_OPERATION_DELETE,
+                    problem_type=args.problem_type,
+                    action=args.action,
+                )
+                env.client.save_problem_type([], [change])
+                print(f"deleted action: {args.problem_type}/{args.action}")
+            case _:
+                fail("unknown problemtype command")
+
+
 def _resolve_problem_type(explicit_problem_type: str) -> ResolvedProblemType:
     if explicit_problem_type:
         return ResolvedProblemType(problem_type=explicit_problem_type, directory=Path("."))
@@ -125,3 +181,48 @@ def _print_file_statuses(directory: Path, server_files: dict[str, bytes]) -> Non
         else:
             status = "changed"
         print(f"{status}: {path}")
+
+
+def _action_definition_from_args(args: argparse.Namespace) -> pb.ProblemTypeAction:
+    return pb.ProblemTypeAction(
+        command=args.command,
+        parser="" if args.parser == "none" else args.parser,
+        max_cpu=args.max_cpu,
+        max_fd=args.max_fd,
+        max_file_size=args.max_file_size,
+        max_memory=args.max_memory,
+        max_threads=args.max_threads,
+    )
+
+
+def _print_problem_type_list(problem_types: list[pb.ProblemType]) -> None:
+    if not problem_types:
+        print("no problem types found")
+        return
+    width = max(len(problem_type.problem_type) for problem_type in problem_types)
+    for problem_type in sorted(problem_types, key=lambda item: item.problem_type):
+        actions = ", ".join(sorted(problem_type.actions.keys()))
+        print(f"{problem_type.problem_type:<{width}}  container: {problem_type.container}  actions: {actions}")
+
+
+def _print_problem_type(problem_type: pb.ProblemType) -> None:
+    print(f"problem type: {problem_type.problem_type}")
+    print(f"container: {problem_type.container}")
+    print("actions:")
+    if not problem_type.actions:
+        print("  none")
+    else:
+        for action_name, action in sorted(problem_type.actions.items()):
+            parser = action.parser or "none"
+            print(
+                f"  {action_name}: command={action.command!r} parser={parser} "
+                f"max-cpu={action.max_cpu} max-fd={action.max_fd} "
+                f"max-file-size={action.max_file_size} max-memory={action.max_memory} "
+                f"max-threads={action.max_threads}"
+            )
+    print("files:")
+    if not problem_type.files:
+        print("  none")
+    else:
+        for path in sorted(problem_type.files.keys()):
+            print(f"  {path}")

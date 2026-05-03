@@ -62,6 +62,17 @@ class CodeGrinderClient:
             pb.SaveProblemTypeFilesRequest(problem_type=problem_type, changes=changes),
         )
 
+    def save_problem_type(
+        self,
+        problem_type_changes: list[pb.ProblemTypeChange],
+        action_changes: list[pb.ProblemTypeActionChange],
+    ) -> pb.SaveProblemTypeResponse:
+        return self.call(
+            "SaveProblemType",
+            self.session.stub.SaveProblemType,
+            pb.SaveProblemTypeRequest(problem_type_changes=problem_type_changes, action_changes=action_changes),
+        )
+
     def get_assignment(self, assignment: pb.AssignmentKey) -> pb.GetAssignmentResponse:
         return self.call("GetAssignment", self.session.stub.GetAssignment, pb.GetAssignmentRequest(assignment=assignment))
 

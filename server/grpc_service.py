@@ -22,6 +22,7 @@ from mutations import (
     save_graded_runtime_bundle,
     save_problem,
     save_problem_set,
+    save_problem_type,
     save_problem_type_files,
     save_ungraded_commit,
     save_workspace_commit,
@@ -458,6 +459,24 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
             return pb.SaveProblemTypeFilesResponse(problem_type=problem_type)
 
         return self._run_rpc(context, label="SaveProblemTypeFiles", require_admin=True, fn=fn)
+
+    def SaveProblemType(
+        self, request: pb.SaveProblemTypeRequest, context: grpc.ServicerContext
+    ) -> pb.SaveProblemTypeResponse:
+        def fn(state: RpcState) -> pb.SaveProblemTypeResponse:
+            try:
+                problem_types = save_problem_type(
+                    state.tx,
+                    list(request.problem_type_changes),
+                    list(request.action_changes),
+                )
+            except ValueError as exc:
+                self._abort(context, grpc.StatusCode.INVALID_ARGUMENT, f"invalid problem type save: {exc}")
+            except sqlite3.Error as exc:
+                self._abort_sqlite(context, exc, internal="db error saving problem type")
+            return pb.SaveProblemTypeResponse(problem_types=problem_types)
+
+        return self._run_rpc(context, label="SaveProblemType", require_admin=True, fn=fn)
 
     def GetAssignment(self, request: pb.GetAssignmentRequest, context: grpc.ServicerContext) -> pb.GetAssignmentResponse:
         def fn(state: RpcState) -> pb.GetAssignmentResponse:

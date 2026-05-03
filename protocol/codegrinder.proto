@@ -97,6 +97,32 @@ message ProblemTypeFileChange {
   bytes content = 3;
 }
 
+enum ProblemTypeOperation {
+  PROBLEM_TYPE_OPERATION_UNSPECIFIED = 0;
+  PROBLEM_TYPE_OPERATION_CREATE = 1;
+  PROBLEM_TYPE_OPERATION_DELETE = 2;
+}
+
+message ProblemTypeChange {
+  ProblemTypeOperation operation = 1;
+  string problem_type = 2;
+  string container = 3;
+}
+
+enum ProblemTypeActionOperation {
+  PROBLEM_TYPE_ACTION_OPERATION_UNSPECIFIED = 0;
+  PROBLEM_TYPE_ACTION_OPERATION_ADD = 1;
+  PROBLEM_TYPE_ACTION_OPERATION_UPDATE = 2;
+  PROBLEM_TYPE_ACTION_OPERATION_DELETE = 3;
+}
+
+message ProblemTypeActionChange {
+  ProblemTypeActionOperation operation = 1;
+  string problem_type = 2;
+  string action = 3;
+  ProblemTypeAction action_definition = 4;
+}
+
 // ReportCardResult Outcomes:
 // passed, failed, error, skipped
 message ReportCardResult {
@@ -370,6 +396,18 @@ message SaveProblemTypeFilesResponse {
   ProblemType problem_type = 1;
 }
 
+// Request for SaveProblemType
+message SaveProblemTypeRequest {
+  string session_cookie = 1;
+  repeated ProblemTypeChange problem_type_changes = 2;
+  repeated ProblemTypeActionChange action_changes = 3;
+}
+
+// Response for SaveProblemType
+message SaveProblemTypeResponse {
+  repeated ProblemType problem_types = 1;
+}
+
 // Request for GetAssignment
 message GetAssignmentRequest {
   string session_cookie = 1;
@@ -518,6 +556,8 @@ service CodeGrinderService {
   rpc GetProblemType(GetProblemTypeRequest) returns (GetProblemTypeResponse);
   // SaveProblemTypeFiles applies admin changes to canonical problem type files.
   rpc SaveProblemTypeFiles(SaveProblemTypeFilesRequest) returns (SaveProblemTypeFilesResponse);
+  // SaveProblemType applies admin changes to problem type metadata and actions.
+  rpc SaveProblemType(SaveProblemTypeRequest) returns (SaveProblemTypeResponse);
   // GetAssignment retrieves assignment metadata and per-problem step progress.
   rpc GetAssignment(GetAssignmentRequest) returns (GetAssignmentResponse);
   // GetWorkspace retrieves canonical local workspace context for one assignment step.

@@ -12,7 +12,7 @@ import pathspec
 from google.protobuf.json_format import MessageToDict
 
 from problem_files import ProblemStepFileType
-from read_store import load_problem_step_files, load_problem_type_files, load_problem_type_pb
+from read_store import list_problem_type_pbs, load_problem_step_files, load_problem_type_files, load_problem_type_pb
 from proto_conv import parse_time
 from signatures import decode_signed_runtime_bundle, encode_signed_runtime_bundle
 
@@ -253,6 +253,186 @@ def save_problem_type_files(
                 raise ValueError(f"problem type file {path!r} does not exist")
 
     return load_problem_type_pb(tx, problem_type_name)
+
+
+def save_problem_type(
+    tx: sqlite3.Connection,
+    problem_type_changes: list[pb.ProblemTypeChange],
+    action_changes: list[pb.ProblemTypeActionChange],
+) -> list[pb.ProblemType]:
+    if not problem_type_changes and not action_changes:
+        raise ValueError("at least one problem type or action change is required")
+
+    prepared_problem_types = _prepare_problem_type_changes(problem_type_changes)
+    prepared_actions = _prepare_problem_type_action_changes(action_changes)
+
+    for operation, problem_type_name, container in prepared_problem_types:
+        if operation == pb.PROBLEM_TYPE_OPERATION_CREATE:
+            try:
+                tx.execute(
+                    "INSERT INTO problem_types(problem_type, container) VALUES (?, ?)",
+                    (problem_type_name, container),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError(f"problem type {problem_type_name!r} already exists") from exc
+        elif operation == pb.PROBLEM_TYPE_OPERATION_DELETE:
+            try:
+                cursor = tx.execute("DELETE FROM problem_types WHERE problem_type = ?", (problem_type_name,))
+            except sqlite3.IntegrityError as exc:
+                raise ValueError(f"problem type {problem_type_name!r} is still used by existing problem steps") from exc
+            if cursor.rowcount != 1:
+                raise ValueError(f"problem type {problem_type_name!r} does not exist")
+
+    for operation, problem_type_name, action_name, definition in prepared_actions:
+        if operation == pb.PROBLEM_TYPE_ACTION_OPERATION_ADD:
+            cursor = tx.execute("SELECT 1 FROM problem_types WHERE problem_type = ?", (problem_type_name,))
+            if cursor.fetchone() is None:
+                raise ValueError(f"problem type {problem_type_name!r} does not exist")
+            try:
+                tx.execute(
+                    "INSERT INTO problem_type_actions("
+                    "problem_type, action, command, parser, max_cpu, max_fd, max_file_size, max_memory, max_threads"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    _problem_type_action_row(problem_type_name, action_name, definition),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError(f"problem type action {problem_type_name!r}/{action_name!r} already exists") from exc
+        elif operation == pb.PROBLEM_TYPE_ACTION_OPERATION_UPDATE:
+            cursor = tx.execute(
+                "UPDATE problem_type_actions "
+                "SET command = ?, parser = ?, max_cpu = ?, max_fd = ?, max_file_size = ?, max_memory = ?, max_threads = ? "
+                "WHERE problem_type = ? AND action = ?",
+                _problem_type_action_update_row(problem_type_name, action_name, definition),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError(f"problem type action {problem_type_name!r}/{action_name!r} does not exist")
+        elif operation == pb.PROBLEM_TYPE_ACTION_OPERATION_DELETE:
+            cursor = tx.execute(
+                "DELETE FROM problem_type_actions WHERE problem_type = ? AND action = ?",
+                (problem_type_name, action_name),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError(f"problem type action {problem_type_name!r}/{action_name!r} does not exist")
+
+    return list_problem_type_pbs(tx)
+
+
+def _prepare_problem_type_changes(
+    changes: list[pb.ProblemTypeChange],
+) -> list[tuple[pb.ProblemTypeOperation.ValueType, str, str]]:
+    seen: set[str] = set()
+    prepared: list[tuple[pb.ProblemTypeOperation.ValueType, str, str]] = []
+    for change in changes:
+        problem_type_name = _clean_identifier(change.problem_type, label="problem type")
+        if problem_type_name in seen:
+            raise ValueError(f"multiple changes for problem type {problem_type_name!r}")
+        seen.add(problem_type_name)
+        operation = change.operation
+        if operation == pb.PROBLEM_TYPE_OPERATION_UNSPECIFIED:
+            raise ValueError(f"missing operation for problem type {problem_type_name!r}")
+        if operation not in (pb.PROBLEM_TYPE_OPERATION_CREATE, pb.PROBLEM_TYPE_OPERATION_DELETE):
+            raise ValueError(f"unknown operation for problem type {problem_type_name!r}")
+        container = change.container.strip()
+        if operation == pb.PROBLEM_TYPE_OPERATION_CREATE and container == "":
+            raise ValueError(f"container is required for problem type {problem_type_name!r}")
+        if operation == pb.PROBLEM_TYPE_OPERATION_DELETE and container != "":
+            raise ValueError(f"delete change for problem type {problem_type_name!r} must not include container")
+        prepared.append((operation, problem_type_name, container))
+    return prepared
+
+
+def _prepare_problem_type_action_changes(
+    changes: list[pb.ProblemTypeActionChange],
+) -> list[tuple[pb.ProblemTypeActionOperation.ValueType, str, str, pb.ProblemTypeAction]]:
+    seen: set[tuple[str, str]] = set()
+    prepared: list[tuple[pb.ProblemTypeActionOperation.ValueType, str, str, pb.ProblemTypeAction]] = []
+    for change in changes:
+        problem_type_name = _clean_identifier(change.problem_type, label="problem type")
+        action_name = _clean_identifier(change.action, label="problem type action")
+        key = (problem_type_name, action_name)
+        if key in seen:
+            raise ValueError(f"multiple changes for problem type action {problem_type_name!r}/{action_name!r}")
+        seen.add(key)
+        operation = change.operation
+        if operation == pb.PROBLEM_TYPE_ACTION_OPERATION_UNSPECIFIED:
+            raise ValueError(f"missing operation for problem type action {problem_type_name!r}/{action_name!r}")
+        if operation not in (
+            pb.PROBLEM_TYPE_ACTION_OPERATION_ADD,
+            pb.PROBLEM_TYPE_ACTION_OPERATION_UPDATE,
+            pb.PROBLEM_TYPE_ACTION_OPERATION_DELETE,
+        ):
+            raise ValueError(f"unknown operation for problem type action {problem_type_name!r}/{action_name!r}")
+        definition = change.action_definition
+        if operation in (pb.PROBLEM_TYPE_ACTION_OPERATION_ADD, pb.PROBLEM_TYPE_ACTION_OPERATION_UPDATE):
+            _validate_problem_type_action_definition(definition, label=f"{problem_type_name!r}/{action_name!r}")
+        elif definition != pb.ProblemTypeAction():
+            raise ValueError(f"delete change for problem type action {problem_type_name!r}/{action_name!r} must not include definition")
+        prepared.append((operation, problem_type_name, action_name, definition))
+    return prepared
+
+
+def _clean_identifier(value: str, *, label: str) -> str:
+    cleaned = value.strip()
+    if cleaned == "":
+        raise ValueError(f"{label} is required")
+    if cleaned != value:
+        raise ValueError(f"{label} must not have leading or trailing whitespace: {value!r}")
+    return cleaned
+
+
+def _validate_problem_type_action_definition(action: pb.ProblemTypeAction, *, label: str) -> None:
+    if action.command.strip() == "":
+        raise ValueError(f"command is required for problem type action {label}")
+    if action.command.strip() != action.command:
+        raise ValueError(f"command must not have leading or trailing whitespace for problem type action {label}")
+    if action.parser not in ("", "xunit", "check"):
+        raise ValueError(f"parser must be empty, 'xunit', or 'check' for problem type action {label}")
+    if action.max_cpu <= 0:
+        raise ValueError(f"max-cpu must be greater than 0 for problem type action {label}")
+    if action.max_fd <= 0:
+        raise ValueError(f"max-fd must be greater than 0 for problem type action {label}")
+    if action.max_file_size <= 0:
+        raise ValueError(f"max-file-size must be greater than 0 for problem type action {label}")
+    if action.max_memory < 0:
+        raise ValueError(f"max-memory must be greater than or equal to 0 for problem type action {label}")
+    if action.max_threads <= 0:
+        raise ValueError(f"max-threads must be greater than 0 for problem type action {label}")
+
+
+def _problem_type_action_row(
+    problem_type_name: str,
+    action_name: str,
+    definition: pb.ProblemTypeAction,
+) -> tuple[str, str, str, str | None, int, int, int, int, int]:
+    return (
+        problem_type_name,
+        action_name,
+        definition.command,
+        None if definition.parser == "" else definition.parser,
+        int(definition.max_cpu),
+        int(definition.max_fd),
+        int(definition.max_file_size),
+        int(definition.max_memory),
+        int(definition.max_threads),
+    )
+
+
+def _problem_type_action_update_row(
+    problem_type_name: str,
+    action_name: str,
+    definition: pb.ProblemTypeAction,
+) -> tuple[str, str | None, int, int, int, int, int, str, str]:
+    return (
+        definition.command,
+        None if definition.parser == "" else definition.parser,
+        int(definition.max_cpu),
+        int(definition.max_fd),
+        int(definition.max_file_size),
+        int(definition.max_memory),
+        int(definition.max_threads),
+        problem_type_name,
+        action_name,
+    )
 
 
 def _gitignore_spec(tree: dict[str, bytes]) -> pathspec.GitIgnoreSpec:

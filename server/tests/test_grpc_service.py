@@ -300,6 +300,126 @@ class GrpcServiceTests(unittest.TestCase):
 
         self.assertEqual(err.exception.code, grpc.StatusCode.INVALID_ARGUMENT)
 
+    def test_save_problem_type_requires_admin(self) -> None:
+        request = pb.SaveProblemTypeRequest(
+            problem_type_changes=[
+                pb.ProblemTypeChange(
+                    operation=pb.PROBLEM_TYPE_OPERATION_CREATE,
+                    problem_type="newtype",
+                    container="codegrinder/new",
+                )
+            ],
+        )
+
+        with self.assertRaises(_AbortError) as err:
+            self.service.SaveProblemType(request, cast(grpc.ServicerContext, self._auth_context("u2")))
+
+        self.assertEqual(err.exception.code, grpc.StatusCode.PERMISSION_DENIED)
+
+    def test_save_problem_type_manages_types_and_actions(self) -> None:
+        create_request = pb.SaveProblemTypeRequest(
+            problem_type_changes=[
+                pb.ProblemTypeChange(
+                    operation=pb.PROBLEM_TYPE_OPERATION_CREATE,
+                    problem_type="newtype",
+                    container="codegrinder/new",
+                )
+            ],
+            action_changes=[
+                pb.ProblemTypeActionChange(
+                    operation=pb.PROBLEM_TYPE_ACTION_OPERATION_ADD,
+                    problem_type="newtype",
+                    action="grade",
+                    action_definition=pb.ProblemTypeAction(
+                        command="make grade",
+                        parser="xunit",
+                        max_cpu=10,
+                        max_fd=100,
+                        max_file_size=10,
+                        max_memory=256,
+                        max_threads=20,
+                    ),
+                )
+            ],
+        )
+
+        created = self.service.SaveProblemType(create_request, cast(grpc.ServicerContext, self._auth_context("u-admin")))
+
+        newtype = next(problem_type for problem_type in created.problem_types if problem_type.problem_type == "newtype")
+        self.assertEqual(newtype.container, "codegrinder/new")
+        self.assertEqual(newtype.actions["grade"].command, "make grade")
+
+        update_request = pb.SaveProblemTypeRequest(
+            action_changes=[
+                pb.ProblemTypeActionChange(
+                    operation=pb.PROBLEM_TYPE_ACTION_OPERATION_UPDATE,
+                    problem_type="newtype",
+                    action="grade",
+                    action_definition=pb.ProblemTypeAction(
+                        command="make test",
+                        parser="check",
+                        max_cpu=20,
+                        max_fd=101,
+                        max_file_size=11,
+                        max_memory=512,
+                        max_threads=21,
+                    ),
+                )
+            ],
+        )
+
+        updated = self.service.SaveProblemType(update_request, cast(grpc.ServicerContext, self._auth_context("u-admin")))
+
+        newtype = next(problem_type for problem_type in updated.problem_types if problem_type.problem_type == "newtype")
+        self.assertEqual(newtype.actions["grade"].command, "make test")
+        self.assertEqual(newtype.actions["grade"].parser, "check")
+
+        delete_action_request = pb.SaveProblemTypeRequest(
+            action_changes=[
+                pb.ProblemTypeActionChange(
+                    operation=pb.PROBLEM_TYPE_ACTION_OPERATION_DELETE,
+                    problem_type="newtype",
+                    action="grade",
+                )
+            ],
+        )
+
+        deleted_action = self.service.SaveProblemType(
+            delete_action_request,
+            cast(grpc.ServicerContext, self._auth_context("u-admin")),
+        )
+
+        newtype = next(problem_type for problem_type in deleted_action.problem_types if problem_type.problem_type == "newtype")
+        self.assertNotIn("grade", newtype.actions)
+
+        delete_type_request = pb.SaveProblemTypeRequest(
+            problem_type_changes=[
+                pb.ProblemTypeChange(
+                    operation=pb.PROBLEM_TYPE_OPERATION_DELETE,
+                    problem_type="newtype",
+                )
+            ],
+        )
+
+        deleted_type = self.service.SaveProblemType(delete_type_request, cast(grpc.ServicerContext, self._auth_context("u-admin")))
+
+        self.assertNotIn("newtype", {problem_type.problem_type for problem_type in deleted_type.problem_types})
+
+    def test_save_problem_type_rejects_deleting_type_used_by_steps(self) -> None:
+        request = pb.SaveProblemTypeRequest(
+            problem_type_changes=[
+                pb.ProblemTypeChange(
+                    operation=pb.PROBLEM_TYPE_OPERATION_DELETE,
+                    problem_type="python3unittest",
+                )
+            ],
+        )
+
+        with self.assertRaises(_AbortError) as err:
+            self.service.SaveProblemType(request, cast(grpc.ServicerContext, self._auth_context("u-admin")))
+
+        self.assertEqual(err.exception.code, grpc.StatusCode.INVALID_ARGUMENT)
+
     def test_list_assignments_modes(self) -> None:
         student_ctx = cast(grpc.ServicerContext, self._auth_context("u1"))
         student_reply = self.service.ListAssignments(

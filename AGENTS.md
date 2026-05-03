@@ -34,7 +34,7 @@ For the exam interface under `www/exam`:
 - Student-visible commands are `version`, `login`, `list`, `get`, `sync`, `grade`, `action`, and `reset`.
 - Cached instructor visibility additionally enables `student`.
 - Cached author visibility additionally enables `create`, `problem`, and `type`.
-- Cached admin visibility additionally enables admin-only commands, including `files`. The server must enforce admin permissions for every admin RPC.
+- Cached admin visibility additionally enables admin-only commands, including `problemtype`. The server must enforce admin permissions for every admin RPC.
 - Cached instructor or author visibility additionally enables `solve`.
 - Instructor-only flags `--api` and `--api-dump` report or dump API traffic; they must not change command semantics.
 - Commands that operate on a local assignment must discover the assignment by finding `.grind` in the current directory or an ancestor.
@@ -266,14 +266,27 @@ For the exam interface under `www/exam`:
 - `grind type --remove TYPE` or `grind type --remove` removes the canonical files for the resolved problem type from the target directory.
 - The server owns problem type definitions, canonical files, and action lists. The CLI only writes or removes exactly the returned canonical file paths.
 
-# `grind files`
+# `grind problemtype`
 
-- `grind files` is available only when admin mode is enabled locally. The server must enforce admin permissions.
-- `grind files [--type TYPE]` reports the status of the canonical server-owned file set for a problem type compared to local files. It must not detect or report local files that are not in the server-owned file set.
-- Without `--type`, `grind files` resolves the nearest author `problem.cfg`, determines the active step's configured problem type, and compares against that step directory. In multi-step layouts it must be run from a step directory.
+- `grind problemtype` is available only when admin mode is enabled locally. The server must enforce admin permissions for every problem type mutation RPC.
+- `grind problemtype list` lists all problem types, containers, and actions by calling `GetProblemTypes`.
+- `grind problemtype show --problem-type TYPE` prints one problem type's container, actions, and canonical file paths by calling `GetProblemType`.
+- `grind problemtype create --problem-type TYPE --container CONTAINER` creates a problem type row that references an existing container image. Creating or managing container images is out of scope for the CLI.
+- `grind problemtype delete --problem-type TYPE` deletes a problem type. The server must reject deletion when any existing problem step uses that problem type.
+- `grind problemtype action add --problem-type TYPE --action ACTION --command COMMAND --parser PARSER --max-cpu N --max-fd N --max-file-size N --max-memory N --max-threads N` adds an action to a problem type.
+- `grind problemtype action update --problem-type TYPE --action ACTION --command COMMAND --parser PARSER --max-cpu N --max-fd N --max-file-size N --max-memory N --max-threads N` replaces the complete action definition. Partial action updates are not supported.
+- `grind problemtype action delete --problem-type TYPE --action ACTION` deletes an action from a problem type.
+- Action parser values are `none`, `xunit`, and `check`; `none` stores no parser.
+- Problem type and action mutations are admin-only server operations and must be applied transactionally.
+
+# `grind problemtype files`
+
+- `grind problemtype files` is available only when admin mode is enabled locally. The server must enforce admin permissions.
+- `grind problemtype files [--type TYPE]` reports the status of the canonical server-owned file set for a problem type compared to local files. It must not detect or report local files that are not in the server-owned file set.
+- Without `--type`, `grind problemtype files` resolves the nearest author `problem.cfg`, determines the active step's configured problem type, and compares against that step directory. In multi-step layouts it must be run from a step directory.
 - `--type TYPE` explicitly selects a problem type and compares against the current directory. There is no shortcut for `--type`.
 - Status output covers every canonical server file path and reports each as unchanged, changed, or missing.
-- `grind files` mutates server problem type files only through explicit per-file options: `--delete PATH`, `--add PATH`, and `--update PATH`. Multiple mutation options may be used in one command.
+- `grind problemtype files` mutates server problem type files only through explicit per-file options: `--delete PATH`, `--add PATH`, and `--update PATH`. Multiple mutation options may be used in one command.
 - `--add` and `--update` read the local file content from the resolved target directory and send it to the server. `--delete` sends only the canonical path.
 - The CLI must reject multiple requested changes for the same normalized path before calling the server.
 - The server must also reject multiple requested changes for the same normalized path.

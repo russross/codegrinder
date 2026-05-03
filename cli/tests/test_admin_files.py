@@ -10,18 +10,80 @@ from admin_commands import _collect_changes, _print_file_statuses
 from errors import CliError
 
 
-def test_files_command_visible_only_for_cached_admin(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_problemtype_files_command_visible_only_for_cached_admin(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cli, "load_config_or_default", lambda: helpers.Config(is_admin=False))
     student_parser = cli._build_parser()
     with pytest.raises(SystemExit):
-        student_parser.parse_args(["files"])
+        student_parser.parse_args(["problemtype"])
 
     monkeypatch.setattr(cli, "load_config_or_default", lambda: helpers.Config(is_admin=True))
     admin_parser = cli._build_parser()
-    namespace = admin_parser.parse_args(["files", "--type", "python3unittest"])
+    with pytest.raises(SystemExit):
+        admin_parser.parse_args(["files"])
 
-    assert namespace.command == "files"
+    namespace = admin_parser.parse_args(["problemtype", "files", "--type", "python3unittest"])
+
+    assert namespace.command == "problemtype"
+    assert namespace.problemtype_command == "files"
     assert namespace.problem_type == "python3unittest"
+
+
+def test_problemtype_management_parser_requires_explicit_action_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "load_config_or_default", lambda: helpers.Config(is_admin=True))
+    parser = cli._build_parser()
+
+    namespace = parser.parse_args(["problemtype", "create", "--problem-type", "python3unittest", "--container", "img"])
+
+    assert namespace.command == "problemtype"
+    assert namespace.problemtype_command == "create"
+    assert namespace.problem_type == "python3unittest"
+    assert namespace.container == "img"
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "problemtype",
+                "action",
+                "add",
+                "--problem-type",
+                "python3unittest",
+                "--action",
+                "grade",
+                "--command",
+                "make grade",
+            ]
+        )
+
+    action_namespace = parser.parse_args(
+        [
+            "problemtype",
+            "action",
+            "add",
+            "--problem-type",
+            "python3unittest",
+            "--action",
+            "grade",
+            "--command",
+            "make grade",
+            "--parser",
+            "xunit",
+            "--max-cpu",
+            "10",
+            "--max-fd",
+            "100",
+            "--max-file-size",
+            "10",
+            "--max-memory",
+            "256",
+            "--max-threads",
+            "20",
+        ]
+    )
+
+    assert action_namespace.problemtype_command == "action-add"
+    assert action_namespace.problem_type == "python3unittest"
+    assert action_namespace.action == "grade"
+    assert action_namespace.max_memory == 256
 
 
 def test_collect_files_changes_rejects_duplicate_normalized_paths(tmp_path: Path) -> None:

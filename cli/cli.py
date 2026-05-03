@@ -5,7 +5,7 @@ import logging
 import sys
 from collections.abc import Sequence
 
-from admin_commands import command_files
+from admin_commands import command_files, command_problemtype
 from assignment_commands import command_get, command_list
 from auth_commands import command_login, command_version
 from author_commands import command_create, command_problem, command_solve, command_student, command_type
@@ -94,7 +94,42 @@ def _build_parser() -> argparse.ArgumentParser:
         type_cmd.set_defaults(func=command_type)
 
     if is_admin:
-        files_cmd = subs.add_parser("files", help="push files for a problem type (admins only)")
+        problemtype_cmd = subs.add_parser("problemtype", help="manage problem types (admins only)")
+        problemtype_subs = problemtype_cmd.add_subparsers(dest="problemtype_command")
+
+        list_cmd = problemtype_subs.add_parser("list", help="list problem types")
+        list_cmd.set_defaults(func=command_problemtype)
+
+        show_cmd = problemtype_subs.add_parser("show", help="show one problem type")
+        show_cmd.add_argument("--problem-type", required=True)
+        show_cmd.set_defaults(func=command_problemtype)
+
+        create_cmd = problemtype_subs.add_parser("create", help="create a problem type")
+        create_cmd.add_argument("--problem-type", required=True)
+        create_cmd.add_argument("--container", required=True)
+        create_cmd.set_defaults(func=command_problemtype)
+
+        delete_cmd = problemtype_subs.add_parser("delete", help="delete a problem type")
+        delete_cmd.add_argument("--problem-type", required=True)
+        delete_cmd.set_defaults(func=command_problemtype)
+
+        action_cmd = problemtype_subs.add_parser("action", help="manage problem type actions")
+        action_subs = action_cmd.add_subparsers(dest="action_command")
+
+        action_add_cmd = action_subs.add_parser("add", help="add a problem type action")
+        _add_problemtype_action_args(action_add_cmd)
+        action_add_cmd.set_defaults(func=command_problemtype, problemtype_command="action-add")
+
+        action_update_cmd = action_subs.add_parser("update", help="update a problem type action")
+        _add_problemtype_action_args(action_update_cmd)
+        action_update_cmd.set_defaults(func=command_problemtype, problemtype_command="action-update")
+
+        action_delete_cmd = action_subs.add_parser("delete", help="delete a problem type action")
+        action_delete_cmd.add_argument("--problem-type", required=True)
+        action_delete_cmd.add_argument("--action", required=True)
+        action_delete_cmd.set_defaults(func=command_problemtype, problemtype_command="action-delete")
+
+        files_cmd = problemtype_subs.add_parser("files", help="push files for a problem type")
         files_cmd.add_argument("--type", dest="problem_type", default="")
         files_cmd.add_argument("--delete", dest="delete_files", action="append", default=[])
         files_cmd.add_argument("--add", dest="add_files", action="append", default=[])
@@ -102,6 +137,18 @@ def _build_parser() -> argparse.ArgumentParser:
         files_cmd.set_defaults(func=command_files)
 
     return parser
+
+
+def _add_problemtype_action_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--problem-type", required=True)
+    parser.add_argument("--action", required=True)
+    parser.add_argument("--command", required=True)
+    parser.add_argument("--parser", required=True, choices=("none", "xunit", "check"))
+    parser.add_argument("--max-cpu", required=True, type=int)
+    parser.add_argument("--max-fd", required=True, type=int)
+    parser.add_argument("--max-file-size", required=True, type=int)
+    parser.add_argument("--max-memory", required=True, type=int)
+    parser.add_argument("--max-threads", required=True, type=int)
 
 
 def run(argv: Sequence[str] | None = None) -> int:
