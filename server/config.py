@@ -27,7 +27,9 @@ class ServerConfig:
     tool_name: str = "CodeGrinder"
     tool_id: str = "codegrinder"
     tool_description: str = "Programming exercises with grading"
-    container_engine: str = "doas podman"
+    container_engine: str = "docker"
+    daycare_mount_dir: str = ""
+    daycare_mount_size: str = "128m"
     acme_cache: str = ""
     sqlite3_path: str = ""
     sessions_expire: list[datetime] = field(default_factory=list)
@@ -70,6 +72,13 @@ def load_config(config_path: Path) -> ServerConfig:
     if now_tz is None:
         raise RuntimeError("local timezone is required")
 
+    raw_daycare_mount_dir = data.get("daycareMountDir")
+    daycare_mount_dir = (
+        str(raw_daycare_mount_dir)
+        if raw_daycare_mount_dir is not None
+        else str(config_path.parent / "daycare-mounts")
+    )
+
     cfg = ServerConfig(
         hostname=str(data.get("hostname", "")),
         daycare_secret=str(data.get("daycareSecret", "")),
@@ -83,7 +92,9 @@ def load_config(config_path: Path) -> ServerConfig:
         tool_name=str(data.get("toolName", "CodeGrinder")),
         tool_id=str(data.get("toolID", "codegrinder")),
         tool_description=str(data.get("toolDescription", "Programming exercises with grading")),
-        container_engine=str(data.get("containerEngine", "doas podman")),
+        container_engine=str(data.get("containerEngine", "docker")),
+        daycare_mount_dir=daycare_mount_dir,
+        daycare_mount_size=str(data.get("daycareMountSize", "128m")),
         acme_cache=str(data.get("acmeDir", "")),
         sqlite3_path=str(data.get("sqlite3Path", "")),
         sessions_expire=_default_sessions_expire(now_tz),

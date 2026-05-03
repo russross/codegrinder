@@ -13,6 +13,7 @@ import grpc
 
 import codegrinder_pb2 as pb
 from config import ServerConfig
+from daycare import DaycareRuntime
 from db import setup_db
 from grpc_service import CodeGrinderService
 from problem_files import ProblemStepFileType
@@ -186,9 +187,11 @@ class GrpcServiceTests(unittest.TestCase):
                 datetime(2020, 7, 1, 0, 0, 0, tzinfo=UTC),
             ],
             sqlite3_path=str(db_path),
+            daycare_mount_dir=str(root / "daycare-mounts"),
         )
         self.logins = LoginRecords()
-        self.service = CodeGrinderService(self.conn, self.config, login_records=self.logins)
+        daycare = DaycareRuntime(self.config, validate_mount=False)
+        self.service = CodeGrinderService(self.conn, self.config, login_records=self.logins, daycare=daycare)
 
     def tearDown(self) -> None:
         self.conn.close()

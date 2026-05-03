@@ -6,5 +6,6 @@ config.json
 rpc/*.pb.go
 *.swp
 certs
+daycare-mounts
 .ruff_cache
 TODO.md

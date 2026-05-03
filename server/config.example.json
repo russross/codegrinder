@@ -3,7 +3,9 @@
   "daycareSecret": "REPLACE_WITH_SECRET",
   "ltiSecret": "REPLACE_WITH_LTI_SECRET",
   "sessionSecret": "REPLACE_WITH_SECRET",
-  "containerEngine": "doas podman",
+  "containerEngine": "docker",
+  "daycareMountDir": "/home/russ/codegrinder/daycare-mounts",
+  "daycareMountSize": "128m",
   "sqlite3Path": "/home/russ/codegrinder/db/codegrinder.db",
   "capacity": 1,
   "problemTypes": [

@@ -14,6 +14,97 @@ pidfile="/run/${RC_SVCNAME}.pid"
 
 depend() {
     need net localmount logger
+    need docker
+}
+
+config_value() {
+    local key="$1"
+    local fallback="$2"
+    python3 - "$config_path" "$key" "$fallback" <<'PY'
+import json
+import sys
+
+path, key, fallback = sys.argv[1:4]
+try:
+    with open(path, encoding="utf-8") as file:
+        data = json.load(file)
+except Exception:
+    print(fallback)
+    raise SystemExit(0)
+value = data.get(key, fallback)
+if value is None:
+    value = fallback
+print(str(value))
+PY
+}
+
+daycare_mount_dir() {
+    config_value "daycareMountDir" "${codegrinder_root}/daycare-mounts"
+}
+
+daycare_mount_size() {
+    config_value "daycareMountSize" "128m"
+}
+
+remove_daycare_containers() {
+    local container_id
+    docker ps -aq --filter "label=codegrinder.daycare=true" 2>/dev/null | while read -r container_id; do
+        [ -n "$container_id" ] && docker rm -f "$container_id" >/dev/null 2>&1
+    done
+}
+
+is_mounted() {
+    local dir="$1"
+    awk -v target="$dir" '$2 == target { found = 1 } END { exit found ? 0 : 1 }' /proc/mounts
+}
+
+prepare_daycare_mount() {
+    local dir
+    local size
+    local uid
+    local gid
+
+    dir="$(daycare_mount_dir)"
+    size="$(daycare_mount_size)"
+    uid="$(id -u "$cg_user")"
+    gid="$(id -g "$cg_group")"
+    case "$dir" in
+        ""|"/")
+            eerror "Refusing unsafe daycareMountDir: ${dir}"
+            return 1
+            ;;
+    esac
+
+    remove_daycare_containers
+    if is_mounted "$dir"; then
+        umount "$dir" || return 1
+    fi
+    rm -rf "$dir"
+    mkdir -p "$dir" || return 1
+    chown "${cg_user}:${cg_group}" "$dir" || return 1
+    mount -t tmpfs -o "size=${size},mode=0700,uid=${uid},gid=${gid}" codegrinder-daycare "$dir"
+}
+
+cleanup_daycare_mount() {
+    local dir
+
+    dir="$(daycare_mount_dir)"
+    case "$dir" in
+        ""|"/")
+            eerror "Refusing unsafe daycareMountDir: ${dir}"
+            return 1
+            ;;
+    esac
+    remove_daycare_containers
+    if is_mounted "$dir"; then
+        umount "$dir"
+    fi
+}
+
+start_pre() {
+    ebegin "Preparing daycare tmpfs"
+    prepare_daycare_mount
+    eend $?
 }
 
 start() {
@@ -33,5 +124,11 @@ start() {
 stop() {
     ebegin "Stopping ${name}"
     start-stop-daemon --stop --pidfile "${pidfile}" --retry TERM/30/KILL/5
+    eend $?
+}
+
+stop_post() {
+    ebegin "Cleaning daycare tmpfs"
+    cleanup_daycare_mount
     eend $?
 }

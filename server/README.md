@@ -15,7 +15,7 @@ Install/verify these packages:
 
 ```sh
 doas apk update
-doas apk add nginx certbot certbot-nginx uv podman
+doas apk add nginx certbot certbot-nginx uv docker
 ```
 
 Notes:
@@ -44,9 +44,10 @@ cp /home/russ/codegrinder/server/config.example.json /home/russ/codegrinder/conf
 ```
 
 Set secrets in `/home/russ/codegrinder/config.json` (`daycareSecret`, `ltiSecret`, `sessionSecret`) before starting the service.
-Set `containerEngine` to `doas podman` for rootful Podman execution from an unprivileged server process. Daycare containers are launched unprivileged (`--user 1001:1001`, dropped capabilities, `no-new-privileges`).
-When using Podman, unqualified image names (for example `codegrinder/riscv`) are automatically resolved as `localhost/codegrinder/riscv`.
-Daycare always runs containers with `--pull=never` and only tries local image candidates, so it will not trigger remote image pulls.
+Set `containerEngine` to `docker`. `daycareMountDir` defaults to `$CODEGRINDEROOT/daycare-mounts`, and `daycareMountSize` defaults to `128m`.
+The OpenRC service mounts `daycareMountDir` as tmpfs before the unprivileged server starts. Daycare refuses to run if that directory is not a tmpfs mount.
+Daycare containers are launched unprivileged as the server UID/GID, with dropped capabilities and `no-new-privileges`.
+Daycare always runs containers with `--pull=never`, so it will not trigger remote image pulls.
 
 ## 4. Sync Python environment
 

@@ -1,5 +1,16 @@
 # General project rules
 
+Core architecture metaphors:
+
+- The main server is the TA: a university course teaching assistant responsible for bookkeeping, grade management, problem sets, assignments, LMS integration, and mediation between students, instructors, and authors. The TA should be a lightweight administrative functionary, not the place for long-running work or broad execution policy. Database transactions must be short-lived and must not block on external network connections.
+- Student code is treated like an unruly toddler: usually not malicious, but often reckless and unsafe by default. The system supervising it is a nanny, focused on resource limits, damage prevention, and containment.
+- A daycare manages nannies and student-code execution. Daycares are stateless, disposable islands for sandboxing, isolation, cleanup, and crowd control. They should have few policy opinions and should not need detailed knowledge of assignments beyond the signed runtime bundle they are asked to run.
+- The TA is the real server. Daycares are add-ons that phone home to register with the TA using a shared secret and lease timeout. We support multiple daycares, and operators should be able to reset or replace them freely.
+- In the common deployment, one TA and one daycare often run as a single process on one machine. They remain logically independent: long-running daycare requests must not interfere with quick TA transactions.
+- Clients shuttle signed messages and file sets between the TA and daycares. Daycares and the TA do not communicate directly during grading/action execution.
+- CORS for browser clients belongs at the daycare boundary, not the TA boundary.
+- TA and daycare deployments are easy to update together, so protocol migration between them is not a major concern. Student clients are harder to update and run in the wild, so version requirements matter and clients must not be trusted.
+
 For Python server checks:
 
 - The server is its own uv project under `server/`; run server pytest from that directory with `uv run pytest tests`.

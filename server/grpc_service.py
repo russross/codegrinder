@@ -225,6 +225,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
         login_records: LoginRecords | None = None,
         version: VersionInfo | None = None,
         daycare_registry: DaycareRegistry | None = None,
+        daycare: DaycareRuntime | None = None,
     ) -> None:
         self._conn = conn
         self._config = config
@@ -233,7 +234,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
         self._daycare_registry = daycare_registry
         whitelist = config.ip_filter.whitelist if config.ip_filter is not None else []
         self.ip_filter = IPFilter.from_entries(whitelist)
-        self._daycare = DaycareRuntime(config)
+        self._daycare = daycare or DaycareRuntime(config)
 
     @property
     def conn(self) -> sqlite3.Connection:

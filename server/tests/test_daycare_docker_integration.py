@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import tempfile
 import unittest
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,8 +15,8 @@ from config import ServerConfig
 from daycare import DaycareRuntime
 from signatures import decode_signed_runtime_bundle, encode_signed_runtime_bundle
 
-_RUNTIME_CANDIDATES: tuple[tuple[str, ...], ...] = (("doas", "podman"), ("podman",))
-_IMAGE_CANDIDATES: tuple[str, ...] = ("localhost/codegrinder/riscv", "codegrinder/riscv")
+_RUNTIME_CANDIDATES: tuple[tuple[str, ...], ...] = (("docker",),)
+_IMAGE_CANDIDATES: tuple[str, ...] = ("codegrinder/riscv",)
 
 
 class _AbortError(Exception):
@@ -109,7 +110,7 @@ def _build_signed_request(*, action: str, problem_options: list[str], image: str
     return pb.DaycareRequest(bundle=encode_signed_runtime_bundle(bundle, "daycare-secret"), args=[])
 
 
-class DaycarePodmanIntegrationTests(unittest.TestCase):
+class DaycareDockerIntegrationTests(unittest.TestCase):
     def _require_runtime_and_image(self) -> tuple[list[str], str]:
         messages: list[str] = []
         for runtime in _RUNTIME_CANDIDATES:
@@ -135,20 +136,25 @@ class DaycarePodmanIntegrationTests(unittest.TestCase):
                     return list(runtime), image
                 messages.append(f"{' '.join(runtime)} {image}: {probe.stderr.strip()}")
         if len(messages) == 0:
-            self.skipTest("required image not present: localhost/codegrinder/riscv or codegrinder/riscv")
-        self.skipTest(f"podman runtime unavailable for integration test: {'; '.join(messages)}")
+            self.skipTest("required image not present: codegrinder/riscv")
+        self.skipTest(f"docker runtime unavailable for integration test: {'; '.join(messages)}")
         raise AssertionError("unreachable")
 
     def _runtime(self, container_command: list[str]) -> DaycareRuntime:
-        return DaycareRuntime(
+        tmp = tempfile.TemporaryDirectory()
+        runtime = DaycareRuntime(
             ServerConfig(
                 hostname="daycare.example.invalid",
                 daycare_secret="daycare-secret",
                 session_secret="session-secret",
                 capacity=1,
                 container_engine=" ".join(container_command),
-            )
+                daycare_mount_dir=tmp.name,
+            ),
+            validate_mount=False,
         )
+        setattr(runtime, "_test_tmp", tmp)
+        return runtime
 
     def test_run_action_streams_exec_and_success_exit(self) -> None:
         container_command, image = self._require_runtime_and_image()

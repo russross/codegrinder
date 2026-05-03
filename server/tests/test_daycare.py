@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import io
 import queue
-import tarfile
+import tempfile
 import unittest
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -19,22 +18,11 @@ from daycare import (
     DaycareRuntime,
     TRANSCRIPT_DATA_LIMIT,
     TRANSCRIPT_EVENT_COUNT_LIMIT,
+    WorkspaceMount,
     gather_files,
     stream_nanny_events,
 )
 from signatures import decode_signed_runtime_bundle, encode_signed_runtime_bundle
-
-
-def _tar_bytes(files: dict[str, bytes]) -> bytes:
-    stream = io.BytesIO()
-    with tarfile.open(fileobj=stream, mode="w") as archive:
-        for name, content in files.items():
-            info = tarfile.TarInfo(name=name)
-            info.type = tarfile.REGTYPE
-            info.mode = 0o644
-            info.size = len(content)
-            archive.addfile(info, io.BytesIO(content))
-    return stream.getvalue()
 
 
 @dataclass(slots=True)
@@ -48,16 +36,11 @@ def _command_key(args: list[str]) -> str:
     for idx, token in enumerate(args):
         if idx + 1 >= len(args):
             break
-        if token.split("/")[-1] in ("docker", "podman"):
+        if token.split("/")[-1] == "docker":
             op_index = idx + 1
             break
     if op_index >= 0:
         op = args[op_index]
-        if op == "cp":
-            if len(args) >= op_index + 2 and args[op_index + 1] == "-":
-                return "cp_put"
-            if len(args) >= op_index + 2 and args[-1] == "-":
-                return "cp_get"
         return op
     return "other"
 
@@ -96,8 +79,6 @@ class _FakeRunner:
                 return planned.result
         if key == "run":
             return CommandResult(returncode=0, stdout=b"container-id\n", stderr=b"")
-        if key == "cp_get":
-            return CommandResult(returncode=0, stdout=_tar_bytes({}), stderr=b"")
         _ = input_bytes
         return CommandResult(returncode=0, stdout=b"", stderr=b"")
 
@@ -121,13 +102,17 @@ class _FakeContext:
 
 
 def _build_runtime(runner: _FakeRunner) -> DaycareRuntime:
+    tmp = tempfile.TemporaryDirectory()
     config = ServerConfig(
         hostname="daycare.example.invalid",
         daycare_secret="daycare-secret",
         capacity=2,
         session_secret="session-secret",
+        daycare_mount_dir=tmp.name,
     )
-    return DaycareRuntime(config, runner=runner)
+    runtime = DaycareRuntime(config, runner=runner, validate_mount=False)
+    setattr(runtime, "_test_tmp", tmp)
+    return runtime
 
 
 def _build_signed_request(
@@ -137,6 +122,7 @@ def _build_signed_request(
     action: str = "grade",
     parser: str = "",
     updated_at: datetime | None = None,
+    runtime_files: dict[str, bytes] | None = None,
 ) -> pb.DaycareRequest:
     now = updated_at or datetime.now(tz=UTC)
     limits = pb.RuntimeLimits(max_cpu=10, max_fd=128, max_file_size=2, max_memory=128, max_threads=16)
@@ -165,7 +151,8 @@ def _build_signed_request(
         command="run-tests",
         parser=parser,
         limits=limits,
-        files={
+        files=runtime_files
+        or {
             "Makefile": b"all:\n\t@echo ok\n",
             "template.txt": b"tmpl\n",
             "main.py": b"print('hello')\n",
@@ -236,9 +223,9 @@ class DaycareTests(unittest.TestCase):
     def test_cleanup_still_runs_when_upload_fails(self) -> None:
         runner = _FakeRunner()
         runtime = _build_runtime(runner)
-        runner.plan_result("cp_put", CommandResult(returncode=1, stdout=b"", stderr=b"cp failed"))
         req = _build_signed_request()
-        responses = list(runtime.stream(req, cast(grpc.ServicerContext, _FakeContext())))
+        with patch.object(WorkspaceMount, "write_files", side_effect=CommandError("write failed")):
+            responses = list(runtime.stream(req, cast(grpc.ServicerContext, _FakeContext())))
         self.assertEqual(responses, [])
         cleanup_calls = [
             call
@@ -331,19 +318,19 @@ class DaycareTests(unittest.TestCase):
         self.assertIn("commit says action", responses[0].error)
         self.assertEqual(len(runner.calls), 0)
 
-    def test_daycare_uses_doas_podman_by_default(self) -> None:
+    def test_daycare_uses_docker_by_default(self) -> None:
         runner = _FakeRunner()
         runtime = _build_runtime(runner)
         req = _build_signed_request()
         _ = list(runtime.stream(req, cast(grpc.ServicerContext, _FakeContext())))
         self.assertGreater(len(runner.calls), 0)
-        run_call = next(call for call in runner.calls if len(call) >= 3 and call[2] == "run")
-        self.assertEqual(run_call[0], "doas")
-        self.assertEqual(run_call[1], "podman")
-        self.assertIn("localhost/img", run_call)
+        run_call = next(call for call in runner.calls if _command_key(call) == "run")
+        self.assertEqual(run_call[0], "docker")
+        self.assertIn("img", run_call)
+        self.assertNotIn("localhost/img", run_call)
         self.assertIn("--pull=never", run_call)
 
-    def test_daycare_uses_configured_doas_podman_prefix(self) -> None:
+    def test_daycare_uses_configured_docker_prefix(self) -> None:
         runner = _FakeRunner()
         runtime = DaycareRuntime(
             ServerConfig(
@@ -351,20 +338,23 @@ class DaycareTests(unittest.TestCase):
                 daycare_secret="daycare-secret",
                 capacity=2,
                 session_secret="session-secret",
-                container_engine="doas podman",
+                container_engine="doas docker",
+                daycare_mount_dir=tempfile.mkdtemp(),
             ),
             runner=runner,
+            validate_mount=False,
         )
         req = _build_signed_request()
         _ = list(runtime.stream(req, cast(grpc.ServicerContext, _FakeContext())))
         self.assertGreater(len(runner.calls), 0)
         run_call = next(call for call in runner.calls if len(call) >= 3 and call[2] == "run")
         self.assertEqual(run_call[0], "doas")
-        self.assertEqual(run_call[1], "podman")
-        self.assertIn("localhost/img", run_call)
+        self.assertEqual(run_call[1], "docker")
+        self.assertIn("img", run_call)
+        self.assertNotIn("localhost/img", run_call)
         self.assertIn("--pull=never", run_call)
 
-    def test_daycare_does_not_prefix_images_for_non_podman_runtime(self) -> None:
+    def test_daycare_uses_configured_docker_without_prefix(self) -> None:
         runner = _FakeRunner()
         runtime = DaycareRuntime(
             ServerConfig(
@@ -373,8 +363,10 @@ class DaycareTests(unittest.TestCase):
                 capacity=2,
                 session_secret="session-secret",
                 container_engine="docker",
+                daycare_mount_dir=tempfile.mkdtemp(),
             ),
             runner=runner,
+            validate_mount=False,
         )
         req = _build_signed_request()
         _ = list(runtime.stream(req, cast(grpc.ServicerContext, _FakeContext())))
@@ -385,7 +377,7 @@ class DaycareTests(unittest.TestCase):
         self.assertNotIn("localhost/img", run_call)
         self.assertIn("--pull=never", run_call)
 
-    def test_daycare_podman_falls_back_when_localhost_image_missing(self) -> None:
+    def test_daycare_missing_image_reports_local_store_error(self) -> None:
         runner = _FakeRunner()
         runtime = DaycareRuntime(
             ServerConfig(
@@ -393,77 +385,11 @@ class DaycareTests(unittest.TestCase):
                 daycare_secret="daycare-secret",
                 capacity=2,
                 session_secret="session-secret",
-                container_engine="doas podman",
+                container_engine="docker",
+                daycare_mount_dir=tempfile.mkdtemp(),
             ),
             runner=runner,
-        )
-        runner.plan_result(
-            "run",
-            CommandResult(
-                returncode=125,
-                stdout=b"",
-                stderr=b"Error: image not known",
-            ),
-        )
-        runner.plan_result("run", CommandResult(returncode=0, stdout=b"container-id\n", stderr=b""))
-        req = _build_signed_request()
-        _ = list(runtime.stream(req, cast(grpc.ServicerContext, _FakeContext())))
-        self.assertGreater(len(runner.calls), 0)
-        run_calls = [call for call in runner.calls if len(call) >= 3 and call[2] == "run"]
-        self.assertEqual(len(run_calls), 2)
-        self.assertEqual(run_calls[0][-3], "localhost/img")
-        self.assertEqual(run_calls[1][-3], "img")
-
-    def test_daycare_podman_image_resolution_is_cached_per_runtime(self) -> None:
-        runner = _FakeRunner()
-        runtime = DaycareRuntime(
-            ServerConfig(
-                hostname="daycare.example.invalid",
-                daycare_secret="daycare-secret",
-                capacity=2,
-                session_secret="session-secret",
-                container_engine="doas podman",
-            ),
-            runner=runner,
-        )
-        runner.plan_result(
-            "run",
-            CommandResult(
-                returncode=125,
-                stdout=b"",
-                stderr=b"Error: image not known",
-            ),
-        )
-        runner.plan_result("run", CommandResult(returncode=0, stdout=b"container-id-1\n", stderr=b""))
-        runner.plan_result("run", CommandResult(returncode=0, stdout=b"container-id-2\n", stderr=b""))
-        req = _build_signed_request()
-        _ = list(runtime.stream(req, cast(grpc.ServicerContext, _FakeContext())))
-        _ = list(runtime.stream(req, cast(grpc.ServicerContext, _FakeContext())))
-        run_calls = [call for call in runner.calls if len(call) >= 3 and call[2] == "run"]
-        self.assertEqual(len(run_calls), 3)
-        self.assertEqual(run_calls[0][-3], "localhost/img")
-        self.assertEqual(run_calls[1][-3], "img")
-        self.assertEqual(run_calls[2][-3], "img")
-
-    def test_daycare_podman_missing_image_fails_after_local_candidates(self) -> None:
-        runner = _FakeRunner()
-        runtime = DaycareRuntime(
-            ServerConfig(
-                hostname="daycare.example.invalid",
-                daycare_secret="daycare-secret",
-                capacity=2,
-                session_secret="session-secret",
-                container_engine="doas podman",
-            ),
-            runner=runner,
-        )
-        runner.plan_result(
-            "run",
-            CommandResult(
-                returncode=125,
-                stdout=b"",
-                stderr=b"Error: image not known",
-            ),
+            validate_mount=False,
         )
         runner.plan_result(
             "run",
@@ -479,7 +405,8 @@ class DaycareTests(unittest.TestCase):
         self.assertEqual(responses[0].WhichOneof("response"), "error")
         self.assertIn("container image not found in local store", responses[0].error)
         run_calls = [call for call in runner.calls if _command_key(call) == "run"]
-        self.assertEqual(len(run_calls), 2)
+        self.assertEqual(len(run_calls), 1)
+        self.assertEqual(run_calls[0][-3], "img")
         self.assertTrue(all("--pull=never" in call for call in run_calls))
 
     def test_xunit_parser_updates_report_card_and_score(self) -> None:
@@ -491,8 +418,15 @@ class DaycareTests(unittest.TestCase):
             b'<testcase classname="cls" name="bad"><failure>boom</failure></testcase>'
             b"</testsuite></testsuites>"
         )
-        runner.plan_result("cp_get", CommandResult(returncode=0, stdout=_tar_bytes({"test_detail.xml": xunit}), stderr=b""))
-        req = _build_signed_request(parser="xunit")
+        req = _build_signed_request(
+            parser="xunit",
+            runtime_files={
+                "Makefile": b"all:\n\t@echo ok\n",
+                "template.txt": b"tmpl\n",
+                "main.py": b"print('hello')\n",
+                "test_detail.xml": xunit,
+            },
+        )
         responses = list(runtime.stream(req, cast(grpc.ServicerContext, _FakeContext())))
         self.assertEqual(responses[-1].WhichOneof("response"), "bundle")
         signed = decode_signed_runtime_bundle(responses[-1].bundle, "daycare-secret")

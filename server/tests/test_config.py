@@ -17,7 +17,9 @@ class ConfigTests(unittest.TestCase):
             cfg = load_config(path)
             self.assertEqual(cfg.hostname, "example.test")
             self.assertEqual(cfg.tool_name, "CodeGrinder")
-            self.assertEqual(cfg.container_engine, "doas podman")
+            self.assertEqual(cfg.container_engine, "docker")
+            self.assertEqual(cfg.daycare_mount_dir, str(path.parent / "daycare-mounts"))
+            self.assertEqual(cfg.daycare_mount_size, "128m")
             self.assertEqual(len(cfg.sessions_expire), 2)
 
     def test_container_engine_override(self) -> None:
@@ -27,13 +29,17 @@ class ConfigTests(unittest.TestCase):
                 json.dumps(
                     {
                         "hostname": "example.test",
-                        "containerEngine": "doas podman",
+                        "containerEngine": "docker",
+                        "daycareMountDir": "/tmp/codegrinder-daycare",
+                        "daycareMountSize": "64m",
                     }
                 ),
                 encoding="utf-8",
             )
             cfg = load_config(path)
-            self.assertEqual(cfg.container_engine, "doas podman")
+            self.assertEqual(cfg.container_engine, "docker")
+            self.assertEqual(cfg.daycare_mount_dir, "/tmp/codegrinder-daycare")
+            self.assertEqual(cfg.daycare_mount_size, "64m")
 
     def test_base64_secret_decode(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

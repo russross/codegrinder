@@ -1,20 +1,22 @@
 from __future__ import annotations
 
 import fnmatch
-import io
+import hashlib
 import json
 import logging
+import os
 import queue
 import re
 import shlex
+import shutil
+import stat
 import subprocess
-import tarfile
 import threading
 import time
 import xml.etree.ElementTree as et
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Callable, Iterator, Protocol
 
 import grpc
@@ -25,11 +27,12 @@ from proto_conv import parse_time
 from signatures import decode_signed_runtime_bundle, encode_signed_runtime_bundle
 from timeutils import format_duration_for_log
 
-DEFAULT_CONTAINER_ENGINE = "podman"
-STUDENT_UID = 1001
+DEFAULT_CONTAINER_ENGINE = "docker"
 SIGNED_REQUEST_MAX_AGE = timedelta(minutes=15)
 TRANSCRIPT_EVENT_COUNT_LIMIT = 500
 TRANSCRIPT_DATA_LIMIT = 100_000
+DAYCARE_CONTAINER_LABEL = "codegrinder.daycare=true"
+WORKSPACE_FILE_READ_LIMIT = 100_000_000
 
 _FORWARDED_EVENT_TYPES = {"exec", "exit", "stdin", "stdout", "stderr", "stdinclosed", "error", "files"}
 _STREAM_EVENT_TYPES = {"stdin", "stdout", "stderr"}
@@ -57,35 +60,6 @@ def _ts_to_datetime(ts: object) -> datetime:
 
 def _duration_string(value: timedelta) -> str:
     return format_duration_for_log(value)
-
-
-def _uses_podman(container_command: list[str]) -> bool:
-    for token in container_command:
-        if token.strip().split("/")[-1] == "podman":
-            return True
-    return False
-
-
-def _resolve_container_image(image: str, *, container_command: list[str]) -> str:
-    if image == "":
-        return image
-    if not _uses_podman(container_command):
-        return image
-    first = image.split("/", 1)[0]
-    if "." in first or ":" in first or first == "localhost":
-        return image
-    return f"localhost/{image}"
-
-
-def _image_candidates_for_runtime(image: str, *, container_command: list[str]) -> list[str]:
-    if image == "":
-        return [image]
-    if not _uses_podman(container_command):
-        return [image]
-    rewritten = _resolve_container_image(image, container_command=container_command)
-    if rewritten == image:
-        return [image]
-    return [rewritten, image]
 
 
 def _is_missing_local_image_error(message: str) -> bool:
@@ -304,12 +278,163 @@ class Limits:
                 self.max_threads = parsed
 
 
+def _container_user() -> str:
+    return f"{os.getuid()}:{os.getgid()}"
+
+
+def _safe_user_dir_name(user_id: str) -> str:
+    clean = user_id.strip()
+    if clean != "" and re.fullmatch(r"[A-Za-z0-9_.-]+", clean) is not None and clean not in (".", ".."):
+        return clean
+    return f"user-{hashlib.sha256(user_id.encode('utf-8')).hexdigest()[:24]}"
+
+
+def _decode_mountinfo_path(raw: str) -> str:
+    return raw.replace("\\040", " ").replace("\\011", "\t").replace("\\012", "\n").replace("\\134", "\\")
+
+
+def _is_tmpfs_mount(path: Path) -> bool:
+    target = path.resolve()
+    try:
+        data = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    for line in data.splitlines():
+        fields = line.split()
+        if len(fields) < 10:
+            continue
+        try:
+            sep = fields.index("-")
+        except ValueError:
+            continue
+        if sep + 1 >= len(fields):
+            continue
+        mount_point = Path(_decode_mountinfo_path(fields[4]))
+        if mount_point == target and fields[sep + 1] == "tmpfs":
+            return True
+    return False
+
+
+def _checked_relative_path(raw_name: str) -> Path:
+    if raw_name == "":
+        raise CommandError("empty workspace path")
+    if "\\" in raw_name:
+        raise CommandError(f"bad workspace path {raw_name!r}: backslashes are not allowed")
+    path = Path(raw_name)
+    if path.is_absolute():
+        raise CommandError(f"bad workspace path {raw_name!r}: absolute paths are not allowed")
+    if any(part in ("", ".", "..") for part in path.parts):
+        raise CommandError(f"bad workspace path {raw_name!r}: dot path components are not allowed")
+    return path
+
+
+@dataclass(slots=True)
+class WorkspaceMount:
+    root: Path
+
+    @classmethod
+    def create(cls, *, base_dir: Path, user_id: str) -> WorkspaceMount:
+        root = base_dir / _safe_user_dir_name(user_id)
+        if root.exists():
+            shutil.rmtree(root)
+        root.mkdir(mode=0o700, parents=True, exist_ok=False)
+        return cls(root=root)
+
+    def write_files(self, files: dict[str, bytes], mode: int) -> None:
+        for raw_name, raw_content in files.items():
+            rel = _checked_relative_path(raw_name)
+            target = self.root / rel
+            target.parent.mkdir(mode=0o777, parents=True, exist_ok=True)
+            target.parent.chmod(0o777)
+            target.write_bytes(bytes(raw_content or b""))
+            target.chmod(mode)
+
+    def read_files(self, patterns: list[str]) -> dict[str, bytes]:
+        checked_patterns = [str(_checked_relative_path(pattern)) for pattern in patterns]
+        selected: dict[str, bytes] = {}
+        total_bytes = 0
+        exact_patterns = [pattern for pattern in checked_patterns if not any(ch in pattern for ch in "*?[")]
+        for pattern in exact_patterns:
+            path = self.root / pattern
+            if not path.exists():
+                continue
+            data = self._read_regular_file(path)
+            total_bytes += len(data)
+            if total_bytes > WORKSPACE_FILE_READ_LIMIT:
+                raise CommandError("downloaded file data exceeds limit")
+            selected[pattern] = data
+        for path in self._regular_file_paths():
+            rel = path.relative_to(self.root).as_posix()
+            if rel in selected:
+                continue
+            if not any(fnmatch.fnmatchcase(rel, pattern) for pattern in checked_patterns):
+                continue
+            data = self._read_regular_file(path)
+            total_bytes += len(data)
+            if total_bytes > WORKSPACE_FILE_READ_LIMIT:
+                raise CommandError("downloaded file data exceeds limit")
+            selected[rel] = data
+        return selected
+
+    def cleanup(self) -> None:
+        if self.root.exists():
+            shutil.rmtree(self.root)
+
+    def _regular_file_paths(self) -> Iterator[Path]:
+        stack = [self.root]
+        while stack:
+            current = stack.pop()
+            try:
+                entries = list(current.iterdir())
+            except OSError:
+                continue
+            for entry in entries:
+                try:
+                    mode = entry.lstat().st_mode
+                except OSError:
+                    continue
+                if stat.S_ISLNK(mode):
+                    continue
+                if stat.S_ISDIR(mode):
+                    stack.append(entry)
+                    continue
+                if stat.S_ISREG(mode):
+                    yield entry
+
+    def _read_regular_file(self, path: Path) -> bytes:
+        current = self.root
+        rel = path.relative_to(self.root)
+        for part in rel.parts:
+            current = current / part
+            try:
+                mode = current.lstat().st_mode
+            except OSError as exc:
+                raise CommandError(f"cannot inspect output path {rel}: {exc}") from exc
+            if stat.S_ISLNK(mode):
+                raise CommandError(f"refusing symlink output path {rel}")
+        try:
+            file = path.open("rb")
+        except OSError as exc:
+            raise CommandError(f"cannot open output path {rel}: {exc}") from exc
+        with file:
+            opened = os.fstat(file.fileno())
+            if not stat.S_ISREG(opened.st_mode):
+                raise CommandError(f"refusing non-regular output path {rel}")
+            if opened.st_size > WORKSPACE_FILE_READ_LIMIT:
+                raise CommandError(f"output file {rel} exceeds read limit")
+            data = file.read(WORKSPACE_FILE_READ_LIMIT + 1)
+            if len(data) > WORKSPACE_FILE_READ_LIMIT:
+                raise CommandError(f"output file {rel} exceeds read limit")
+            return data
+
+
 class Nanny:
     def __init__(
         self,
         *,
         runner: CommandRunner,
         container_command: list[str],
+        workspace: WorkspaceMount,
         user_id: str,
         name: str,
         container_id: str,
@@ -319,6 +444,7 @@ class Nanny:
     ) -> None:
         self._runner = runner
         self._container_command = tuple(container_command)
+        self._workspace = workspace
         self._user_id = user_id
         self._name = name
         self._container_id = container_id
@@ -330,7 +456,6 @@ class Nanny:
         self.report_card = _report_card_new()
         self.events: queue.Queue[pb.EventMessage | None] = queue.Queue(maxsize=100)
         self._closed = False
-        self._files_cache: dict[str, bytes] | None = None
 
     @property
     def name(self) -> str:
@@ -355,6 +480,7 @@ class Nanny:
         *,
         runner: CommandRunner,
         container_command: list[str],
+        workspace: WorkspaceMount,
         user_id: str,
         image: str,
         problem_type: str,
@@ -379,8 +505,14 @@ class Nanny:
             "--hostname",
             name,
             "--user",
-            f"{STUDENT_UID}:{STUDENT_UID}",
+            _container_user(),
             "--net=none",
+            "--mount",
+            f"type=bind,source={workspace.root},target=/home/student",
+            "--label",
+            DAYCARE_CONTAINER_LABEL,
+            "--label",
+            f"codegrinder.user_id={user_id}",
             "--memory",
             memory,
             "--memory-swap",
@@ -469,6 +601,7 @@ class Nanny:
         return cls(
             runner=runner,
             container_command=container_command,
+            workspace=workspace,
             user_id=user_id,
             name=name,
             container_id=container_id,
@@ -523,48 +656,18 @@ class Nanny:
     def put_files(self, files: dict[str, bytes], mode: int) -> None:
         if len(files) == 0:
             return
-        tar_bytes = _tar_bytes(files, mode=mode)
-        result = _run_with_action_timeout(
-            self._runner,
-            [*self._container_command, "cp", "-", f"{self._container_id}:/home/student/"],
-            input_bytes=tar_bytes,
-            action_deadline_monotonic=self._action_deadline_monotonic,
-            cancel_event=self._cancel_event,
-        )
-        if result.returncode != 0:
-            output = (result.stdout + result.stderr).decode("utf-8", errors="replace")
-            raise CommandError(f"container cp failed: exit={result.returncode}; output={output}")
+        self._workspace.write_files(files, mode=mode)
 
     def get_files(self, filenames: list[str]) -> dict[str, bytes]:
         if len(filenames) == 0:
             return {}
-        if self._files_cache is None:
-            if self._closed:
-                raise CommandError("cannot fetch files, container is closed")
-            result = _run_with_action_timeout(
-                self._runner,
-                [*self._container_command, "cp", f"{self._container_id}:/home/student/.", "-"],
-                action_deadline_monotonic=self._action_deadline_monotonic,
-                cancel_event=self._cancel_event,
-            )
-            if result.returncode != 0:
-                output = (result.stdout + result.stderr).decode("utf-8", errors="replace")
-                raise CommandError(f"container cp from container failed: exit={result.returncode}; output={output}")
-            self._files_cache = _untar_bytes(result.stdout)
-
-        selected: dict[str, bytes] = {}
-        for name, contents in self._files_cache.items():
-            for pattern in filenames:
-                if fnmatch.fnmatchcase(name, pattern):
-                    selected[name] = contents
-                    break
-        return selected
+        return self._workspace.read_files(filenames)
 
     def exec_command(self, cmd: list[str]) -> int:
         self.emit_event(_event_message("exec", exec_command=cmd))
         result = _run_with_action_timeout(
             self._runner,
-            [*self._container_command, "exec", "--user", str(STUDENT_UID), self._container_id, *cmd],
+            [*self._container_command, "exec", "--user", _container_user(), self._container_id, *cmd],
             action_deadline_monotonic=self._action_deadline_monotonic,
             cancel_event=self._cancel_event,
         )
@@ -832,61 +935,6 @@ def _log_container_usage_summary(
     logging.info("container usage summary %s", " ".join(parts))
 
 
-def _tar_bytes(files: dict[str, bytes], mode: int) -> bytes:
-    stream = io.BytesIO()
-    nowish = _now_utc() - timedelta(seconds=1)
-    created_dirs: set[str] = set()
-    with tarfile.open(fileobj=stream, mode="w") as archive:
-        for raw_name, raw_content in files.items():
-            path = PurePosixPath(raw_name)
-            if str(path) in ("", "."):
-                continue
-            parts = list(path.parents)
-            parts.reverse()
-            for part in parts:
-                if str(part) in ("", "."):
-                    continue
-                dir_name = str(part)
-                if dir_name in created_dirs:
-                    continue
-                created_dirs.add(dir_name)
-                info = tarfile.TarInfo(name=dir_name)
-                info.type = tarfile.DIRTYPE
-                info.mode = 0o777
-                info.uid = STUDENT_UID
-                info.gid = STUDENT_UID
-                info.uname = str(STUDENT_UID)
-                info.gname = str(STUDENT_UID)
-                info.mtime = int(nowish.timestamp())
-                archive.addfile(info)
-
-            content = bytes(raw_content or b"")
-            file_info = tarfile.TarInfo(name=str(path))
-            file_info.type = tarfile.REGTYPE
-            file_info.mode = mode
-            file_info.uid = STUDENT_UID
-            file_info.gid = STUDENT_UID
-            file_info.uname = str(STUDENT_UID)
-            file_info.gname = str(STUDENT_UID)
-            file_info.mtime = int(nowish.timestamp())
-            file_info.size = len(content)
-            archive.addfile(file_info, io.BytesIO(content))
-    return stream.getvalue()
-
-
-def _untar_bytes(data: bytes) -> dict[str, bytes]:
-    result: dict[str, bytes] = {}
-    with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as archive:
-        for member in archive.getmembers():
-            if not member.isfile():
-                continue
-            fileobj = archive.extractfile(member)
-            if fileobj is None:
-                continue
-            result[str(PurePosixPath(member.name))] = fileobj.read()
-    return result
-
-
 def validate_and_decode_action(
     *,
     envelope: pb.SignedRuntimeBundle,
@@ -1140,10 +1188,15 @@ class DaycareRuntime:
         *,
         runner: CommandRunner | None = None,
         now_fn: Callable[[], datetime] | None = None,
+        validate_mount: bool = True,
     ) -> None:
         self._config = config
         self._runner = runner or SubprocessCommandRunner()
         self._now_fn = now_fn or _now_utc
+        self._workspace_base = Path(config.daycare_mount_dir or "daycare-mounts").resolve()
+        if validate_mount and not _is_tmpfs_mount(self._workspace_base):
+            raise RuntimeError(f"daycare mount dir is not a tmpfs mount: {self._workspace_base}")
+        self._workspace_base.mkdir(parents=True, exist_ok=True)
         configured_engine = config.container_engine.strip()
         if configured_engine == "":
             configured_engine = DEFAULT_CONTAINER_ENGINE
@@ -1151,23 +1204,10 @@ class DaycareRuntime:
         if len(parsed_engine) == 0:
             parsed_engine = [DEFAULT_CONTAINER_ENGINE]
         self._container_command = parsed_engine
-        self._resolved_image_cache: dict[str, str | None] = {}
-        self._resolved_image_cache_lock = threading.Lock()
         cap = int(config.capacity)
         if cap <= 0:
             cap = 1
         self._container_limiter = threading.BoundedSemaphore(cap)
-
-    def _image_candidates_with_cache(self, *, image: str) -> list[str]:
-        with self._resolved_image_cache_lock:
-            cached = self._resolved_image_cache.get(image)
-        if cached is not None:
-            return [cached]
-        return _image_candidates_for_runtime(image, container_command=self._container_command)
-
-    def _cache_resolved_image(self, *, image: str, resolved_image: str) -> None:
-        with self._resolved_image_cache_lock:
-            self._resolved_image_cache[image] = resolved_image
 
     def stream(self, request: pb.DaycareRequest, context: grpc.ServicerContext) -> Iterator[pb.DaycareResponse]:
         if request is None:
@@ -1253,45 +1293,34 @@ class DaycareRuntime:
             limits.override(list(bundle.problem_options))
             timeout_seconds = float(int(limits.max_cpu) * 2 + 5)
             action_deadline_monotonic = time.monotonic() + timeout_seconds
+            workspace = WorkspaceMount.create(base_dir=self._workspace_base, user_id=bundle.user_id)
 
-            image_candidates = self._image_candidates_with_cache(image=bundle.container)
-            nanny: Nanny | None = None
-            creation_error: CommandError | None = None
-            missing_images: list[str] = []
-            for candidate in image_candidates:
+            try:
+                nanny = Nanny.create(
+                    runner=self._runner,
+                    container_command=self._container_command,
+                    workspace=workspace,
+                    user_id=bundle.user_id,
+                    image=bundle.container,
+                    problem_type=bundle.container,
+                    problem_id=bundle.problem_id,
+                    action=bundle.action,
+                    limits=limits,
+                    name=nanny_name,
+                    args=args,
+                    action_deadline_monotonic=action_deadline_monotonic,
+                    cancel_event=cancel_event,
+                )
+            except CommandError as exc:
                 try:
-                    nanny = Nanny.create(
-                        runner=self._runner,
-                        container_command=self._container_command,
-                        user_id=bundle.user_id,
-                        image=candidate,
-                        problem_type=bundle.container,
-                        problem_id=bundle.problem_id,
-                        action=bundle.action,
-                        limits=limits,
-                        name=nanny_name,
-                        args=args,
-                        action_deadline_monotonic=action_deadline_monotonic,
-                        cancel_event=cancel_event,
-                    )
-                    self._cache_resolved_image(image=bundle.container, resolved_image=candidate)
-                    break
-                except CommandError as exc:
-                    creation_error = exc
-                    if _is_missing_local_image_error(str(exc)):
-                        missing_images.append(candidate)
-                        continue
-                    emit_error(f"error creating container: {exc}")
-                    return
-
-            if nanny is None:
-                if len(missing_images) == len(image_candidates) and len(image_candidates) > 0:
-                    tried = ", ".join(repr(elt) for elt in image_candidates)
+                    workspace.cleanup()
+                except Exception as cleanup_exc:
+                    logging.info("workspace cleanup error for %s: %s", workspace.root, cleanup_exc)
+                if _is_missing_local_image_error(str(exc)):
+                    tried = repr(bundle.container)
                     emit_error(f"error creating container: container image not found in local store: tried {tried}")
-                elif creation_error is not None:
-                    emit_error(f"error creating container: {creation_error}")
-                else:
-                    emit_error("error creating container: unknown image resolution failure")
+                    return
+                emit_error(f"error creating container: {exc}")
                 return
 
             try:
@@ -1370,6 +1399,10 @@ class DaycareRuntime:
                     nanny.shutdown("action finished")
                 except CommandError as exc:
                     logging.info("nanny shutdown error: %s", exc)
+                try:
+                    workspace.cleanup()
+                except Exception as exc:
+                    logging.info("workspace cleanup error for %s: %s", workspace.root, exc)
         finally:
             self._container_limiter.release()
             if outcome == "ok":
