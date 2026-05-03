@@ -5,7 +5,6 @@ import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any, Callable, Iterator, NoReturn, TypeVar
 
 import grpc
@@ -23,6 +22,7 @@ from mutations import (
     save_graded_runtime_bundle,
     save_problem,
     save_problem_set,
+    save_problem_type_files,
     save_ungraded_commit,
     save_workspace_commit,
 )
@@ -30,10 +30,9 @@ from read_store import (
     get_assignment_list_items_pb,
     get_assignment_summary_pb,
     get_workspace_pb,
-    get_problem_type_actions_rows,
-    get_problem_types_rows,
+    list_problem_type_pbs,
+    load_problem_type_pb,
     load_user_by_id,
-    problem_type_pb,
     search_problem_catalog_pb,
 )
 from signatures import decode_signed_runtime_bundle, encode_signed_runtime_bundle
@@ -222,14 +221,12 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
         self,
         conn: sqlite3.Connection,
         config: ServerConfig,
-        root: Path,
         login_records: LoginRecords | None = None,
         version: VersionInfo | None = None,
         daycare_registry: DaycareRegistry | None = None,
     ) -> None:
         self._conn = conn
         self._config = config
-        self._root = root
         self._login_records = login_records or LoginRecords()
         self._version = version or VersionInfo()
         self._daycare_registry = daycare_registry
@@ -346,29 +343,6 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
         except sqlite3.Error as exc:
             self._abort(context, grpc.StatusCode.INTERNAL, f"db error loading user: {exc}")
 
-    def _problem_type_files(self, problem_type: str) -> dict[str, bytes]:
-        files: dict[str, bytes] = {}
-        directory = self._root / "files" / problem_type
-        if not directory.exists() or not directory.is_dir():
-            return files
-        for path in directory.rglob("*"):
-            if not path.is_file():
-                continue
-            files[str(path.relative_to(directory))] = path.read_bytes()
-        return files
-
-    def _load_problem_type(self, tx: sqlite3.Connection, problem_type: str) -> pb.ProblemType:
-        row = tx.execute("SELECT * FROM problem_types WHERE problem_type = ?", (problem_type,)).fetchone()
-        if row is None:
-            raise sqlite3.Error("not found")
-        action_rows = get_problem_type_actions_rows(tx, problem_type)
-        return problem_type_pb(
-            str(row["problem_type"]),
-            str(row["container"]),
-            self._problem_type_files(problem_type),
-            action_rows,
-        )
-
     def _hello_response(self, user_row: sqlite3.Row, version: pb.Version, cookie: str = "") -> pb.HelloResponse:
         return pb.HelloResponse(
             cookie=cookie,
@@ -455,10 +429,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
     def GetProblemTypes(self, request: pb.GetProblemTypesRequest, context: grpc.ServicerContext) -> pb.GetProblemTypesResponse:
         def fn(state: RpcState) -> pb.GetProblemTypesResponse:
             try:
-                rows = get_problem_types_rows(state.tx)
-                return pb.GetProblemTypesResponse(
-                    problem_types=[self._load_problem_type(state.tx, str(row["problem_type"])) for row in rows]
-                )
+                return pb.GetProblemTypesResponse(problem_types=list_problem_type_pbs(state.tx))
             except sqlite3.Error as exc:
                 self._abort_sqlite(context, exc, internal="db error getting problem types")
 
@@ -467,12 +438,26 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
     def GetProblemType(self, request: pb.GetProblemTypeRequest, context: grpc.ServicerContext) -> pb.GetProblemTypeResponse:
         def fn(state: RpcState) -> pb.GetProblemTypeResponse:
             try:
-                problem_type = self._load_problem_type(state.tx, request.problem_type)
+                problem_type = load_problem_type_pb(state.tx, request.problem_type)
             except sqlite3.Error as exc:
                 self._abort_sqlite(context, exc, internal="db error getting problem type", not_found="not found")
             return pb.GetProblemTypeResponse(problem_type=problem_type)
 
         return self._run_rpc(context, label="GetProblemType", fn=fn)
+
+    def SaveProblemTypeFiles(
+        self, request: pb.SaveProblemTypeFilesRequest, context: grpc.ServicerContext
+    ) -> pb.SaveProblemTypeFilesResponse:
+        def fn(state: RpcState) -> pb.SaveProblemTypeFilesResponse:
+            try:
+                problem_type = save_problem_type_files(state.tx, request.problem_type, list(request.changes))
+            except ValueError as exc:
+                self._abort(context, grpc.StatusCode.INVALID_ARGUMENT, f"invalid problem type file save: {exc}")
+            except sqlite3.Error as exc:
+                self._abort_sqlite(context, exc, internal="db error saving problem type files")
+            return pb.SaveProblemTypeFilesResponse(problem_type=problem_type)
+
+        return self._run_rpc(context, label="SaveProblemTypeFiles", require_admin=True, fn=fn)
 
     def GetAssignment(self, request: pb.GetAssignmentRequest, context: grpc.ServicerContext) -> pb.GetAssignmentResponse:
         def fn(state: RpcState) -> pb.GetAssignmentResponse:
@@ -505,7 +490,6 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                     bool(request.include_contents),
                     bool(request.include_solution_files),
                     state.ip_allowed,
-                    self._problem_type_files,
                 )
             except PermissionError as exc:
                 self._abort(context, grpc.StatusCode.PERMISSION_DENIED, str(exc))
@@ -627,7 +611,6 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                     request.action,
                     self._config.daycare_secret,
                     self._select_daycare_host,
-                    self._problem_type_files,
                 )
             except ValueError as exc:
                 self._abort(context, grpc.StatusCode.INVALID_ARGUMENT, f"invalid problem draft: {exc}")
@@ -703,7 +686,6 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
                     working,
                     state.ip_allowed,
                     self._select_daycare_host,
-                    self._problem_type_files,
                 )
             except ValueError as exc:
                 self._abort(context, grpc.StatusCode.INVALID_ARGUMENT, f"invalid ungraded commit: {exc}")

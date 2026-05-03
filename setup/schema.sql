@@ -32,6 +32,29 @@ CREATE TABLE problem_type_actions (
     CHECK (max_threads > 0)
 ) WITHOUT ROWID;
 
+CREATE TABLE problem_type_files (
+    problem_type            text NOT NULL,
+    path                    text NOT NULL,
+    content                 blob NOT NULL,
+
+    PRIMARY KEY (problem_type, path),
+    FOREIGN KEY (problem_type) REFERENCES problem_types (problem_type) ON DELETE CASCADE ON UPDATE CASCADE,
+    CHECK (trim(problem_type) = problem_type AND length(problem_type) > 0),
+    CHECK (trim(path) = path AND length(path) > 0),
+    CHECK (
+        path NOT GLOB '/*'
+        AND path NOT GLOB './*'
+        AND path NOT GLOB '../*'
+        AND path NOT GLOB '*//*'
+        AND path NOT GLOB '*/./*'
+        AND path NOT GLOB '*/../*'
+        AND path NOT GLOB '*/.'
+        AND path NOT GLOB '*/..'
+        AND path NOT GLOB '*\*'
+        AND path NOT IN ('.', '..')
+    )
+) WITHOUT ROWID;
+
 CREATE TABLE problems (
     problem_id              text NOT NULL,
     problem_note            text NOT NULL,

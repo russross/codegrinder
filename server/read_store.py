@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import PurePosixPath
-from typing import Any, Callable
+from typing import Any
 
 import codegrinder_pb2 as pb
 from problem_files import ProblemStepFileType
@@ -240,12 +240,12 @@ def _starter_student_files(
 
 
 def _system_owned_files_for_step(
-    load_problem_type_files: Callable[[str], dict[str, bytes]],
+    conn: sqlite3.Connection,
     problem_type: str,
     step_files: dict[str, bytes],
 ) -> dict[str, bytes]:
     files: dict[str, bytes] = _normalize_file_map(step_files)
-    for path, content in load_problem_type_files(problem_type).items():
+    for path, content in load_problem_type_files(conn, problem_type).items():
         files[_normalize_workspace_path(path)] = content
     return files
 
@@ -391,7 +391,6 @@ def get_workspace_pb(
     include_contents: bool,
     include_solution_files: bool,
     ip_allowed: bool,
-    load_problem_type_files: Callable[[str], dict[str, bytes]],
 ) -> pb.GetWorkspaceResponse:
     reset_to_step_start = _workspace_reset_to_step_start(file_state)
     assignment_access = get_assignment_access_row(conn, current_user, assignment, ip_allowed)
@@ -404,7 +403,7 @@ def get_workspace_pb(
     step_files = load_problem_step_files(conn, problem_id, resolved_step_number, ProblemStepFileType.REGULAR)
     starter_files = load_problem_step_files(conn, problem_id, resolved_step_number, ProblemStepFileType.STARTER)
     system_owned_files = _system_owned_files_for_step(
-        load_problem_type_files,
+        conn,
         str(step_row["problem_type"]),
         step_files,
     )
@@ -457,6 +456,29 @@ def get_problem_types_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 
 def get_problem_type_actions_rows(conn: sqlite3.Connection, problem_type: str) -> list[sqlite3.Row]:
     return _q(conn, "SELECT * FROM problem_type_actions WHERE problem_type = ?", (problem_type,))
+
+
+def load_problem_type_files(conn: sqlite3.Connection, problem_type: str) -> dict[str, bytes]:
+    rows = _q(
+        conn,
+        "SELECT path, content FROM problem_type_files WHERE problem_type = ? ORDER BY path",
+        (problem_type,),
+    )
+    return {str(row["path"]): bytes(row["content"] or b"") for row in rows}
+
+
+def load_problem_type_pb(conn: sqlite3.Connection, problem_type: str) -> pb.ProblemType:
+    row = _q1(conn, "SELECT * FROM problem_types WHERE problem_type = ?", (problem_type,))
+    return problem_type_pb(
+        problem_type=str(row["problem_type"]),
+        container=str(row["container"]),
+        files=load_problem_type_files(conn, problem_type),
+        action_rows=get_problem_type_actions_rows(conn, problem_type),
+    )
+
+
+def list_problem_type_pbs(conn: sqlite3.Connection) -> list[pb.ProblemType]:
+    return [load_problem_type_pb(conn, str(row["problem_type"])) for row in get_problem_types_rows(conn)]
 
 
 def load_problem_step_files(

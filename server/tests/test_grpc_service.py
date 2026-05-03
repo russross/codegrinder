@@ -67,6 +67,10 @@ def _seed(conn: sqlite3.Connection) -> None:
     now = "2026-02-15T10:00:00+00:00"
     conn.execute("INSERT INTO problem_types(problem_type, container) VALUES (?, ?)", ("python3unittest", "img"))
     conn.execute(
+        "INSERT INTO problem_type_files(problem_type, path, content) VALUES (?, ?, ?)",
+        ("python3unittest", "Makefile", b"all:\n"),
+    )
+    conn.execute(
         "INSERT INTO problem_type_actions(problem_type, action, command, parser, max_cpu, max_fd, max_file_size, max_memory, max_threads) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         ("python3unittest", "grade", "make grade", "xunit", 10, 100, 10, 256, 20),
@@ -169,9 +173,6 @@ class GrpcServiceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         root = Path(self.tmp.name)
-        self.root = root
-        (root / "files" / "python3unittest").mkdir(parents=True)
-        (root / "files" / "python3unittest" / "Makefile").write_text("all:\n", encoding="utf-8")
         db_path = root / "db.sqlite"
         self.conn = setup_db(db_path)
         _apply_schema(self.conn)
@@ -187,7 +188,7 @@ class GrpcServiceTests(unittest.TestCase):
             sqlite3_path=str(db_path),
         )
         self.logins = LoginRecords()
-        self.service = CodeGrinderService(self.conn, self.config, root, login_records=self.logins)
+        self.service = CodeGrinderService(self.conn, self.config, login_records=self.logins)
 
     def tearDown(self) -> None:
         self.conn.close()
@@ -228,6 +229,76 @@ class GrpcServiceTests(unittest.TestCase):
         with self.assertRaises(_AbortError) as err:
             self.service.ListAssignments(pb.ListAssignmentsRequest(), cast(grpc.ServicerContext, _FakeContext()))
         self.assertEqual(err.exception.code, grpc.StatusCode.UNAUTHENTICATED)
+
+    def test_save_problem_type_files_requires_admin(self) -> None:
+        request = pb.SaveProblemTypeFilesRequest(
+            problem_type="python3unittest",
+            changes=[
+                pb.ProblemTypeFileChange(
+                    operation=pb.PROBLEM_TYPE_FILE_OPERATION_UPDATE,
+                    path="Makefile",
+                    content=b"updated:\n",
+                )
+            ],
+        )
+
+        with self.assertRaises(_AbortError) as err:
+            self.service.SaveProblemTypeFiles(request, cast(grpc.ServicerContext, self._auth_context("u2")))
+
+        self.assertEqual(err.exception.code, grpc.StatusCode.PERMISSION_DENIED)
+
+    def test_save_problem_type_files_applies_admin_changes(self) -> None:
+        self.conn.execute(
+            "INSERT INTO problem_type_files(problem_type, path, content) VALUES (?, ?, ?)",
+            ("python3unittest", "old.py", b"old\n"),
+        )
+        request = pb.SaveProblemTypeFilesRequest(
+            problem_type="python3unittest",
+            changes=[
+                pb.ProblemTypeFileChange(
+                    operation=pb.PROBLEM_TYPE_FILE_OPERATION_UPDATE,
+                    path="Makefile",
+                    content=b"updated:\n",
+                ),
+                pb.ProblemTypeFileChange(
+                    operation=pb.PROBLEM_TYPE_FILE_OPERATION_ADD,
+                    path="tests/test_example.py",
+                    content=b"def test_example():\n    assert True\n",
+                ),
+                pb.ProblemTypeFileChange(
+                    operation=pb.PROBLEM_TYPE_FILE_OPERATION_DELETE,
+                    path="old.py",
+                ),
+            ],
+        )
+
+        response = self.service.SaveProblemTypeFiles(request, cast(grpc.ServicerContext, self._auth_context("u-admin")))
+
+        self.assertEqual(response.problem_type.files["Makefile"], b"updated:\n")
+        self.assertNotIn("old.py", response.problem_type.files)
+        self.assertEqual(response.problem_type.files["tests/test_example.py"], b"def test_example():\n    assert True\n")
+
+    def test_save_problem_type_files_rejects_duplicate_normalized_paths(self) -> None:
+        request = pb.SaveProblemTypeFilesRequest(
+            problem_type="python3unittest",
+            changes=[
+                pb.ProblemTypeFileChange(
+                    operation=pb.PROBLEM_TYPE_FILE_OPERATION_ADD,
+                    path="tests/new.py",
+                    content=b"a\n",
+                ),
+                pb.ProblemTypeFileChange(
+                    operation=pb.PROBLEM_TYPE_FILE_OPERATION_UPDATE,
+                    path="tests/./new.py",
+                    content=b"b\n",
+                ),
+            ],
+        )
+
+        with self.assertRaises(_AbortError) as err:
+            self.service.SaveProblemTypeFiles(request, cast(grpc.ServicerContext, self._auth_context("u-admin")))
+
+        self.assertEqual(err.exception.code, grpc.StatusCode.INVALID_ARGUMENT)
 
     def test_list_assignments_modes(self) -> None:
         student_ctx = cast(grpc.ServicerContext, self._auth_context("u1"))
@@ -833,7 +904,10 @@ class GrpcServiceTests(unittest.TestCase):
 
 
     def test_prepare_problem_overlays_type_files_then_filters_gitignore(self) -> None:
-        (self.root / "files" / "python3unittest" / ".gitignore").write_text("ignored.txt\n", encoding="utf-8")
+        self.conn.execute(
+            "INSERT INTO problem_type_files(problem_type, path, content) VALUES (?, ?, ?)",
+            ("python3unittest", ".gitignore", b"ignored.txt\n"),
+        )
         author_ctx = cast(grpc.ServicerContext, self._auth_context("u2"))
         reply = self.service.PrepareProblem(
             pb.PrepareProblemRequest(

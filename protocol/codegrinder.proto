@@ -84,6 +84,19 @@ message ProblemType {
   map<string, ProblemTypeAction> actions = 4;
 }
 
+enum ProblemTypeFileOperation {
+  PROBLEM_TYPE_FILE_OPERATION_UNSPECIFIED = 0;
+  PROBLEM_TYPE_FILE_OPERATION_ADD = 1;
+  PROBLEM_TYPE_FILE_OPERATION_UPDATE = 2;
+  PROBLEM_TYPE_FILE_OPERATION_DELETE = 3;
+}
+
+message ProblemTypeFileChange {
+  ProblemTypeFileOperation operation = 1;
+  string path = 2;
+  bytes content = 3;
+}
+
 // ReportCardResult Outcomes:
 // passed, failed, error, skipped
 message ReportCardResult {
@@ -345,6 +358,18 @@ message GetProblemTypeResponse {
   ProblemType problem_type = 1;
 }
 
+// Request for SaveProblemTypeFiles
+message SaveProblemTypeFilesRequest {
+  string session_cookie = 1;
+  string problem_type = 2;
+  repeated ProblemTypeFileChange changes = 3;
+}
+
+// Response for SaveProblemTypeFiles
+message SaveProblemTypeFilesResponse {
+  ProblemType problem_type = 1;
+}
+
 // Request for GetAssignment
 message GetAssignmentRequest {
   string session_cookie = 1;
@@ -491,6 +516,8 @@ service CodeGrinderService {
   rpc GetProblemTypes(GetProblemTypesRequest) returns (GetProblemTypesResponse);
   // GetProblemType retrieves a specific problem type
   rpc GetProblemType(GetProblemTypeRequest) returns (GetProblemTypeResponse);
+  // SaveProblemTypeFiles applies admin changes to canonical problem type files.
+  rpc SaveProblemTypeFiles(SaveProblemTypeFilesRequest) returns (SaveProblemTypeFilesResponse);
   // GetAssignment retrieves assignment metadata and per-problem step progress.
   rpc GetAssignment(GetAssignmentRequest) returns (GetAssignmentResponse);
   // GetWorkspace retrieves canonical local workspace context for one assignment step.

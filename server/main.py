@@ -36,7 +36,7 @@ def _validate_config(config: ServerConfig, http_bind: str) -> None:
         raise RuntimeError("daycare capacity must be greater than zero")
 
 
-def build_server(config: ServerConfig, root: Path) -> Tuple[grpc.Server, CodeGrinderService, DaycareRegistry]:
+def build_server(config: ServerConfig) -> Tuple[grpc.Server, CodeGrinderService, DaycareRegistry]:
     conn = setup_db(Path(config.sqlite3_path))
     login_records = LoginRecords()
     registry = DaycareRegistry(secret=config.daycare_secret, version="2.8.0")
@@ -45,7 +45,6 @@ def build_server(config: ServerConfig, root: Path) -> Tuple[grpc.Server, CodeGri
     service = CodeGrinderService(
         conn=conn,
         config=config,
-        root=root,
         login_records=login_records,
         daycare_registry=registry,
     )
@@ -72,7 +71,7 @@ def main() -> None:
     if not config.sqlite3_path:
         config.sqlite3_path = str(root / "db" / "codegrinder.db")
     _validate_config(config, args.http_bind)
-    server, grpc_service, registry = build_server(config, root)
+    server, grpc_service, registry = build_server(config)
     if args.http_bind:
         lti_service = LTIService(
             conn=grpc_service.conn,

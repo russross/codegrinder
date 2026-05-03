@@ -5,6 +5,7 @@ import logging
 import sys
 from collections.abc import Sequence
 
+from admin_commands import command_files
 from assignment_commands import command_get, command_list
 from auth_commands import command_login, command_version
 from author_commands import command_create, command_problem, command_solve, command_student, command_type
@@ -20,6 +21,7 @@ def _build_parser() -> argparse.ArgumentParser:
     config = load_config_or_default()
     is_instructor = config.is_instructor
     is_author = config.is_author
+    is_admin = config.is_admin
 
     if is_instructor:
         parser.add_argument("--api", action="store_true", help="report all API requests")
@@ -90,6 +92,14 @@ def _build_parser() -> argparse.ArgumentParser:
         type_cmd.add_argument("-l", "--list", action="store_true")
         type_cmd.add_argument("type_args", nargs="*")
         type_cmd.set_defaults(func=command_type)
+
+    if is_admin:
+        files_cmd = subs.add_parser("files", help="push files for a problem type (admins only)")
+        files_cmd.add_argument("--type", dest="problem_type", default="")
+        files_cmd.add_argument("--delete", dest="delete_files", action="append", default=[])
+        files_cmd.add_argument("--add", dest="add_files", action="append", default=[])
+        files_cmd.add_argument("--update", dest="update_files", action="append", default=[])
+        files_cmd.set_defaults(func=command_files)
 
     return parser
 

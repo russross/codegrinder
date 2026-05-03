@@ -12,7 +12,7 @@ import pathspec
 from google.protobuf.json_format import MessageToDict
 
 from problem_files import ProblemStepFileType
-from read_store import load_problem_step_files
+from read_store import load_problem_step_files, load_problem_type_files, load_problem_type_pb
 from proto_conv import parse_time
 from signatures import decode_signed_runtime_bundle, encode_signed_runtime_bundle
 
@@ -193,6 +193,68 @@ def _collect_author_files(files: list[pb.AuthorFile], *, label: str) -> dict[str
     return out
 
 
+def save_problem_type_files(
+    tx: sqlite3.Connection,
+    problem_type: str,
+    changes: list[pb.ProblemTypeFileChange],
+) -> pb.ProblemType:
+    problem_type_name = problem_type.strip()
+    if problem_type_name == "":
+        raise ValueError("problem type is required")
+    if not changes:
+        raise ValueError("at least one file change is required")
+
+    cursor = tx.execute("SELECT 1 FROM problem_types WHERE problem_type = ?", (problem_type_name,))
+    if cursor.fetchone() is None:
+        raise ValueError(f"unknown problem type {problem_type_name!r}")
+
+    normalized_paths: set[str] = set()
+    prepared: list[tuple[pb.ProblemTypeFileOperation.ValueType, str, bytes]] = []
+    for change in changes:
+        path = _normalize_rel_path(change.path, label="problem type file")
+        if path in normalized_paths:
+            raise ValueError(f"multiple changes for problem type file {path!r}")
+        normalized_paths.add(path)
+        operation = change.operation
+        if operation == pb.PROBLEM_TYPE_FILE_OPERATION_UNSPECIFIED:
+            raise ValueError(f"missing operation for problem type file {path!r}")
+        if operation not in (
+            pb.PROBLEM_TYPE_FILE_OPERATION_ADD,
+            pb.PROBLEM_TYPE_FILE_OPERATION_UPDATE,
+            pb.PROBLEM_TYPE_FILE_OPERATION_DELETE,
+        ):
+            raise ValueError(f"unknown operation for problem type file {path!r}")
+        if operation == pb.PROBLEM_TYPE_FILE_OPERATION_DELETE and change.content:
+            raise ValueError(f"delete change for problem type file {path!r} must not include content")
+        prepared.append((operation, path, bytes(change.content or b"")))
+
+    for operation, path, content in prepared:
+        if operation == pb.PROBLEM_TYPE_FILE_OPERATION_ADD:
+            try:
+                tx.execute(
+                    "INSERT INTO problem_type_files(problem_type, path, content) VALUES (?, ?, ?)",
+                    (problem_type_name, path, content),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError(f"problem type file {path!r} already exists") from exc
+        elif operation == pb.PROBLEM_TYPE_FILE_OPERATION_UPDATE:
+            cursor = tx.execute(
+                "UPDATE problem_type_files SET content = ? WHERE problem_type = ? AND path = ?",
+                (content, problem_type_name, path),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError(f"problem type file {path!r} does not exist")
+        elif operation == pb.PROBLEM_TYPE_FILE_OPERATION_DELETE:
+            cursor = tx.execute(
+                "DELETE FROM problem_type_files WHERE problem_type = ? AND path = ?",
+                (problem_type_name, path),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError(f"problem type file {path!r} does not exist")
+
+    return load_problem_type_pb(tx, problem_type_name)
+
+
 def _gitignore_spec(tree: dict[str, bytes]) -> pathspec.GitIgnoreSpec:
     lines: list[str] = []
     for path in sorted(tree.keys()):
@@ -229,34 +291,6 @@ def _filter_ignored_paths(tree: dict[str, bytes]) -> dict[str, bytes]:
         for path, content in tree.items()
         if not spec.match_file(path)
     }
-
-
-def _load_problem_type_from_store(
-    tx: sqlite3.Connection,
-    problem_type: str,
-    load_problem_type_files: Callable[[str], dict[str, bytes]],
-) -> pb.ProblemType:
-    row = tx.execute("SELECT * FROM problem_types WHERE problem_type = ?", (problem_type,)).fetchone()
-    if row is None:
-        raise sqlite3.Error("not found")
-    action_rows = tx.execute("SELECT * FROM problem_type_actions WHERE problem_type = ?", (problem_type,)).fetchall()
-    actions: dict[str, pb.ProblemTypeAction] = {}
-    for action_row in action_rows:
-        actions[str(action_row["action"])] = pb.ProblemTypeAction(
-            command=str(action_row["command"]),
-            parser=str(action_row["parser"] or ""),
-            max_cpu=int(action_row["max_cpu"]),
-            max_fd=int(action_row["max_fd"]),
-            max_file_size=int(action_row["max_file_size"]),
-            max_memory=int(action_row["max_memory"]),
-            max_threads=int(action_row["max_threads"]),
-        )
-    return pb.ProblemType(
-        problem_type=problem_type,
-        container=str(row["container"]),
-        files=load_problem_type_files(problem_type),
-        actions=actions,
-    )
 
 
 def _build_problem_from_draft(draft: pb.AuthorProblemDraft) -> pb.Problem:
@@ -347,7 +381,6 @@ def prepare_problem(
     action: str,
     daycare_secret: str,
     assign_host: Callable[[set[str]], str],
-    load_problem_type_files: Callable[[str], dict[str, bytes]],
 ) -> pb.ProblemBundle:
     if len(draft.steps) == 0:
         raise ValueError("problem draft must include at least one step")
@@ -367,7 +400,7 @@ def prepare_problem(
         weight = float(step_draft.weight)
         step_weight = _require_positive_int_weight(weight, f"step {index} weight")
 
-        problem_type = _load_problem_type_from_store(tx, step_draft.problem_type, load_problem_type_files)
+        problem_type = load_problem_type_pb(tx, step_draft.problem_type)
         bundle.problem_types[problem_type.problem_type].CopyFrom(problem_type)
 
         filtered_tree = _build_effective_author_tree(step_draft, problem_type, index)
@@ -884,7 +917,6 @@ def _runtime_bundle_for_commit(
     bundle: pb.GradingCommit,
     saved: _SavedGradingCommit,
     assign_host: Callable[[set[str]], str],
-    load_problem_type_files: Callable[[str], dict[str, bytes]],
 ) -> SaveGradingCommitResult:
     if saved.action_name == "":
         return SaveGradingCommitResult(bundle=_commit_metadata_bundle(bundle, saved), save_status=saved.save_status)
@@ -899,7 +931,7 @@ def _runtime_bundle_for_commit(
         raise ValueError(f'action "{runtime_action_name}" not defined for problem type {step_context["problem_type"]}')
 
     runtime_files = (
-        load_problem_type_files(str(step_context["problem_type"]))
+        load_problem_type_files(tx, str(step_context["problem_type"]))
         | load_problem_step_files(tx, saved.commit.problem_id, int(saved.commit.step), ProblemStepFileType.REGULAR)
         | dict(saved.commit.files)
     )
@@ -933,10 +965,9 @@ def save_ungraded_commit(
     bundle: pb.GradingCommit,
     ip_allowed: bool,
     assign_host: Callable[[set[str]], str],
-    load_problem_type_files: Callable[[str], dict[str, bytes]],
 ) -> SaveGradingCommitResult:
     saved = _save_grading_commit(tx, current_user_id, bundle, ip_allowed, graded=False)
-    return _runtime_bundle_for_commit(tx, bundle, saved, assign_host, load_problem_type_files)
+    return _runtime_bundle_for_commit(tx, bundle, saved, assign_host)
 
 
 def save_workspace_commit(
