@@ -182,7 +182,7 @@
     <li>Open Thonny</li>
     <li>Click on the “CodeGrinder” menu (if you do not see it, you may need to install the CodeGrinder plugin)</li>
     <li>Select the “Login…” option in the menu (if you cannot select it, you may already be logged in. In that case, select “Logout” and then try again)</li>
-    <li>Copy the following and paste it into the box: <pre>grind login <script>document.write(document.location.hostname + ' ' + QueryString.session)</script></pre></li>
+    <li>Copy the following and paste it into the box: <pre>grind login <script>document.write(document.location.hostname + ' ' + QueryString.token)</script></pre></li>
     <li>If it does not accept your login credentials, you may need to refresh this page. The login token is only valid for 5 minutes, and can only be used once.</li>
   </ol>
 </div>
@@ -230,7 +230,7 @@
 <h3>Logging in</h3>
 <div>
   <p>After you install <tt>grind</tt> you must log in. You will normally only need to do this once per semester. To do so, type this command:</p>
-  <pre>grind login <script>document.write(document.location.hostname + ' ' + QueryString.session)</script></pre>
+  <pre>grind login <script>document.write(document.location.hostname + ' ' + QueryString.token)</script></pre>
    <p>Note that the command given above is custom to you, and will expire 5 minutes from when you first loaded this page. If you need a fresh login token, reload this page.</p>
 </div>
 </div>

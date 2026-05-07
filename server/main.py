@@ -5,6 +5,7 @@ import logging
 import os
 from pathlib import Path
 from concurrent import futures
+from datetime import UTC, datetime
 from typing import Tuple
 
 import grpc
@@ -12,10 +13,10 @@ import grpc
 import codegrinder_pb2_grpc as pb_grpc
 from config import ServerConfig, load_config
 from daycare_registry import DaycareRegistry
-from db import setup_db
+from db import setup_db, transaction
 from grpc_service import CodeGrinderService, IPFilterInterceptor, RecoveryInterceptor
 from lti import LTIService, start_lti_http_server
-from sessions import LoginRecords
+from sessions import LoginTokens, delete_expired_sessions
 
 
 def configure_logging() -> None:
@@ -38,14 +39,16 @@ def _validate_config(config: ServerConfig, http_bind: str) -> None:
 
 def build_server(config: ServerConfig) -> Tuple[grpc.Server, CodeGrinderService, DaycareRegistry]:
     conn = setup_db(Path(config.sqlite3_path))
-    login_records = LoginRecords()
+    with transaction(conn, label="delete expired sessions") as tx:
+        delete_expired_sessions(tx, datetime.now(tz=UTC))
+    login_tokens = LoginTokens()
     registry = DaycareRegistry(secret=config.daycare_secret, version="2.8.0")
     if config.hostname and config.problem_types and config.capacity > 0:
         registry.register_local(config.hostname, config.problem_types, config.capacity)
     service = CodeGrinderService(
         conn=conn,
         config=config,
-        login_records=login_records,
+        login_tokens=login_tokens,
         daycare_registry=registry,
     )
     server = grpc.server(
@@ -76,7 +79,7 @@ def main() -> None:
         lti_service = LTIService(
             conn=grpc_service.conn,
             config=config,
-            login_records=grpc_service.login_records,
+            login_tokens=grpc_service.login_tokens,
             ip_filter=grpc_service.ip_filter,
             daycare_registry=registry,
             version_payload={

@@ -5,10 +5,9 @@ See `codegrinder.proto`, which defines the gRPC protocol. This
 document uses the protocol definition names; you must translate
 naming conventions to what JavaScript gRPC-web expects to use these.
 
-Most requests have a `session_cookie`. This is always filled in with
-the main session cookie loaded from the initial request, and must
-include the `codegrinder=` prefix. The following will omit mention
-of the cookie.
+Authenticated requests send the session key returned by `Hello` in
+gRPC metadata. The following will omit repeated mention of this
+metadata.
 
 All messages are encoded with binary encoding but without
 compression.
@@ -315,8 +314,8 @@ on successful completion returns a new `CommitBundle`.
 
 1.  The server hostname is found in the `hostname` field of the
     bundle. It may or may not be the same as the main gRPC server
-    and is used just for this request. This request unusual in that
-    it does not take a session cookie.
+    and is used just for this request. This request is unusual in
+    that it does not use the main session key.
 
 2.  Call `Daycare`. request requires `commit_bundle` (the bundle
     parameter), `problem_type` (the `name` field from the

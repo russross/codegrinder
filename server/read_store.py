@@ -40,11 +40,7 @@ def _assignment_download_status(value: Any) -> pb.AssignmentDownloadStatus:
 def load_user_by_id(conn: sqlite3.Connection, user_id: str) -> sqlite3.Row:
     return _q1(
         conn,
-        "SELECT users.*, "
-        "users.admin AS admin, "
-        "EXISTS(SELECT 1 FROM authors WHERE authors.user_id = users.user_id) AS author, "
-        "EXISTS(SELECT 1 FROM user_courses WHERE user_courses.user_id = users.user_id AND user_courses.is_instructor) AS instructor "
-        "FROM users WHERE users.user_id = ?",
+        "SELECT * FROM user_role_flags WHERE user_id = ?",
         (user_id,),
     )
 
@@ -132,16 +128,9 @@ def get_assignment_access_row(
 ) -> sqlite3.Row:
     return _q1(
         conn,
-        "SELECT assignments.*, accessible_assignment_fields.is_owner, "
-        "accessible_assignment_fields.is_course_instructor, accessible_assignment_fields.restricted AS viewer_restricted, "
-        "accessible_assignment_fields.download_status, accessible_assignment_fields.download_available "
-        "FROM assignments "
-        "JOIN accessible_assignment_fields "
-        "ON assignments.user_id = accessible_assignment_fields.assignment_user_id "
-        "AND assignments.course_id = accessible_assignment_fields.course_id "
-        "AND assignments.problem_set_id = accessible_assignment_fields.problem_set_id "
-        "WHERE assignments.user_id = ? AND assignments.course_id = ? AND assignments.problem_set_id = ? "
-        "AND accessible_assignment_fields.viewer_user_id = ? AND (? OR NOT accessible_assignment_fields.restricted)",
+        "SELECT * FROM accessible_assignment_rows "
+        "WHERE user_id = ? AND course_id = ? AND problem_set_id = ? "
+        "AND viewer_user_id = ? AND (? OR NOT viewer_restricted)",
         (
             assignment.user_id,
             assignment.course_id,
@@ -211,16 +200,9 @@ def _starter_student_files(
             )
         else:
             continuation = conn.execute(
-                "SELECT previous_slice.problem_set_id, previous_slice.last_step "
-                "FROM problem_sets "
-                "JOIN problem_set_problems AS current_slice "
-                "ON current_slice.problem_set_id = problem_sets.problem_set_id "
-                "JOIN problem_set_problems AS previous_slice "
-                "ON previous_slice.problem_set_id = problem_sets.continues_problem_set_id "
-                "AND previous_slice.problem_id = current_slice.problem_id "
-                "AND previous_slice.last_step = current_slice.first_step - 1 "
-                "WHERE problem_sets.problem_set_id = ? AND current_slice.problem_id = ? "
-                "AND current_slice.first_step = ?",
+                "SELECT prerequisite_problem_set_id, prerequisite_step_number "
+                "FROM problem_set_continuations "
+                "WHERE problem_set_id = ? AND problem_id = ? AND first_step = ?",
                 (problem_set_id, problem_id, step_number),
             ).fetchone()
             if continuation is not None:
@@ -228,9 +210,9 @@ def _starter_student_files(
                     conn,
                     user_id,
                     course_id,
-                    str(continuation["problem_set_id"]),
+                    str(continuation["prerequisite_problem_set_id"]),
                     problem_id,
-                    int(continuation["last_step"]),
+                    int(continuation["prerequisite_step_number"]),
                 )
             else:
                 files = load_problem_step_files(conn, problem_id, step_number - 1, ProblemStepFileType.SOLUTION)
@@ -503,28 +485,25 @@ def search_problem_catalog_pb(
     conditions: list[str] = []
     args: list[Any] = []
     for term in search_terms:
-        conditions.append("LOWER(problem_set_search_fields.search_text) LIKE ?")
+        conditions.append("LOWER(search_text) LIKE ?")
         args.append(f"%{term.lower()}%")
 
     if bool(current_user["author"]):
         set_rows = _q(
             conn,
-            "SELECT problem_sets.* FROM problem_sets "
-            "JOIN problem_set_search_fields ON problem_set_search_fields.problem_set_id = problem_sets.problem_set_id"
+            "SELECT problem_set_id, problem_set_note, problem_set_tags FROM problem_catalog_sets"
             + _where_clause(conditions)
-            + " ORDER BY problem_sets.problem_set_id",
+            + " ORDER BY problem_set_id",
             tuple(args),
         )
     else:
-        conditions = [*conditions, "accessible_problem_sets.viewer_user_id = ?"]
+        conditions = [*conditions, "viewer_user_id = ?"]
         args.append(str(current_user["user_id"]))
         set_rows = _q(
             conn,
-            "SELECT problem_sets.* FROM problem_sets "
-            "JOIN accessible_problem_sets ON accessible_problem_sets.problem_set_id = problem_sets.problem_set_id"
-            " JOIN problem_set_search_fields ON problem_set_search_fields.problem_set_id = problem_sets.problem_set_id"
+            "SELECT problem_set_id, problem_set_note, problem_set_tags FROM accessible_problem_catalog_sets"
             + _where_clause(conditions)
-            + " ORDER BY problem_sets.problem_set_id",
+            + " ORDER BY problem_set_id",
             tuple(args),
         )
 

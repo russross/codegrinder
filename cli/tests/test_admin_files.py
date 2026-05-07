@@ -4,9 +4,10 @@ from pathlib import Path
 
 import pytest
 
+import codegrinder_pb2 as pb
 import cli
 import helpers
-from admin_commands import _collect_changes, _print_file_statuses
+from admin_commands import _collect_changes, _print_file_statuses, _print_problem_type
 from errors import CliError
 
 
@@ -118,4 +119,54 @@ def test_files_status_reports_only_server_file_set(tmp_path: Path, capsys: pytes
         "changed: changed.py",
         "missing: missing.py",
         "unchanged: same.py",
+    ]
+
+
+def test_problemtype_show_prints_aligned_update_commands(capsys: pytest.CaptureFixture[str]) -> None:
+    _print_problem_type(
+        pb.ProblemType(
+            problem_type="python3unittest",
+            container="codegrinder/python:3.12",
+            actions={
+                "grade": pb.ProblemTypeAction(
+                    command="make grade",
+                    parser="xunit",
+                    max_cpu=10,
+                    max_fd=128,
+                    max_file_size=10485760,
+                    max_memory=536870912,
+                    max_threads=32,
+                )
+            },
+            files={"Makefile": b"all:\n"},
+        )
+    )
+
+    assert capsys.readouterr().out.splitlines() == [
+        "problem type: python3unittest",
+        "container:    codegrinder/python:3.12",
+        "actions:",
+        "  grade",
+        "    command:        make grade",
+        "    parser:         xunit",
+        "    max_cpu:        10",
+        "    max_fd:         128",
+        "    max_file_size:  10485760",
+        "    max_memory:     536870912",
+        "    max_threads:    32",
+        "",
+        "    update command:",
+        "      grind problemtype action update \\",
+        "        --problem-type   python3unittest \\",
+        "        --action         grade \\",
+        "        --command        'make grade' \\",
+        "        --parser         xunit \\",
+        "        --max-cpu        10 \\",
+        "        --max-fd         128 \\",
+        "        --max-file-size  10485760 \\",
+        "        --max-memory     536870912 \\",
+        "        --max-threads    32",
+        "",
+        "canonical files:",
+        "  Makefile",
     ]

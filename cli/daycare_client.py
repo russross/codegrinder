@@ -21,7 +21,7 @@ def handle_daycare_stream(
     request = pb.DaycareRequest(bundle=bundle, args=args)
     dump_message(client.config, "Daycare", True, request)
     try:
-        stream = client.session.stub.Daycare(request, metadata=grpc_metadata(client.config.cookie))
+        stream = client.session.stub.Daycare(request, metadata=grpc_metadata(client.config.session_key))
     except Exception as exc:
         raise CliError(f"error starting Daycare session: {clean_error(exc)}") from exc
     dump_message(client.config, "Daycare", False, None)

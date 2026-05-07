@@ -10,7 +10,6 @@ import sqlite3
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from email.utils import format_datetime
 from hashlib import sha1
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -22,7 +21,7 @@ from config import ServerConfig
 from daycare_registry import DaycareRegistration, DaycareRegistry
 from db import transaction
 from ipfilter import IPFilter
-from sessions import COOKIE_NAME, LoginRecords, encode_session, new_session
+from sessions import LoginTokens
 from signatures import encode_params, escape
 
 BOOTSTRAP_ASSIGNMENT_NAME = "bootstrap-codegrinder"
@@ -43,7 +42,6 @@ class LTIResponse:
     content_type: str
     body: bytes
     location: str | None = None
-    set_cookie: str | None = None
 
 
 def compute_oauth_signature(method: str, request_url: str, parameters: dict[str, list[str]], secret: str) -> str:
@@ -140,17 +138,6 @@ def _date_mismatch(old_value: object, incoming: str) -> bool:
     return incoming_dt != old_dt
 
 
-def _build_set_cookie(cookie_value: str, expires_at: datetime, now: datetime) -> str:
-    max_age = int((expires_at - now).total_seconds())
-    if max_age < 0:
-        max_age = 0
-    expires_utc = expires_at.astimezone(UTC)
-    return (
-        f"{COOKIE_NAME}={cookie_value}; Path=/; Expires={format_datetime(expires_utc, usegmt=True)}; "
-        f"Max-Age={max_age}; Secure"
-    )
-
-
 def get_config_xml(config: ServerConfig) -> bytes:
     title = xml_escape(config.tool_name)
     description = xml_escape(config.tool_description)
@@ -189,7 +176,7 @@ class LTIService:
         self,
         conn: sqlite3.Connection,
         config: ServerConfig,
-        login_records: LoginRecords,
+        login_tokens: LoginTokens,
         ip_filter: IPFilter,
         daycare_registry: DaycareRegistry | None = None,
         version_payload: dict[str, str] | None = None,
@@ -197,7 +184,7 @@ class LTIService:
     ) -> None:
         self._conn = conn
         self._config = config
-        self._logins = login_records
+        self._login_tokens = login_tokens
         self._ip_filter = ip_filter
         self._daycare_registry = daycare_registry
         self._version_payload = version_payload or {
@@ -343,17 +330,13 @@ class LTIService:
                     restricted=restricted,
                 )
 
-        session = new_session(user_id, now, self._config.sessions_expire)
-        cookie_value = encode_session(session, self._config.session_secret)
-        set_cookie = _build_set_cookie(cookie_value, session.expires_at, now)
-        key = self._logins.insert(user_id, now)
-        location = f"/{ui}/?assignment={quote_plus(assignment_key)}&session={key}&course={quote_plus(course_label)}"
+        login_token = self._login_tokens.insert(user_id, now)
+        location = f"/{ui}/?assignment={quote_plus(assignment_key)}&token={login_token}&course={quote_plus(course_label)}"
         return LTIResponse(
             status=HTTPStatus.SEE_OTHER,
             content_type="text/plain; charset=utf-8",
             body=b"",
             location=location,
-            set_cookie=set_cookie,
         )
 
     def _get_update_user(self, tx: sqlite3.Connection, form: dict[str, list[str]], _now: datetime) -> str:
@@ -590,8 +573,6 @@ class _LTIHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", response.content_type)
         if response.location is not None:
             self.send_header("Location", response.location)
-        if response.set_cookie is not None:
-            self.send_header("Set-Cookie", response.set_cookie)
         self.send_header("Content-Length", str(len(response.body)))
         self.end_headers()
         if len(response.body) > 0:

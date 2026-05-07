@@ -12,7 +12,7 @@ from daycare_registry import DaycareRegistry
 from db import setup_db
 from ipfilter import IPFilter
 from lti import BOOTSTRAP_ASSIGNMENT_NAME, LTIError, LTIService, compute_oauth_signature, get_config_xml
-from sessions import LoginRecords
+from sessions import LoginTokens
 from signatures import compute_daycare_registration_signature
 
 
@@ -71,7 +71,7 @@ class LTITests(unittest.TestCase):
             ],
         )
         self.now = datetime(2026, 2, 15, 10, 0, 0, tzinfo=UTC)
-        self.logins = LoginRecords()
+        self.login_tokens = LoginTokens()
 
     def tearDown(self) -> None:
         self.conn.close()
@@ -81,7 +81,7 @@ class LTITests(unittest.TestCase):
         return LTIService(
             conn=self.conn,
             config=self.config,
-            login_records=self.logins,
+            login_tokens=self.login_tokens,
             ip_filter=ip_filter or IPFilter.from_entries([]),
             daycare_registry=DaycareRegistry(secret=self.config.daycare_secret, version="2.8.0", now_provider=lambda: self.now),
             now_provider=lambda: self.now,
@@ -110,7 +110,7 @@ class LTITests(unittest.TestCase):
                 service.validate_oauth_signature("POST", "https://codegrinder.example.com/lti/problem_sets/web/set-1", form)
             self.assertTrue(log_warning.called)
 
-    def test_lti_launch_creates_user_course_assignment_session(self) -> None:
+    def test_lti_launch_creates_user_course_assignment_login_token(self) -> None:
         service = self._service()
         form = _launch_form()
         request_url = "https://codegrinder.example.com/lti/problem_sets/web/set-1"
@@ -124,10 +124,11 @@ class LTITests(unittest.TestCase):
             client_ip="127.0.0.1",
         )
         self.assertEqual(response.status, 303)
-        self.assertIn("codegrinder=", response.set_cookie or "")
         query = parse_qs(urlsplit(response.location or "").query)
         self.assertIn("assignment", query)
+        self.assertIn("token", query)
         self.assertEqual(query.get("course"), ["CSE101"])
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) AS n FROM user_sessions").fetchone()["n"], 0)
         user = self.conn.execute("SELECT * FROM users WHERE user_id = 'u-1'").fetchone()
         self.assertIsNotNone(user)
         course = self.conn.execute("SELECT * FROM courses WHERE course_id = 'course-1'").fetchone()

@@ -63,14 +63,14 @@ def _parse_config_file() -> dict[str, object]:
 
 def _config_from_raw(raw: dict[str, object]) -> Config:
     host = raw.get("host", "")
-    cookie = raw.get("cookie", "")
+    session_key = raw.get("session_key", "")
     workspace_root = raw.get("workspace_root", str(Path.home()))
     is_author = raw.get("is_author", False)
     is_instructor = raw.get("is_instructor", False)
     is_admin = raw.get("is_admin", False)
     if (
         not isinstance(host, str)
-        or not isinstance(cookie, str)
+        or not isinstance(session_key, str)
         or not isinstance(workspace_root, str)
         or not isinstance(is_author, bool)
         or not isinstance(is_instructor, bool)
@@ -82,7 +82,7 @@ def _config_from_raw(raw: dict[str, object]) -> Config:
         )
     return Config(
         host=host,
-        cookie=cookie,
+        session_key=session_key,
         workspace_root=Path(workspace_root).expanduser(),
         is_author=is_author,
         is_instructor=is_instructor,
@@ -111,7 +111,7 @@ def write_config(config: Config) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     merged = Config(
         host=config.host,
-        cookie=config.cookie,
+        session_key=config.session_key,
         workspace_root=existing.workspace_root,
         is_author=config.is_author,
         is_instructor=config.is_instructor,
@@ -119,7 +119,7 @@ def write_config(config: Config) -> None:
     )
     lines = [
         f"host = {_toml_string(merged.host)}",
-        f"cookie = {_toml_string(merged.cookie)}",
+        f"session_key = {_toml_string(merged.session_key)}",
         f"workspace_root = {_toml_string(str(merged.workspace_root))}",
     ]
     if merged.is_author:
@@ -182,8 +182,8 @@ def dump_message(config: Config, call: str, is_outgoing: bool, msg: object | Non
         logging.error("%s %s", marker, call)
 
 
-def grpc_metadata(cookie: str) -> Sequence[tuple[str, str]]:
-    return (("cookie", cookie),)
+def grpc_metadata(session_key: str) -> Sequence[tuple[str, str]]:
+    return (("authorization", f"Bearer {session_key}"),)
 
 
 def new_grpc_client(config: Config) -> tuple[pb_grpc.CodeGrinderServiceStub, grpc.Channel]:
@@ -216,7 +216,7 @@ def _sync_cached_roles(config: Config, user: AuthenticatedUser) -> None:
     write_config(
         Config(
             host=config.host,
-            cookie=config.cookie,
+            session_key=config.session_key,
             workspace_root=config.workspace_root,
             is_author=user.is_author,
             is_instructor=user.is_instructor,
@@ -235,7 +235,7 @@ def setup(config: Config) -> Session:
     try:
         req = pb.HelloRequest()
         dump_message(config, "Hello", True, req)
-        response = stub.Hello(req, metadata=grpc_metadata(config.cookie))
+        response = stub.Hello(req, metadata=grpc_metadata(config.session_key))
         dump_message(config, "Hello", False, response)
     except Exception as exc:
         channel.close()

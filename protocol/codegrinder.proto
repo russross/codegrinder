@@ -276,12 +276,12 @@ message ProblemSetBundle {
 
 // Request for Hello
 message HelloRequest {
-  string key = 1;
+  string token = 1;
 }
 
 // Response for Hello
 message HelloResponse {
-  string cookie = 1;
+  string session_key = 1;
   string user_id = 2;
   string user_name = 3;
   string user_login = 4;
@@ -293,9 +293,8 @@ message HelloResponse {
 
 // Request for ListAssignments
 message ListAssignmentsRequest {
-  string session_cookie = 1;
-  repeated string search = 2;
-  bool include_student_context = 3;
+  repeated string search = 1;
+  bool include_student_context = 2;
 }
 
 // AssignmentListItem returns assignment list data shaped for list/student commands.
@@ -331,8 +330,7 @@ message ListAssignmentsResponse {
 
 // Request for SearchProblemCatalog
 message SearchProblemCatalogRequest {
-  string session_cookie = 1;
-  repeated string search = 2;
+  repeated string search = 1;
 }
 
 // ProblemCatalogStep summarizes one step for catalog display.
@@ -365,7 +363,6 @@ message SearchProblemCatalogResponse {
 
 // Request for GetProblemTypes
 message GetProblemTypesRequest {
-  string session_cookie = 1;
 }
 
 // Response for GetProblemTypes
@@ -375,8 +372,7 @@ message GetProblemTypesResponse {
 
 // Request for GetProblemType
 message GetProblemTypeRequest {
-  string session_cookie = 1;
-  string problem_type = 2;
+  string problem_type = 1;
 }
 
 // Response for GetProblemType
@@ -386,9 +382,8 @@ message GetProblemTypeResponse {
 
 // Request for SaveProblemTypeFiles
 message SaveProblemTypeFilesRequest {
-  string session_cookie = 1;
-  string problem_type = 2;
-  repeated ProblemTypeFileChange changes = 3;
+  string problem_type = 1;
+  repeated ProblemTypeFileChange changes = 2;
 }
 
 // Response for SaveProblemTypeFiles
@@ -398,9 +393,8 @@ message SaveProblemTypeFilesResponse {
 
 // Request for SaveProblemType
 message SaveProblemTypeRequest {
-  string session_cookie = 1;
-  repeated ProblemTypeChange problem_type_changes = 2;
-  repeated ProblemTypeActionChange action_changes = 3;
+  repeated ProblemTypeChange problem_type_changes = 1;
+  repeated ProblemTypeActionChange action_changes = 2;
 }
 
 // Response for SaveProblemType
@@ -410,8 +404,7 @@ message SaveProblemTypeResponse {
 
 // Request for GetAssignment
 message GetAssignmentRequest {
-  string session_cookie = 1;
-  AssignmentKey assignment = 2;
+  AssignmentKey assignment = 1;
 }
 
 // AssignmentProblemProgress reports one problem's progress in the assignment.
@@ -440,13 +433,12 @@ enum WorkspaceFileState {
 
 // Request for GetWorkspace
 message GetWorkspaceRequest {
-  string session_cookie = 1;
-  AssignmentKey assignment = 2;
-  string problem_id = 3;
-  int64 step_number = 4; // 0 means use the student's current step for this problem.
-  WorkspaceFileState file_state = 5;
-  bool include_contents = 6;
-  bool include_solution_files = 7;
+  AssignmentKey assignment = 1;
+  string problem_id = 2;
+  int64 step_number = 3; // 0 means use the student's current step for this problem.
+  WorkspaceFileState file_state = 4;
+  bool include_contents = 5;
+  bool include_solution_files = 6;
 }
 
 // Response for GetWorkspace
@@ -468,9 +460,8 @@ message GetWorkspaceResponse {
 
 // Request for PrepareProblem
 message PrepareProblemRequest {
-  string session_cookie = 1;
-  AuthorProblemDraft draft = 2;
-  string action = 3;
+  AuthorProblemDraft draft = 1;
+  string action = 2;
 }
 
 // Response for PrepareProblem
@@ -480,9 +471,8 @@ message PrepareProblemResponse {
 
 // Request for SaveProblem
 message SaveProblemRequest {
-  string session_cookie = 1;
-  SaveMode mode = 2;
-  ProblemBundle bundle = 3;
+  SaveMode mode = 1;
+  ProblemBundle bundle = 2;
 }
 
 // Response for SaveProblem
@@ -492,9 +482,8 @@ message SaveProblemResponse {
 
 // Request for SaveProblemSet
 message SaveProblemSetRequest {
-  string session_cookie = 1;
-  SaveMode mode = 2;
-  ProblemSetBundle bundle = 3;
+  SaveMode mode = 1;
+  ProblemSetBundle bundle = 2;
 }
 
 // Response for SaveProblemSet
@@ -510,8 +499,7 @@ enum CommitSaveStatus {
 
 // Request for SaveWorkspaceCommit
 message SaveWorkspaceCommitRequest {
-  string session_cookie = 1;
-  Commit commit = 2;
+  Commit commit = 1;
 }
 
 // Response for SaveWorkspaceCommit
@@ -521,8 +509,7 @@ message SaveWorkspaceCommitResponse {
 
 // Request for SaveUngradedCommit
 message SaveUngradedCommitRequest {
-  string session_cookie = 1;
-  GradingCommit commit = 2;
+  GradingCommit commit = 1;
 }
 
 // Response for SaveUngradedCommit
@@ -533,8 +520,7 @@ message SaveUngradedCommitResponse {
 
 // Request for SaveGradedCommit
 message SaveGradedCommitRequest {
-  string session_cookie = 1;
-  SignedRuntimeBundle bundle = 2;
+  SignedRuntimeBundle bundle = 1;
 }
 
 // Response for SaveGradedCommit

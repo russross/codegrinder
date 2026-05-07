@@ -9,6 +9,16 @@ from db import setup_db, transaction
 
 
 class DBTests(unittest.TestCase):
+    def test_setup_db_configures_busy_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "db.sqlite"
+            conn = setup_db(db_path)
+            row = conn.execute("PRAGMA busy_timeout").fetchone()
+            self.assertIsNotNone(row)
+            assert row is not None
+            self.assertEqual(int(row[0]), 10000)
+            conn.close()
+
     def test_setup_db_and_transaction_commit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "db.sqlite"
@@ -27,9 +37,9 @@ class DBTests(unittest.TestCase):
             conn = setup_db(db_path)
             conn.execute("CREATE TABLE items(id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
             with self.assertRaises(sqlite3.IntegrityError):
-                with transaction(conn):
-                    conn.execute("INSERT INTO items(name) VALUES (?)", ("alpha",))
-                    conn.execute("INSERT INTO items(id, name) VALUES (?, ?)", (1, "duplicate-id"))
+                with transaction(conn) as tx:
+                    tx.execute("INSERT INTO items(name) VALUES (?)", ("alpha",))
+                    tx.execute("INSERT INTO items(id, name) VALUES (?, ?)", (1, "duplicate-id"))
             row = conn.execute("SELECT COUNT(1) FROM items").fetchone()
             self.assertIsNotNone(row)
             self.assertEqual(int(row[0]), 0)

@@ -11,12 +11,12 @@ primary external libraries are:
 The app is launched on the same server and port as a gRPC server
 that the app interacts with. At start time it is given:
 
-* A cookie `codegrinder=` used in all gRPC requests for
-  authentication/session linking
+* A URL parameter `token=` used once to obtain a session key from
+  `Hello`
 * A URL parameter `assignment=` with an integer ID to indentify the
   assignment that is the context of this session
 
-At startup the cookie and the assignment ID are used to drive the
+At startup the token and the assignment ID are used to drive the
 "loadAssignment" operation (see @RPC.md) to get basic info. That
 sequence identifies one or more problems that are part of this
 assignment, which leads to one or more "loadProblem" operations to

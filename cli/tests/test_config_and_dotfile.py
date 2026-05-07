@@ -13,15 +13,15 @@ def test_write_and_load_config_uses_xdg_path(monkeypatch, tmp_path: Path) -> Non
     monkeypatch.setattr(helpers, "CONFIG_DIR", cfg_dir)
     monkeypatch.setattr(helpers, "CONFIG_FILE", cfg_file)
 
-    config = helpers.Config(host="example.edu", cookie="abc123")
+    config = helpers.Config(host="example.edu", session_key="abc123")
     helpers.write_config(config)
 
     payload = tomllib.loads(cfg_file.read_text(encoding="utf-8"))
-    assert payload == {"host": "example.edu", "cookie": "abc123", "workspace_root": str(Path.home())}
+    assert payload == {"host": "example.edu", "session_key": "abc123", "workspace_root": str(Path.home())}
 
     loaded = helpers.load_config()
     assert loaded.host == "example.edu"
-    assert loaded.cookie == "abc123"
+    assert loaded.session_key == "abc123"
     assert loaded.workspace_root == Path.home()
     assert not loaded.is_instructor
     assert not loaded.is_author
@@ -38,7 +38,7 @@ def test_login_config_update_preserves_user_settings(monkeypatch, tmp_path: Path
     cfg_dir.mkdir()
     cfg_file.write_text(
         f'host = "old.example.edu"\n'
-        f'cookie = "old-cookie"\n'
+        f'session_key = "old-session-key"\n'
         f'workspace_root = "{workspace_root}"\n'
         'is_author = true\n'
         'is_admin = true\n',
@@ -46,13 +46,13 @@ def test_login_config_update_preserves_user_settings(monkeypatch, tmp_path: Path
     )
 
     helpers.write_config(
-        helpers.Config(host="new.example.edu", cookie="new-cookie", is_instructor=True, is_admin=True)
+        helpers.Config(host="new.example.edu", session_key="new-session-key", is_instructor=True, is_admin=True)
     )
 
     payload = tomllib.loads(cfg_file.read_text(encoding="utf-8"))
     assert payload == {
         "host": "new.example.edu",
-        "cookie": "new-cookie",
+        "session_key": "new-session-key",
         "workspace_root": str(workspace_root),
         "is_instructor": True,
         "is_admin": True,

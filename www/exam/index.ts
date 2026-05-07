@@ -21,6 +21,7 @@ import {
 import { CodeGrinderServiceClient } from "./codegrinder.client";
 import { Timestamp } from "./google/protobuf/timestamp";
 import { GrpcWebFetchTransport } from "@protobuf-ts/grpcweb-transport";
+import type { RpcOptions } from "@protobuf-ts/runtime-rpc";
 
 import Split from "split.js";
 
@@ -79,6 +80,7 @@ let fitAddon: FitAddon;
 let term: Terminal;
 let assignment: AssignmentKey | null = null;
 let userId = "";
+let sessionKey = "";
 let currentlyOpenFilePath: string | null = null;
 let hasUserMadeChanges = false;
 let isProgrammaticEditorUpdate = false;
@@ -138,6 +140,13 @@ function createMainClient(): CodeGrinderServiceClient {
     );
 }
 
+function authOptions(): RpcOptions {
+    if (sessionKey === "") {
+        throw new Error("Missing session key");
+    }
+    return { meta: { authorization: `Bearer ${sessionKey}` } };
+}
+
 function createDaycareClient(hostname: string): CodeGrinderServiceClient {
     return new CodeGrinderServiceClient(
         new GrpcWebFetchTransport({
@@ -172,16 +181,9 @@ function parseAssignmentKeyFromUrl(): AssignmentKey {
     };
 }
 
-function getSessionKeyFromUrl(): string {
-    const raw = new URLSearchParams(window.location.search).get("session");
+function getLoginTokenFromUrl(): string {
+    const raw = new URLSearchParams(window.location.search).get("token");
     return raw === null ? "" : raw;
-}
-
-function setCookieFromHello(cookie: string): void {
-    if (cookie === "") {
-        return;
-    }
-    document.cookie = `${cookie}; path=/`;
 }
 
 function normalizeRelativePath(raw: string): string {
@@ -411,7 +413,7 @@ async function fetchWorkspace(
             includeContents: true,
             includeSolutionFiles: false,
         }),
-        {},
+        authOptions(),
     );
     return reply.response;
 }
@@ -427,16 +429,19 @@ async function loadProblem(
 
 async function loadAssignment(): Promise<void> {
     const client = createMainClient();
-    const sessionKey = getSessionKeyFromUrl();
-    const helloCall = await client.hello(HelloRequest.create({ key: sessionKey }), {});
-    setCookieFromHello(helloCall.response.cookie);
+    const loginToken = getLoginTokenFromUrl();
+    const helloCall = await client.hello(HelloRequest.create({ token: loginToken }), {});
+    sessionKey = helloCall.response.sessionKey;
+    if (sessionKey === "") {
+        throw new Error("Session key not returned from hello");
+    }
     if (helloCall.response.userId === "") {
         throw new Error("User not returned from hello");
     }
     userId = helloCall.response.userId;
 
     assignment = parseAssignmentKeyFromUrl();
-    const assignmentCall = await client.getAssignment(GetAssignmentRequest.create({ assignment }), {});
+    const assignmentCall = await client.getAssignment(GetAssignmentRequest.create({ assignment }), authOptions());
     const assignmentResponse = assignmentCall.response;
     if (assignmentResponse.assignment === undefined) {
         throw new Error("Assignment not returned from GetAssignment");
@@ -596,7 +601,7 @@ async function doAction(action: string): Promise<void> {
 
     if (action === "") {
         const commit = buildCommit(problem, "", "exam interface: save");
-        const saved = await client.saveWorkspaceCommit(SaveWorkspaceCommitRequest.create({ commit }), {});
+        const saved = await client.saveWorkspaceCommit(SaveWorkspaceCommitRequest.create({ commit }), authOptions());
         hasUserMadeChanges = false;
         getRequiredElement<HTMLButtonElement>("save-button").disabled = true;
         writeSaveStatus(saved.response.saveStatus, "save");
@@ -618,7 +623,7 @@ async function doAction(action: string): Promise<void> {
                 commit: ungradedCommit,
             }),
         }),
-        {},
+        authOptions(),
     );
     if (ungraded.response.bundle === undefined) {
         throw new Error("SaveUngradedCommit did not return a signed runtime bundle");
@@ -636,7 +641,7 @@ async function doAction(action: string): Promise<void> {
 
     const graded = await client.saveGradedCommit(
         SaveGradedCommitRequest.create({ bundle: finalBundle }),
-        {},
+        authOptions(),
     );
     const gradedCommit = runtime.commit;
     if (gradedCommit === undefined) {

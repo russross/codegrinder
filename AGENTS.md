@@ -16,13 +16,22 @@ For Python server checks:
 - The server is its own uv project under `server/`; run server pytest from that directory with `uv run pytest tests`.
 - Do not run server tests from the repo root with `uv run --project server pytest`; pytest will collect unrelated repo paths such as `certs/` and CLI tests, and imports will not match the server test layout.
 
+For database schema and queries:
+
+- The database should be natural-join friendly. Avoid reusing a column name across tables unless it represents the same value, usually as part of a primary key or foreign key relationship.
+- Prefer schema and view definitions that make policy explicit in the data model. Server queries should usually be simple reads from tables or views instead of reimplementing relationship or policy logic in Python.
+- Prefer `WITHOUT ROWID` for tables with primary keys.
+- Prefer `NATURAL JOIN` where the schema makes the join relationship clear. Use explicit `ON` or `USING` only when names intentionally differ, extra predicates are needed, or a natural join would obscure the relationship.
+- File tables use `path` and `content` consistently because those columns represent the same logical workspace-file data across file sets.
+- Treat file `content` values as potentially large. When gathering file sets, favor simple direct queries with selective predicates on keys and file metadata; avoid clever joins or broad views whose query plans might load file contents before filtering them out.
+
 For protocol changes:
 
 - Backware compatibility of the protocol is NOT a goal
 - Always clean up/remove fields that are not actually used
 - Favor flattening message data types where appropriate
 - Client does not know/care about database layout—protocol should minimize leaking relational database structure
-- Preserve `session_cookie` request fields where they help future web-gRPC integration, even if the current Python gRPC path authenticates through metadata instead
+- Session authentication uses explicit raw session keys in gRPC metadata. Do not use HTTP cookies or `session_cookie` request fields for session auth.
 
 For the exam interface under `www/exam`:
 
@@ -34,7 +43,7 @@ For the exam interface under `www/exam`:
 - CLI config uses XDG conventions: `$XDG_CONFIG_HOME/codegrinder/config.toml`, defaulting to `~/.config/codegrinder/config.toml`.
 - Do not use legacy `~/.codegrinderrc` or `~/.codegrinderinstructor` files.
 - The config file is TOML and is created on login.
-- Login updates the auth cookie/token, server URL, and cached role flags returned by `Hello`; preserve user-editable settings such as workspace root when the file already exists.
+- Login updates the session key, server URL, and cached role flags returned by `Hello`; preserve user-editable settings such as workspace root when the file already exists.
 - The workspace root setting controls where per-course assignment directories are created. Default it to `$HOME` and explicitly write that default to the config file.
 - `grind get` has no assignment selector or directory override; it always uses the configured workspace root. Students who want a different root edit the config file by hand.
 - Cached role flags are optional TOML boolean lines. Omit `is_instructor`, `is_author`, and `is_admin` when false; missing means `false`.
@@ -51,7 +60,7 @@ For the exam interface under `www/exam`:
 - Commands that operate on a local assignment must discover the assignment by finding `.grind` in the current directory or an ancestor.
 - Multi-problem assignments require problem-specific author commands to run from inside a concrete problem directory; single-problem assignments use the assignment root as the problem directory.
 - Client-side workspace path handling must normalize paths before reading or writing local files. Server-side validation remains authoritative and must reject invalid submitted paths.
-- Non-login commands that load the server session must call `Hello` through `managed_session`, enforce version checks, and use the configured session cookie as the authentication source.
+- Non-login commands that load the server session must call `Hello` through `managed_session`, enforce version checks, and use the configured session key as the authentication source.
 - After a successful authenticated `Hello`, the CLI updates cached `is_instructor`, `is_author`, and `is_admin` config flags when they differ from the server response.
 
 # `grind version`
@@ -62,11 +71,11 @@ For the exam interface under `www/exam`:
 
 # `grind login`
 
-- `grind login <hostname> <sessionkey>` exchanges a Canvas-provided one-time login key for a durable session cookie by calling `Hello` against the given host.
-- `grind login` with any argument shape other than exactly host and key prints login guidance and fails.
-- The server validates the login key, returns the authenticated user, session cookie, and version policy.
+- `grind login <hostname> <token>` exchanges a Canvas-provided one-time login token for a durable session key by calling `Hello` against the given host.
+- `grind login` with any argument shape other than exactly host and token prints login guidance and fails.
+- The server validates the login token, creates a database-backed session, returns the authenticated user, session key, and version policy.
 - The CLI must reject an empty user response and must run normal version compatibility checks before writing config.
-- Login creates or updates the XDG TOML config. It updates host, cookie/session fields, and cached role flags from `Hello`, and preserves user-editable settings such as workspace root.
+- Login creates or updates the XDG TOML config. It updates host, session key, and cached role flags from `Hello`, and preserves user-editable settings such as workspace root.
 - A successful login prints the authenticated user's display name.
 
 # `grind list`

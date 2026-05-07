@@ -4,6 +4,7 @@ import argparse
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from shlex import quote
 
 import codegrinder_pb2 as pb
 
@@ -207,22 +208,43 @@ def _print_problem_type_list(problem_types: list[pb.ProblemType]) -> None:
 
 def _print_problem_type(problem_type: pb.ProblemType) -> None:
     print(f"problem type: {problem_type.problem_type}")
-    print(f"container: {problem_type.container}")
+    print(f"container:    {problem_type.container}")
     print("actions:")
     if not problem_type.actions:
         print("  none")
     else:
-        for action_name, action in sorted(problem_type.actions.items()):
-            parser = action.parser or "none"
-            print(
-                f"  {action_name}: command={action.command!r} parser={parser} "
-                f"max-cpu={action.max_cpu} max-fd={action.max_fd} "
-                f"max-file-size={action.max_file_size} max-memory={action.max_memory} "
-                f"max-threads={action.max_threads}"
-            )
-    print("files:")
+        for index, (action_name, action) in enumerate(sorted(problem_type.actions.items())):
+            if index > 0:
+                print()
+            print(f"  {action_name}")
+            _print_problem_type_action(problem_type.problem_type, action_name, action)
+        print()
+    print("canonical files:")
     if not problem_type.files:
         print("  none")
     else:
         for path in sorted(problem_type.files.keys()):
             print(f"  {path}")
+
+
+def _print_problem_type_action(problem_type: str, action_name: str, action: pb.ProblemTypeAction) -> None:
+    parser = action.parser or "none"
+    print(f"    command:        {action.command}")
+    print(f"    parser:         {parser}")
+    print(f"    max_cpu:        {action.max_cpu}")
+    print(f"    max_fd:         {action.max_fd}")
+    print(f"    max_file_size:  {action.max_file_size}")
+    print(f"    max_memory:     {action.max_memory}")
+    print(f"    max_threads:    {action.max_threads}")
+    print()
+    print("    update command:")
+    print("      grind problemtype action update \\")
+    print(f"        --problem-type   {quote(problem_type)} \\")
+    print(f"        --action         {quote(action_name)} \\")
+    print(f"        --command        {quote(action.command)} \\")
+    print(f"        --parser         {quote(parser)} \\")
+    print(f"        --max-cpu        {action.max_cpu} \\")
+    print(f"        --max-fd         {action.max_fd} \\")
+    print(f"        --max-file-size  {action.max_file_size} \\")
+    print(f"        --max-memory     {action.max_memory} \\")
+    print(f"        --max-threads    {action.max_threads}")

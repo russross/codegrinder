@@ -19,21 +19,21 @@ def command_login(args: argparse.Namespace) -> None:
         print(
             "To log in, click on an assignment in Canvas and follow the\n"
             "instructions given. You should run a command of the form:\n\n"
-            f"{program_name()} login <hostname> <sessionkey>\n\n"
-            "where <hostname> and <sessionkey> are given in the instructions.\n\n"
+            f"{program_name()} login <hostname> <token>\n\n"
+            "where <hostname> and <token> are given in the instructions.\n\n"
             "You should normally only need to do this once per semester.\n"
         )
-        fail(f"Usage: {program_name()} login <hostname> <sessionkey>")
+        fail(f"Usage: {program_name()} login <hostname> <token>")
 
-    config = Config(host=args.login_args[0], cookie="", api_report=False, api_dump=False)
+    config = Config(host=args.login_args[0], session_key="", api_report=False, api_dump=False)
     channel = None
     try:
         stub, channel = new_grpc_client(config)
-        req = pb.HelloRequest(key=args.login_args[1])
+        req = pb.HelloRequest(token=args.login_args[1])
         dump_message(config, "Hello", True, req)
         response = stub.Hello(req)
         dump_message(config, "Hello", False, response)
-        config.cookie = response.cookie
+        config.session_key = response.session_key
         config.is_author = bool(response.is_author)
         config.is_instructor = bool(response.is_instructor)
         config.is_admin = bool(response.is_admin)

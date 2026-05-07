@@ -18,7 +18,7 @@ from db import setup_db
 from grpc_service import CodeGrinderService
 from problem_files import ProblemStepFileType
 from signatures import decode_signed_runtime_bundle, encode_signed_runtime_bundle
-from sessions import LoginRecords, encode_session, new_session
+from sessions import LoginTokens, create_session
 
 
 @dataclass(slots=True)
@@ -189,32 +189,41 @@ class GrpcServiceTests(unittest.TestCase):
             sqlite3_path=str(db_path),
             daycare_mount_dir=str(root / "daycare-mounts"),
         )
-        self.logins = LoginRecords()
+        self.login_tokens = LoginTokens()
         daycare = DaycareRuntime(self.config, validate_mount=False)
-        self.service = CodeGrinderService(self.conn, self.config, login_records=self.logins, daycare=daycare)
+        self.service = CodeGrinderService(self.conn, self.config, login_tokens=self.login_tokens, daycare=daycare)
 
     def tearDown(self) -> None:
         self.conn.close()
         self.tmp.cleanup()
 
     def _auth_context(self, user_id: str = "u1") -> _FakeContext:
-        session = new_session(user_id, datetime(2026, 2, 15, 10, 0, 0, tzinfo=UTC), self.config.sessions_expire)
-        cookie = encode_session(session, self.config.session_secret)
-        return _FakeContext([_Meta("cookie", f"codegrinder={cookie}")])
+        session = create_session(
+            self.conn,
+            user_id,
+            datetime(2026, 2, 15, 10, 0, 0, tzinfo=UTC),
+            self.config.sessions_expire,
+            self.config.session_secret,
+        )
+        return _FakeContext([_Meta("authorization", f"Bearer {session.session_key}")])
 
     def _assignment_key(self) -> pb.AssignmentKey:
         return pb.AssignmentKey(user_id="u1", course_id="c1", problem_set_id="ps1")
 
-    def test_hello_with_key_and_cookie(self) -> None:
-        key = self.logins.insert("u1", datetime.now(tz=UTC))
-        key_reply = self.service.Hello(pb.HelloRequest(key=key), cast(grpc.ServicerContext, _FakeContext()))
-        self.assertIn("codegrinder=", key_reply.cookie)
-        self.assertEqual(key_reply.user_id, "u1")
-        self.assertFalse(key_reply.is_author)
-        self.assertFalse(key_reply.is_instructor)
-        self.assertFalse(key_reply.is_admin)
-        cookie_reply = self.service.Hello(pb.HelloRequest(), cast(grpc.ServicerContext, self._auth_context("u1")))
-        self.assertEqual(cookie_reply.user_id, "u1")
+    def test_hello_with_token_and_session_key(self) -> None:
+        token = self.login_tokens.insert("u1", datetime.now(tz=UTC))
+        token_reply = self.service.Hello(pb.HelloRequest(token=token), cast(grpc.ServicerContext, _FakeContext()))
+        self.assertTrue(token_reply.session_key)
+        self.assertEqual(
+            self.conn.execute("SELECT COUNT(*) AS n FROM user_sessions").fetchone()["n"],
+            1,
+        )
+        self.assertEqual(token_reply.user_id, "u1")
+        self.assertFalse(token_reply.is_author)
+        self.assertFalse(token_reply.is_instructor)
+        self.assertFalse(token_reply.is_admin)
+        session_reply = self.service.Hello(pb.HelloRequest(), cast(grpc.ServicerContext, self._auth_context("u1")))
+        self.assertEqual(session_reply.user_id, "u1")
 
         instructor_reply = self.service.Hello(pb.HelloRequest(), cast(grpc.ServicerContext, self._auth_context("u2")))
         self.assertEqual(instructor_reply.user_id, "u2")

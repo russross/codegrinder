@@ -1,21 +1,19 @@
 from __future__ import annotations
 
-import base64
-import binascii
-import hmac
 import secrets
-import json
+import sqlite3
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from hashlib import sha256
 
+from proto_conv import parse_time
+from signatures import hmac_sha256_base64
 from timeutils import next_session_expiry
 
-COOKIE_NAME = "codegrinder"
-LOGIN_RECORD_TIMEOUT = timedelta(minutes=5)
+LOGIN_TOKEN_TIMEOUT = timedelta(minutes=5)
+SESSION_LAST_USED_UPDATE_INTERVAL = timedelta(minutes=10)
 KEY_CHAR_SET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
-SESSION_VERSION = 1
+_SESSION_KEY_HMAC_CONTEXT = b"codegrinder:session-key:v1\0"
 
 
 class SessionError(ValueError):
@@ -23,117 +21,138 @@ class SessionError(ValueError):
 
 
 @dataclass(slots=True)
-class CookieSession:
+class Session:
+    session_key: str
     expires_at: datetime
     user_id: str
-    path: str = "/"
 
 
-def new_session(user_id: str, now: datetime, sessions_expire: list[datetime]) -> CookieSession:
+def _format_db_time(value: datetime) -> str:
+    if value.tzinfo is None:
+        raise SessionError("session timestamps must be timezone-aware")
+    return value.astimezone(UTC).replace(microsecond=0).isoformat()
+
+
+def make_login_token() -> str:
+    return "".join(secrets.choice(KEY_CHAR_SET) for _ in range(8))
+
+
+def make_session_key() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def session_key_hash(session_key: str, session_secret: str) -> str:
+    if session_key.strip() == "":
+        raise SessionError("session key is empty")
+    if session_secret.strip() == "":
+        raise SessionError("session secret is empty")
+    return hmac_sha256_base64(session_secret, _SESSION_KEY_HMAC_CONTEXT + session_key.encode("utf-8"))
+
+
+def create_session(
+    tx: sqlite3.Connection,
+    user_id: str,
+    now: datetime,
+    sessions_expire: list[datetime],
+    session_secret: str,
+) -> Session:
+    if user_id.strip() == "":
+        raise SessionError("session does not contain a legal user ID field")
     expires_at = next_session_expiry(now, sessions_expire)
-    return CookieSession(expires_at=expires_at, user_id=user_id)
+    while True:
+        session_key = make_session_key()
+        key_hash = session_key_hash(session_key, session_secret)
+        try:
+            tx.execute(
+                "INSERT INTO user_sessions(session_key_hash, user_id, session_created_at, session_expires_at, session_last_used_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    key_hash,
+                    user_id,
+                    _format_db_time(now),
+                    _format_db_time(expires_at),
+                    _format_db_time(now),
+                ),
+            )
+        except sqlite3.IntegrityError:
+            if tx.execute("SELECT 1 FROM user_sessions WHERE session_key_hash = ?", (key_hash,)).fetchone() is not None:
+                continue
+            raise
+        return Session(session_key=session_key, expires_at=expires_at, user_id=user_id)
 
 
-def _b64url_encode(value: bytes) -> str:
-    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
-
-
-def _b64url_decode(value: str) -> bytes:
-    pad = "=" * ((4 - (len(value) % 4)) % 4)
-    return base64.urlsafe_b64decode(value + pad)
-
-
-def encode_session(session: CookieSession, secret: str) -> str:
-    if session.expires_at.tzinfo is None:
-        raise SessionError("session is expired; must log in again to continue")
-    user_id = str(session.user_id)
+def load_session_user_id(
+    tx: sqlite3.Connection,
+    session_key: str,
+    session_secret: str,
+    now: datetime,
+) -> str:
+    key_hash = session_key_hash(session_key, session_secret)
+    row = tx.execute(
+        "SELECT user_id, session_expires_at, session_last_used_at "
+        "FROM user_sessions "
+        "WHERE session_key_hash = ? AND session_revoked_at IS NULL AND datetime(session_expires_at) >= datetime(?)",
+        (key_hash, _format_db_time(now)),
+    ).fetchone()
+    if row is None:
+        raise SessionError("session is expired or invalid; must log in again to continue")
+    last_used_at = parse_time(row["session_last_used_at"])
+    if last_used_at <= now - SESSION_LAST_USED_UPDATE_INTERVAL:
+        tx.execute(
+            "UPDATE user_sessions SET session_last_used_at = ? WHERE session_key_hash = ?",
+            (_format_db_time(now), key_hash),
+        )
+    user_id = str(row["user_id"])
     if user_id.strip() == "":
         raise SessionError("session does not contain a legal user ID field")
-    expires_at_utc = session.expires_at.astimezone(UTC)
-    epoch = datetime(1970, 1, 1, tzinfo=UTC)
-    delta = expires_at_utc - epoch
-    expires_at_us = ((delta.days * 86_400) + delta.seconds) * 1_000_000 + delta.microseconds
-    payload_obj = {"v": SESSION_VERSION, "exp": expires_at_us, "uid": user_id}
-    payload = json.dumps(payload_obj, separators=(",", ":")).encode("utf-8")
-    sig = hmac.new(secret.encode("utf-8"), payload, sha256).digest()
-    return f"{_b64url_encode(payload)}.{_b64url_encode(sig)}"
+    return user_id
 
 
-def decode_session(cookie_value: str, secret: str, now: datetime) -> CookieSession:
-    if cookie_value.startswith(COOKIE_NAME + "="):
-        cookie_value = cookie_value[len(COOKIE_NAME) + 1 :]
-    try:
-        payload_encoded, sig_encoded = cookie_value.split(".", 1)
-    except ValueError as exc:
-        raise SessionError("unable to decode session cookie") from exc
-
-    try:
-        payload = _b64url_decode(payload_encoded)
-        payload_obj = json.loads(payload.decode("utf-8"))
-        version = int(payload_obj.get("v", 0))
-        expires_at_us = int(payload_obj.get("exp", 0))
-        user_id = str(payload_obj.get("uid", ""))
-        expected_sig = hmac.new(secret.encode("utf-8"), payload, sha256).digest()
-        got_sig = _b64url_decode(sig_encoded)
-    except (ValueError, TypeError, json.JSONDecodeError, binascii.Error) as exc:
-        raise SessionError("unable to decode session cookie") from exc
-
-    if version != SESSION_VERSION:
-        raise SessionError("unable to decode session cookie")
-    if not hmac.compare_digest(expected_sig, got_sig):
-        raise SessionError("unable to decode session cookie")
-
-    epoch = datetime(1970, 1, 1, tzinfo=UTC)
-    expires_at = epoch + timedelta(microseconds=expires_at_us)
-    if expires_at < now:
-        raise SessionError("session is expired; must log in again to continue")
-    if user_id.strip() == "":
-        raise SessionError("session does not contain a legal user ID field")
-
-    return CookieSession(expires_at=expires_at, user_id=user_id)
+def delete_expired_sessions(tx: sqlite3.Connection, now: datetime) -> int:
+    cursor = tx.execute(
+        "DELETE FROM user_sessions WHERE datetime(session_expires_at) < datetime(?)",
+        (_format_db_time(now),),
+    )
+    return cursor.rowcount
 
 
 @dataclass(slots=True)
-class _LoginRecord:
+class _LoginToken:
     user_id: str
     time: datetime
 
 
-class LoginRecords:
+class LoginTokens:
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._records: dict[str, _LoginRecord] = {}
+        self._tokens: dict[str, _LoginToken] = {}
 
     def _expire(self, now: datetime) -> None:
         expired = [
-            key
-            for key, record in self._records.items()
-            if (now - record.time) >= LOGIN_RECORD_TIMEOUT
+            token
+            for token, record in self._tokens.items()
+            if (now - record.time) >= LOGIN_TOKEN_TIMEOUT
         ]
-        for key in expired:
-            del self._records[key]
+        for token in expired:
+            del self._tokens[token]
 
     def insert(self, user_id: str, now: datetime) -> str:
         with self._lock:
             while True:
-                key = make_login_key()
-                if key not in self._records:
+                token = make_login_token()
+                if token not in self._tokens:
                     break
-            self._records[key] = _LoginRecord(user_id=user_id, time=now)
+            self._tokens[token] = _LoginToken(user_id=user_id, time=now)
             self._expire(now)
-            return key
+            return token
 
-    def get(self, key: str, now: datetime) -> str:
+    def get(self, token: str, now: datetime) -> str:
         with self._lock:
             self._expire(now)
-            if key not in self._records:
+            if token not in self._tokens:
                 raise SessionError(
-                    f'session "{key}" not found: key expires after 5 minutes and can only be used once'
+                    f'login token "{token}" not found: tokens expire after 5 minutes and can only be used once'
                 )
-            user_id = self._records[key].user_id
-            del self._records[key]
+            user_id = self._tokens[token].user_id
+            del self._tokens[token]
             return user_id
-
-
-def make_login_key() -> str:
-    return "".join(secrets.choice(KEY_CHAR_SET) for _ in range(8))

@@ -166,6 +166,25 @@ CREATE TABLE users (
     CHECK (admin IN (0, 1))
 ) WITHOUT ROWID;
 
+CREATE TABLE user_sessions (
+    session_key_hash        text NOT NULL,
+    user_id                 text NOT NULL,
+    session_created_at      datetime NOT NULL,
+    session_expires_at      datetime NOT NULL,
+    session_last_used_at    datetime NOT NULL,
+    session_revoked_at      datetime,
+
+    PRIMARY KEY (session_key_hash),
+    FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE ON UPDATE CASCADE,
+    CHECK (trim(session_key_hash) = session_key_hash AND length(session_key_hash) > 0),
+    CHECK (trim(user_id) = user_id AND length(user_id) > 0),
+    CHECK (session_created_at <= session_expires_at),
+    CHECK (session_created_at <= session_last_used_at),
+    CHECK (session_revoked_at IS NULL OR session_created_at <= session_revoked_at)
+) WITHOUT ROWID;
+CREATE INDEX user_sessions_user_id ON user_sessions (user_id);
+CREATE INDEX user_sessions_expires_at ON user_sessions (session_expires_at);
+
 CREATE TABLE authors (
     user_id                 text NOT NULL,
 
@@ -289,6 +308,13 @@ CREATE TABLE commit_files (
     )
 ) WITHOUT ROWID;
 
+CREATE VIEW user_role_flags AS
+    SELECT
+        users.*,
+        EXISTS(SELECT 1 FROM authors WHERE authors.user_id = users.user_id) AS author,
+        EXISTS(SELECT 1 FROM user_courses WHERE user_courses.user_id = users.user_id AND user_courses.is_instructor) AS instructor
+    FROM users;
+
 CREATE VIEW accessible_assignments AS
     SELECT
         viewer_user_id,
@@ -333,6 +359,23 @@ CREATE VIEW accessible_problems AS
     FROM accessible_problem_sets
     NATURAL JOIN problem_set_problems;
 
+CREATE VIEW problem_set_continuations AS
+    SELECT
+        current_slice.problem_set_id,
+        current_slice.problem_id,
+        current_slice.first_step,
+        current_slice.last_step,
+        previous_slice.problem_set_id AS prerequisite_problem_set_id,
+        previous_slice.first_step AS prerequisite_first_step,
+        previous_slice.last_step AS prerequisite_step_number
+    FROM problem_sets
+    NATURAL JOIN problem_set_problems AS current_slice
+    JOIN problem_set_problems AS previous_slice
+        ON previous_slice.problem_set_id = problem_sets.continues_problem_set_id
+        AND previous_slice.problem_id = current_slice.problem_id
+        AND current_slice.first_step IS NOT NULL
+        AND previous_slice.last_step = current_slice.first_step - 1;
+
 CREATE VIEW problem_set_step_scope AS
     SELECT
         problem_set_problems.problem_set_id,
@@ -345,10 +388,16 @@ CREATE VIEW problem_set_step_scope AS
         problem_steps.step_note,
         problem_steps.step_weight
     FROM problem_set_problems
-    JOIN problem_steps
-        ON problem_steps.problem_id = problem_set_problems.problem_id
-        AND (problem_set_problems.first_step IS NULL OR problem_steps.step_number >= problem_set_problems.first_step)
+    NATURAL JOIN problem_steps
+    WHERE (problem_set_problems.first_step IS NULL OR problem_steps.step_number >= problem_set_problems.first_step)
         AND (problem_set_problems.last_step IS NULL OR problem_steps.step_number <= problem_set_problems.last_step);
+
+CREATE VIEW passed_commit_steps AS
+    SELECT user_id, course_id, problem_set_id, problem_id, step_number
+    FROM commits
+    WHERE json_extract(report_card, '$.passed') = 1
+        AND score = 1.0
+    GROUP BY user_id, course_id, problem_set_id, problem_id, step_number;
 
 CREATE VIEW assignment_list_fields AS
     SELECT
@@ -366,21 +415,14 @@ CREATE VIEW assignment_list_fields AS
             WHEN problem_sets.continues_problem_set_id IS NULL THEN 1
             WHEN EXISTS (
                 SELECT 1
-                FROM problem_set_problems AS current_slice
-                JOIN problem_set_problems AS previous_slice
-                    ON previous_slice.problem_set_id = problem_sets.continues_problem_set_id
-                    AND previous_slice.problem_id = current_slice.problem_id
-                    AND current_slice.first_step IS NOT NULL
-                    AND previous_slice.last_step = current_slice.first_step - 1
-                JOIN commits AS previous_commit
-                    ON previous_commit.user_id = assignments.user_id
-                    AND previous_commit.course_id = assignments.course_id
-                    AND previous_commit.problem_set_id = previous_slice.problem_set_id
-                    AND previous_commit.problem_id = previous_slice.problem_id
-                    AND previous_commit.step_number = previous_slice.last_step
-                    AND json_extract(previous_commit.report_card, '$.passed') = 1
-                    AND previous_commit.score = 1.0
-                WHERE current_slice.problem_set_id = assignments.problem_set_id
+                FROM problem_set_continuations
+                JOIN passed_commit_steps
+                    ON passed_commit_steps.user_id = assignments.user_id
+                    AND passed_commit_steps.course_id = assignments.course_id
+                    AND passed_commit_steps.problem_set_id = problem_set_continuations.prerequisite_problem_set_id
+                    AND passed_commit_steps.problem_id = problem_set_continuations.problem_id
+                    AND passed_commit_steps.step_number = problem_set_continuations.prerequisite_step_number
+                WHERE problem_set_continuations.problem_set_id = assignments.problem_set_id
             ) THEN 1
             ELSE 0
         END AS prereq_ready,
@@ -429,6 +471,21 @@ CREATE VIEW accessible_assignment_fields AS
         ON assignment_list_fields.user_id = accessible_assignments.assignment_user_id
         AND assignment_list_fields.course_id = accessible_assignments.course_id
         AND assignment_list_fields.problem_set_id = accessible_assignments.problem_set_id;
+
+CREATE VIEW accessible_assignment_rows AS
+    SELECT
+        assignments.*,
+        accessible_assignment_fields.viewer_user_id,
+        accessible_assignment_fields.is_owner,
+        accessible_assignment_fields.is_course_instructor,
+        accessible_assignment_fields.restricted AS viewer_restricted,
+        accessible_assignment_fields.download_status,
+        accessible_assignment_fields.download_available
+    FROM accessible_assignment_fields
+    JOIN assignments
+        ON assignments.user_id = accessible_assignment_fields.assignment_user_id
+        AND assignments.course_id = accessible_assignment_fields.course_id
+        AND assignments.problem_set_id = accessible_assignment_fields.problem_set_id;
 
 CREATE VIEW accessible_assignment_commit_policy AS
     SELECT
@@ -506,13 +563,6 @@ CREATE VIEW problem_total_steps AS
     FROM problem_steps
     GROUP BY problem_id;
 
-CREATE VIEW passed_commit_steps AS
-    SELECT user_id, course_id, problem_set_id, problem_id, step_number
-    FROM commits
-    WHERE json_extract(report_card, '$.passed') = 1
-        AND score = 1.0
-    GROUP BY user_id, course_id, problem_set_id, problem_id, step_number;
-
 CREATE VIEW assignment_problem_progress AS
     SELECT
         assignments.user_id,
@@ -534,13 +584,8 @@ CREATE VIEW assignment_problem_progress AS
         ) AS current_step_number
     FROM assignments
     NATURAL JOIN problem_set_step_scope
-    JOIN problems ON problems.problem_id = problem_set_step_scope.problem_id
-    LEFT JOIN passed_commit_steps
-        ON passed_commit_steps.user_id = assignments.user_id
-        AND passed_commit_steps.course_id = assignments.course_id
-        AND passed_commit_steps.problem_set_id = assignments.problem_set_id
-        AND passed_commit_steps.problem_id = problem_set_step_scope.problem_id
-        AND passed_commit_steps.step_number = problem_set_step_scope.step_number
+    NATURAL JOIN problems
+    NATURAL LEFT JOIN passed_commit_steps
     GROUP BY
         assignments.user_id,
         assignments.course_id,
@@ -584,12 +629,8 @@ CREATE VIEW workspace_step_context AS
         problem_set_step_scope.step_weight,
         problem_step_whitelist.whitelist
     FROM assignment_problem_progress
-    JOIN problem_set_step_scope
-        ON problem_set_step_scope.problem_set_id = assignment_problem_progress.problem_set_id
-        AND problem_set_step_scope.problem_id = assignment_problem_progress.problem_id
-    JOIN problem_step_whitelist
-        ON problem_step_whitelist.problem_id = problem_set_step_scope.problem_id
-        AND problem_step_whitelist.step_number = problem_set_step_scope.step_number;
+    NATURAL JOIN problem_set_step_scope
+    NATURAL JOIN problem_step_whitelist;
 
 CREATE VIEW grading_step_context AS
     SELECT
@@ -603,15 +644,10 @@ CREATE VIEW grading_step_context AS
         COALESCE(problem_total_steps.total_steps, 1) AS total_steps,
         problem_step_whitelist.whitelist
     FROM problem_set_step_scope
-    JOIN problems
-        ON problems.problem_id = problem_set_step_scope.problem_id
-    JOIN problem_types
-        ON problem_types.problem_type = problem_set_step_scope.problem_type
-    LEFT JOIN problem_total_steps
-        ON problem_total_steps.problem_id = problem_set_step_scope.problem_id
-    JOIN problem_step_whitelist
-        ON problem_step_whitelist.problem_id = problem_set_step_scope.problem_id
-        AND problem_step_whitelist.step_number = problem_set_step_scope.step_number;
+    NATURAL JOIN problems
+    NATURAL JOIN problem_types
+    NATURAL LEFT JOIN problem_total_steps
+    NATURAL JOIN problem_step_whitelist;
 
 CREATE VIEW problem_set_search_fields AS
     SELECT problem_sets.problem_set_id,
@@ -625,6 +661,25 @@ CREATE VIEW problem_set_search_fields AS
     NATURAL JOIN problem_set_problems
     NATURAL JOIN problems
     GROUP BY problem_sets.problem_set_id;
+
+CREATE VIEW problem_catalog_sets AS
+    SELECT
+        problem_sets.problem_set_id,
+        problem_sets.problem_set_note,
+        problem_sets.problem_set_tags,
+        problem_set_search_fields.search_text
+    FROM problem_sets
+    NATURAL JOIN problem_set_search_fields;
+
+CREATE VIEW accessible_problem_catalog_sets AS
+    SELECT
+        accessible_problem_sets.viewer_user_id,
+        problem_catalog_sets.problem_set_id,
+        problem_catalog_sets.problem_set_note,
+        problem_catalog_sets.problem_set_tags,
+        problem_catalog_sets.search_text
+    FROM accessible_problem_sets
+    NATURAL JOIN problem_catalog_sets;
 
 CREATE VIEW problem_catalog_rows AS
     SELECT

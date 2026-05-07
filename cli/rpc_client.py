@@ -21,7 +21,7 @@ class CodeGrinderClient:
     def call(self, name: str, fn: Callable[..., T], request: object) -> T:
         dump_message(self.config, name, True, request)
         try:
-            response = fn(request, metadata=grpc_metadata(self.config.cookie))
+            response = fn(request, metadata=grpc_metadata(self.config.session_key))
         except Exception as exc:
             raise CliError(clean_error(exc)) from exc
         dump_message(self.config, name, False, response)

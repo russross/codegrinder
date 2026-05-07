@@ -37,7 +37,7 @@ from read_store import (
     search_problem_catalog_pb,
 )
 from signatures import decode_signed_runtime_bundle, encode_signed_runtime_bundle
-from sessions import COOKIE_NAME, LoginRecords, SessionError, decode_session, encode_session, new_session
+from sessions import LoginTokens, SessionError, create_session, load_session_user_id
 
 IP_ALLOWED_VAR: contextvars.ContextVar[bool] = contextvars.ContextVar("ip_allowed", default=True)
 T = TypeVar("T")
@@ -222,14 +222,14 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
         self,
         conn: sqlite3.Connection,
         config: ServerConfig,
-        login_records: LoginRecords | None = None,
+        login_tokens: LoginTokens | None = None,
         version: VersionInfo | None = None,
         daycare_registry: DaycareRegistry | None = None,
         daycare: DaycareRuntime | None = None,
     ) -> None:
         self._conn = conn
         self._config = config
-        self._login_records = login_records or LoginRecords()
+        self._login_tokens = login_tokens or LoginTokens()
         self._version = version or VersionInfo()
         self._daycare_registry = daycare_registry
         whitelist = config.ip_filter.whitelist if config.ip_filter is not None else []
@@ -241,8 +241,8 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
         return self._conn
 
     @property
-    def login_records(self) -> LoginRecords:
-        return self._login_records
+    def login_tokens(self) -> LoginTokens:
+        return self._login_tokens
 
     @property
     def version_info(self) -> VersionInfo:
@@ -319,35 +319,35 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
             return
         self._abort(context, grpc.StatusCode.PERMISSION_DENIED, "user is not an admin")
 
-    def _get_cookie_value(self, context: grpc.ServicerContext) -> str:
+    def _get_session_key_from_metadata(self, context: grpc.ServicerContext) -> str:
         md = context.invocation_metadata()
-        cookies: list[str] = []
         for item in md:
-            if item.key.lower() == "cookie":
-                cookies.append(item.value)
-        if not cookies:
-            self._abort(context, grpc.StatusCode.UNAUTHENTICATED, "missing session cookie")
-        for cookie_header in cookies:
-            for part in cookie_header.split(";"):
-                chunk = part.strip()
-                if chunk.startswith(COOKIE_NAME + "="):
-                    return chunk[len(COOKIE_NAME) + 1 :]
-        self._abort(context, grpc.StatusCode.UNAUTHENTICATED, "missing session cookie")
+            if item.key.lower() != "authorization":
+                continue
+            value = item.value.strip()
+            prefix = "Bearer "
+            if not value.startswith(prefix):
+                self._abort(context, grpc.StatusCode.UNAUTHENTICATED, "invalid authorization metadata")
+            session_key = value[len(prefix) :].strip()
+            if session_key == "":
+                self._abort(context, grpc.StatusCode.UNAUTHENTICATED, "missing session key")
+            return session_key
+        self._abort(context, grpc.StatusCode.UNAUTHENTICATED, "missing session key")
 
     def _current_user_row(self, tx: sqlite3.Connection, context: grpc.ServicerContext) -> sqlite3.Row:
-        cookie_value = self._get_cookie_value(context)
+        session_key = self._get_session_key_from_metadata(context)
         try:
-            session = decode_session(cookie_value, self._config.session_secret, datetime.now(tz=UTC))
+            user_id = load_session_user_id(tx, session_key, self._config.session_secret, datetime.now(tz=UTC))
         except SessionError as exc:
             self._abort(context, grpc.StatusCode.UNAUTHENTICATED, str(exc))
         try:
-            return load_user_by_id(tx, session.user_id)
+            return load_user_by_id(tx, user_id)
         except sqlite3.Error as exc:
             self._abort(context, grpc.StatusCode.INTERNAL, f"db error loading user: {exc}")
 
-    def _hello_response(self, user_row: sqlite3.Row, version: pb.Version, cookie: str = "") -> pb.HelloResponse:
+    def _hello_response(self, user_row: sqlite3.Row, version: pb.Version, session_key: str = "") -> pb.HelloResponse:
         return pb.HelloResponse(
-            cookie=cookie,
+            session_key=session_key,
             user_id=str(user_row["user_id"]),
             user_name=str(user_row["user_name"]),
             user_login=str(user_row["user_login"]),
@@ -371,20 +371,29 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
     # gRPC-native names
     def Hello(self, request: pb.HelloRequest, context: grpc.ServicerContext) -> pb.HelloResponse:
         version = self._version.to_pb()
-        if request.key:
+        if request.token:
+            now = datetime.now(tz=UTC)
             try:
-                user_id = self._login_records.get(request.key, datetime.now(tz=UTC))
+                login_token = str(request.token)
+                user_id = self._login_tokens.get(login_token, now)
             except SessionError as exc:
                 self._abort(context, grpc.StatusCode.INVALID_ARGUMENT, str(exc))
-            session = new_session(user_id, datetime.now(tz=UTC), self._config.sessions_expire)
-            cookie_value = encode_session(session, self._config.session_secret)
 
             def fn(state: RpcState) -> pb.HelloResponse:
                 try:
                     user_row = load_user_by_id(state.tx, user_id)
+                    session = create_session(
+                        state.tx,
+                        user_id,
+                        now,
+                        self._config.sessions_expire,
+                        self._config.session_secret,
+                    )
                 except sqlite3.Error as exc:
                     self._abort_sqlite(context, exc, internal="db error getting user me")
-                return self._hello_response(user_row, version, f"{COOKIE_NAME}={cookie_value}")
+                except SessionError as exc:
+                    self._abort(context, grpc.StatusCode.INTERNAL, str(exc))
+                return self._hello_response(user_row, version, session.session_key)
 
             return self._run_rpc(context, label="Hello", fn=fn)
 

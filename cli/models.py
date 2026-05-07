@@ -7,7 +7,7 @@ from pathlib import Path
 @dataclass(slots=True)
 class Config:
     host: str = ""
-    cookie: str = ""
+    session_key: str = ""
     workspace_root: Path = Path.home()
     is_author: bool = False
     is_instructor: bool = False
