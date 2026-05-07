@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
-from enum import Enum
 from pathlib import Path
 from shlex import quote
 
@@ -15,19 +14,6 @@ from errors import fail
 from workspace_files import clean_relative_path, workspace_file_map
 
 
-class ProblemTypeFileOperation(Enum):
-    ADD = pb.PROBLEM_TYPE_FILE_OPERATION_ADD
-    UPDATE = pb.PROBLEM_TYPE_FILE_OPERATION_UPDATE
-    DELETE = pb.PROBLEM_TYPE_FILE_OPERATION_DELETE
-
-
-@dataclass(frozen=True, slots=True)
-class ProblemTypeFileChange:
-    operation: ProblemTypeFileOperation
-    path: str
-    content: bytes
-
-
 @dataclass(frozen=True, slots=True)
 class ResolvedProblemType:
     problem_type: str
@@ -36,33 +22,19 @@ class ResolvedProblemType:
 
 def command_files(args: argparse.Namespace) -> None:
     resolved = _resolve_problem_type(args.problem_type)
-    changes = _collect_changes(
-        resolved.directory,
-        adds=args.add_files,
-        updates=args.update_files,
-        deletes=args.delete_files,
-    )
 
     with managed_client(args) as env:
         if not env.session.user.is_admin:
             fail("you must be an admin to use this command")
 
-        if not changes:
+        if not args.set_files:
             response = env.client.get_problem_type(resolved.problem_type)
             _print_file_statuses(resolved.directory, workspace_file_map(response.problem_type.files))
             return
 
-        proto_changes = [
-            pb.ProblemTypeFileChange(
-                operation=change.operation.value,
-                path=change.path,
-                content=change.content,
-            )
-            for change in changes
-        ]
-        env.client.save_problem_type_files(resolved.problem_type, proto_changes)
-        for change in changes:
-            print(f"{change.operation.name.lower()}: {change.path}")
+        files = _collect_file_set(resolved.directory)
+        env.client.save_problem_type_files(resolved.problem_type, files)
+        print(f"set {len(files)} files for problem type: {resolved.problem_type}")
 
 
 def command_problemtype(args: argparse.Namespace) -> None:
@@ -76,47 +48,10 @@ def command_problemtype(args: argparse.Namespace) -> None:
             case "show":
                 response = env.client.get_problem_type(args.problem_type)
                 _print_problem_type(response.problem_type)
-            case "create":
-                change = pb.ProblemTypeChange(
-                    operation=pb.PROBLEM_TYPE_OPERATION_CREATE,
-                    problem_type=args.problem_type,
-                    container=args.container,
-                )
-                env.client.save_problem_type([change], [])
-                print(f"created problem type: {args.problem_type}")
-            case "delete":
-                change = pb.ProblemTypeChange(
-                    operation=pb.PROBLEM_TYPE_OPERATION_DELETE,
-                    problem_type=args.problem_type,
-                )
-                env.client.save_problem_type([change], [])
-                print(f"deleted problem type: {args.problem_type}")
-            case "action-add":
-                change = pb.ProblemTypeActionChange(
-                    operation=pb.PROBLEM_TYPE_ACTION_OPERATION_ADD,
-                    problem_type=args.problem_type,
-                    action=args.action,
-                    action_definition=_action_definition_from_args(args),
-                )
-                env.client.save_problem_type([], [change])
-                print(f"added action: {args.problem_type}/{args.action}")
-            case "action-update":
-                change = pb.ProblemTypeActionChange(
-                    operation=pb.PROBLEM_TYPE_ACTION_OPERATION_UPDATE,
-                    problem_type=args.problem_type,
-                    action=args.action,
-                    action_definition=_action_definition_from_args(args),
-                )
-                env.client.save_problem_type([], [change])
-                print(f"updated action: {args.problem_type}/{args.action}")
-            case "action-delete":
-                change = pb.ProblemTypeActionChange(
-                    operation=pb.PROBLEM_TYPE_ACTION_OPERATION_DELETE,
-                    problem_type=args.problem_type,
-                    action=args.action,
-                )
-                env.client.save_problem_type([], [change])
-                print(f"deleted action: {args.problem_type}/{args.action}")
+            case "action-set":
+                actions = _parse_action_specs(_action_specs_from_args(args))
+                env.client.save_problem_type(args.problem_type, args.container, actions)
+                print(f"set {len(actions)} actions for problem type: {args.problem_type}")
             case _:
                 fail("unknown problemtype command")
 
@@ -138,35 +73,18 @@ def _resolve_problem_type(explicit_problem_type: str) -> ResolvedProblemType:
     return ResolvedProblemType(problem_type=problem_type, directory=layout.active_step_dir)
 
 
-def _collect_changes(
-    directory: Path,
-    *,
-    adds: list[str],
-    updates: list[str],
-    deletes: list[str],
-) -> list[ProblemTypeFileChange]:
-    changes: list[ProblemTypeFileChange] = []
-    seen_paths: set[str] = set()
-    for operation, paths in (
-        (ProblemTypeFileOperation.ADD, adds),
-        (ProblemTypeFileOperation.UPDATE, updates),
-        (ProblemTypeFileOperation.DELETE, deletes),
-    ):
-        for raw_path in paths:
-            path = clean_relative_path(raw_path).as_posix()
-            if path in seen_paths:
-                fail(f"multiple changes requested for {path!r}")
-            seen_paths.add(path)
-            content = b"" if operation is ProblemTypeFileOperation.DELETE else _read_local_file(directory, path)
-            changes.append(ProblemTypeFileChange(operation=operation, path=path, content=content))
-    return changes
-
-
-def _read_local_file(directory: Path, path: str) -> bytes:
-    local_path = directory / Path(path)
-    if not local_path.is_file():
-        fail(f"local file {path!r} does not exist")
-    return local_path.read_bytes()
+def _collect_file_set(directory: Path) -> dict[str, bytes]:
+    files: dict[str, bytes] = {}
+    for local_path in sorted(directory.rglob("*")):
+        if ".git" in local_path.relative_to(directory).parts:
+            continue
+        if not local_path.is_file():
+            continue
+        path = clean_relative_path(local_path.relative_to(directory).as_posix()).as_posix()
+        if path in files:
+            fail(f"multiple local files resolve to {path!r}")
+        files[path] = local_path.read_bytes()
+    return files
 
 
 def _print_file_statuses(directory: Path, server_files: dict[str, bytes]) -> None:
@@ -184,16 +102,52 @@ def _print_file_statuses(directory: Path, server_files: dict[str, bytes]) -> Non
         print(f"{status}: {path}")
 
 
-def _action_definition_from_args(args: argparse.Namespace) -> pb.ProblemTypeAction:
-    return pb.ProblemTypeAction(
-        command=args.command,
-        parser="" if args.parser == "none" else args.parser,
-        max_cpu=args.max_cpu,
-        max_fd=args.max_fd,
-        max_file_size=args.max_file_size,
-        max_memory=args.max_memory,
-        max_threads=args.max_threads,
-    )
+def _parse_action_specs(specs: list[str]) -> dict[str, pb.ProblemTypeAction]:
+    actions: dict[str, pb.ProblemTypeAction] = {}
+    for spec in specs:
+        parts = spec.split("|")
+        if len(parts) != 8:
+            fail(
+                "action must use: "
+                "NAME|COMMAND|PARSER|MAX_CPU|MAX_FD|MAX_FILE_SIZE|MAX_MEMORY|MAX_THREADS"
+            )
+        action_name, command, parser, max_cpu, max_fd, max_file_size, max_memory, max_threads = parts
+        action_name = action_name.strip()
+        if action_name == "":
+            fail("action name is required")
+        if action_name in actions:
+            fail(f"multiple definitions for action {action_name!r}")
+        actions[action_name] = pb.ProblemTypeAction(
+            command=command,
+            parser="" if parser == "none" else parser,
+            max_cpu=_parse_int(max_cpu, label=f"{action_name} max_cpu"),
+            max_fd=_parse_int(max_fd, label=f"{action_name} max_fd"),
+            max_file_size=_parse_int(max_file_size, label=f"{action_name} max_file_size"),
+            max_memory=_parse_int(max_memory, label=f"{action_name} max_memory"),
+            max_threads=_parse_int(max_threads, label=f"{action_name} max_threads"),
+        )
+    return actions
+
+
+def _action_specs_from_args(args: argparse.Namespace) -> list[str]:
+    specs = list(args.actions)
+    if args.actions_file:
+        path = Path(args.actions_file)
+        if not path.is_file():
+            fail(f"actions file {args.actions_file!r} does not exist")
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if stripped == "" or stripped.startswith("#"):
+                continue
+            specs.append(stripped)
+    return specs
+
+
+def _parse_int(value: str, *, label: str) -> int:
+    try:
+        return int(value)
+    except ValueError:
+        fail(f"{label} must be an integer")
 
 
 def _print_problem_type_list(problem_types: list[pb.ProblemType]) -> None:
@@ -217,7 +171,19 @@ def _print_problem_type(problem_type: pb.ProblemType) -> None:
             if index > 0:
                 print()
             print(f"  {action_name}")
-            _print_problem_type_action(problem_type.problem_type, action_name, action)
+            _print_problem_type_action(action)
+        print()
+        print("action set command:")
+        print("  grind problemtype action set \\")
+        print(f"    --problem-type  {quote(problem_type.problem_type)} \\")
+        print(f"    --container     {quote(problem_type.container)} \\")
+        action_specs = [
+            _action_spec(action_name, action)
+            for action_name, action in sorted(problem_type.actions.items())
+        ]
+        for index, spec in enumerate(action_specs):
+            suffix = " \\" if index < len(action_specs) - 1 else ""
+            print(f"    --action        {quote(spec)}{suffix}")
         print()
     print("canonical files:")
     if not problem_type.files:
@@ -227,7 +193,7 @@ def _print_problem_type(problem_type: pb.ProblemType) -> None:
             print(f"  {path}")
 
 
-def _print_problem_type_action(problem_type: str, action_name: str, action: pb.ProblemTypeAction) -> None:
+def _print_problem_type_action(action: pb.ProblemTypeAction) -> None:
     parser = action.parser or "none"
     print(f"    command:        {action.command}")
     print(f"    parser:         {parser}")
@@ -236,15 +202,11 @@ def _print_problem_type_action(problem_type: str, action_name: str, action: pb.P
     print(f"    max_file_size:  {action.max_file_size}")
     print(f"    max_memory:     {action.max_memory}")
     print(f"    max_threads:    {action.max_threads}")
-    print()
-    print("    update command:")
-    print("      grind problemtype action update \\")
-    print(f"        --problem-type   {quote(problem_type)} \\")
-    print(f"        --action         {quote(action_name)} \\")
-    print(f"        --command        {quote(action.command)} \\")
-    print(f"        --parser         {quote(parser)} \\")
-    print(f"        --max-cpu        {action.max_cpu} \\")
-    print(f"        --max-fd         {action.max_fd} \\")
-    print(f"        --max-file-size  {action.max_file_size} \\")
-    print(f"        --max-memory     {action.max_memory} \\")
-    print(f"        --max-threads    {action.max_threads}")
+
+
+def _action_spec(action_name: str, action: pb.ProblemTypeAction) -> str:
+    parser = action.parser or "none"
+    return (
+        f"{action_name}|{action.command}|{parser}|{action.max_cpu}|{action.max_fd}|"
+        f"{action.max_file_size}|{action.max_memory}|{action.max_threads}"
+    )

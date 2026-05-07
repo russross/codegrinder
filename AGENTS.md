@@ -289,14 +289,14 @@ For the exam interface under `www/exam`:
 # `grind problemtype`
 
 - `grind problemtype` is available only when admin mode is enabled locally. The server must enforce admin permissions for every problem type mutation RPC.
+- Problem type source material lives outside the tracked main repo under ignored `problemtypes/`, which is intended to be its own installation-specific git checkout.
+- The problem type source layout is `problemtypes/types/TYPE/type.conf` for metadata/actions, `problemtypes/types/TYPE/files/` for canonical files, `problemtypes/common/` for shared symlink targets, `problemtypes/containers/NAME/Dockerfile` for container builds, and `problemtypes/bin/` for deployment scripts.
+- `problemtypes/bin/sync-actions [TYPE...]` reads `type.conf` files and calls `grind problemtype action set`; `problemtypes/bin/sync-files [TYPE...]` replaces canonical file sets from `files/`; `problemtypes/bin/build-containers [NAME...]` builds container images.
 - `grind problemtype list` lists all problem types, containers, and actions by calling `GetProblemTypes`.
 - `grind problemtype show --problem-type TYPE` prints one problem type's container, actions, and canonical file paths by calling `GetProblemType`.
-- `grind problemtype create --problem-type TYPE --container CONTAINER` creates a problem type row that references an existing container image. Creating or managing container images is out of scope for the CLI.
-- `grind problemtype delete --problem-type TYPE` deletes a problem type. The server must reject deletion when any existing problem step uses that problem type.
-- `grind problemtype action add --problem-type TYPE --action ACTION --command COMMAND --parser PARSER --max-cpu N --max-fd N --max-file-size N --max-memory N --max-threads N` adds an action to a problem type.
-- `grind problemtype action update --problem-type TYPE --action ACTION --command COMMAND --parser PARSER --max-cpu N --max-fd N --max-file-size N --max-memory N --max-threads N` replaces the complete action definition. Partial action updates are not supported.
-- `grind problemtype action delete --problem-type TYPE --action ACTION` deletes an action from a problem type.
-- Action parser values are `none`, `xunit`, and `check`; `none` stores no parser.
+- `grind problemtype action set --problem-type TYPE --container CONTAINER --action ACTION_SPEC ...` creates or updates a problem type row and replaces its complete action list with the supplied actions. It must not delete and recreate the problem type row.
+- `ACTION_SPEC` is `ACTION|COMMAND|PARSER|MAX_CPU|MAX_FD|MAX_FILE_SIZE|MAX_MEMORY|MAX_THREADS`. Parser values are `none`, `xunit`, and `check`; `none` stores no parser.
+- Problem type metadata and action replacement must use SQLite upsert clauses for rows that remain present, then delete only action rows that are absent from the submitted complete action set.
 - Problem type and action mutations are admin-only server operations and must be applied transactionally.
 
 # `grind problemtype files`
@@ -306,8 +306,7 @@ For the exam interface under `www/exam`:
 - Without `--type`, `grind problemtype files` resolves the nearest author `problem.cfg`, determines the active step's configured problem type, and compares against that step directory. In multi-step layouts it must be run from a step directory.
 - `--type TYPE` explicitly selects a problem type and compares against the current directory. There is no shortcut for `--type`.
 - Status output covers every canonical server file path and reports each as unchanged, changed, or missing.
-- `grind problemtype files` mutates server problem type files only through explicit per-file options: `--delete PATH`, `--add PATH`, and `--update PATH`. Multiple mutation options may be used in one command.
-- `--add` and `--update` read the local file content from the resolved target directory and send it to the server. `--delete` sends only the canonical path.
-- The CLI must reject multiple requested changes for the same normalized path before calling the server.
-- The server must also reject multiple requested changes for the same normalized path.
-- The server must reject `--add` for paths that already exist, and must reject `--update` or `--delete` for paths that do not exist.
+- `grind problemtype files --set [--type TYPE]` replaces the server canonical file set for the resolved problem type with the complete regular-file tree under the resolved target directory. Symlinked files are followed and stored as bytes at the symlink path.
+- Problem type file replacement must use SQLite upsert clauses for rows that remain present, then delete only file rows that are absent from the submitted complete file set.
+- `grind problemtype files --set` skips `.git` directories and their contents.
+- The server must reject multiple submitted file paths that normalize to the same canonical path.

@@ -2,7 +2,7 @@
 
 set -e
 
-if [ -z "$CODEGRINDERROOT"]; then
+if [ -z "$CODEGRINDERROOT" ]; then
     CODEGRINDERROOT="$HOME"/codegrinder
 fi
 
@@ -20,6 +20,3 @@ rm -f "$DBFILE"
 
 echo Creating database tables
 sqlite3 "$DBFILE" < "$CODEGRINDERROOT"/setup/schema.sql
-
-echo Creating problem types
-sqlite3 "$DBFILE" < "$CODEGRINDERROOT"/setup/problemtypes.sql

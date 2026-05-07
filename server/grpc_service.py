@@ -461,7 +461,7 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
     ) -> pb.SaveProblemTypeFilesResponse:
         def fn(state: RpcState) -> pb.SaveProblemTypeFilesResponse:
             try:
-                problem_type = save_problem_type_files(state.tx, request.problem_type, list(request.changes))
+                problem_type = save_problem_type_files(state.tx, request.problem_type, dict(request.files))
             except ValueError as exc:
                 self._abort(context, grpc.StatusCode.INVALID_ARGUMENT, f"invalid problem type file save: {exc}")
             except sqlite3.Error as exc:
@@ -477,8 +477,9 @@ class CodeGrinderService(pb_grpc.CodeGrinderServiceServicer):
             try:
                 problem_types = save_problem_type(
                     state.tx,
-                    list(request.problem_type_changes),
-                    list(request.action_changes),
+                    request.problem_type,
+                    request.container,
+                    dict(request.actions),
                 )
             except ValueError as exc:
                 self._abort(context, grpc.StatusCode.INVALID_ARGUMENT, f"invalid problem type save: {exc}")

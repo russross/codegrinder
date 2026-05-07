@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 import pytest
@@ -7,7 +8,7 @@ import pytest
 import codegrinder_pb2 as pb
 import cli
 import helpers
-from admin_commands import _collect_changes, _print_file_statuses, _print_problem_type
+from admin_commands import _action_specs_from_args, _collect_file_set, _parse_action_specs, _print_file_statuses, _print_problem_type
 from errors import CliError
 
 
@@ -29,29 +30,18 @@ def test_problemtype_files_command_visible_only_for_cached_admin(monkeypatch: py
     assert namespace.problem_type == "python3unittest"
 
 
-def test_problemtype_management_parser_requires_explicit_action_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_problemtype_management_parser_sets_complete_action_list(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cli, "load_config_or_default", lambda: helpers.Config(is_admin=True))
     parser = cli._build_parser()
-
-    namespace = parser.parse_args(["problemtype", "create", "--problem-type", "python3unittest", "--container", "img"])
-
-    assert namespace.command == "problemtype"
-    assert namespace.problemtype_command == "create"
-    assert namespace.problem_type == "python3unittest"
-    assert namespace.container == "img"
 
     with pytest.raises(SystemExit):
         parser.parse_args(
             [
                 "problemtype",
                 "action",
-                "add",
+                "set",
                 "--problem-type",
                 "python3unittest",
-                "--action",
-                "grade",
-                "--command",
-                "make grade",
             ]
         )
 
@@ -59,46 +49,74 @@ def test_problemtype_management_parser_requires_explicit_action_fields(monkeypat
         [
             "problemtype",
             "action",
-            "add",
+            "set",
             "--problem-type",
             "python3unittest",
+            "--container",
+            "img",
             "--action",
-            "grade",
-            "--command",
-            "make grade",
-            "--parser",
-            "xunit",
-            "--max-cpu",
-            "10",
-            "--max-fd",
-            "100",
-            "--max-file-size",
-            "10",
-            "--max-memory",
-            "256",
-            "--max-threads",
-            "20",
+            "grade|make grade|xunit|10|100|10|256|20",
         ]
     )
 
-    assert action_namespace.problemtype_command == "action-add"
+    assert action_namespace.problemtype_command == "action-set"
     assert action_namespace.problem_type == "python3unittest"
-    assert action_namespace.action == "grade"
-    assert action_namespace.max_memory == 256
+    assert action_namespace.container == "img"
+    assert action_namespace.actions == ["grade|make grade|xunit|10|100|10|256|20"]
 
 
-def test_collect_files_changes_rejects_duplicate_normalized_paths(tmp_path: Path) -> None:
+def test_parse_action_specs_rejects_duplicate_actions() -> None:
+    with pytest.raises(CliError):
+        _parse_action_specs(
+            [
+                "grade|make grade|xunit|10|100|10|256|20",
+                "grade|make test|xunit|10|100|10|256|20",
+            ]
+        )
+
+
+def test_action_specs_from_args_reads_nonempty_noncomment_file(tmp_path: Path) -> None:
+    actions_file = tmp_path / "actions"
+    actions_file.write_text(
+        "# comment\n\nstep|make step|none|10|100|10|256|20\n",
+        encoding="utf-8",
+    )
+    namespace = argparse.Namespace(
+        actions=["grade|make grade|xunit|10|100|10|256|20"],
+        actions_file=str(actions_file),
+    )
+
+    assert _action_specs_from_args(namespace) == [
+        "grade|make grade|xunit|10|100|10|256|20",
+        "step|make step|none|10|100|10|256|20",
+    ]
+
+
+def test_collect_file_set_reads_recursive_files_and_ignores_git(tmp_path: Path) -> None:
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "new.py").write_bytes(b"new\n")
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "config").write_bytes(b"ignored\n")
+
+    assert _collect_file_set(tmp_path) == {"tests/new.py": b"new\n"}
+
+
+def test_collect_file_set_rejects_duplicate_normalized_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     path = tmp_path / "tests"
     path.mkdir()
     (path / "new.py").write_bytes(b"new\n")
+    (path / "other.py").write_bytes(b"other\n")
 
+    original = Path.relative_to
+
+    def fake_relative_to(self: Path, other: Path) -> Path:
+        if self.name in ("new.py", "other.py"):
+            return Path("tests/new.py")
+        return original(self, other)
+
+    monkeypatch.setattr(Path, "relative_to", fake_relative_to)
     with pytest.raises(CliError):
-        _collect_changes(
-            tmp_path,
-            adds=["tests/new.py"],
-            updates=["tests/./new.py"],
-            deletes=[],
-        )
+        _collect_file_set(tmp_path)
 
 
 def test_files_status_reports_only_server_file_set(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -155,17 +173,11 @@ def test_problemtype_show_prints_aligned_update_commands(capsys: pytest.CaptureF
         "    max_memory:     536870912",
         "    max_threads:    32",
         "",
-        "    update command:",
-        "      grind problemtype action update \\",
-        "        --problem-type   python3unittest \\",
-        "        --action         grade \\",
-        "        --command        'make grade' \\",
-        "        --parser         xunit \\",
-        "        --max-cpu        10 \\",
-        "        --max-fd         128 \\",
-        "        --max-file-size  10485760 \\",
-        "        --max-memory     536870912 \\",
-        "        --max-threads    32",
+        "action set command:",
+        "  grind problemtype action set \\",
+        "    --problem-type  python3unittest \\",
+        "    --container     codegrinder/python:3.12 \\",
+        "    --action        'grade|make grade|xunit|10|128|10485760|536870912|32'",
         "",
         "canonical files:",
         "  Makefile",

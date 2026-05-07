@@ -54,23 +54,24 @@ class CodeGrinderClient:
     def save_problem_type_files(
         self,
         problem_type: str,
-        changes: list[pb.ProblemTypeFileChange],
+        files: dict[str, bytes],
     ) -> pb.SaveProblemTypeFilesResponse:
         return self.call(
             "SaveProblemTypeFiles",
             self.session.stub.SaveProblemTypeFiles,
-            pb.SaveProblemTypeFilesRequest(problem_type=problem_type, changes=changes),
+            pb.SaveProblemTypeFilesRequest(problem_type=problem_type, files=files),
         )
 
     def save_problem_type(
         self,
-        problem_type_changes: list[pb.ProblemTypeChange],
-        action_changes: list[pb.ProblemTypeActionChange],
+        problem_type: str,
+        container: str,
+        actions: dict[str, pb.ProblemTypeAction],
     ) -> pb.SaveProblemTypeResponse:
         return self.call(
             "SaveProblemType",
             self.session.stub.SaveProblemType,
-            pb.SaveProblemTypeRequest(problem_type_changes=problem_type_changes, action_changes=action_changes),
+            pb.SaveProblemTypeRequest(problem_type=problem_type, container=container, actions=actions),
         )
 
     def get_assignment(self, assignment: pb.AssignmentKey) -> pb.GetAssignmentResponse:

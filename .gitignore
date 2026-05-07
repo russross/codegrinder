@@ -7,5 +7,6 @@ rpc/*.pb.go
 *.swp
 certs
 daycare-mounts
+problemtypes
 .ruff_cache
 TODO.md

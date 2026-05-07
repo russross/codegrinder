@@ -84,45 +84,6 @@ message ProblemType {
   map<string, ProblemTypeAction> actions = 4;
 }
 
-enum ProblemTypeFileOperation {
-  PROBLEM_TYPE_FILE_OPERATION_UNSPECIFIED = 0;
-  PROBLEM_TYPE_FILE_OPERATION_ADD = 1;
-  PROBLEM_TYPE_FILE_OPERATION_UPDATE = 2;
-  PROBLEM_TYPE_FILE_OPERATION_DELETE = 3;
-}
-
-message ProblemTypeFileChange {
-  ProblemTypeFileOperation operation = 1;
-  string path = 2;
-  bytes content = 3;
-}
-
-enum ProblemTypeOperation {
-  PROBLEM_TYPE_OPERATION_UNSPECIFIED = 0;
-  PROBLEM_TYPE_OPERATION_CREATE = 1;
-  PROBLEM_TYPE_OPERATION_DELETE = 2;
-}
-
-message ProblemTypeChange {
-  ProblemTypeOperation operation = 1;
-  string problem_type = 2;
-  string container = 3;
-}
-
-enum ProblemTypeActionOperation {
-  PROBLEM_TYPE_ACTION_OPERATION_UNSPECIFIED = 0;
-  PROBLEM_TYPE_ACTION_OPERATION_ADD = 1;
-  PROBLEM_TYPE_ACTION_OPERATION_UPDATE = 2;
-  PROBLEM_TYPE_ACTION_OPERATION_DELETE = 3;
-}
-
-message ProblemTypeActionChange {
-  ProblemTypeActionOperation operation = 1;
-  string problem_type = 2;
-  string action = 3;
-  ProblemTypeAction action_definition = 4;
-}
-
 // ReportCardResult Outcomes:
 // passed, failed, error, skipped
 message ReportCardResult {
@@ -383,7 +344,7 @@ message GetProblemTypeResponse {
 // Request for SaveProblemTypeFiles
 message SaveProblemTypeFilesRequest {
   string problem_type = 1;
-  repeated ProblemTypeFileChange changes = 2;
+  map<string, bytes> files = 2;
 }
 
 // Response for SaveProblemTypeFiles
@@ -393,8 +354,9 @@ message SaveProblemTypeFilesResponse {
 
 // Request for SaveProblemType
 message SaveProblemTypeRequest {
-  repeated ProblemTypeChange problem_type_changes = 1;
-  repeated ProblemTypeActionChange action_changes = 2;
+  string problem_type = 1;
+  string container = 2;
+  map<string, ProblemTypeAction> actions = 3;
 }
 
 // Response for SaveProblemType
@@ -540,9 +502,9 @@ service CodeGrinderService {
   rpc GetProblemTypes(GetProblemTypesRequest) returns (GetProblemTypesResponse);
   // GetProblemType retrieves a specific problem type
   rpc GetProblemType(GetProblemTypeRequest) returns (GetProblemTypeResponse);
-  // SaveProblemTypeFiles applies admin changes to canonical problem type files.
+  // SaveProblemTypeFiles replaces one problem type's canonical file set.
   rpc SaveProblemTypeFiles(SaveProblemTypeFilesRequest) returns (SaveProblemTypeFilesResponse);
-  // SaveProblemType applies admin changes to problem type metadata and actions.
+  // SaveProblemType sets one problem type's metadata and complete action list.
   rpc SaveProblemType(SaveProblemTypeRequest) returns (SaveProblemTypeResponse);
   // GetAssignment retrieves assignment metadata and per-problem step progress.
   rpc GetAssignment(GetAssignmentRequest) returns (GetAssignmentResponse);
