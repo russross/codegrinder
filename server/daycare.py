@@ -17,7 +17,7 @@ import xml.etree.ElementTree as et
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Callable, Iterator, Protocol
+from typing import BinaryIO, Callable, Iterator, Protocol
 
 import grpc
 
@@ -33,6 +33,8 @@ TRANSCRIPT_EVENT_COUNT_LIMIT = 500
 TRANSCRIPT_DATA_LIMIT = 100_000
 DAYCARE_CONTAINER_LABEL = "codegrinder.daycare=true"
 WORKSPACE_FILE_READ_LIMIT = 100_000_000
+COMMAND_OUTPUT_LIMIT = 1_000_000
+OUTPUT_TRUNCATED_MARKER = b"\n[codegrinder: command output truncated]\n"
 
 _FORWARDED_EVENT_TYPES = {"exec", "exit", "stdin", "stdout", "stderr", "stdinclosed", "error", "files"}
 _STREAM_EVENT_TYPES = {"stdin", "stdout", "stderr"}
@@ -187,6 +189,23 @@ class CommandRunner(Protocol):
     ) -> CommandResult: ...
 
 
+def _append_limited_output(buffer: bytearray, chunk: bytes) -> bool:
+    if len(buffer) >= COMMAND_OUTPUT_LIMIT:
+        return True
+    available = COMMAND_OUTPUT_LIMIT - len(buffer)
+    if len(chunk) > available:
+        buffer.extend(chunk[:available])
+        return True
+    buffer.extend(chunk)
+    return False
+
+
+def _output_bytes(buffer: bytearray, truncated: bool) -> bytes:
+    if truncated:
+        return bytes(buffer) + OUTPUT_TRUNCATED_MARKER
+    return bytes(buffer)
+
+
 class SubprocessCommandRunner:
     def run(
         self,
@@ -209,12 +228,52 @@ class SubprocessCommandRunner:
         except OSError as exc:
             raise CommandError(f"failed to start command {args!r}: {exc}") from exc
 
-        provided_input: bytes | None = input_bytes
+        stdout_buffer = bytearray()
+        stderr_buffer = bytearray()
+        stdout_truncated = False
+        stderr_truncated = False
+
+        def read_pipe(pipe: BinaryIO, buffer: bytearray, set_truncated: Callable[[], None]) -> None:
+            while True:
+                chunk = pipe.read(65536)
+                if not chunk:
+                    return
+                if _append_limited_output(buffer, bytes(chunk)):
+                    set_truncated()
+
+        def mark_stdout_truncated() -> None:
+            nonlocal stdout_truncated
+            stdout_truncated = True
+
+        def mark_stderr_truncated() -> None:
+            nonlocal stderr_truncated
+            stderr_truncated = True
+
+        readers: list[threading.Thread] = []
+        if proc.stdout is not None:
+            thread = threading.Thread(target=read_pipe, args=(proc.stdout, stdout_buffer, mark_stdout_truncated))
+            thread.start()
+            readers.append(thread)
+        if proc.stderr is not None:
+            thread = threading.Thread(target=read_pipe, args=(proc.stderr, stderr_buffer, mark_stderr_truncated))
+            thread.start()
+            readers.append(thread)
+
+        if proc.stdin is not None:
+            try:
+                if input_bytes:
+                    proc.stdin.write(input_bytes)
+                proc.stdin.close()
+            except OSError:
+                pass
+
         start = time.monotonic()
         while True:
             if cancel_event is not None and cancel_event.is_set():
                 proc.kill()
-                _ = proc.communicate()
+                _ = proc.wait()
+                for reader in readers:
+                    reader.join(timeout=1.0)
                 raise CommandError("command canceled")
             remaining: float | None
             if timeout_seconds is None:
@@ -224,18 +283,25 @@ class SubprocessCommandRunner:
                 remaining = timeout_seconds - elapsed
                 if remaining <= 0:
                     proc.kill()
-                    _ = proc.communicate()
+                    _ = proc.wait()
+                    for reader in readers:
+                        reader.join(timeout=1.0)
                     raise CommandError("command timed out")
             try:
                 if remaining is None:
-                    stdout, stderr = proc.communicate(input=provided_input)
+                    proc.wait()
                 else:
-                    stdout, stderr = proc.communicate(input=provided_input, timeout=min(0.1, remaining))
+                    proc.wait(timeout=min(0.1, remaining))
                 break
             except subprocess.TimeoutExpired:
-                provided_input = None
                 continue
-        return CommandResult(returncode=int(proc.returncode or 0), stdout=stdout, stderr=stderr)
+        for reader in readers:
+            reader.join(timeout=1.0)
+        return CommandResult(
+            returncode=int(proc.returncode or 0),
+            stdout=_output_bytes(stdout_buffer, stdout_truncated),
+            stderr=_output_bytes(stderr_buffer, stderr_truncated),
+        )
 
 
 @dataclass(slots=True)
@@ -328,6 +394,31 @@ def _checked_relative_path(raw_name: str) -> Path:
     return path
 
 
+def _make_tree_removable(path: Path) -> None:
+    try:
+        mode = path.lstat().st_mode
+    except OSError:
+        return
+    if stat.S_ISLNK(mode):
+        return
+    if stat.S_ISDIR(mode):
+        try:
+            path.chmod(stat.S_IRWXU)
+        except OSError:
+            return
+        try:
+            children = list(path.iterdir())
+        except OSError:
+            return
+        for child in children:
+            _make_tree_removable(child)
+    else:
+        try:
+            path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+        except OSError:
+            return
+
+
 @dataclass(slots=True)
 class WorkspaceMount:
     root: Path
@@ -378,6 +469,7 @@ class WorkspaceMount:
 
     def cleanup(self) -> None:
         if self.root.exists():
+            _make_tree_removable(self.root)
             shutil.rmtree(self.root)
 
     def _regular_file_paths(self) -> Iterator[Path]:
@@ -529,6 +621,8 @@ class Nanny:
             f"cpu={int(limits.max_cpu)}",
             "--ulimit",
             f"fsize={disk_bytes}",
+            "--ulimit",
+            f"nofile={int(limits.max_fd)}:{int(limits.max_fd)}",
             image,
             "/bin/sleep",
             f"{time_limit_seconds}s",
@@ -585,6 +679,12 @@ class Nanny:
                 )
             if result.returncode != 0:
                 output = (result.stdout + result.stderr).decode("utf-8", errors="replace")
+                _remove_failed_container_run(
+                    runner,
+                    container_command=container_command,
+                    result=result,
+                    name=name,
+                )
                 raise CommandError(f"container run failed: exit={result.returncode}; output={output}")
         container_id = result.stdout.decode("utf-8", errors="replace").strip()
         if container_id == "":
@@ -619,6 +719,7 @@ class Nanny:
         usage = _CgroupUsage()
         if self._cgroup_path is not None:
             usage = _collect_cgroup_usage(self._cgroup_path)
+        nonfatal_errors: list[str] = []
         for step_name, args in (
             ("stop", [*self._container_command, "stop", "--time", "1", self._container_id]),
             ("wait", [*self._container_command, "wait", self._container_id]),
@@ -630,7 +731,7 @@ class Nanny:
                     cleanup_deadline_monotonic=cleanup_deadline,
                 )
             except CommandError as exc:
-                errors.append(f"{step_name}: {exc}")
+                nonfatal_errors.append(f"{step_name}: {exc}")
 
         _log_container_usage_summary(
             self._runner,
@@ -651,7 +752,10 @@ class Nanny:
         except CommandError as exc:
             errors.append(f"rm: {exc}")
         if errors:
+            errors = [*nonfatal_errors, *errors]
             raise CommandError("; ".join(errors))
+        if nonfatal_errors:
+            logging.info("nonfatal container cleanup errors for %s: %s", self._name, "; ".join(nonfatal_errors))
 
     def put_files(self, files: dict[str, bytes], mode: int) -> None:
         if len(files) == 0:
@@ -694,6 +798,44 @@ def _remove_container_action_scope(
         action_deadline_monotonic=action_deadline_monotonic,
         cancel_event=cancel_event,
     )
+
+
+def _remove_container_preempt_scope(
+    runner: CommandRunner,
+    *,
+    container_command: list[str],
+    name: str,
+) -> None:
+    try:
+        _ = runner.run([*container_command, "rm", "-f", name], timeout_seconds=5.0)
+    except CommandError as exc:
+        logging.info("failed to preempt existing container %s: %s", name, exc)
+
+
+def _container_id_from_run_stdout(stdout: bytes) -> str:
+    raw = stdout.decode("utf-8", errors="replace").strip().splitlines()
+    if not raw:
+        return ""
+    candidate = raw[0].strip()
+    if re.fullmatch(r"[0-9a-fA-F]{12,64}", candidate) is None:
+        return ""
+    return candidate
+
+
+def _remove_failed_container_run(
+    runner: CommandRunner,
+    *,
+    container_command: list[str],
+    result: CommandResult,
+    name: str,
+) -> None:
+    container_id = _container_id_from_run_stdout(result.stdout)
+    if container_id == "":
+        return
+    try:
+        _ = runner.run([*container_command, "rm", "-f", container_id], timeout_seconds=5.0)
+    except CommandError as exc:
+        logging.info("failed to remove failed container %s (%s): %s", container_id, name, exc)
 
 
 def _run_with_action_timeout(
@@ -1204,6 +1346,8 @@ class DaycareRuntime:
         if len(parsed_engine) == 0:
             parsed_engine = [DEFAULT_CONTAINER_ENGINE]
         self._container_command = parsed_engine
+        self._user_locks: dict[str, threading.Lock] = {}
+        self._user_locks_guard = threading.Lock()
         cap = int(config.capacity)
         if cap <= 0:
             cap = 1
@@ -1236,23 +1380,49 @@ class DaycareRuntime:
 
         broken = False
         while True:
-            payload = q.get()
+            try:
+                payload = q.get(timeout=0.1)
+            except queue.Empty:
+                if self._context_inactive(context):
+                    broken = True
+                    cancel_event.set()
+                continue
             if payload is None:
                 break
             if broken:
                 continue
-            is_active = True
-            try:
-                is_active = bool(context.is_active())
-            except Exception:
-                is_active = True
-            if not is_active:
+            if self._context_inactive(context):
                 broken = True
                 cancel_event.set()
                 continue
             yield payload
         cancel_event.set()
         thread.join(timeout=0.1)
+
+    def _context_inactive(self, context: grpc.ServicerContext) -> bool:
+        try:
+            return not bool(context.is_active())
+        except Exception:
+            return False
+
+    def _acquire_container_slot(self, cancel_event: threading.Event) -> bool:
+        while not cancel_event.is_set():
+            if self._container_limiter.acquire(timeout=0.1):
+                return True
+        return False
+
+    def _user_lock(self, lock_name: str) -> threading.Lock:
+        with self._user_locks_guard:
+            if lock_name not in self._user_locks:
+                self._user_locks[lock_name] = threading.Lock()
+            return self._user_locks[lock_name]
+
+    def _acquire_user_lock(self, lock_name: str, cancel_event: threading.Event) -> threading.Lock | None:
+        lock = self._user_lock(lock_name)
+        while not cancel_event.is_set():
+            if lock.acquire(timeout=0.1):
+                return lock
+        return None
 
     def _handle_problem_action(
         self,
@@ -1282,13 +1452,26 @@ class DaycareRuntime:
             emit_error(f"validation error: {exc}")
             return
 
-        nanny_name = f"nanny-{bundle.user_id}"
+        nanny_name = f"nanny-{_safe_user_dir_name(bundle.user_id)}"
 
         files = gather_files(bundle)
 
-        self._container_limiter.acquire()
-        logging.info("container locked for user %s", bundle.user_id)
+        _remove_container_preempt_scope(
+            self._runner,
+            container_command=self._container_command,
+            name=nanny_name,
+        )
+        user_lock = self._acquire_user_lock(nanny_name, cancel_event)
+        if user_lock is None:
+            emit_error("request canceled before the user's previous container cleanup finished")
+            return
+        container_slot_acquired = False
         try:
+            if not self._acquire_container_slot(cancel_event):
+                emit_error("request canceled before a container slot was available")
+                return
+            container_slot_acquired = True
+            logging.info("container locked for user %s", bundle.user_id)
             limits = Limits.from_action(bundle.limits)
             limits.override(list(bundle.problem_options))
             timeout_seconds = float(int(limits.max_cpu) * 2 + 5)
@@ -1323,6 +1506,7 @@ class DaycareRuntime:
                 emit_error(f"error creating container: {exc}")
                 return
 
+            final_response: pb.DaycareResponse | None = None
             try:
                 def emit_response(response: pb.DaycareResponse) -> None:
                     out_queue.put(response)
@@ -1341,76 +1525,83 @@ class DaycareRuntime:
                 try:
                     nanny.put_files(files, 0o666)
                 except CommandError as exc:
-                    _report_card_log_and_fail(nanny.report_card, f"uploading files: {exc}")
-                    nanny.close_events()
-                    event_listener.join()
-                    return
-
-                cmd = bundle.command.split()
-                if bundle.parser == "xunit":
-                    run_and_parse_xunit(nanny, cmd)
-                elif bundle.parser == "check":
-                    run_and_parse_check_xml(nanny, cmd)
-                elif bundle.parser != "":
-                    _report_card_log_and_fail(
-                        nanny.report_card,
-                        f'unknown parser "{bundle.parser}" for action {bundle.action}',
-                    )
+                    final_response = pb.DaycareResponse(error=f"uploading files: {exc}")
                 else:
-                    joined = " ".join(cmd)
-                    try:
-                        status = nanny.exec_command(cmd)
-                    except CommandError as exc:
-                        _report_card_log_and_fail(nanny.report_card, f'"{joined}" exec error: {exc}')
+                    cmd = bundle.command.split()
+                    if bundle.parser == "xunit":
+                        run_and_parse_xunit(nanny, cmd)
+                    elif bundle.parser == "check":
+                        run_and_parse_check_xml(nanny, cmd)
+                    elif bundle.parser != "":
+                        _report_card_log_and_fail(
+                            nanny.report_card,
+                            f'unknown parser "{bundle.parser}" for action {bundle.action}',
+                        )
                     else:
-                        if status != 0:
-                            _report_card_log_and_fail(
-                                nanny.report_card,
-                                f'"{joined}" failed with exit status {status}',
-                            )
+                        joined = " ".join(cmd)
+                        try:
+                            status = nanny.exec_command(cmd)
+                        except CommandError as exc:
+                            _report_card_log_and_fail(nanny.report_card, f'"{joined}" exec error: {exc}')
+                        else:
+                            if status != 0:
+                                _report_card_log_and_fail(
+                                    nanny.report_card,
+                                    f'"{joined}" failed with exit status {status}',
+                                )
 
-                bundle.commit.report_card.CopyFrom(nanny.report_card)
+                    bundle.commit.report_card.CopyFrom(nanny.report_card)
 
-                for option in bundle.problem_options:
-                    parts = option.split("=", 1)
-                    if len(parts) != 2 or parts[0] != "download":
-                        continue
-                    try:
-                        downloaded = nanny.get_files(parts[1].split(","))
-                    except CommandError as exc:
-                        logging.info("error trying to download files from container: %s", exc)
-                        continue
-                    if downloaded:
-                        nanny.emit_event(_event_message("files", files=downloaded))
+                    for option in bundle.problem_options:
+                        parts = option.split("=", 1)
+                        if len(parts) != 2 or parts[0] != "download":
+                            continue
+                        try:
+                            downloaded = nanny.get_files(parts[1].split(","))
+                        except CommandError as exc:
+                            logging.info("error trying to download files from container: %s", exc)
+                            continue
+                        if downloaded:
+                            nanny.emit_event(_event_message("files", files=downloaded))
 
-                nanny.close_events()
-                event_listener.join()
-
-                if bundle.action == "grade":
-                    bundle.commit.score = _compute_grade_score(bundle.commit.report_card)
-                    _set_timestamp(bundle.commit.updated_at, now)
-                    out_queue.put(
-                        pb.DaycareResponse(
+                    if bundle.action == "grade":
+                        bundle.commit.score = _compute_grade_score(bundle.commit.report_card)
+                        _set_timestamp(bundle.commit.updated_at, now)
+                        final_response = pb.DaycareResponse(
                             bundle=encode_signed_runtime_bundle(bundle, self._config.daycare_secret)
                         )
-                    )
+
             finally:
+                nanny.close_events()
+                event_listener.join()
+                cleanup_error = ""
                 try:
                     nanny.shutdown("action finished")
                 except CommandError as exc:
+                    cleanup_error = str(exc)
                     logging.info("nanny shutdown error: %s", exc)
                 try:
                     workspace.cleanup()
                 except Exception as exc:
+                    cleanup_error = f"{cleanup_error}; workspace: {exc}" if cleanup_error else f"workspace: {exc}"
                     logging.info("workspace cleanup error for %s: %s", workspace.root, exc)
+                if cleanup_error:
+                    final_response = pb.DaycareResponse(error=f"cleanup error: {cleanup_error}")
+                if final_response is not None:
+                    if final_response.error:
+                        outcome = final_response.error
+                        logging.info(final_response.error)
+                    out_queue.put(final_response)
         finally:
-            self._container_limiter.release()
-            if outcome == "ok":
-                logging.info("handler for %s finished", nanny_name)
-            else:
-                logging.info(
-                    "handler for %s finished with %s",
-                    nanny_name,
-                    outcome,
-                )
-            logging.info("container unlocked for user %s", bundle.user_id)
+            if container_slot_acquired:
+                self._container_limiter.release()
+                if outcome == "ok":
+                    logging.info("handler for %s finished", nanny_name)
+                else:
+                    logging.info(
+                        "handler for %s finished with %s",
+                        nanny_name,
+                        outcome,
+                    )
+                logging.info("container unlocked for user %s", bundle.user_id)
+            user_lock.release()

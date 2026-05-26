@@ -118,7 +118,7 @@ class DaycareDockerIntegrationTests(unittest.TestCase):
                 continue
             for image in _IMAGE_CANDIDATES:
                 image_exists = subprocess.run(
-                    [*runtime, "image", "exists", image],
+                    [*runtime, "image", "inspect", image],
                     check=False,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,

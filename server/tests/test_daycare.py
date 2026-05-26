@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import queue
+import sys
 import tempfile
 import unittest
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from unittest.mock import patch
 from typing import cast
 
@@ -13,9 +15,12 @@ import grpc
 import codegrinder_pb2 as pb
 from config import ServerConfig
 from daycare import (
+    COMMAND_OUTPUT_LIMIT,
     CommandError,
     CommandResult,
     DaycareRuntime,
+    OUTPUT_TRUNCATED_MARKER,
+    SubprocessCommandRunner,
     TRANSCRIPT_DATA_LIMIT,
     TRANSCRIPT_EVENT_COUNT_LIMIT,
     WorkspaceMount,
@@ -216,9 +221,10 @@ class DaycareTests(unittest.TestCase):
             if _command_key(call) == "rm" and len(call) >= 2 and call[-1] == "nanny-123"
         ]
         self.assertEqual(len(run_indices), 2)
-        self.assertEqual(len(rm_name_indices), 1)
-        self.assertLess(run_indices[0], rm_name_indices[0])
-        self.assertLess(rm_name_indices[0], run_indices[1])
+        self.assertGreaterEqual(len(rm_name_indices), 2)
+        self.assertLess(rm_name_indices[0], run_indices[0])
+        self.assertLess(run_indices[0], rm_name_indices[1])
+        self.assertLess(rm_name_indices[1], run_indices[1])
 
     def test_cleanup_still_runs_when_upload_fails(self) -> None:
         runner = _FakeRunner()
@@ -226,7 +232,9 @@ class DaycareTests(unittest.TestCase):
         req = _build_signed_request()
         with patch.object(WorkspaceMount, "write_files", side_effect=CommandError("write failed")):
             responses = list(runtime.stream(req, cast(grpc.ServicerContext, _FakeContext())))
-        self.assertEqual(responses, [])
+        self.assertEqual(len(responses), 1)
+        self.assertEqual(responses[0].WhichOneof("response"), "error")
+        self.assertIn("uploading files", responses[0].error)
         cleanup_calls = [
             call
             for call in runner.calls
@@ -250,6 +258,23 @@ class DaycareTests(unittest.TestCase):
         ]
         self.assertEqual([_command_key(call) for call in cleanup_calls], ["stop", "wait", "rm"])
         self.assertTrue(all(call[-1] == "container-id" for call in cleanup_calls))
+
+    def test_signed_bundle_is_emitted_after_container_cleanup(self) -> None:
+        runner = _FakeRunner()
+        runtime = _build_runtime(runner)
+        req = _build_signed_request()
+        for response in runtime.stream(req, cast(grpc.ServicerContext, _FakeContext())):
+            if response.WhichOneof("response") != "bundle":
+                continue
+            cleanup_calls = [
+                call
+                for call in runner.calls
+                if _command_key(call) in ("stop", "wait", "rm") and len(call) >= 2 and call[-1] == "container-id"
+            ]
+            self.assertEqual([_command_key(call) for call in cleanup_calls], ["stop", "wait", "rm"])
+            break
+        else:
+            self.fail("expected signed bundle response")
 
     def test_logs_container_usage_summary(self) -> None:
         runner = _FakeRunner()
@@ -408,6 +433,64 @@ class DaycareTests(unittest.TestCase):
         self.assertEqual(len(run_calls), 1)
         self.assertEqual(run_calls[0][-3], "img")
         self.assertTrue(all("--pull=never" in call for call in run_calls))
+
+    def test_failed_container_start_removes_created_container(self) -> None:
+        runner = _FakeRunner()
+        runtime = _build_runtime(runner)
+        created_id = "4579b92f982c93681d288d970ba6d569e6cd239d9a72bbd9ff0a0a36bf8e4397"
+        runner.plan_result(
+            "run",
+            CommandResult(
+                returncode=125,
+                stdout=f"{created_id}\n".encode("ascii"),
+                stderr=b'Error response from daemon: invalid mount config for type "bind"',
+            ),
+        )
+        req = _build_signed_request()
+        responses = list(runtime.stream(req, cast(grpc.ServicerContext, _FakeContext())))
+        self.assertEqual(len(responses), 1)
+        self.assertEqual(responses[0].WhichOneof("response"), "error")
+        self.assertIn("container run failed", responses[0].error)
+        self.assertTrue(any(_command_key(call) == "rm" and call[-1] == created_id for call in runner.calls))
+
+    def test_stream_cancels_while_waiting_for_container_slot(self) -> None:
+        runner = _FakeRunner()
+        runtime = _build_runtime(runner)
+        self.assertTrue(runtime._container_limiter.acquire(blocking=False))
+        self.assertTrue(runtime._container_limiter.acquire(blocking=False))
+        try:
+            context = _FakeContext()
+            context.active = False
+            req = _build_signed_request()
+            responses = list(runtime.stream(req, cast(grpc.ServicerContext, context)))
+        finally:
+            runtime._container_limiter.release()
+            runtime._container_limiter.release()
+        self.assertEqual(responses, [])
+        self.assertTrue(all(_command_key(call) == "rm" and call[-1] == "nanny-123" for call in runner.calls))
+
+    def test_workspace_cleanup_handles_restrictive_permissions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = WorkspaceMount.create(base_dir=Path(tmp), user_id="u1")
+            locked_dir = workspace.root / "locked"
+            locked_dir.mkdir()
+            (locked_dir / "file.txt").write_text("data", encoding="utf-8")
+            locked_dir.chmod(0)
+            workspace.cleanup()
+            self.assertFalse(workspace.root.exists())
+
+    def test_subprocess_runner_limits_captured_output(self) -> None:
+        result = SubprocessCommandRunner().run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.stdout.buffer.write(b'a' * 1000100)",
+            ],
+            timeout_seconds=5.0,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(len(result.stdout), COMMAND_OUTPUT_LIMIT + len(OUTPUT_TRUNCATED_MARKER))
+        self.assertTrue(result.stdout.endswith(OUTPUT_TRUNCATED_MARKER))
 
     def test_xunit_parser_updates_report_card_and_score(self) -> None:
         runner = _FakeRunner()
