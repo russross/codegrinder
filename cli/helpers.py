@@ -257,9 +257,9 @@ def managed_session(config: Config) -> Iterator[Session]:
 
 
 def course_directory(label: str) -> str:
-    match = re.match(r"^([A-Za-z]+[- ]*\d+\w*)\b", label)
+    match = re.match(r"^([A-Za-z]+)[- ]*(\d+\w*)\b", label)
     if match is not None:
-        return match.group(1)
+        return f"{match.group(1)}{match.group(2)}".lower()
     return label
 
 

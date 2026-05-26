@@ -8,7 +8,7 @@ import codegrinder_pb2 as pb
 from assignment_download import download_assignment_summary, existing_assignment_warning
 from cli import _build_parser
 from errors import CliError
-from helpers import load_dotfile, save_dotfile
+from helpers import course_directory, load_dotfile, save_dotfile
 from models import AssignmentRef, DotFileInfo, ProblemInfo
 
 
@@ -74,10 +74,16 @@ def test_get_command_rejects_assignment_arguments() -> None:
         args.func(args)
 
 
+def test_course_directory_normalizes_common_course_names() -> None:
+    assert course_directory("CS-2810 Fall 2026") == "cs2810"
+    assert course_directory("CS 101") == "cs101"
+    assert course_directory("CS3520A Section 1") == "cs3520a"
+
+
 def test_existing_assignment_without_dotfile_warns(tmp_path: Path) -> None:
     warning = existing_assignment_warning(_list_item(), tmp_path)
 
-    assert warning == "warning: assignment CS 101/ps1 directory exists but has no .grind metadata; skipping"
+    assert warning == "warning: assignment cs101/ps1 directory exists but has no .grind metadata; skipping"
 
 
 def test_existing_assignment_with_matching_metadata_skips_silently(tmp_path: Path) -> None:
@@ -103,7 +109,7 @@ def test_existing_assignment_with_problem_mismatch_warns(tmp_path: Path) -> None
 
     warning = existing_assignment_warning(_list_item(), tmp_path)
 
-    assert warning == "warning: assignment CS 101/ps1 has different problem metadata; skipping"
+    assert warning == "warning: assignment cs101/ps1 has different problem metadata; skipping"
 
 
 def test_download_assignment_summary_stages_files_and_writes_metadata(tmp_path: Path) -> None:
@@ -156,4 +162,4 @@ def test_existing_assignment_with_step_mismatch_warns(tmp_path: Path) -> None:
 
     warning = existing_assignment_warning(_list_item(), tmp_path, _assignment_summary(step=2))
 
-    assert warning == "warning: assignment CS 101/ps1 has different problem metadata; skipping"
+    assert warning == "warning: assignment cs101/ps1 has different problem metadata; skipping"
