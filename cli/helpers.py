@@ -263,6 +263,16 @@ def course_directory(label: str) -> str:
     return label
 
 
+def abbreviate_home(path: Path) -> str:
+    expanded = path.expanduser()
+    home = Path.home()
+    try:
+        relative = expanded.resolve().relative_to(home.resolve())
+    except ValueError:
+        return str(expanded)
+    return str(Path("~") / relative)
+
+
 def plural(count: int) -> str:
     return "" if count == 1 else "s"
 

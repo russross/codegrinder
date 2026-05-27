@@ -136,14 +136,14 @@ def _seed(conn: sqlite3.Connection) -> None:
         ("ps1", "p1", 1),
     )
     conn.execute(
-        "INSERT INTO assignments(user_id, course_id, problem_set_id, restricted, grade_id, outcome_url, outcome_ext_accepted, consumer_key, unlock_at, due_at, lock_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)",
-        ("u1", "c1", "ps1", 0, "g1", "https://canvas.invalid/outcome", "text", "key"),
+        "INSERT INTO assignments(user_id, course_id, problem_set_id, assignment_title, restricted, grade_id, outcome_url, outcome_ext_accepted, consumer_key, unlock_at, due_at, lock_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)",
+        ("u1", "c1", "ps1", "Canvas Set Note", 0, "g1", "https://canvas.invalid/outcome", "text", "key"),
     )
     conn.execute(
-        "INSERT INTO assignments(user_id, course_id, problem_set_id, restricted, grade_id, outcome_url, outcome_ext_accepted, consumer_key, unlock_at, due_at, lock_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)",
-        ("u2", "c1", "ps1", 0, "g2", "https://canvas.invalid/outcome", "text", "key"),
+        "INSERT INTO assignments(user_id, course_id, problem_set_id, assignment_title, restricted, grade_id, outcome_url, outcome_ext_accepted, consumer_key, unlock_at, due_at, lock_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)",
+        ("u2", "c1", "ps1", "Instructor Canvas Set Note", 0, "g2", "https://canvas.invalid/outcome", "text", "key"),
     )
     conn.execute(
         "INSERT INTO commits(user_id, course_id, problem_set_id, problem_id, step_number, action, note, transcript, report_card, score, commit_created_at, commit_updated_at) "
@@ -378,7 +378,9 @@ class GrpcServiceTests(unittest.TestCase):
         self.assertEqual(len(student_reply.items), 1)
         self.assertEqual(student_reply.items[0].assignment.user_id, "u1")
         self.assertEqual(student_reply.items[0].course_name, "Course 101")
+        self.assertEqual(student_reply.items[0].assignment_title, "Canvas Set Note")
         self.assertEqual(student_reply.items[0].problem_set_note, "Set Note")
+        self.assertAlmostEqual(student_reply.items[0].assignment_score, 0.5)
         self.assertEqual(student_reply.items[0].user_name, "")
         self.assertEqual(student_reply.items[0].user_login, "")
         self.assertEqual(student_reply.items[0].download_status, pb.ASSIGNMENT_DOWNLOAD_STATUS_AVAILABLE)
@@ -458,6 +460,57 @@ class GrpcServiceTests(unittest.TestCase):
         listed = self.service.ListAssignments(pb.ListAssignmentsRequest(search=["part-2"], include_student_context=False), ctx)
 
         self.assertEqual(listed.items[0].download_status, pb.ASSIGNMENT_DOWNLOAD_STATUS_PREREQ_NOT_READY)
+        self.assertEqual(listed.items[0].prerequisite_problem_set_id, "ps-part-1")
+
+        summary = self.service.GetAssignment(
+            pb.GetAssignmentRequest(assignment=pb.AssignmentKey(user_id="u1", course_id="c1", problem_set_id="ps-part-2")),
+            ctx,
+        )
+        self.assertEqual(summary.download_status, pb.ASSIGNMENT_DOWNLOAD_STATUS_PREREQ_NOT_READY)
+        self.assertEqual(summary.prerequisite_problem_set_id, "ps-part-1")
+
+    def test_continuation_problem_set_reports_missing_intermediate_prereq(self) -> None:
+        now = "2026-02-15T10:00:00+00:00"
+        self.conn.execute(
+            "INSERT INTO problem_steps(problem_id, step_number, problem_type, step_note, step_weight) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("p1", 3, "python3unittest", "Step 3", 1),
+        )
+        for problem_set_id, note, continues in (
+            ("ps-part-1", "Part 1", None),
+            ("ps-part-2", "Part 2", "ps-part-1"),
+            ("ps-part-3", "Part 3", "ps-part-2"),
+        ):
+            self.conn.execute(
+                "INSERT INTO problem_sets(problem_set_id, problem_set_note, problem_set_tags, continues_problem_set_id, problem_set_created_at, problem_set_updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (problem_set_id, note, "[]", continues, now, now),
+            )
+        for problem_set_id, step_number in (("ps-part-1", 1), ("ps-part-2", 2), ("ps-part-3", 3)):
+            self.conn.execute(
+                "INSERT INTO problem_set_problems(problem_set_id, problem_id, problem_weight, first_step, last_step) VALUES (?, ?, ?, ?, ?)",
+                (problem_set_id, "p1", 1, step_number, step_number),
+            )
+        for problem_set_id, grade_id in (("ps-part-1", "g-part-1"), ("ps-part-3", "g-part-3")):
+            self.conn.execute(
+                "INSERT INTO assignments(user_id, course_id, problem_set_id, restricted, grade_id, outcome_url, outcome_ext_accepted, consumer_key, unlock_at, due_at, lock_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)",
+                ("u1", "c1", problem_set_id, 0, grade_id, "https://canvas.invalid/outcome", "text", "key"),
+            )
+        self.conn.execute(
+            "INSERT INTO commits(user_id, course_id, problem_set_id, problem_id, step_number, action, note, transcript, report_card, score, commit_created_at, commit_updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("u1", "c1", "ps-part-1", "p1", 1, "grade", "ok", "[]", '{"passed": true}', 1.0, now, now),
+        )
+        self.conn.commit()
+        ctx = cast(grpc.ServicerContext, self._auth_context())
+
+        listed = self.service.ListAssignments(pb.ListAssignmentsRequest(search=["part-3"], include_student_context=False), ctx)
+
+        self.assertEqual(len(listed.items), 1)
+        self.assertEqual(listed.items[0].assignment.problem_set_id, "ps-part-3")
+        self.assertEqual(listed.items[0].download_status, pb.ASSIGNMENT_DOWNLOAD_STATUS_PREREQ_NOT_READY)
+        self.assertEqual(listed.items[0].prerequisite_problem_set_id, "ps-part-2")
 
     def test_continuation_problem_set_uses_previous_slice_commit_as_start(self) -> None:
         now = "2026-02-15T10:00:00+00:00"
@@ -1109,6 +1162,54 @@ class GrpcServiceTests(unittest.TestCase):
                 author_ctx,
             )
         self.assertEqual(err.exception.code, grpc.StatusCode.INVALID_ARGUMENT)
+
+    def test_save_problem_create_persists_matching_problem_set(self) -> None:
+        author_ctx = cast(grpc.ServicerContext, self._auth_context("u2"))
+        prepared = self.service.PrepareProblem(
+            pb.PrepareProblemRequest(
+                draft=pb.AuthorProblemDraft(
+                    problem_id="default-set-problem",
+                    problem_note="Default Set Problem",
+                    problem_tags=["auto"],
+                    problem_options=[],
+                    steps=[
+                        pb.AuthorProblemStepDraft(
+                            step_number=1,
+                            problem_type="python3unittest",
+                            note="Step 1",
+                            weight=1.0,
+                            files=[pb.AuthorFile(path="main.py", content=b"print('solution')\n")],
+                            starter_files=[pb.AuthorFile(path="main.py", content=b"print('starter')\n")],
+                        )
+                    ],
+                )
+            ),
+            author_ctx,
+        )
+        _mark_author_validation_passed(prepared.bundle)
+
+        self.service.SaveProblem(
+            pb.SaveProblemRequest(mode=pb.SAVE_MODE_CREATE, bundle=prepared.bundle),
+            author_ctx,
+        )
+
+        problem_set = self.conn.execute(
+            "SELECT problem_set_id, problem_set_note, problem_set_tags FROM problem_sets WHERE problem_set_id = ?",
+            ("default-set-problem",),
+        ).fetchone()
+        problem_set_problem = self.conn.execute(
+            "SELECT problem_set_id, problem_id, problem_weight, first_step, last_step "
+            "FROM problem_set_problems WHERE problem_set_id = ?",
+            ("default-set-problem",),
+        ).fetchone()
+        self.assertIsNotNone(problem_set)
+        self.assertEqual(str(problem_set["problem_set_note"]), "Default Set Problem")
+        self.assertEqual(str(problem_set["problem_set_tags"]), '["auto"]')
+        self.assertIsNotNone(problem_set_problem)
+        self.assertEqual(str(problem_set_problem["problem_id"]), "default-set-problem")
+        self.assertEqual(int(problem_set_problem["problem_weight"]), 1)
+        self.assertIsNone(problem_set_problem["first_step"])
+        self.assertIsNone(problem_set_problem["last_step"])
 
     def test_save_problem_rejects_unvalidated_author_bundle(self) -> None:
         author_ctx = cast(grpc.ServicerContext, self._auth_context("u2"))

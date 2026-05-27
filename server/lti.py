@@ -405,6 +405,7 @@ class LTIService:
             (user_id, course_id, problem_set_id),
         ).fetchone()
         person_sourced_id = _form_first(form, "lis_result_sourcedid")
+        assignment_title = _form_first(form, "resource_link_title") or problem_set_id
         outcome_url = _form_first(form, "lis_outcome_service_url")
         outcome_ext_accepted = _form_first(form, "ext_outcome_data_values_accepted")
         consumer_key = _form_first(form, "oauth_consumer_key")
@@ -418,12 +419,13 @@ class LTIService:
         if row is None:
             grade_id = person_sourced_id if person_sourced_id != "" else None
             tx.execute(
-                "INSERT INTO assignments(user_id, course_id, problem_set_id, restricted, grade_id, outcome_url, outcome_ext_accepted, consumer_key, unlock_at, due_at, lock_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO assignments(user_id, course_id, problem_set_id, assignment_title, restricted, grade_id, outcome_url, outcome_ext_accepted, consumer_key, unlock_at, due_at, lock_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     user_id,
                     course_id,
                     problem_set_id,
+                    assignment_title,
                     1 if restricted else 0,
                     grade_id,
                     outcome_url,
@@ -442,6 +444,7 @@ class LTIService:
             str(row["course_id"]) != course_id
             or str(row["problem_set_id"]) != problem_set_id
             or str(row["user_id"]) != user_id
+            or str(row["assignment_title"]) != assignment_title
             or bool(row["restricted"]) != restricted
             or (person_sourced_id != "" and old_grade_id != person_sourced_id)
             or str(row["outcome_url"]) != outcome_url
@@ -454,9 +457,10 @@ class LTIService:
 
         if changed:
             tx.execute(
-                "UPDATE assignments SET restricted = ?, grade_id = ?, outcome_url = ?, outcome_ext_accepted = ?, consumer_key = ?, unlock_at = ?, due_at = ?, lock_at = ? "
+                "UPDATE assignments SET assignment_title = ?, restricted = ?, grade_id = ?, outcome_url = ?, outcome_ext_accepted = ?, consumer_key = ?, unlock_at = ?, due_at = ?, lock_at = ? "
                 "WHERE user_id = ? AND course_id = ? AND problem_set_id = ?",
                 (
+                    assignment_title,
                     1 if restricted else 0,
                     new_grade_id if new_grade_id != "" else None,
                     outcome_url,

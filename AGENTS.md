@@ -11,10 +11,18 @@ Core architecture metaphors:
 - CORS for browser clients belongs at the daycare boundary, not the TA boundary.
 - TA and daycare deployments are easy to update together, so protocol migration between them is not a major concern. Student clients are harder to update and run in the wild, so version requirements matter and clients must not be trusted.
 
+Daycare container concurrency policy:
+
+- A daycare intentionally allows only one active execution container per user.
+- Execution container names intentionally include the user id, so Docker refuses to create a second concurrent container for the same user.
+- A later session always kills an earlier session for the same user. This is policy, not an accidental implementation detail.
+- Do not "fix" race conditions by removing the user id from container names, making names unique per session, or otherwise allowing multiple active containers for one user. This single-container policy has repeatedly exposed real race conditions; preserve it and fix those races at their source.
+
 For Python server checks:
 
 - The server is its own uv project under `server/`; run server pytest from that directory with `uv run pytest tests`.
 - Do not run server tests from the repo root with `uv run --project server pytest`; pytest will collect unrelated repo paths such as `certs/` and CLI tests, and imports will not match the server test layout.
+- Stop, start, restart, and check the local CodeGrinder server with `doas rc-service codegrinder-server ...`; do not launch ad hoc background server processes.
 
 For database schema and queries:
 
@@ -53,9 +61,9 @@ For the exam interface under `www/exam`:
 - The CLI command surface is the contract. Every command should be described here before its behavior is changed.
 - Student-visible commands are `version`, `login`, `list`, `get`, `sync`, `grade`, `action`, and `reset`.
 - Cached instructor visibility additionally enables `student`.
-- Cached author visibility additionally enables `create`, `problem`, and `type`.
+- Cached author visibility additionally enables `create` and `type`.
 - Cached admin visibility additionally enables admin-only commands, including `problemtype`. The server must enforce admin permissions for every admin RPC.
-- Cached instructor or author visibility additionally enables `solve`.
+- Cached instructor or author visibility additionally enables `solve` and `problem`.
 - Instructor-only flags `--api` and `--api-dump` report or dump API traffic; they must not change command semantics.
 - Commands that operate on a local assignment must discover the assignment by finding `.grind` in the current directory or an ancestor.
 - Multi-problem assignments require problem-specific author commands to run from inside a concrete problem directory; single-problem assignments use the assignment root as the problem directory.
@@ -85,6 +93,8 @@ For the exam interface under `www/exam`:
 - The server owns assignment visibility, ordering-independent content, availability status, due dates, and user authorization.
 - Some assignments may be hidden from the student by the server when their IP address is filtered, but instructors see all assignments for the courses where they are instructors
 - The CLI sorts the returned assignment items for presentation only; sorting must not change which assignments exist or which are downloadable.
+- The CLI keeps per-course headers, then displays each assignment with the Canvas assignment title, aligned integer completion percentage from the server assignment score, and the configured workspace path using `~` for the home directory when applicable.
+- Per-assignment `grind list` output must not include numbered list prefixes.
 - If no assignments are returned, the CLI explains that assignments must be launched from Canvas before CLI access.
 
 
@@ -230,6 +240,7 @@ For the exam interface under `www/exam`:
   - Persisted solution files must come from the server-verified validation result, and must match the solution files originally prepared for that step.
   - Persisted regular files must match the runtime files that were validated; persisted starter files must match the starter files carried in the signed validation bundle.
   - `SaveProblem` requires exactly one problem step, one solution commit, and one signed validation bundle per step.
+  - A `SAVE_MODE_CREATE` problem save also creates a same-id problem set containing exactly that problem with weight 1 and no step slicing.
   - `grind create --action ACTION` is validation-only/interactive; it must not persist problem data.
 - `grind create PSET.cfg` saves only the problem set membership/weights; it does not prepare or validate problem source material.
 - `grind create PSET.cfg` may save either a complete-problem bundle or a unary step-sliced problem set. It must reject configs that mix multiple problems with slicing.
@@ -246,7 +257,7 @@ For the exam interface under `www/exam`:
 - `grind create --action ACTION` prepares the problem and runs one interactive validation action for the active step only. It must not persist problem data.
 - `grind create PSET.cfg` saves only problem set metadata and membership/weights. It must reject `--action` because problem-set saves do not have daycare actions.
 - Problem-set create/update calls `SaveProblemSet` with explicit `SAVE_MODE_CREATE` or `SAVE_MODE_UPDATE`; the server enforces existence semantics at save time.
-- Problem create/update uses the end-to-end authoring flow described above: for each step refresh canonical type files, run `make clean`, gather author material with client-side pre-filtering for `.git`, `.gitignore`, and canonical type files, call `PrepareProblem`, run every signed validation bundle through daycare, require passing validation, attach the signed validation results, then call `SaveProblem`.
+- Problem create/update uses the end-to-end authoring flow described above: for each step refresh canonical type files, run `make clean`, gather author material with client-side pre-filtering for `.git`, `.gitignore`, and canonical type files, call `PrepareProblem`, run every signed validation bundle through daycare, require passing validation, attach the signed validation results, then call `SaveProblem`. Create mode also creates the default same-id single-problem problem set.
 - The client must not trust its own validation as persistence authority; `SaveProblem` verifies signed validation bundles before writing any problem rows.
 
 # `grind student`
@@ -271,7 +282,7 @@ For the exam interface under `www/exam`:
 
 # `grind problem`
 
-- `grind problem SEARCH...` is an author-visible catalog search command.
+- `grind problem SEARCH...` is an instructor-or-author catalog search command.
 - It requires one or more search terms. Terms search server-owned problem set and problem metadata such as names, notes, and tags.
 - The CLI calls `SearchProblemCatalog` and prints problem set URLs using the configured server host.
 - The server owns catalog visibility, search semantics, and returned metadata.

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
+from pathlib import Path
 
 import codegrinder_pb2 as pb
 
-from helpers import course_directory, dashes
+from helpers import abbreviate_home, course_directory, dashes
 
 
 def sorted_assignment_items(items: Iterable[pb.AssignmentListItem]) -> list[pb.AssignmentListItem]:
@@ -32,22 +33,38 @@ def sorted_student_assignment_items(items: Iterable[pb.AssignmentListItem]) -> l
     )
 
 
-def print_assignment_list(items: Sequence[pb.AssignmentListItem]) -> None:
-    longest_idx = len(str(len(items)))
-    longest_ps = max(len(item.assignment.problem_set_id) for item in items)
+def _pretty_assignment_path(workspace_root: Path, item: pb.AssignmentListItem) -> str:
+    path = workspace_root.expanduser() / course_directory(item.course_name) / item.assignment.problem_set_id
+    return abbreviate_home(path)
+
+
+def _assignment_title(item: pb.AssignmentListItem) -> str:
+    if item.assignment_title:
+        return item.assignment_title
+    if item.problem_set_note:
+        return item.problem_set_note
+    return item.assignment.problem_set_id
+
+
+def print_assignment_list(items: Sequence[pb.AssignmentListItem], workspace_root: Path) -> None:
+    titles = [_assignment_title(item) for item in items]
+    longest_title = max(len(title) for title in titles)
 
     current_course_id = ""
-    for idx, item in enumerate(items, start=1):
-        assignment = item.assignment
-        if assignment.course_id != current_course_id:
+    for item, title in zip(items, titles, strict=True):
+        if item.assignment.course_id != current_course_id:
             if current_course_id != "":
                 print()
-            current_course_id = assignment.course_id
+            current_course_id = item.assignment.course_id
             print(item.course_name)
             print(dashes(len(item.course_name)))
 
-        pset_label = assignment.problem_set_id
-        print(f"{idx:>{longest_idx}}. {pset_label:<{longest_ps}} ({course_directory(item.course_name)}/{pset_label})")
+        percent = round(float(item.assignment_score) * 100)
+        pretty_path = _pretty_assignment_path(workspace_root, item)
+        suffix = ""
+        if item.download_status == pb.ASSIGNMENT_DOWNLOAD_STATUS_PREREQ_NOT_READY:
+            suffix = f" waiting for {item.prerequisite_problem_set_id}"
+        print(f"{title:<{longest_title}}  {percent:>3}% ({pretty_path}){suffix}")
 
 
 def print_problem_catalog(problem_sets: Sequence[pb.ProblemCatalogSet], host: str) -> None:

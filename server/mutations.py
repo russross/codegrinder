@@ -110,6 +110,23 @@ def _problem_to_row(problem: pb.Problem) -> tuple[str, str, str, str, str, str]:
     )
 
 
+def _create_default_problem_set(tx: sqlite3.Connection, problem: pb.Problem) -> None:
+    now_sql = _rfc3339_round_sec(_timestamp_now())
+    tags_json = json.dumps(list(problem.problem_tags))
+    try:
+        tx.execute(
+            "INSERT INTO problem_sets(problem_set_id, problem_set_note, problem_set_tags, problem_set_created_at, problem_set_updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (problem.problem_id, problem.problem_note, tags_json, now_sql, now_sql),
+        )
+    except sqlite3.IntegrityError as exc:
+        raise ValueError(f"problem set {problem.problem_id!r} already exists") from exc
+    tx.execute(
+        "INSERT INTO problem_set_problems(problem_set_id, problem_id, problem_weight) VALUES (?, ?, ?)",
+        (problem.problem_id, problem.problem_id, 1),
+    )
+
+
 def _save_problem_step_files(
     tx: sqlite3.Connection,
     problem_id: str,
@@ -669,6 +686,8 @@ def save_problem(
         "DELETE FROM problem_steps WHERE problem_id = ? AND step_number > ?",
         (bundle.problem.problem_id, len(bundle.problem_steps)),
     )
+    if mode == pb.SAVE_MODE_CREATE:
+        _create_default_problem_set(tx, bundle.problem)
     return bundle
 
 

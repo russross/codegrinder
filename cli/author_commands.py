@@ -33,6 +33,8 @@ def command_problem(args: argparse.Namespace) -> None:
         )
 
     with managed_client(args) as env:
+        if not env.session.user.is_author and not env.session.user.is_instructor:
+            fail("you must be an author or instructor to use this command")
         catalog_resp = env.client.search_problem_catalog(args.problem_args)
         problem_sets = sorted(catalog_resp.problem_sets, key=lambda ps: ps.problem_set_id.lower())
         if not problem_sets:

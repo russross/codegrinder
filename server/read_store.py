@@ -65,8 +65,9 @@ def get_assignment_list_items_pb(
         conn,
         "SELECT "
         "assignment_user_id, course_id, problem_set_id, "
+        "assignment_title, assignment_score, "
         "unlock_at, due_at, lock_at, download_status, "
-        "problem_set_note, course_name, "
+        "problem_set_note, prerequisite_problem_set_id, course_name, "
         "user_name, user_login "
         "FROM accessible_assignment_fields "
         + _where_clause(conditions)
@@ -82,6 +83,8 @@ def get_assignment_list_items_pb(
                 problem_set_id=str(row["problem_set_id"] or ""),
             ),
             problem_set_note=str(row["problem_set_note"] or ""),
+            assignment_title=str(row["assignment_title"] or ""),
+            assignment_score=float(row["assignment_score"] or 0.0),
             unlock_at=to_timestamp(row["unlock_at"]),
             due_at=to_timestamp(row["due_at"]),
             lock_at=to_timestamp(row["lock_at"]),
@@ -89,6 +92,7 @@ def get_assignment_list_items_pb(
             user_name=str(row["user_name"] or ""),
             user_login=str(row["user_login"] or ""),
             download_status=_assignment_download_status(row["download_status"]),
+            prerequisite_problem_set_id=str(row["prerequisite_problem_set_id"] or ""),
         )
         for row in rows
     ]
@@ -241,7 +245,8 @@ def get_assignment_summary_pb(
     assignment_row = _q1(
         conn,
         "SELECT "
-        "assignment_user_id, course_id, problem_set_id, course_name, problem_set_note, download_status "
+        "assignment_user_id, course_id, problem_set_id, course_name, problem_set_note, "
+        "download_status, prerequisite_problem_set_id "
         "FROM accessible_assignment_fields "
         "WHERE assignment_user_id = ? AND course_id = ? AND problem_set_id = ? "
         "AND viewer_user_id = ? AND (? OR NOT restricted)",
@@ -281,6 +286,7 @@ def get_assignment_summary_pb(
         course_name=str(assignment_row["course_name"]),
         problems=problems,
         download_status=_assignment_download_status(assignment_row["download_status"]),
+        prerequisite_problem_set_id=str(assignment_row["prerequisite_problem_set_id"] or ""),
     )
 
 

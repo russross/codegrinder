@@ -42,6 +42,7 @@ def _launch_form() -> dict[str, list[str]]:
         "context_label": ["CSE101"],
         "context_id": ["course-1"],
         "resource_link_id": ["asst-1"],
+        "resource_link_title": ["Canvas Assignment Title"],
         "lis_result_sourcedid": ["grade-1"],
         "lis_outcome_service_url": ["https://canvas.invalid/outcome"],
         "ext_outcome_data_values_accepted": ["url,text"],
@@ -142,6 +143,7 @@ class LTITests(unittest.TestCase):
         ).fetchone()
         self.assertIsNotNone(assignment)
         self.assertEqual(int(assignment["restricted"]), 0)
+        self.assertEqual(str(assignment["assignment_title"]), "Canvas Assignment Title")
 
     def test_lti_launch_restricts_exam_ui_by_ip_for_non_instructor(self) -> None:
         service = self._service(ip_filter=IPFilter.from_entries(["10.0.0.0/24"]))

@@ -82,11 +82,12 @@ def _build_parser() -> argparse.ArgumentParser:
         solve_cmd.add_argument("extra", nargs="*")
         solve_cmd.set_defaults(func=command_solve)
 
-    if is_author:
-        problem_cmd = subs.add_parser("problem", help="find a problem set URL (authors only)")
+    if is_instructor or is_author:
+        problem_cmd = subs.add_parser("problem", help="find a problem set URL")
         problem_cmd.add_argument("problem_args", nargs="*")
         problem_cmd.set_defaults(func=command_problem)
 
+    if is_author:
         type_cmd = subs.add_parser("type", help="download files for a problem type (authors only)")
         type_cmd.add_argument("-r", "--remove", action="store_true")
         type_cmd.add_argument("-l", "--list", action="store_true")

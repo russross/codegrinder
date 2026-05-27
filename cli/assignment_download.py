@@ -9,7 +9,7 @@ from typing import Protocol
 import codegrinder_pb2 as pb
 
 from errors import CliError, fail
-from helpers import course_directory, load_dotfile, save_dotfile
+from helpers import abbreviate_home, course_directory, load_dotfile, save_dotfile
 from models import AssignmentRef, DotFileInfo, ProblemInfo
 from workspace_files import update_files, workspace_file_map
 
@@ -157,7 +157,7 @@ def download_assignment_to_root(
 ) -> Path:
     info_resp = client.get_assignment(assignment)
     target_dir = assignment_directory(root_dir, info_resp.course_name, info_resp.assignment.problem_set_id)
-    pretty_full = str(Path(pretty_root) / course_directory(info_resp.course_name) / info_resp.assignment.problem_set_id)
+    pretty_full = abbreviate_home(Path(pretty_root) / course_directory(info_resp.course_name) / info_resp.assignment.problem_set_id)
     if target_dir.exists():
         fail(f"directory {pretty_full} already exists\ndelete it first if you want to re-download the assignment")
     return download_assignment_summary(client, info_resp, target_dir, pretty_full)

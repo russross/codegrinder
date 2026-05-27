@@ -225,6 +225,7 @@ CREATE TABLE assignments (
     user_id                 text NOT NULL,
     course_id               text NOT NULL,
     problem_set_id          text NOT NULL,
+    assignment_title        text NOT NULL DEFAULT '',
 
     restricted              boolean NOT NULL,
     grade_id                text,
@@ -240,6 +241,7 @@ CREATE TABLE assignments (
     FOREIGN KEY (user_id, course_id) REFERENCES user_courses (user_id, course_id) ON DELETE CASCADE ON UPDATE CASCADE,
     FOREIGN KEY (problem_set_id) REFERENCES problem_sets (problem_set_id) ON DELETE CASCADE ON UPDATE CASCADE,
     UNIQUE (grade_id),
+    CHECK (trim(assignment_title) = assignment_title),
     CHECK (restricted IN (0, 1)),
     CHECK (grade_id IS NULL OR (trim(grade_id) = grade_id AND length(grade_id) > 0)),
     CHECK (trim(outcome_url) = outcome_url AND length(outcome_url) > 0),
@@ -404,6 +406,7 @@ CREATE VIEW assignment_list_fields AS
         assignments.user_id,
         assignments.course_id,
         assignments.problem_set_id,
+        assignments.assignment_title,
         assignments.unlock_at,
         assignments.due_at,
         assignments.lock_at,
@@ -426,17 +429,21 @@ CREATE VIEW assignment_list_fields AS
             ) THEN 1
             ELSE 0
         END AS prereq_ready,
+        problem_sets.continues_problem_set_id AS prerequisite_problem_set_id,
         problem_sets.problem_set_note,
+        COALESCE(assignment_scores.assignment_score, 0.0) AS assignment_score,
         courses.course_name,
         users.user_name,
         users.user_login,
         courses.course_name || ',' ||
         users.user_name || ',' || users.user_login || ',' ||
-        problem_sets.problem_set_id || ',' || problem_sets.problem_set_note || ',' || problem_sets.problem_set_tags AS search_text
+        assignments.assignment_title || ',' || problem_sets.problem_set_id || ',' ||
+        problem_sets.problem_set_note || ',' || problem_sets.problem_set_tags AS search_text
     FROM assignments
     NATURAL JOIN courses
     NATURAL JOIN users
-    NATURAL JOIN problem_sets;
+    NATURAL JOIN problem_sets
+    NATURAL LEFT JOIN assignment_scores;
 
 CREATE VIEW accessible_assignment_fields AS
     SELECT
@@ -447,6 +454,7 @@ CREATE VIEW accessible_assignment_fields AS
         accessible_assignments.is_owner,
         accessible_assignments.is_course_instructor,
         accessible_assignments.restricted,
+        assignment_list_fields.assignment_title,
         assignment_list_fields.unlock_at,
         assignment_list_fields.due_at,
         assignment_list_fields.lock_at,
@@ -462,6 +470,8 @@ CREATE VIEW accessible_assignment_fields AS
             ELSE 0
         END AS download_available,
         assignment_list_fields.problem_set_note,
+        assignment_list_fields.assignment_score,
+        assignment_list_fields.prerequisite_problem_set_id,
         assignment_list_fields.course_name,
         assignment_list_fields.user_name,
         assignment_list_fields.user_login,

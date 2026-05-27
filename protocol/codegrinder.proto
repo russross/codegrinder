@@ -282,6 +282,9 @@ message AssignmentListItem {
   string user_login = 8;
   repeated AssignmentListProblem problems = 9;
   AssignmentDownloadStatus download_status = 10;
+  string assignment_title = 11;
+  double assignment_score = 12;
+  string prerequisite_problem_set_id = 13;
 }
 
 // Response for ListAssignments
@@ -385,6 +388,7 @@ message GetAssignmentResponse {
   string course_name = 3;
   repeated AssignmentProblemProgress problems = 4;
   AssignmentDownloadStatus download_status = 5;
+  string prerequisite_problem_set_id = 6;
 }
 
 enum WorkspaceFileState {
