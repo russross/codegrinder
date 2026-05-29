@@ -21,8 +21,14 @@ Daycare container concurrency policy:
 For Python server checks:
 
 - The server is its own uv project under `server/`; run server pytest from that directory with `uv run pytest tests`.
-- Do not run server tests from the repo root with `uv run --project server pytest`; pytest will collect unrelated repo paths such as `certs/` and CLI tests, and imports will not match the server test layout.
+- Do not run server tests from the repo root with `uv run --project server pytest`; pytest will collect unrelated repo paths such as `certs/`, and imports will not match the server test layout.
 - Stop, start, restart, and check the local CodeGrinder server with `doas rc-service codegrinder-server ...`; do not launch ad hoc background server processes.
+
+For Rust `grind` client checks:
+
+- The Rust client under `grind/` is the default command-line client.
+- Build and check it with `cargo build --manifest-path grind/Cargo.toml`, `cargo test --manifest-path grind/Cargo.toml`, `cargo clippy --manifest-path grind/Cargo.toml -- -D warnings`, and `cargo fmt --manifest-path grind/Cargo.toml --check`.
+- The repo-level `make build` and `make test` targets build and check the Rust `grind` client and the Python server.
 
 For database schema and queries:
 
@@ -46,9 +52,9 @@ For the exam interface under `www/exam`:
 - Use the project-local Node toolchain under `www/exam/.toolchain/node/bin` for npm/proto-generation/build commands when the system `node` is unavailable or mismatched.
 
 
-# CLI Config
+# `grind` Config
 
-- CLI config uses XDG conventions: `$XDG_CONFIG_HOME/codegrinder/config.toml`, defaulting to `~/.config/codegrinder/config.toml`.
+- `grind` config uses XDG conventions: `$XDG_CONFIG_HOME/codegrinder/config.toml`, defaulting to `~/.config/codegrinder/config.toml`.
 - Do not use legacy `~/.codegrinderrc` or `~/.codegrinderinstructor` files.
 - The config file is TOML and is created on login.
 - Login updates the session key, server URL, and cached role flags returned by `Hello`; preserve user-editable settings such as workspace root when the file already exists.
@@ -56,25 +62,26 @@ For the exam interface under `www/exam`:
 - `grind get` has no assignment selector or directory override; it always uses the configured workspace root. Students who want a different root edit the config file by hand.
 - Cached role flags are optional TOML boolean lines. Omit `is_instructor`, `is_author`, and `is_admin` when false; missing means `false`.
 
-# CLI Command Semantics
+# `grind` Command Semantics
 
-- The CLI command surface is the contract. Every command should be described here before its behavior is changed.
+- The `grind` command surface is the contract. Every command should be described here before its behavior is changed.
 - Student-visible commands are `version`, `login`, `list`, `get`, `sync`, `grade`, `action`, and `reset`.
-- Cached instructor visibility additionally enables `student`.
-- Cached author visibility additionally enables `create` and `type`.
-- Cached admin visibility additionally enables admin-only commands, including `problemtype`. The server must enforce admin permissions for every admin RPC.
-- Cached instructor or author visibility additionally enables `solve` and `problem`.
-- Instructor-only flags `--api` and `--api-dump` report or dump API traffic; they must not change command semantics.
+- Cached instructor visibility additionally shows `student` in help.
+- Cached author visibility additionally shows `create` and `type` in help.
+- Cached admin visibility additionally shows admin-only commands, including `problemtype`, in help. The server must enforce admin permissions for every admin RPC.
+- Cached instructor or author visibility additionally shows `solve` and `problem` in help.
+- `--api` and `--api-dump` report or dump API traffic. They are hidden from normal student help output but remain accepted for every role and must not change command semantics.
+- Hidden commands remain invokable by name. Local cached role flags are presentation only; server authorization is authoritative.
 - Commands that operate on a local assignment must discover the assignment by finding `.grind` in the current directory or an ancestor.
 - Multi-problem assignments require problem-specific author commands to run from inside a concrete problem directory; single-problem assignments use the assignment root as the problem directory.
 - Client-side workspace path handling must normalize paths before reading or writing local files. Server-side validation remains authoritative and must reject invalid submitted paths.
-- Non-login commands that load the server session must call `Hello` through `managed_session`, enforce version checks, and use the configured session key as the authentication source.
-- After a successful authenticated `Hello`, the CLI updates cached `is_instructor`, `is_author`, and `is_admin` config flags when they differ from the server response.
+- Non-login commands that load the server session must call `Hello` through the Rust session setup, enforce version checks, and use the configured session key as the authentication source.
+- After a successful authenticated `Hello`, `grind` updates cached `is_instructor`, `is_author`, and `is_admin` config flags when they differ from the server response.
 
 # `grind version`
 
 - `grind version` performs no network calls and reads no config.
-- It prints the local CLI version as `grind {version}`.
+- It prints the local `grind` version as `grind {version}`.
 - It must not depend on login state or server availability.
 
 # `grind login`
@@ -82,7 +89,7 @@ For the exam interface under `www/exam`:
 - `grind login <hostname> <token>` exchanges a Canvas-provided one-time login token for a durable session key by calling `Hello` against the given host.
 - `grind login` with any argument shape other than exactly host and token prints login guidance and fails.
 - The server validates the login token, creates a database-backed session, returns the authenticated user, session key, and version policy.
-- The CLI must reject an empty user response and must run normal version compatibility checks before writing config.
+- `grind` must reject an empty user response and must run normal version compatibility checks before writing config.
 - Login creates or updates the XDG TOML config. It updates host, session key, and cached role flags from `Hello`, and preserves user-editable settings such as workspace root.
 - A successful login prints the authenticated user's display name.
 
@@ -92,15 +99,15 @@ For the exam interface under `www/exam`:
 - It lists assignments visible to the logged-in user by calling `ListAssignments` with no search terms and without student context.
 - The server owns assignment visibility, ordering-independent content, availability status, due dates, and user authorization.
 - Some assignments may be hidden from the student by the server when their IP address is filtered, but instructors see all assignments for the courses where they are instructors
-- The CLI sorts the returned assignment items for presentation only; sorting must not change which assignments exist or which are downloadable.
-- The CLI keeps per-course headers, then displays each assignment with the Canvas assignment title, aligned integer completion percentage from the server assignment score, and the configured workspace path using `~` for the home directory when applicable.
+- `grind` sorts the returned assignment items for presentation only; sorting must not change which assignments exist or which are downloadable.
+- `grind` keeps per-course headers, then displays each assignment with the Canvas assignment title, aligned integer completion percentage from the server assignment score, and the configured workspace path using `~` for the home directory when applicable.
 - Per-assignment `grind list` output must not include numbered list prefixes.
-- If no assignments are returned, the CLI explains that assignments must be launched from Canvas before CLI access.
+- If no assignments are returned, `grind` explains that assignments must be launched from Canvas before command-line access.
 
 
 # Assignment Availability and Locking
 
-- Assignment download availability is server-provided in list responses and should be derived consistently from database views. The CLI should not duplicate open/locked time policy.
+- Assignment download availability is server-provided in list responses and should be derived consistently from database views. `grind` should not duplicate open/locked time policy.
 - `unlock_at` controls whether an assignment is available for download. If it is present and in the future, the server should mark the assignment unavailable for download and refuse workspace download.
 - Problem-set continuation prerequisites also affect download availability. If a sliced problem set continues an earlier sliced problem set and the required previous step is not passed, the server should mark the assignment `ASSIGNMENT_DOWNLOAD_STATUS_PREREQ_NOT_READY` and refuse workspace download.
 - LMS launch should still create or update the assignment row for a prerequisite-blocked continuation; readiness is enforced by `ListAssignments`, `GetAssignment`, and `GetWorkspace`, not by rejecting the launch.
@@ -113,7 +120,7 @@ For the exam interface under `www/exam`:
 # `grind get`
 
 - `grind get` downloads all currently available assignments owned by the logged-in user into the configured workspace root.
-- The CLI must use `ListAssignments` download status to decide which assignments to attempt; it must not reimplement `unlock_at` policy.
+- `grind` must use `ListAssignments` download status to decide which assignments to attempt; it must not reimplement `unlock_at` policy.
 - `GetAssignment` must also report assignment download status so assignment summaries and workspace download use one server-owned availability concept.
 - The server must enforce download availability again in `GetWorkspace`; list filtering is not a security boundary.
 - Assignment directories are `$workspace_root/$course_directory/$problem_set_id`.
@@ -124,24 +131,24 @@ For the exam interface under `www/exam`:
 - Workspace file state has three current meanings: unspecified/missing request state, current saved/student state, and step-start reset state.
 - `WORKSPACE_FILE_STATE_UNSPECIFIED` means the caller omitted a required choice and `GetWorkspace` must reject it.
 - `GetWorkspace` must reject unspecified and unknown file-state enum values.
-- Workspace paths returned by the server and written by the CLI must be relative, normalized, and must not contain absolute paths, `.` components, `..` components, or backslashes.
+- Workspace paths returned by the server and written by `grind` must be relative, normalized, and must not contain absolute paths, `.` components, `..` components, or backslashes.
 - `lock_at` does not prevent `grind get`; only `unlock_at` controls download availability, and only for students.
 - `grind get` skips `ASSIGNMENT_DOWNLOAD_STATUS_PREREQ_NOT_READY` assignments and prints a warning that the prerequisite assignment is not ready.
 
 # `grind sync`
 
 - `grind sync` has no arguments.
-- The CLI must resolve the current problem from `.grind`, fetch `GetWorkspace` with `WORKSPACE_FILE_STATE_CURRENT`, refresh system-owned files, and submit only student-owned files.
+- `grind` must resolve the current problem from `.grind`, fetch `GetWorkspace` with `WORKSPACE_FILE_STATE_CURRENT`, refresh system-owned files, and submit only student-owned files.
 - `grind sync` must call `SaveWorkspaceCommit`, not `SaveUngradedCommit`; sync is persistence only and must not receive or create a signed daycare runtime bundle.
 - The submitted `Commit` must have empty `action` and note `grind sync`.
 - `SaveWorkspaceCommit` must reject non-empty `action`.
 - `SaveWorkspaceCommit` must ignore transcript, report-card, and score fields. It saves files, note, and timestamps only.
-- Commit save policy belongs in SQLite views. Python maps the view result to `CommitSaveStatus` and does not duplicate lock ownership policy.
+- Commit save policy belongs in SQLite views. Server code maps the view result to `CommitSaveStatus` and does not duplicate lock ownership policy.
 - After `lock_at`, sync must return `COMMIT_SAVE_STATUS_NOT_SAVED_LOCKED` and persist no files. This does not apply to instructors, who are unaffected by `lock_at` and `unlock_at`.
 - Non-owner saves must not persist files and must not silently become owner saves.
 - Submitted commit paths must be normalized server-side and must be student-owned paths from the problem-step solution whitelist.
-- On saved sync, CLI prints `problem {problem_id} step {step} synced`.
-- On locked sync, CLI prints that work was not saved because the assignment is locked.
+- On saved sync, `grind` prints `problem {problem_id} step {step} synced`.
+- On locked sync, `grind` prints that work was not saved because the assignment is locked.
 - After saving, `grind sync` removes local files outside the official workspace path set for the current problem step and prunes empty directories.
 - Sync cleanup must preserve `.git` directories and their contents.
 - The cleanup phase must preserve current system-owned and student-owned files even when the assignment is locked.
@@ -149,26 +156,26 @@ For the exam interface under `www/exam`:
 # `grind grade`
 
 - `grind grade` has no arguments.
-- The CLI must resolve the current problem from `.grind`, fetch `GetWorkspace` with `WORKSPACE_FILE_STATE_CURRENT`, refresh system-owned files, and submit only student-owned files.
+- `grind` must resolve the current problem from `.grind`, fetch `GetWorkspace` with `WORKSPACE_FILE_STATE_CURRENT`, refresh system-owned files, and submit only student-owned files.
 - Client flow is exactly: build `GradingCommit` with action `grade` and note `grind grade`; call `SaveUngradedCommit`; send returned signed runtime bundle to `Daycare`; call `SaveGradedCommit` with the signed daycare result.
 - `SaveUngradedCommit` is a pre-daycare save/sign step. It may persist student files when allowed, but it must not persist transcript/report-card/score and must not run LMS grade passback.
 - `SaveGradedCommit` is the only grade endpoint that may persist report-card/score or run LMS grade passback.
 - Daycare may run after `lock_at`, but both ungraded and graded commit persistence must be disabled for the owner after `lock_at`.
 - LMS grade passback must run only when `SaveGradedCommit` persists a saved owner commit.
-- Commit save policy belongs in SQLite views. Python maps the view result to protocol status and does not duplicate lock ownership policy.
+- Commit save policy belongs in SQLite views. Server code maps the view result to protocol status and does not duplicate lock ownership policy.
 - Submitted commit paths must be normalized server-side and must be student-owned paths from the problem-step solution whitelist.
-- Passing grade means signed daycare commit has `report_card.passed` and `score == 1.0`; the CLI then advances local `.grind` to the next step or reports completion.
-- If grade was locked, the final CLI line must say results were not saved because the assignment is locked.
+- Passing grade means signed daycare commit has `report_card.passed` and `score == 1.0`; `grind` then advances local `.grind` to the next step or reports completion.
+- If grade was locked, the final `grind` line must say results were not saved because the assignment is locked.
 
 # `grind action`
 
 - `grind action [action]` runs an interactive non-grade daycare action for the current problem step.
 - `grind action grade` must fail and tell the user to use `grind grade`; grade is not an interactive action alias.
-- With no action, or with an action not present in the current workspace action map, the CLI lists available non-grade actions and fails.
-- The CLI must resolve the current problem, fetch `GetWorkspace` with `WORKSPACE_FILE_STATE_CURRENT`, refresh system-owned files, and submit only student-owned files.
+- With no action, or with an action not present in the current workspace action map, `grind` lists available non-grade actions and fails.
+- `grind` must resolve the current problem, fetch `GetWorkspace` with `WORKSPACE_FILE_STATE_CURRENT`, refresh system-owned files, and submit only student-owned files.
 - Client flow is: build `GradingCommit` with the requested action and note `grind action {action}`; call `SaveUngradedCommit`; send the returned signed runtime bundle to `Daycare` in interactive mode.
 - `SaveUngradedCommit` may save current student files before action execution when policy allows, but action output is not finalized through `SaveGradedCommit`.
-- If the assignment is locked, the CLI warns that action results will not be saved, but still runs daycare so students can inspect behavior.
+- If the assignment is locked, `grind` warns that action results will not be saved, but still runs daycare so students can inspect behavior.
 - The server must reject unknown, unavailable, or mismatched runtime actions through signed runtime bundle validation; the client-side action check is presentation and early feedback only.
 
 # `grind reset`
@@ -177,8 +184,8 @@ For the exam interface under `www/exam`:
 - It fetches `GetWorkspace` with `WORKSPACE_FILE_STATE_STEP_START` and uses the returned system-owned and student-owned files as the reset source.
 - With no file arguments, it restores missing student-owned files, refreshes system-owned files, and reports modified student-owned files without overwriting them.
 - With file arguments, each argument must match at least one student-owned path for the current step, either by exact normalized path or by basename. Unknown files fail the command.
-- Modified student files that were not requested are left untouched, and the CLI reports that they have been modified.
-- If no student-owned files differ from the beginning of the step, the CLI reports that no student files have been modified.
+- Modified student files that were not requested are left untouched, and `grind` reports that they have been modified.
+- If no student-owned files differ from the beginning of the step, `grind` reports that no student files have been modified.
 - Reset is a local workspace operation. It must not persist a commit, call daycare, advance `.grind`, or change server state.
 
 
@@ -198,23 +205,23 @@ For the exam interface under `www/exam`:
 - Multi-problem problem sets must not use step slicing. This keeps continuation semantics unary.
 - Assignment scoring, progress, workspace reads, and grading context must use the problem-set step scope, not all steps of the underlying problem.
 - Continuation slices do not migrate commits. The first step of a continuation slice uses the previous slice's passed final-step commit files as the current starting student-owned files until the new slice has its own commit.
-- The CLI uploads only:
+- `grind` uploads only:
   - problem/problem-set metadata from `.cfg`
   - ordered steps
   - per-step authored files from the main tree
   - per-step starter files from `_starter/`
   - explicit create/update intent
-- Before gathering each step for `grind create`, the CLI refreshes canonical problem type files for that step and runs `make clean` in the step directory.
-- The CLI does not attempt to identify solution files, system files, or cumulative student-owned files.
-- The CLI does not attempt to stitch together step-to-step continuity.
-- The server remains canonical for `.gitignore` processing, but the CLI pre-filters files that local `.gitignore` rules would ignore before upload.
-- The helper that implements Git-style `.gitignore` matching must exist in both CLI and server as an exact copy for the `dict[str, bytes] -> filtered dict[str, bytes]` logic. If one copy changes, update the other in the same change.
-- The CLI reports whitespace issues but must not normalize file contents.
+- Before gathering each step for `grind create`, `grind` refreshes canonical problem type files for that step and runs `make clean` in the step directory.
+- `grind` does not attempt to identify solution files, system files, or cumulative student-owned files.
+- `grind` does not attempt to stitch together step-to-step continuity.
+- The server remains canonical for `.gitignore` processing, but `grind` pre-filters files that local `.gitignore` rules would ignore before upload.
+- The Rust client and server Git-style `.gitignore` handling must stay behaviorally aligned for uploaded author file trees. If one side changes ignore semantics, update the other in the same change.
+- `grind` reports whitespace issues but must not normalize file contents.
 - Whitespace normalization is removed completely. What the author supplies is what gets stored in the problem.
-- The CLI should report one log line per affected text file for whitespace issues such as non-Unix line endings and trailing spaces, but continue processing.
+- `grind` should report one log line per affected text file for whitespace issues such as non-Unix line endings and trailing spaces, but continue processing.
 - `.gitignore` handling is hierarchical and based on the effective overlaid step tree, not just the uploaded problem files.
 - Problem type files are authoritative and trump uploaded author files.
-- The CLI must not upload `.git` contents or canonical problem type files gathered from the refreshed step tree.
+- `grind` must not upload `.git` contents or canonical problem type files gathered from the refreshed step tree.
 - Server-side file processing order is:
   - start with the uploaded file set
   - overlay canonical problem type files on top
@@ -231,10 +238,10 @@ For the exam interface under `www/exam`:
 - The server strips problem type files from persisted problem step files.
 - Daycare-facing blobs for author validation use the same grading-commit shape as the student grading flow.
 - End-to-end `grind create` problem flow:
-  - CLI builds an `AuthorProblemDraft` from `problem.cfg`, authored files, and `_starter/`.
-  - CLI sends `PrepareProblem`; the server validates author material, overlays problem type files, applies `.gitignore`, infers solution files, builds one signed validation runtime bundle per step, and persists nothing.
-  - CLI runs every signed validation bundle through daycare before `SaveProblem`.
-  - CLI sends `SaveProblem` only after every validation returns a signed runtime bundle with a passing `grade` report card and score `1.0`.
+  - `grind` builds an `AuthorProblemDraft` from `problem.cfg`, authored files, and `_starter/`.
+  - `grind` sends `PrepareProblem`; the server validates author material, overlays problem type files, applies `.gitignore`, infers solution files, builds one signed validation runtime bundle per step, and persists nothing.
+  - `grind` runs every signed validation bundle through daycare before `SaveProblem`.
+  - `grind` sends `SaveProblem` only after every validation returns a signed runtime bundle with a passing `grade` report card and score `1.0`.
   - The server must verify those signed validation bundles during `SaveProblem`; client-side validation is never trusted as the persistence authority.
   - `SaveProblem` must reject missing, extra, unsigned, failed, mismatched, or tampered validation bundles before writing any problem rows.
   - Persisted solution files must come from the server-verified validation result, and must match the solution files originally prepared for that step.
@@ -251,7 +258,7 @@ For the exam interface under `www/exam`:
 
 # `grind create`
 
-- `grind create` is available only when instructor mode is enabled locally. The server must enforce author permissions.
+- `grind create` is hidden from normal help unless cached author mode is enabled locally. Hidden commands remain invokable; the server must enforce author permissions.
 - `grind create` with no positional argument operates on the author problem rooted at the nearest `problem.cfg`.
 - `grind create --update` changes the save mode from create to update for a problem; update mode is invalid with `--action`.
 - `grind create --action ACTION` prepares the problem and runs one interactive validation action for the active step only. It must not persist problem data.
@@ -262,12 +269,12 @@ For the exam interface under `www/exam`:
 
 # `grind student`
 
-- `grind student SEARCH...` is an instructor-visible command for inspecting a student's assignment in a temporary local checkout.
+- `grind student SEARCH...` is hidden from normal help unless cached instructor mode is enabled locally. Hidden commands remain invokable; the server must enforce instructor visibility. The command inspects a student's assignment in a temporary local checkout.
 - It requires search terms; without terms it fails with guidance.
-- The CLI calls `ListAssignments` with the provided search terms and `include_student_context=True`.
+- `grind` calls `ListAssignments` with the provided search terms and `include_student_context=True`.
 - The server owns which student assignments are visible to the instructor and returns the student context needed for presentation.
-- The CLI prints sorted matching assignments grouped by student. If matches cover more than one user, it must fail and ask for narrower terms.
-- If matches cover exactly one user, the CLI downloads the most recent matching assignment into a private temporary directory under `/tmp`, opens an interactive shell in that workspace, and deletes the temporary directory after the shell exits.
+- `grind` prints sorted matching assignments grouped by student. If matches cover more than one user, it must fail and ask for narrower terms.
+- If matches cover exactly one user, `grind` downloads the most recent matching assignment into a private temporary directory under `/tmp`, opens an interactive shell in that workspace, and deletes the temporary directory after the shell exits.
 - Student downloads use the same `GetAssignment` and `GetWorkspace` download semantics as `grind get`, including server-side availability enforcement.
 - `grind student` must not save commits, run daycare, mutate the student's server state, or write into the instructor's configured workspace root.
 
@@ -275,18 +282,18 @@ For the exam interface under `www/exam`:
 
 - `grind solve` is an instructor-or-author command for writing authoritative solution files into the current local problem step.
 - It takes no arguments.
-- The CLI must require an authenticated user whose cached `Hello` roles include `is_author` or `is_instructor`.
+- `grind solve` is hidden from normal help unless cached `Hello` roles include `is_author` or `is_instructor`. Hidden commands remain invokable; the server decides whether solution files may be returned.
 - It resolves the current assignment/problem from `.grind` and fetches `GetWorkspace` with `WORKSPACE_FILE_STATE_CURRENT`, contents included, and solution files included.
-- The server decides whether solution files may be returned. Authors retain current `solve` semantics. Instructors may also fetch solution files, but only for assignments in courses where they are instructors. The CLI must fail if no solution files are present.
-- The CLI writes only the returned solution files into the local problem directory. It must not save a commit, run daycare, advance `.grind`, or modify server state.
+- The server decides whether solution files may be returned. Authors retain current `solve` semantics. Instructors may also fetch solution files, but only for assignments in courses where they are instructors. `grind` must fail if no solution files are present.
+- `grind` writes only the returned solution files into the local problem directory. It must not save a commit, run daycare, advance `.grind`, or modify server state.
 
 # `grind problem`
 
 - `grind problem SEARCH...` is an instructor-or-author catalog search command.
 - It requires one or more search terms. Terms search server-owned problem set and problem metadata such as names, notes, and tags.
-- The CLI calls `SearchProblemCatalog` and prints problem set URLs using the configured server host.
+- `grind` calls `SearchProblemCatalog` and prints problem set URLs using the configured server host.
 - The server owns catalog visibility, search semantics, and returned metadata.
-- The CLI may sort results for presentation only; it must not infer hidden catalog state or perform local database lookups.
+- `grind` may sort results for presentation only; it must not infer hidden catalog state or perform local database lookups.
 
 # `grind type`
 
@@ -295,11 +302,11 @@ For the exam interface under `www/exam`:
 - `grind type TYPE` downloads canonical files for one problem type by calling `GetProblemType(TYPE)` and writing those files into the current directory.
 - `grind type` without a type name must resolve the nearest author `problem.cfg`, determine the active step's configured problem type, and write canonical type files into that step directory. In multi-step layouts it must be run from a step directory.
 - `grind type --remove TYPE` or `grind type --remove` removes the canonical files for the resolved problem type from the target directory.
-- The server owns problem type definitions, canonical files, and action lists. The CLI only writes or removes exactly the returned canonical file paths.
+- The server owns problem type definitions, canonical files, and action lists. `grind` only writes or removes exactly the returned canonical file paths.
 
 # `grind problemtype`
 
-- `grind problemtype` is available only when admin mode is enabled locally. The server must enforce admin permissions for every problem type mutation RPC.
+- `grind problemtype` is hidden from normal help unless cached admin mode is enabled locally. Hidden commands remain invokable; the server must enforce admin permissions for every problem type mutation RPC.
 - Problem type source material lives outside the tracked main repo under ignored `problemtypes/`, which is intended to be its own installation-specific git checkout.
 - The problem type source layout is `problemtypes/types/TYPE/type.conf` for metadata/actions, `problemtypes/types/TYPE/files/` for canonical files, `problemtypes/common/` for shared symlink targets, `problemtypes/containers/NAME/Dockerfile` for container builds, and `problemtypes/bin/` for deployment scripts.
 - `problemtypes/bin/sync-actions [TYPE...]` reads `type.conf` files and calls `grind problemtype action set`; `problemtypes/bin/sync-files [TYPE...]` replaces canonical file sets from `files/`; `problemtypes/bin/build-containers [NAME...]` builds container images.
@@ -312,7 +319,7 @@ For the exam interface under `www/exam`:
 
 # `grind problemtype files`
 
-- `grind problemtype files` is available only when admin mode is enabled locally. The server must enforce admin permissions.
+- `grind problemtype files` is hidden from normal help unless cached admin mode is enabled locally. Hidden commands remain invokable; the server must enforce admin permissions.
 - `grind problemtype files [--type TYPE]` reports the status of the canonical server-owned file set for a problem type compared to local files. It must not detect or report local files that are not in the server-owned file set.
 - Without `--type`, `grind problemtype files` resolves the nearest author `problem.cfg`, determines the active step's configured problem type, and compares against that step directory. In multi-step layouts it must be run from a step directory.
 - `--type TYPE` explicitly selects a problem type and compares against the current directory. There is no shortcut for `--type`.
