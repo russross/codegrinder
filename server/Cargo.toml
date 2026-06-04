@@ -1,0 +1,40 @@
+[package]
+name = "codegrinder-server"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+axum = { workspace = true, features = ["http1", "http2", "tokio", "form", "json"] }
+axum-server = { workspace = true, features = ["tls-rustls"] }
+base64.workspace = true
+bytes.workspace = true
+chrono = { workspace = true, features = ["clock", "serde", "std"] }
+flate2.workspace = true
+hex.workspace = true
+hmac.workspace = true
+http.workspace = true
+ignore.workspace = true
+prost.workspace = true
+prost-types.workspace = true
+rand.workspace = true
+reqwest = { workspace = true, features = ["rustls-tls", "http2"] }
+roxmltree.workspace = true
+rusqlite = { workspace = true, features = ["bundled", "chrono", "serde_json"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "process", "signal", "fs", "io-util", "sync", "time"] }
+tokio-stream.workspace = true
+tonic = { workspace = true, features = ["transport", "codegen", "tls-ring", "gzip"] }
+tonic-prost.workspace = true
+tonic-web.workspace = true
+tower.workspace = true
+tower-http = { workspace = true, features = ["compression-gzip", "cors", "fs", "trace"] }
+url.workspace = true
+urlencoding.workspace = true
+
+[build-dependencies]
+tonic-prost-build.workspace = true

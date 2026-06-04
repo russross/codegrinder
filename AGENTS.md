@@ -18,17 +18,21 @@ Daycare container concurrency policy:
 - A later session always kills an earlier session for the same user. This is policy, not an accidental implementation detail.
 - Do not "fix" race conditions by removing the user id from container names, making names unique per session, or otherwise allowing multiple active containers for one user. This single-container policy has repeatedly exposed real race conditions; preserve it and fix those races at their source.
 
-For Python server checks:
+For Rust server startup and checks:
 
-- The server is its own uv project under `server/`; run server pytest from that directory with `uv run pytest tests`.
-- Do not run server tests from the repo root with `uv run --project server pytest`; pytest will collect unrelated repo paths such as `certs/`, and imports will not match the server test layout.
+- The production server lives under `server/` as the Rust `codegrinder-server` crate. The old Python server is kept only for port comparison under `pyserver/`.
+- The Rust server binds directly on the HTTPS port, loads TLS certificates from config paths, and demultiplexes gRPC, gRPC-Web, LTI HTTPS, and static-file HTTPS requests itself. Do not assume nginx is in front of the Rust server.
+- Certificates are managed externally, for example by cron or another renewal job. The Rust server should use the certificates it finds and should not manage ACME/certbot itself.
+- The server supports `-ta` and `-daycare` roles. Either role may be enabled alone, both may be enabled together, and omitting both role flags means both roles are enabled.
+- TA role serves LTI, version/daycare-registration HTTPS routes, static files, and TA gRPC methods. Daycare role serves the `Daycare` gRPC runtime path and registers the local daycare capacity when configured.
+- Build and check the Rust server with `cargo build -p codegrinder-server`, `cargo test -p codegrinder-server`, `cargo clippy -p codegrinder-server -- -D warnings`, and `cargo fmt --all --check`.
 - Stop, start, restart, and check the local CodeGrinder server with `doas rc-service codegrinder-server ...`; do not launch ad hoc background server processes.
 
 For Rust `grind` client checks:
 
 - The Rust client under `grind/` is the default command-line client.
-- Build and check it with `cargo build --manifest-path grind/Cargo.toml`, `cargo test --manifest-path grind/Cargo.toml`, `cargo clippy --manifest-path grind/Cargo.toml -- -D warnings`, and `cargo fmt --manifest-path grind/Cargo.toml --check`.
-- The repo-level `make build` and `make test` targets build and check the Rust `grind` client and the Python server.
+- Build and check it with `cargo build -p grind`, `cargo test -p grind`, `cargo clippy -p grind -- -D warnings`, and `cargo fmt --all --check`.
+- The repo-level Rust workspace owns shared dependency versions, the single `Cargo.lock`, and the shared `target/` build cache. The repo-level `make build` and `make test` targets build and check the Rust server and the Rust `grind` client.
 
 For database schema and queries:
 
@@ -111,9 +115,11 @@ For the exam interface under `www/exam`:
 - `unlock_at` controls whether an assignment is available for download. If it is present and in the future, the server should mark the assignment unavailable for download and refuse workspace download.
 - Problem-set continuation prerequisites also affect download availability. If a sliced problem set continues an earlier sliced problem set and the required previous step is not passed, the server should mark the assignment `ASSIGNMENT_DOWNLOAD_STATUS_PREREQ_NOT_READY` and refuse workspace download.
 - LMS launch should still create or update the assignment row for a prerequisite-blocked continuation; readiness is enforced by `ListAssignments`, `GetAssignment`, and `GetWorkspace`, not by rejecting the launch.
-- `lock_at` does not hide assignments and does not prevent workspace download or daycare actions, including grade.
-- After `lock_at`, student-owned assignment commits must not be persisted and grade passback must not run, but daycare actions should still run so students can see results.
-- After a locked `grind grade`, the final line shown to the student must clearly say the results were not saved because the assignment is locked.
+- `lock_at` does not hide assignments and does not prevent workspace download, persistence, step advancement, continuation prerequisites, or daycare actions, including grade.
+- After `lock_at`, student-owned assignment commits must still be persisted so students can continue making progress through steps and across continued problem sets.
+- After `lock_at`, LMS grade passback must not run for students. A later extension can be picked up by relaunching the assignment from the LMS and then rerunning the latest grade action.
+- The database records grade passback state for admin inspection. At minimum it distinguishes posted, post pending, not posted because no LMS postback target is available, and not posted because the assignment lock date has passed.
+- After a locked `grind grade`, the final line shown to the student must clearly say the grade was not posted to the LMS because the assignment is locked.
 - `lock_at` and `unlock_at` do not apply to instructors for the course.
 
 
@@ -143,12 +149,11 @@ For the exam interface under `www/exam`:
 - The submitted `Commit` must have empty `action` and note `grind sync`.
 - `SaveWorkspaceCommit` must reject non-empty `action`.
 - `SaveWorkspaceCommit` must ignore transcript, report-card, and score fields. It saves files, note, and timestamps only.
-- Commit save policy belongs in SQLite views. Server code maps the view result to `CommitSaveStatus` and does not duplicate lock ownership policy.
-- After `lock_at`, sync must return `COMMIT_SAVE_STATUS_NOT_SAVED_LOCKED` and persist no files. This does not apply to instructors, who are unaffected by `lock_at` and `unlock_at`.
+- Commit save policy belongs in SQLite views. Server code maps the view result to `CommitSaveStatus` and does not duplicate ownership policy.
+- After `lock_at`, sync still persists owner files. This does not apply to instructors, who are unaffected by `lock_at` and `unlock_at`.
 - Non-owner saves must not persist files and must not silently become owner saves.
 - Submitted commit paths must be normalized server-side and must be student-owned paths from the problem-step solution whitelist.
 - On saved sync, `grind` prints `problem {problem_id} step {step} synced`.
-- On locked sync, `grind` prints that work was not saved because the assignment is locked.
 - After saving, `grind sync` removes local files outside the official workspace path set for the current problem step and prunes empty directories.
 - Sync cleanup must preserve `.git` directories and their contents.
 - The cleanup phase must preserve current system-owned and student-owned files even when the assignment is locked.
@@ -160,12 +165,12 @@ For the exam interface under `www/exam`:
 - Client flow is exactly: build `GradingCommit` with action `grade` and note `grind grade`; call `SaveUngradedCommit`; send returned signed runtime bundle to `Daycare`; call `SaveGradedCommit` with the signed daycare result.
 - `SaveUngradedCommit` is a pre-daycare save/sign step. It may persist student files when allowed, but it must not persist transcript/report-card/score and must not run LMS grade passback.
 - `SaveGradedCommit` is the only grade endpoint that may persist report-card/score or run LMS grade passback.
-- Daycare may run after `lock_at`, but both ungraded and graded commit persistence must be disabled for the owner after `lock_at`.
-- LMS grade passback must run only when `SaveGradedCommit` persists a saved owner commit.
-- Commit save policy belongs in SQLite views. Server code maps the view result to protocol status and does not duplicate lock ownership policy.
+- Daycare may run after `lock_at`, and both ungraded and graded owner commits must still be persisted after `lock_at`.
+- LMS grade passback must run only when `SaveGradedCommit` persists a saved owner commit and the assignment is not locked.
+- Commit save policy belongs in SQLite views. Server code maps the view result to protocol status and does not duplicate ownership policy.
 - Submitted commit paths must be normalized server-side and must be student-owned paths from the problem-step solution whitelist.
 - Passing grade means signed daycare commit has `report_card.passed` and `score == 1.0`; `grind` then advances local `.grind` to the next step or reports completion.
-- If grade was locked, the final `grind` line must say results were not saved because the assignment is locked.
+- If grade was locked, the final `grind` line must say the grade was not posted to the LMS because the assignment is locked.
 
 # `grind action`
 
@@ -175,7 +180,7 @@ For the exam interface under `www/exam`:
 - `grind` must resolve the current problem, fetch `GetWorkspace` with `WORKSPACE_FILE_STATE_CURRENT`, refresh system-owned files, and submit only student-owned files.
 - Client flow is: build `GradingCommit` with the requested action and note `grind action {action}`; call `SaveUngradedCommit`; send the returned signed runtime bundle to `Daycare` in interactive mode.
 - `SaveUngradedCommit` may save current student files before action execution when policy allows, but action output is not finalized through `SaveGradedCommit`.
-- If the assignment is locked, `grind` warns that action results will not be saved, but still runs daycare so students can inspect behavior.
+- If the assignment is locked, `grind action` still persists pre-action student files when policy allows and still runs daycare so students can inspect behavior.
 - The server must reject unknown, unavailable, or mismatched runtime actions through signed runtime bundle validation; the client-side action check is presentation and early feedback only.
 
 # `grind reset`

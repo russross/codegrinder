@@ -12,8 +12,7 @@ use crate::files::{
     workspace_official_paths,
 };
 use crate::proto::codegrinder::{
-    AssignmentKey, Commit, CommitSaveStatus, GetWorkspaceResponse, GradingCommit,
-    WorkspaceFileState,
+    AssignmentKey, Commit, GetWorkspaceResponse, GradingCommit, WorkspaceFileState,
 };
 use crate::transcript::dump_transcript;
 use prost_types::Timestamp;
@@ -39,9 +38,7 @@ pub async fn command_sync(extra: Vec<String>, trace: ApiTrace) -> Result<()> {
     let mut session = connect(trace).await?;
     let student = gather_student_context(&mut session, Path::new(".")).await?;
     let response = save_current_student_files(&mut session, &student, "grind sync").await?;
-    if response.save_status() == CommitSaveStatus::NotSavedLocked {
-        println!("work was not saved because the assignment is locked");
-    }
+    let _ = response;
     clean_workspace_tree(
         &student.problem_dir,
         &workspace_official_paths(&student.workspace)?,
@@ -59,6 +56,7 @@ pub async fn command_grade(extra: Vec<String>, trace: ApiTrace) -> Result<()> {
     }
     let mut session = connect(trace).await?;
     let mut student = gather_student_context(&mut session, Path::new(".")).await?;
+    let locked_for_lms = assignment_locked_for_lms(&mut session, &student).await?;
     let unsigned = build_grading_commit(&session.user.user_id, &student, "grade", "grind grade");
     let signed_resp = session.save_ungraded_commit(unsigned).await?;
     let signed = signed_resp.bundle.unwrap_or_default();
@@ -78,15 +76,12 @@ pub async fn command_grade(extra: Vec<String>, trace: ApiTrace) -> Result<()> {
                 "the server ended the connection without sending a report card".to_string(),
             )
         })?;
-    let saved_resp = session.save_graded_commit(graded.clone()).await?;
+    session.save_graded_commit(graded.clone()).await?;
     let graded_bundle = decode_signed_runtime(&graded)?;
     let saved_commit = graded_bundle.commit.unwrap_or_default();
-    let locked = saved_resp.save_status() == CommitSaveStatus::NotSavedLocked;
     if commit_passed(&saved_commit) {
         println!("step {} passed", saved_commit.step);
-        if locked {
-            println!("results were not saved because the assignment is locked");
-        } else if student.workspace.step_number >= student.workspace.last_step_number {
+        if student.workspace.step_number >= student.workspace.last_step_number {
             println!("you have completed all steps for this problem");
         } else {
             let next_step_number = student.workspace.step_number + 1;
@@ -124,9 +119,9 @@ pub async fn command_grade(extra: Vec<String>, trace: ApiTrace) -> Result<()> {
         if !transcript.is_empty() && !transcript.ends_with('\n') && !transcript.ends_with('\r') {
             println!();
         }
-        if locked {
-            println!("results were not saved because the assignment is locked");
-        }
+    }
+    if locked_for_lms {
+        println!("grade was not posted to the LMS because the assignment is locked");
     }
     Ok(())
 }
@@ -168,9 +163,6 @@ pub async fn command_action(action_args: Vec<String>, trace: ApiTrace) -> Result
         &format!("grind action {action}"),
     );
     let signed_resp = session.save_ungraded_commit(unsigned).await?;
-    if signed_resp.save_status() == CommitSaveStatus::NotSavedLocked {
-        println!("warning: assignment is locked; action results will not be saved");
-    }
     let signed = signed_resp.bundle.unwrap_or_default();
     parse_signed_runtime_bundle(
         &signed,
@@ -182,6 +174,29 @@ pub async fn command_action(action_args: Vec<String>, trace: ApiTrace) -> Result
     );
     handle_daycare_stream(&mut session, signed, Vec::new(), Path::new("."), true).await?;
     Ok(())
+}
+
+async fn assignment_locked_for_lms(
+    session: &mut Session,
+    student: &StudentCommandContext,
+) -> Result<bool> {
+    let assignment = student.commit.assignment.clone().unwrap_or_default();
+    let response = session.list_assignments(Vec::new(), false).await?;
+    Ok(response
+        .items
+        .iter()
+        .find(|item| item.assignment.as_ref() == Some(&assignment))
+        .and_then(|item| item.lock_at.as_ref())
+        .is_some_and(timestamp_has_passed))
+}
+
+fn timestamp_has_passed(timestamp: &Timestamp) -> bool {
+    let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH) else {
+        return false;
+    };
+    timestamp.seconds < now.as_secs() as i64
+        || (timestamp.seconds == now.as_secs() as i64
+            && timestamp.nanos <= i32::try_from(now.subsec_nanos()).unwrap_or_default())
 }
 
 pub async fn command_reset(reset_args: Vec<String>, trace: ApiTrace) -> Result<()> {

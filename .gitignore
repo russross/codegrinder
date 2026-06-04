@@ -10,3 +10,4 @@ daycare-mounts
 problemtypes
 .ruff_cache
 TODO.md
+/target/

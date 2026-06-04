@@ -232,6 +232,7 @@ CREATE TABLE assignments (
     outcome_url             text NOT NULL,
     outcome_ext_accepted    text NOT NULL,
     consumer_key            text NOT NULL,
+    grade_passback_status   text NOT NULL DEFAULT 'not_posted_no_target',
 
     unlock_at               datetime,
     due_at                  datetime,
@@ -247,6 +248,7 @@ CREATE TABLE assignments (
     CHECK (trim(outcome_url) = outcome_url AND length(outcome_url) > 0),
     CHECK (trim(outcome_ext_accepted) = outcome_ext_accepted AND length(outcome_ext_accepted) > 0),
     CHECK (trim(consumer_key) = consumer_key AND length(consumer_key) > 0),
+    CHECK (grade_passback_status IN ('posted', 'post_pending', 'post_failed', 'not_posted_no_target', 'not_posted_locked')),
     CHECK (unlock_at IS NULL OR due_at IS NULL OR unlock_at <= due_at),
     CHECK (due_at IS NULL OR lock_at IS NULL OR due_at <= lock_at)
 ) WITHOUT ROWID;
@@ -510,18 +512,10 @@ CREATE VIEW accessible_assignment_commit_policy AS
             ELSE 0
         END AS locked,
         CASE
-            WHEN is_owner
-                AND NOT (lock_at IS NOT NULL AND datetime(lock_at) <= CURRENT_TIMESTAMP)
-            THEN 1
+            WHEN is_owner THEN 1
             ELSE 0
         END AS can_save_commit,
-        CASE
-            WHEN is_owner
-                AND lock_at IS NOT NULL
-                AND datetime(lock_at) <= CURRENT_TIMESTAMP
-            THEN 1
-            ELSE 0
-        END AS not_saved_locked,
+        0 AS not_saved_locked,
         CASE
             WHEN NOT is_owner THEN 1
             ELSE 0
