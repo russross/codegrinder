@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use axum::extract::ConnectInfo;
 use rusqlite::{Connection, OptionalExtension, params};
@@ -95,7 +96,7 @@ impl CodeGrinderServer {
             .to_owned();
         let config = self.config.clone();
         self.db
-            .transaction(move |conn| {
+            .transaction_until(request_deadline(request), move |conn| {
                 let user_id =
                     load_session_user_id(conn, &session_key, &config.session_secret, now_utc())?;
                 store::load_user_by_id(conn, &user_id)
@@ -162,6 +163,7 @@ impl CodeGrinderService for CodeGrinderServer {
         self.require_ta_role().map_err(AppError::grpc_status)?;
         let config = self.config.clone();
         let version = self.version();
+        let deadline = request_deadline(&request);
         let token = request.get_ref().token.clone();
         if !token.is_empty() {
             let user_id = self
@@ -170,7 +172,7 @@ impl CodeGrinderService for CodeGrinderServer {
                 .map_err(AppError::grpc_status)?;
             let response = self
                 .db
-                .transaction(move |conn| {
+                .transaction_until(deadline, move |conn| {
                     let user = store::load_user_by_id(conn, &user_id)?;
                     let session = create_session(
                         conn,
@@ -197,6 +199,7 @@ impl CodeGrinderService for CodeGrinderServer {
         request: Request<ListAssignmentsRequest>,
     ) -> Result<Response<ListAssignmentsResponse>, Status> {
         self.require_ta_role().map_err(AppError::grpc_status)?;
+        let deadline = request_deadline(&request);
         let ip_allowed = self.ip_allowed(&request);
         let current_user = self
             .authenticated_user(&request)
@@ -205,7 +208,7 @@ impl CodeGrinderService for CodeGrinderServer {
         let req = request.into_inner();
         let items = self
             .db
-            .transaction(move |conn| {
+            .transaction_until(deadline, move |conn| {
                 store::list_assignments(
                     conn,
                     &current_user,
@@ -224,6 +227,7 @@ impl CodeGrinderService for CodeGrinderServer {
         request: Request<SearchProblemCatalogRequest>,
     ) -> Result<Response<SearchProblemCatalogResponse>, Status> {
         self.require_ta_role().map_err(AppError::grpc_status)?;
+        let deadline = request_deadline(&request);
         let current_user = self
             .authenticated_user(&request)
             .await
@@ -232,7 +236,7 @@ impl CodeGrinderService for CodeGrinderServer {
         let req = request.into_inner();
         let problem_sets = self
             .db
-            .transaction(move |conn| {
+            .transaction_until(deadline, move |conn| {
                 store::search_problem_catalog(conn, &current_user, &req.search)
             })
             .await
@@ -242,12 +246,13 @@ impl CodeGrinderService for CodeGrinderServer {
 
     async fn get_problem_types(
         &self,
-        _request: Request<GetProblemTypesRequest>,
+        request: Request<GetProblemTypesRequest>,
     ) -> Result<Response<GetProblemTypesResponse>, Status> {
         self.require_ta_role().map_err(AppError::grpc_status)?;
+        let deadline = request_deadline(&request);
         let problem_types = self
             .db
-            .transaction(store::list_problem_types)
+            .transaction_until(deadline, store::list_problem_types)
             .await
             .map_err(AppError::grpc_status)?;
         Ok(Response::new(GetProblemTypesResponse { problem_types }))
@@ -258,10 +263,13 @@ impl CodeGrinderService for CodeGrinderServer {
         request: Request<GetProblemTypeRequest>,
     ) -> Result<Response<GetProblemTypeResponse>, Status> {
         self.require_ta_role().map_err(AppError::grpc_status)?;
+        let deadline = request_deadline(&request);
         let problem_type_name = request.into_inner().problem_type;
         let problem_type = self
             .db
-            .transaction(move |conn| store::load_problem_type(conn, &problem_type_name))
+            .transaction_until(deadline, move |conn| {
+                store::load_problem_type(conn, &problem_type_name)
+            })
             .await
             .map_err(AppError::grpc_status)?;
         Ok(Response::new(GetProblemTypeResponse {
@@ -274,6 +282,7 @@ impl CodeGrinderService for CodeGrinderServer {
         request: Request<SaveProblemTypeFilesRequest>,
     ) -> Result<Response<SaveProblemTypeFilesResponse>, Status> {
         self.require_ta_role().map_err(AppError::grpc_status)?;
+        let deadline = request_deadline(&request);
         let current_user = self
             .authenticated_user(&request)
             .await
@@ -282,7 +291,7 @@ impl CodeGrinderService for CodeGrinderServer {
         let req = request.into_inner();
         let problem_type = self
             .db
-            .transaction(move |conn| {
+            .transaction_until(deadline, move |conn| {
                 mutations::save_problem_type_files(conn, &req.problem_type, &req.files)
             })
             .await
@@ -297,6 +306,7 @@ impl CodeGrinderService for CodeGrinderServer {
         request: Request<SaveProblemTypeRequest>,
     ) -> Result<Response<SaveProblemTypeResponse>, Status> {
         self.require_ta_role().map_err(AppError::grpc_status)?;
+        let deadline = request_deadline(&request);
         let current_user = self
             .authenticated_user(&request)
             .await
@@ -305,7 +315,7 @@ impl CodeGrinderService for CodeGrinderServer {
         let req = request.into_inner();
         let problem_types = self
             .db
-            .transaction(move |conn| {
+            .transaction_until(deadline, move |conn| {
                 mutations::save_problem_type(conn, &req.problem_type, &req.container, &req.actions)
             })
             .await
@@ -318,6 +328,7 @@ impl CodeGrinderService for CodeGrinderServer {
         request: Request<GetAssignmentRequest>,
     ) -> Result<Response<GetAssignmentResponse>, Status> {
         self.require_ta_role().map_err(AppError::grpc_status)?;
+        let deadline = request_deadline(&request);
         let ip_allowed = self.ip_allowed(&request);
         let current_user = self
             .authenticated_user(&request)
@@ -329,7 +340,9 @@ impl CodeGrinderService for CodeGrinderServer {
             .ok_or_else(|| Status::invalid_argument("assignment is required"))?;
         let response = self
             .db
-            .transaction(move |conn| store::get_assignment(conn, &current_user, &key, ip_allowed))
+            .transaction_until(deadline, move |conn| {
+                store::get_assignment(conn, &current_user, &key, ip_allowed)
+            })
             .await
             .map_err(AppError::grpc_status)?;
         Ok(Response::new(response))
@@ -340,6 +353,7 @@ impl CodeGrinderService for CodeGrinderServer {
         request: Request<GetWorkspaceRequest>,
     ) -> Result<Response<GetWorkspaceResponse>, Status> {
         self.require_ta_role().map_err(AppError::grpc_status)?;
+        let deadline = request_deadline(&request);
         let ip_allowed = self.ip_allowed(&request);
         let current_user = self
             .authenticated_user(&request)
@@ -351,7 +365,7 @@ impl CodeGrinderService for CodeGrinderServer {
             .ok_or_else(|| Status::invalid_argument("assignment is required"))?;
         let response = self
             .db
-            .transaction(move |conn| {
+            .transaction_until(deadline, move |conn| {
                 store::get_workspace(
                     conn,
                     &current_user,
@@ -376,6 +390,7 @@ impl CodeGrinderService for CodeGrinderServer {
         request: Request<PrepareProblemRequest>,
     ) -> Result<Response<PrepareProblemResponse>, Status> {
         self.require_ta_role().map_err(AppError::grpc_status)?;
+        let deadline = request_deadline(&request);
         let current_user = self
             .authenticated_user(&request)
             .await
@@ -389,7 +404,7 @@ impl CodeGrinderService for CodeGrinderServer {
         let this = self.clone();
         let bundle = self
             .db
-            .transaction(move |conn| {
+            .transaction_until(deadline, move |conn| {
                 mutations::prepare_problem(
                     conn,
                     &current_user,
@@ -411,6 +426,7 @@ impl CodeGrinderService for CodeGrinderServer {
         request: Request<SaveProblemRequest>,
     ) -> Result<Response<SaveProblemResponse>, Status> {
         self.require_ta_role().map_err(AppError::grpc_status)?;
+        let deadline = request_deadline(&request);
         let current_user = self
             .authenticated_user(&request)
             .await
@@ -423,7 +439,7 @@ impl CodeGrinderService for CodeGrinderServer {
         let config = self.config.clone();
         let saved = self
             .db
-            .transaction(move |conn| {
+            .transaction_until(deadline, move |conn| {
                 mutations::save_problem(conn, &current_user, req.mode, &bundle, &config)
             })
             .await
@@ -438,6 +454,7 @@ impl CodeGrinderService for CodeGrinderServer {
         request: Request<SaveProblemSetRequest>,
     ) -> Result<Response<SaveProblemSetResponse>, Status> {
         self.require_ta_role().map_err(AppError::grpc_status)?;
+        let deadline = request_deadline(&request);
         let current_user = self
             .authenticated_user(&request)
             .await
@@ -449,7 +466,9 @@ impl CodeGrinderService for CodeGrinderServer {
             .ok_or_else(|| Status::invalid_argument("bundle is required"))?;
         let saved = self
             .db
-            .transaction(move |conn| mutations::save_problem_set(conn, req.mode, &bundle))
+            .transaction_until(deadline, move |conn| {
+                mutations::save_problem_set(conn, req.mode, &bundle)
+            })
             .await
             .map_err(AppError::grpc_status)?;
         Ok(Response::new(SaveProblemSetResponse {
@@ -462,6 +481,7 @@ impl CodeGrinderService for CodeGrinderServer {
         request: Request<SaveWorkspaceCommitRequest>,
     ) -> Result<Response<SaveWorkspaceCommitResponse>, Status> {
         self.require_ta_role().map_err(AppError::grpc_status)?;
+        let deadline = request_deadline(&request);
         let ip_allowed = self.ip_allowed(&request);
         let current_user = self
             .authenticated_user(&request)
@@ -473,7 +493,7 @@ impl CodeGrinderService for CodeGrinderServer {
             .ok_or_else(|| Status::invalid_argument("commit is required"))?;
         let (save_status, _) = self
             .db
-            .transaction(move |conn| {
+            .transaction_until(deadline, move |conn| {
                 mutations::save_workspace_commit(conn, &current_user, &commit, ip_allowed)
             })
             .await
@@ -486,6 +506,7 @@ impl CodeGrinderService for CodeGrinderServer {
         request: Request<SaveUngradedCommitRequest>,
     ) -> Result<Response<SaveUngradedCommitResponse>, Status> {
         self.require_ta_role().map_err(AppError::grpc_status)?;
+        let deadline = request_deadline(&request);
         let ip_allowed = self.ip_allowed(&request);
         let current_user = self
             .authenticated_user(&request)
@@ -499,7 +520,7 @@ impl CodeGrinderService for CodeGrinderServer {
         let this = self.clone();
         let result = self
             .db
-            .transaction(move |conn| {
+            .transaction_until(deadline, move |conn| {
                 mutations::save_ungraded_commit(conn, &current_user, &commit, ip_allowed, |types| {
                     this.select_daycare_host(types)
                 })
@@ -520,6 +541,7 @@ impl CodeGrinderService for CodeGrinderServer {
         request: Request<SaveGradedCommitRequest>,
     ) -> Result<Response<SaveGradedCommitResponse>, Status> {
         self.require_ta_role().map_err(AppError::grpc_status)?;
+        let deadline = request_deadline(&request);
         let ip_allowed = self.ip_allowed(&request);
         let current_user = self
             .authenticated_user(&request)
@@ -532,15 +554,16 @@ impl CodeGrinderService for CodeGrinderServer {
         let config = self.config.clone();
         let result = self
             .db
-            .transaction(move |conn| {
+            .transaction_until(deadline, move |conn| {
                 mutations::save_graded_commit(conn, &current_user, &signed, &config, ip_allowed)
             })
             .await
             .map_err(AppError::grpc_status)?;
         if result.save_status == crate::proto::CommitSaveStatus::Saved as i32
-            && let Some((target, html)) = passback_work(&self.db, &result.bundle, result.locked)
-                .await
-                .map_err(AppError::grpc_status)?
+            && let Some((target, html)) =
+                passback_work(&self.db, &result.bundle, result.locked, deadline)
+                    .await
+                    .map_err(AppError::grpc_status)?
         {
             spawn_grade_passback(self.db.clone(), self.config.clone(), target, html);
         }
@@ -589,6 +612,35 @@ fn request_client_ip<T>(request: &Request<T>) -> Option<String> {
         })
 }
 
+fn request_deadline<T>(request: &Request<T>) -> Option<Instant> {
+    let timeout = request
+        .metadata()
+        .get("grpc-timeout")
+        .and_then(|value| value.to_str().ok())
+        .and_then(parse_grpc_timeout)?;
+    Instant::now().checked_add(timeout)
+}
+
+fn parse_grpc_timeout(raw: &str) -> Option<Duration> {
+    if raw.len() < 2 || raw.len() > 9 {
+        return None;
+    }
+    let (digits, unit) = raw.split_at(raw.len() - 1);
+    if digits.len() > 8 {
+        return None;
+    }
+    let value = digits.parse::<u64>().ok()?;
+    match unit {
+        "H" => value.checked_mul(60 * 60).map(Duration::from_secs),
+        "M" => value.checked_mul(60).map(Duration::from_secs),
+        "S" => Some(Duration::from_secs(value)),
+        "m" => Some(Duration::from_millis(value)),
+        "u" => Some(Duration::from_micros(value)),
+        "n" => Some(Duration::from_nanos(value)),
+        _ => None,
+    }
+}
+
 fn hello_response(user: UserRow, version: Version, session_key: String) -> HelloResponse {
     HelloResponse {
         session_key,
@@ -606,6 +658,7 @@ async fn passback_work(
     db: &Db,
     bundle: &crate::proto::RuntimeBundle,
     locked: bool,
+    deadline: Option<Instant>,
 ) -> AppResult<Option<(GradePassbackTarget, String)>> {
     let Some(commit) = &bundle.commit else {
         return Ok(None);
@@ -617,7 +670,7 @@ async fn passback_work(
     let problem_id = bundle.problem_id.clone();
     let total_steps = bundle.total_steps;
     let commit = commit.clone();
-    db.transaction(move |conn| {
+    db.transaction_until(deadline, move |conn| {
         if locked {
             update_passback_status(conn, &key, PASSBACK_LOCKED)?;
             return Ok(None);
@@ -711,6 +764,18 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(err.code(), Code::Unauthenticated);
+    }
+
+    #[test]
+    fn parses_grpc_timeout_metadata_units() {
+        assert_eq!(parse_grpc_timeout("10S"), Some(Duration::from_secs(10)));
+        assert_eq!(parse_grpc_timeout("250m"), Some(Duration::from_millis(250)));
+        assert_eq!(
+            parse_grpc_timeout("500000u"),
+            Some(Duration::from_millis(500))
+        );
+        assert_eq!(parse_grpc_timeout("123456789S"), None);
+        assert_eq!(parse_grpc_timeout("10x"), None);
     }
 
     #[tokio::test]
@@ -914,7 +979,7 @@ mod tests {
         seed_second_step_and_scores(&service.db).await;
         let bundle = runtime_bundle_for_passback(2);
 
-        let (target, _) = passback_work(&service.db, &bundle, false)
+        let (target, _) = passback_work(&service.db, &bundle, false, None)
             .await
             .unwrap()
             .unwrap();
@@ -933,7 +998,9 @@ mod tests {
         seed_service_assignments(&service.db).await;
         let bundle = runtime_bundle_for_passback(1);
 
-        let work = passback_work(&service.db, &bundle, true).await.unwrap();
+        let work = passback_work(&service.db, &bundle, true, None)
+            .await
+            .unwrap();
 
         assert!(work.is_none());
         assert_eq!(

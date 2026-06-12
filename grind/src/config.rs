@@ -5,20 +5,32 @@ use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 pub const DOT_FILE_NAME: &str = ".grind";
+pub const DEFAULT_RPC_TIMEOUT_SECONDS: u64 = 10;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ApiTrace {
     pub report: bool,
     pub dump: bool,
+    pub rpc_timeout: Duration,
 }
 
 impl ApiTrace {
     pub fn new(report: bool, dump: bool) -> Self {
+        Self::with_timeout(
+            report,
+            dump,
+            Duration::from_secs(DEFAULT_RPC_TIMEOUT_SECONDS),
+        )
+    }
+
+    pub fn with_timeout(report: bool, dump: bool, rpc_timeout: Duration) -> Self {
         Self {
             report: report || dump,
             dump,
+            rpc_timeout,
         }
     }
 }
@@ -40,6 +52,7 @@ pub struct Config {
     pub workspace_root: PathBuf,
     pub roles: Roles,
     pub trace: ApiTrace,
+    pub rpc_timeout: Duration,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -118,6 +131,7 @@ pub fn load_config_or_default() -> Result<Config> {
             workspace_root: home_dir(),
             roles: Roles::default(),
             trace: ApiTrace::new(false, false),
+            rpc_timeout: Duration::from_secs(DEFAULT_RPC_TIMEOUT_SECONDS),
         })
     }
 }
@@ -130,6 +144,7 @@ pub fn load_config_from_path(path: &Path, trace: ApiTrace) -> Result<Config> {
         workspace_root: expand_home(&raw.workspace_root),
         roles: raw.roles,
         trace,
+        rpc_timeout: trace.rpc_timeout,
     })
 }
 

@@ -19,7 +19,7 @@ prost-types.workspace = true
 rand.workspace = true
 reqwest = { workspace = true, features = ["rustls-tls", "http2", "json"] }
 roxmltree.workspace = true
-rusqlite = { workspace = true, features = ["bundled", "chrono", "serde_json"] }
+rusqlite = { workspace = true, features = ["bundled", "chrono", "hooks", "serde_json"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha1.workspace = true

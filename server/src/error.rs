@@ -14,6 +14,8 @@ pub enum AppError {
     Conflict(String),
     #[error("{0}")]
     Internal(String),
+    #[error("{0}")]
+    DeadlineExceeded(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
@@ -32,6 +34,7 @@ impl AppError {
             AppError::Forbidden(_) => http::StatusCode::FORBIDDEN,
             AppError::NotFound(_) => http::StatusCode::NOT_FOUND,
             AppError::Conflict(_) => http::StatusCode::CONFLICT,
+            AppError::DeadlineExceeded(_) => http::StatusCode::GATEWAY_TIMEOUT,
             AppError::Internal(_) | AppError::Io(_) | AppError::Db(_) | AppError::Json(_) => {
                 http::StatusCode::INTERNAL_SERVER_ERROR
             }
@@ -46,6 +49,7 @@ impl AppError {
             AppError::NotFound(message) => Status::new(Code::NotFound, message),
             AppError::Conflict(message) => Status::new(Code::AlreadyExists, message),
             AppError::Internal(message) => Status::new(Code::Internal, message),
+            AppError::DeadlineExceeded(message) => Status::new(Code::DeadlineExceeded, message),
             AppError::Io(error) => Status::new(Code::Internal, error.to_string()),
             AppError::Db(error) => {
                 if error.to_string().trim().eq_ignore_ascii_case("not found") {

@@ -20,6 +20,7 @@ use error::{CliError, Result};
 use std::env;
 use std::ffi::OsString;
 use std::process::ExitCode;
+use std::time::Duration;
 use tokio::runtime::Builder;
 use version::CURRENT_VERSION;
 
@@ -33,6 +34,14 @@ struct Cli {
     api: bool,
     #[arg(long, global = true)]
     api_dump: bool,
+    #[arg(
+        long,
+        global = true,
+        default_value_t = config::DEFAULT_RPC_TIMEOUT_SECONDS,
+        value_parser = clap::value_parser!(u64).range(1..),
+        help = "per-RPC timeout in seconds"
+    )]
+    timeout: u64,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -229,7 +238,8 @@ fn command_for_roles(roles: Roles) -> clap::Command {
     if !roles.is_instructor {
         command = command
             .mut_arg("api", |arg| arg.hide(true))
-            .mut_arg("api_dump", |arg| arg.hide(true));
+            .mut_arg("api_dump", |arg| arg.hide(true))
+            .mut_arg("timeout", |arg| arg.hide(true));
     }
     if !roles.is_author {
         command = command
@@ -251,7 +261,8 @@ fn command_for_roles(roles: Roles) -> clap::Command {
 }
 
 async fn dispatch(cli: Cli) -> Result<()> {
-    let trace = config::ApiTrace::new(cli.api, cli.api_dump);
+    let trace =
+        config::ApiTrace::with_timeout(cli.api, cli.api_dump, Duration::from_secs(cli.timeout));
     match cli.command {
         None => {
             let roles = load_config_or_default()

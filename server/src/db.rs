@@ -1,5 +1,6 @@
 use std::any::Any;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, OpenFlags};
 use tokio::sync::{mpsc, oneshot};
@@ -7,6 +8,8 @@ use tokio::sync::{mpsc, oneshot};
 use crate::error::{AppError, AppResult};
 
 const SCHEMA_SQL: &str = include_str!("../../setup/schema.sql");
+const DEFAULT_BUSY_TIMEOUT: Duration = Duration::from_secs(10);
+const SQLITE_PROGRESS_OPS: i32 = 1_000;
 
 type DbJob = Box<dyn FnOnce(&Connection) -> AppResult<DbResponse> + Send + 'static>;
 
@@ -16,6 +19,7 @@ enum DbResponse {
 
 struct DbMessage {
     job: DbJob,
+    deadline: Option<Instant>,
     reply: oneshot::Sender<AppResult<DbResponse>>,
 }
 
@@ -36,7 +40,7 @@ impl Db {
             .spawn(move || {
                 let conn = open_connection(&path).expect("database connection failed");
                 while let Some(message) = receiver.blocking_recv() {
-                    let result = (message.job)(&conn);
+                    let result = run_job(&conn, message.job, message.deadline);
                     let _ = message.reply.send(result);
                 }
             })
@@ -44,7 +48,7 @@ impl Db {
         Ok(Self { sender })
     }
 
-    pub async fn call<T, F>(&self, f: F) -> AppResult<T>
+    async fn call_until<T, F>(&self, deadline: Option<Instant>, f: F) -> AppResult<T>
     where
         T: Send + 'static,
         F: FnOnce(&Connection) -> AppResult<T> + Send + 'static,
@@ -54,12 +58,29 @@ impl Db {
             f(conn).map(|value| DbResponse::Value(Box::new(value)))
         });
         self.sender
-            .send(DbMessage { job, reply })
+            .send(DbMessage {
+                job,
+                deadline,
+                reply,
+            })
             .map_err(|_| AppError::Internal("database worker stopped".to_owned()))?;
-        match recv
-            .await
-            .map_err(|_| AppError::Internal("database worker dropped response".to_owned()))??
-        {
+        let response = match deadline {
+            Some(deadline) => {
+                let remaining = deadline
+                    .checked_duration_since(Instant::now())
+                    .ok_or_else(deadline_exceeded)?;
+                tokio::time::timeout(remaining, recv)
+                    .await
+                    .map_err(|_| deadline_exceeded())?
+                    .map_err(|_| {
+                        AppError::Internal("database worker dropped response".to_owned())
+                    })?
+            }
+            None => recv
+                .await
+                .map_err(|_| AppError::Internal("database worker dropped response".to_owned()))?,
+        }?;
+        match response {
             DbResponse::Value(value) => value
                 .downcast::<T>()
                 .map(|boxed| *boxed)
@@ -72,7 +93,15 @@ impl Db {
         T: Send + 'static,
         F: FnOnce(&Connection) -> AppResult<T> + Send + 'static,
     {
-        self.call(move |conn| {
+        self.transaction_until(None, f).await
+    }
+
+    pub async fn transaction_until<T, F>(&self, deadline: Option<Instant>, f: F) -> AppResult<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&Connection) -> AppResult<T> + Send + 'static,
+    {
+        self.call_until(deadline, move |conn| {
             conn.execute_batch("BEGIN")?;
             let result = f(conn);
             match result {
@@ -88,6 +117,43 @@ impl Db {
         })
         .await
     }
+}
+
+fn run_job(conn: &Connection, job: DbJob, deadline: Option<Instant>) -> AppResult<DbResponse> {
+    if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+        return Err(deadline_exceeded());
+    }
+    set_job_deadline(conn, deadline)?;
+    let result = job(conn);
+    clear_job_deadline(conn)?;
+    result
+}
+
+fn set_job_deadline(conn: &Connection, deadline: Option<Instant>) -> AppResult<()> {
+    let Some(deadline) = deadline else {
+        conn.busy_timeout(DEFAULT_BUSY_TIMEOUT)?;
+        conn.progress_handler(0, None::<fn() -> bool>);
+        return Ok(());
+    };
+    let remaining = deadline
+        .checked_duration_since(Instant::now())
+        .ok_or_else(deadline_exceeded)?;
+    conn.busy_timeout(remaining.min(DEFAULT_BUSY_TIMEOUT))?;
+    conn.progress_handler(
+        SQLITE_PROGRESS_OPS,
+        Some(move || Instant::now() >= deadline),
+    );
+    Ok(())
+}
+
+fn clear_job_deadline(conn: &Connection) -> AppResult<()> {
+    conn.progress_handler(0, None::<fn() -> bool>);
+    conn.busy_timeout(DEFAULT_BUSY_TIMEOUT)?;
+    Ok(())
+}
+
+fn deadline_exceeded() -> AppError {
+    AppError::DeadlineExceeded("request deadline exceeded".to_owned())
 }
 
 pub fn open_connection(path: &Path) -> AppResult<Connection> {
@@ -110,9 +176,9 @@ fn configure_connection(conn: &Connection) -> AppResult<()> {
         PRAGMA synchronous = FULL;
         PRAGMA temp_store = MEMORY;
         PRAGMA cache_size = -20000;
-        PRAGMA busy_timeout = 10000;
         ",
     )?;
+    conn.busy_timeout(DEFAULT_BUSY_TIMEOUT)?;
     Ok(())
 }
 
@@ -131,6 +197,10 @@ fn ensure_schema(conn: &Connection) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
 
     #[test]
     fn schema_is_created_for_empty_database() {
@@ -144,5 +214,24 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn expired_transaction_deadline_does_not_run_job() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(&dir.path().join("db.sqlite")).unwrap();
+        db.transaction(|_| Ok(())).await.unwrap();
+        let called = Arc::new(AtomicBool::new(false));
+        let called_in_job = called.clone();
+
+        let result = db
+            .transaction_until(Some(Instant::now() - Duration::from_millis(1)), move |_| {
+                called_in_job.store(true, Ordering::Relaxed);
+                Ok(())
+            })
+            .await;
+
+        assert!(matches!(result, Err(AppError::DeadlineExceeded(_))));
+        assert!(!called.load(Ordering::Relaxed));
     }
 }

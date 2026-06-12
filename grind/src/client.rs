@@ -19,6 +19,7 @@ use semver::Version;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::str::FromStr;
+use std::time::Duration;
 use tonic::metadata::MetadataValue;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use tonic::{Request, Streaming};
@@ -27,7 +28,10 @@ macro_rules! call_rpc {
     ($session:expr, $name:literal, $request:expr, $method:ident) => {{
         let request = $request;
         dump(&$session.config.trace, $name, true, &request);
-        let request = authorize(Request::new(request), &$session.config.session_key)?;
+        let request = authorize(
+            timed_request(request, $session.config.rpc_timeout),
+            &$session.config.session_key,
+        )?;
         let response = $session.client.$method(request).await?.into_inner();
         dump(&$session.config.trace, $name, false, &response);
         Ok::<_, CliError>(response)
@@ -44,11 +48,15 @@ pub struct Session {
 impl Session {
     pub async fn connect(mut config: Config, trace: ApiTrace) -> Result<Self> {
         config.trace = trace;
+        config.rpc_timeout = trace.rpc_timeout;
         let mut client = new_grpc_client(&config).await?;
         let request = authorize(
-            Request::new(HelloRequest {
-                token: String::new(),
-            }),
+            timed_request(
+                HelloRequest {
+                    token: String::new(),
+                },
+                config.rpc_timeout,
+            ),
             &config.session_key,
         )?;
         dump(&config.trace, "Hello", true, &request.get_ref());
@@ -286,7 +294,8 @@ impl Session {
         request: crate::proto::codegrinder::DaycareRequest,
     ) -> Result<Streaming<crate::proto::codegrinder::DaycareResponse>> {
         dump(&self.config.trace, "Daycare", true, &request);
-        let request = authorize(Request::new(request), &self.config.session_key)?;
+        let timeout = daycare_timeout(&request, self.config.rpc_timeout);
+        let request = authorize(timed_request(request, timeout), &self.config.session_key)?;
         let response = self.client.daycare(request).await?.into_inner();
         dump(&self.config.trace, "Daycare", false, &"stream");
         Ok(response)
@@ -300,13 +309,17 @@ pub async fn login(host: &str, token: &str, trace: ApiTrace) -> Result<HelloResp
         workspace_root: crate::config::home_dir(),
         roles: Roles::default(),
         trace,
+        rpc_timeout: trace.rpc_timeout,
     };
     let mut client = new_grpc_client(&config).await?;
     let request = HelloRequest {
         token: token.to_string(),
     };
     dump(&trace, "Hello", true, &request);
-    let response = client.hello(Request::new(request)).await?.into_inner();
+    let response = client
+        .hello(timed_request(request, config.rpc_timeout))
+        .await?
+        .into_inner();
     dump(&trace, "Hello", false, &response);
     check_version(&response)?;
     if response.user_id.is_empty() {
@@ -386,6 +399,31 @@ fn authorize<T>(mut request: Request<T>, session_key: &str) -> Result<Request<T>
     Ok(request)
 }
 
+fn timed_request<T>(message: T, timeout: Duration) -> Request<T> {
+    let mut request = Request::new(message);
+    request.set_timeout(timeout);
+    request
+}
+
+fn daycare_timeout(
+    request: &crate::proto::codegrinder::DaycareRequest,
+    rpc_timeout: Duration,
+) -> Duration {
+    request
+        .bundle
+        .as_ref()
+        .and_then(runtime_action_timeout)
+        .and_then(|action_timeout| action_timeout.checked_add(rpc_timeout))
+        .unwrap_or(rpc_timeout)
+}
+
+fn runtime_action_timeout(bundle: &SignedRuntimeBundle) -> Option<Duration> {
+    let runtime = decode_runtime(bundle).ok()?;
+    let limits = runtime.limits?;
+    let cpu = limits.max_cpu.max(1) as u64;
+    Some(Duration::from_secs(cpu.saturating_mul(2).saturating_add(5)))
+}
+
 fn dump(trace: &ApiTrace, call: &str, outgoing: bool, message: &impl Debug) {
     if !trace.report {
         return;
@@ -411,4 +449,55 @@ fn summarize_debug(message: &impl Debug) -> String {
         }
     }
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use prost::Message;
+
+    use super::{daycare_timeout, timed_request};
+    use crate::proto::codegrinder::{
+        DaycareRequest, RuntimeBundle, RuntimeLimits, SignedRuntimeBundle,
+    };
+
+    #[test]
+    fn rpc_timeout_is_encoded_as_grpc_timeout_metadata() {
+        let request = timed_request((), Duration::from_secs(10));
+
+        assert_eq!(
+            request
+                .metadata()
+                .get("grpc-timeout")
+                .and_then(|value| value.to_str().ok()),
+            Some("10000000u")
+        );
+    }
+
+    #[test]
+    fn daycare_timeout_adds_runtime_action_budget_to_rpc_budget() {
+        let bundle = RuntimeBundle {
+            limits: Some(RuntimeLimits {
+                max_cpu: 10,
+                max_fd: 100,
+                max_file_size: 10,
+                max_memory: 256,
+                max_threads: 20,
+            }),
+            ..RuntimeBundle::default()
+        };
+        let request = DaycareRequest {
+            bundle: Some(SignedRuntimeBundle {
+                bundle: bundle.encode_to_vec(),
+                signature: "not checked here".to_owned(),
+            }),
+            args: Vec::new(),
+        };
+
+        assert_eq!(
+            daycare_timeout(&request, Duration::from_secs(10)),
+            Duration::from_secs(35)
+        );
+    }
 }

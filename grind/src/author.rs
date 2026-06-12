@@ -60,6 +60,7 @@ pub async fn command_login(login_args: Vec<String>, trace: ApiTrace) -> Result<(
             is_admin: response.is_admin,
         },
         trace,
+        rpc_timeout: trace.rpc_timeout,
     };
     write_login_config(&config)?;
     println!("login successful; welcome {}", response.user_name);
