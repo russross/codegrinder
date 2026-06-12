@@ -60,17 +60,18 @@ async fn main() -> AppResult<()> {
             .await?;
     }
     let login_tokens = Arc::new(LoginTokens::default());
-    let mut registry = DaycareRegistry::new(config.daycare_secret.clone(), VERSION.to_owned());
-    if args.daycare {
-        registry = registry.with_local(&config.hostname, &config.problem_types, config.capacity);
-    }
+    let registry = DaycareRegistry::new(config.daycare_secret.clone(), VERSION.to_owned());
+    let registry = if args.daycare {
+        registry.with_local(&config.hostname, &config.problem_types, config.capacity)
+    } else {
+        registry
+    };
     let registry = Arc::new(registry);
     let ip_filter = IpFilter::from_entries(&config.ip_filter.whitelist);
-    let daycare = if args.daycare {
-        Some(DaycareRuntime::new(config.clone())?)
-    } else {
-        None
-    };
+    let daycare = args
+        .daycare
+        .then(|| DaycareRuntime::new(config.clone()))
+        .transpose()?;
     if args.daycare && !args.ta {
         tokio::spawn(register_daycare(config.clone(), VERSION.to_owned()));
     }

@@ -1,6 +1,8 @@
-use crate::error::{CliError, Result, fail};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
+
+use crate::error::{CliError, Result, fail};
 
 pub const PROBLEM_CONFIG_NAME: &str = "problem.cfg";
 
@@ -125,8 +127,8 @@ pub fn parse_author_problem_config(path: &Path) -> Result<AuthorProblemConfig> {
             path.display()
         ))
     })?;
-    let problem_id = last_non_empty(all_values(problem, "unique"), "problem.unique", path)?;
-    let note = last_non_empty(all_values(problem, "note"), "problem.note", path)?;
+    let problem_id = required_last_non_empty(problem, "unique", "problem.unique", path)?;
+    let note = required_last_non_empty(problem, "note", "problem.note", path)?;
     let problem_type = last_value_or_empty(problem, "type");
     let tags = all_values(problem, "tag");
     let options = all_values(problem, "option");
@@ -139,7 +141,7 @@ pub fn parse_author_problem_config(path: &Path) -> Result<AuthorProblemConfig> {
             weight: 1.0,
         });
     } else {
-        let mut step_map = std::collections::BTreeMap::new();
+        let mut step_map = BTreeMap::new();
         for section in &step_sections {
             let subsection = section.subsection.as_deref().unwrap_or("");
             if subsection.parse::<i64>().is_err() {
@@ -151,11 +153,8 @@ pub fn parse_author_problem_config(path: &Path) -> Result<AuthorProblemConfig> {
             let index = subsection
                 .parse::<i64>()
                 .map_err(|error| CliError::Message(error.to_string()))?;
-            let step_note = last_non_empty(
-                all_values(section, "note"),
-                &format!("step {index}.note"),
-                path,
-            )?;
+            let step_note =
+                required_last_non_empty(section, "note", &format!("step {index}.note"), path)?;
             let section_type = last_value_or_empty(section, "type");
             if section_type.is_empty() == problem_type.is_empty() {
                 fail(
@@ -217,8 +216,8 @@ pub fn parse_author_problem_set_config(path: &Path) -> Result<AuthorProblemSetCo
                 path.display()
             ))
         })?;
-    let problem_set_id = last_non_empty(all_values(pset, "unique"), "problemset.unique", path)?;
-    let note = last_non_empty(all_values(pset, "note"), "problemset.note", path)?;
+    let problem_set_id = required_last_non_empty(pset, "unique", "problemset.unique", path)?;
+    let note = required_last_non_empty(pset, "note", "problemset.note", path)?;
     let tags = all_values(pset, "tag");
     let continues_problem_set_id = last_value_or_empty(pset, "continues");
     let mut sliced = false;
@@ -291,11 +290,28 @@ fn all_values(section: &GcfgSection, key: &str) -> Vec<String> {
 }
 
 fn last_value_or_empty(section: &GcfgSection, key: &str) -> String {
-    all_values(section, key).pop().unwrap_or_default()
+    section
+        .items
+        .iter()
+        .rev()
+        .find(|item| item.key == key)
+        .map(|item| item.value.clone())
+        .unwrap_or_default()
 }
 
-fn last_non_empty(values: Vec<String>, field: &str, path: &Path) -> Result<String> {
-    let Some(value) = values.last() else {
+fn required_last_non_empty(
+    section: &GcfgSection,
+    key: &str,
+    field: &str,
+    path: &Path,
+) -> Result<String> {
+    let Some(value) = section
+        .items
+        .iter()
+        .rev()
+        .find(|item| item.key == key)
+        .map(|item| item.value.as_str())
+    else {
         return fail(format!(
             "failed to parse {}: missing {field}",
             path.display()

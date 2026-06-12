@@ -31,13 +31,13 @@ pub async fn command_files(
         return Ok(());
     }
     let files = collect_file_set(&resolved.directory)?;
+    let file_count = files.len();
     session
-        .save_problem_type_files(resolved.problem_type.clone(), files.clone())
+        .save_problem_type_files(resolved.problem_type.clone(), files)
         .await?;
     println!(
         "set {} files for problem type: {}",
-        files.len(),
-        resolved.problem_type
+        file_count, resolved.problem_type
     );
     Ok(())
 }
@@ -65,12 +65,13 @@ pub async fn command_problemtype_action_set(
     let mut session = connect(trace).await?;
     let specs = action_specs_from_args(actions, &actions_file)?;
     let parsed = parse_action_specs(&specs)?;
+    let action_count = parsed.len();
     session
-        .save_problem_type(problem_type.clone(), container, parsed.clone())
+        .save_problem_type(problem_type.clone(), container, parsed)
         .await?;
     println!(
         "set {} actions for problem type: {problem_type}",
-        parsed.len()
+        action_count
     );
     Ok(())
 }
@@ -200,7 +201,7 @@ fn print_problem_type_list(mut problem_types: Vec<ProblemType>) {
         println!("no problem types found");
         return;
     }
-    problem_types.sort_by_key(|problem_type| problem_type.problem_type.clone());
+    problem_types.sort_by_cached_key(|problem_type| problem_type.problem_type.clone());
     let width = problem_types
         .iter()
         .map(|problem_type| problem_type.problem_type.len())

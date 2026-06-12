@@ -1,3 +1,6 @@
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
+
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use hmac::{Hmac, Mac};
@@ -15,28 +18,38 @@ type HmacSha256 = Hmac<Sha256>;
 type HmacSha1 = Hmac<Sha1>;
 
 pub fn escape(value: &str) -> String {
-    value
-        .as_bytes()
-        .iter()
-        .map(|byte| match byte {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
             b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
-                (*byte as char).to_string()
+                out.push(byte as char);
             }
-            _ => format!("%{byte:02X}"),
-        })
-        .collect()
+            _ => {
+                out.push('%');
+                let _ = write!(&mut out, "{byte:02X}");
+            }
+        }
+    }
+    out
 }
 
-pub fn encode_params(values: &std::collections::BTreeMap<String, Vec<String>>) -> Vec<u8> {
-    values
-        .iter()
-        .flat_map(|(key, vals)| {
-            vals.iter()
-                .map(move |value| format!("{}={}", escape(key), escape(value)))
-        })
-        .collect::<Vec<_>>()
-        .join("&")
-        .into_bytes()
+pub fn encode_params(values: &BTreeMap<String, Vec<String>>) -> Vec<u8> {
+    let mut out = String::new();
+    let mut first = true;
+    for (key, vals) in values {
+        let escaped_key = escape(key);
+        for value in vals {
+            if first {
+                first = false;
+            } else {
+                out.push('&');
+            }
+            out.push_str(&escaped_key);
+            out.push('=');
+            out.push_str(&escape(value));
+        }
+    }
+    out.into_bytes()
 }
 
 pub fn hmac_sha256_base64(secret: &str, payload: &[u8]) -> AppResult<String> {
@@ -61,7 +74,7 @@ pub fn compute_daycare_registration_signature(
     version: &str,
     secret: &str,
 ) -> AppResult<String> {
-    let mut values = std::collections::BTreeMap::from([
+    let mut values = BTreeMap::from([
         ("hostname".to_owned(), vec![hostname.to_owned()]),
         ("capacity".to_owned(), vec![capacity.to_string()]),
         ("time".to_owned(), vec![db_time(time)]),

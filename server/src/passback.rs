@@ -51,10 +51,9 @@ pub fn build_grade_report_html(
     } else {
         "Grading transcript".to_owned()
     };
-    let mut body = vec![
-        format!("<h1>{}</h1>", html_escape(&heading)),
-        ansi_to_html_pre(&transcript_text(&commit.transcript)),
-    ];
+    let mut body = Vec::with_capacity(commit.files.len() + 2);
+    body.push(format!("<h1>{}</h1>", html_escape(&heading)));
+    body.push(ansi_to_html_pre(&transcript_text(&commit.transcript)));
     for (path, content) in &commit.files {
         if let Ok(text) = std::str::from_utf8(content) {
             body.push(format!(
@@ -206,10 +205,11 @@ fn oauth_auth_header(
     ]);
     let sig = compute_oauth_signature(method, target_url, &params, secret)?;
     params.insert("oauth_signature".to_owned(), vec![sig]);
-    let mut parts = vec![format!(
+    let mut parts = Vec::with_capacity(params.len() + 1);
+    parts.push(format!(
         "OAuth realm=\"{}\"",
         escape(&format!("https://{hostname}"))
-    )];
+    ));
     for (key, value) in params {
         let raw = value.first().cloned().unwrap_or_default();
         parts.push(format!("{key}=\"{}\"", escape(&raw)));
@@ -224,8 +224,11 @@ pub fn compute_oauth_signature(
     secret: &str,
 ) -> AppResult<String> {
     let normalized_url = normalize_oauth_url(request_url)?;
-    let mut copied = parameters.clone();
-    copied.remove("oauth_signature");
+    let copied = parameters
+        .iter()
+        .filter(|(key, _)| key.as_str() != "oauth_signature")
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<BTreeMap<_, _>>();
     let param_string = String::from_utf8(encode_params(&copied)).unwrap_or_default();
     let base_string = format!(
         "{}&{}&{}",

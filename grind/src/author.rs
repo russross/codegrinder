@@ -76,7 +76,7 @@ pub async fn command_problem(search: Vec<String>, trace: ApiTrace) -> Result<()>
     }
     let mut session = connect(trace).await?;
     let mut problem_sets = session.search_problem_catalog(search).await?.problem_sets;
-    problem_sets.sort_by_key(|pset| pset.problem_set_id.to_lowercase());
+    problem_sets.sort_by_cached_key(|pset| pset.problem_set_id.to_lowercase());
     if problem_sets.is_empty() {
         fail("no problem sets found matching the terms you gave")?;
     }
@@ -193,6 +193,7 @@ pub async fn command_student(search: Vec<String>, trace: ApiTrace) -> Result<()>
     if items.is_empty() {
         fail("no assignments found matching the terms you gave")?;
     }
+    validate_student_assignment_items(&items)?;
     let user_ids = items
         .iter()
         .filter_map(|item| {
@@ -204,12 +205,14 @@ pub async fn command_student(search: Vec<String>, trace: ApiTrace) -> Result<()>
     let longest_num = items.len().to_string().len();
     let mut prev_user_id = String::new();
     for (index, item) in items.iter().enumerate() {
-        let assignment = item.assignment.as_ref().cloned().unwrap_or_default();
+        let Some(assignment) = item.assignment.as_ref() else {
+            return fail("server returned a student assignment without an assignment key");
+        };
         if assignment.user_id != prev_user_id {
             if !prev_user_id.is_empty() {
                 println!();
             }
-            prev_user_id = assignment.user_id;
+            prev_user_id = assignment.user_id.clone();
             println!("{} ({})", item.user_name, item.user_login);
             println!(
                 "{}",
@@ -230,7 +233,9 @@ pub async fn command_student(search: Vec<String>, trace: ApiTrace) -> Result<()>
     }
     println!();
     if user_ids.len() == 1 {
-        let item = items.last().cloned().unwrap_or_default();
+        let Some(item) = items.last().cloned() else {
+            return fail("no assignments found matching the terms you gave");
+        };
         download_student_assignment(&mut session, item).await
     } else {
         fail(
@@ -447,22 +452,22 @@ pub fn gather_author(
             step_number,
             &problem_type_files,
         )?;
-        draft.steps.push(AuthorProblemStepDraft {
+        let step_draft = AuthorProblemStepDraft {
             step_number,
             problem_type: step.problem_type.clone(),
             note: step.note.clone(),
             weight: step.weight,
             files,
             starter_files,
-        });
-        let step = draft.steps.last().expect("just pushed");
+        };
         println!(
             "  found {} authored file{} and {} starter file{}",
-            step.files.len(),
-            plural(step.files.len()),
-            step.starter_files.len(),
-            plural(step.starter_files.len())
+            step_draft.files.len(),
+            plural(step_draft.files.len()),
+            step_draft.starter_files.len(),
+            plural(step_draft.starter_files.len())
         );
+        draft.steps.push(step_draft);
     }
     if !action.is_empty() && !layout.config.single_step_layout && layout.active_step_number < 1 {
         fail("to run an action, you must be in a step directory")?;
@@ -591,7 +596,9 @@ async fn download_student_assignment(
     session: &mut Session,
     item: crate::proto::codegrinder::AssignmentListItem,
 ) -> Result<()> {
-    let assignment = item.assignment.clone().unwrap_or_default();
+    let Some(assignment) = item.assignment.clone() else {
+        return fail("server returned a student assignment without an assignment key");
+    };
     println!(
         "[{}] assignment {}/{}",
         item.user_name, assignment.course_id, assignment.problem_set_id
@@ -610,6 +617,15 @@ async fn download_student_assignment(
     } else {
         fail(format!("error waiting for shell to terminate: {status}"))
     }
+}
+
+fn validate_student_assignment_items(
+    items: &[crate::proto::codegrinder::AssignmentListItem],
+) -> Result<()> {
+    if items.iter().any(|item| item.assignment.is_none()) {
+        return fail("server returned a student assignment without an assignment key");
+    }
+    Ok(())
 }
 
 fn gather_step_tree(
@@ -798,4 +814,25 @@ async fn connect(trace: ApiTrace) -> Result<Session> {
     let mut config = load_config()?;
     config.trace = trace;
     Session::connect(config, trace).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_student_assignment_items;
+    use crate::proto::codegrinder::{AssignmentKey, AssignmentListItem};
+
+    #[test]
+    fn student_assignment_items_require_assignment_keys() {
+        let items = vec![AssignmentListItem {
+            assignment: Some(AssignmentKey {
+                user_id: "u1".to_string(),
+                course_id: "c1".to_string(),
+                problem_set_id: "ps1".to_string(),
+            }),
+            ..AssignmentListItem::default()
+        }];
+
+        assert!(validate_student_assignment_items(&items).is_ok());
+        assert!(validate_student_assignment_items(&[AssignmentListItem::default()]).is_err());
+    }
 }

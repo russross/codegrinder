@@ -49,39 +49,41 @@ async fn consume_stream(
     process_events: bool,
 ) -> Result<Option<SignedRuntimeBundle>> {
     while let Some(reply) = stream.message().await? {
-        if let Some(response) = reply.response {
-            match response {
-                crate::proto::codegrinder::daycare_response::Response::Error(error) => {
-                    fail(format!("server returned an error: {error}"))?;
-                }
-                crate::proto::codegrinder::daycare_response::Response::Bundle(bundle) => {
-                    return Ok(Some(bundle));
-                }
-                crate::proto::codegrinder::daycare_response::Response::Event(event) => {
-                    if matches!(
-                        event.event.as_str(),
-                        "exec" | "stdin" | "stdout" | "exit" | "error" | "stderr"
-                    ) {
-                        if process_events {
-                            print!("{}", dump_event(&event));
-                        }
-                    } else if event.event == "files"
-                        && process_events
-                        && !directory.as_os_str().is_empty()
-                    {
-                        for (name, contents) in event.files {
-                            let relative = clean_relative_path(&name)?;
-                            let path = directory.join(relative.as_path());
-                            if let Some(parent) = path.parent() {
-                                fs::create_dir_all(parent)?;
-                            }
-                            fs::write(path, contents)?;
-                        }
-                    }
+        let Some(response) = reply.response else {
+            return fail("unexpected reply from server");
+        };
+        match response {
+            crate::proto::codegrinder::daycare_response::Response::Error(error) => {
+                fail(format!("server returned an error: {error}"))?;
+            }
+            crate::proto::codegrinder::daycare_response::Response::Bundle(bundle) => {
+                return Ok(Some(bundle));
+            }
+            crate::proto::codegrinder::daycare_response::Response::Event(event)
+                if matches!(
+                    event.event.as_str(),
+                    "exec" | "stdin" | "stdout" | "exit" | "error" | "stderr"
+                ) =>
+            {
+                if process_events {
+                    print!("{}", dump_event(&event));
                 }
             }
-        } else {
-            fail("unexpected reply from server")?;
+            crate::proto::codegrinder::daycare_response::Response::Event(event)
+                if event.event == "files"
+                    && process_events
+                    && !directory.as_os_str().is_empty() =>
+            {
+                for (name, contents) in event.files {
+                    let relative = clean_relative_path(&name)?;
+                    let path = directory.join(relative.as_path());
+                    if let Some(parent) = path.parent() {
+                        fs::create_dir_all(parent)?;
+                    }
+                    fs::write(path, contents)?;
+                }
+            }
+            crate::proto::codegrinder::daycare_response::Response::Event(_) => {}
         }
     }
     eprintln!("session closed by server");

@@ -166,32 +166,30 @@ pub fn write_login_config(config: &Config) -> Result<()> {
 }
 
 pub fn find_dotfile(start_dir: &Path) -> Result<(DotFile, PathBuf, Option<PathBuf>)> {
-    let mut problem_set_dir = start_dir.to_path_buf();
-    let mut problem_dir = None;
-    loop {
+    let start_dir = if start_dir.is_absolute() {
+        start_dir.to_path_buf()
+    } else {
+        start_dir.canonicalize()?
+    };
+    let ancestors = start_dir
+        .ancestors()
+        .map(Path::to_path_buf)
+        .collect::<Vec<_>>();
+    for (index, problem_set_dir) in ancestors.iter().enumerate() {
         let dotfile_path = problem_set_dir.join(DOT_FILE_NAME);
         if dotfile_path.exists() {
             let dotfile = load_dotfile(&dotfile_path)?;
-            return Ok((dotfile, problem_set_dir, problem_dir));
-        }
-        if !problem_set_dir.is_absolute() {
-            problem_set_dir = problem_set_dir.canonicalize()?;
-            continue;
-        }
-        let parent = problem_set_dir.parent().map(Path::to_path_buf);
-        match parent {
-            Some(parent) if parent != problem_set_dir => {
-                problem_dir = Some(problem_set_dir);
-                problem_set_dir = parent;
-            }
-            _ => {
-                return fail(format!(
-                    "unable to find {DOT_FILE_NAME} in {} or an ancestor directory\n   you must run this in a problem directory\n   or supply the directory name as an argument",
-                    start_dir.display()
-                ));
-            }
+            let problem_dir = index
+                .checked_sub(1)
+                .and_then(|previous| ancestors.get(previous))
+                .cloned();
+            return Ok((dotfile, problem_set_dir.clone(), problem_dir));
         }
     }
+    fail(format!(
+        "unable to find {DOT_FILE_NAME} in {} or an ancestor directory\n   you must run this in a problem directory\n   or supply the directory name as an argument",
+        start_dir.display()
+    ))
 }
 
 pub fn load_dotfile(path: &Path) -> Result<DotFile> {

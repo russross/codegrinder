@@ -26,30 +26,15 @@ pub fn course_directory(label: &str) -> String {
 }
 
 pub fn sorted_assignment_items(mut items: Vec<AssignmentListItem>) -> Vec<AssignmentListItem> {
-    items.sort_by_key(|item| {
-        let assignment = item.assignment.clone().unwrap_or_default();
-        (
-            assignment.course_id,
-            item.due_at.as_ref().map_or(0, |ts| ts.seconds),
-            item.lock_at.as_ref().map_or(0, |ts| ts.seconds),
-            assignment.user_id,
-            assignment.problem_set_id,
-        )
-    });
+    items.sort_by(|left, right| assignment_sort_key(left).cmp(&assignment_sort_key(right)));
     items
 }
 
 pub fn sorted_student_assignment_items(
     mut items: Vec<AssignmentListItem>,
 ) -> Vec<AssignmentListItem> {
-    items.sort_by_key(|item| {
-        let assignment = item.assignment.clone().unwrap_or_default();
-        (
-            assignment.user_id,
-            assignment.course_id,
-            item.due_at.as_ref().map_or(0, |ts| ts.seconds),
-            assignment.problem_set_id,
-        )
+    items.sort_by(|left, right| {
+        student_assignment_sort_key(left).cmp(&student_assignment_sort_key(right))
     });
     items
 }
@@ -59,12 +44,13 @@ pub fn print_assignment_list(items: &[AssignmentListItem], workspace_root: &Path
     let longest_title = titles.iter().map(String::len).max().unwrap_or(0);
     let mut current_course_id = String::new();
     for (item, title) in items.iter().zip(titles.iter()) {
-        let assignment = item.assignment.as_ref().cloned().unwrap_or_default();
-        if assignment.course_id != current_course_id {
+        let assignment = item.assignment.as_ref();
+        let course_id = assignment.map_or("", |assignment| assignment.course_id.as_str());
+        if course_id != current_course_id {
             if !current_course_id.is_empty() {
                 println!();
             }
-            current_course_id = assignment.course_id;
+            current_course_id = course_id.to_owned();
             println!("{}", item.course_name);
             println!("{}", "-".repeat(item.course_name.len()));
         }
@@ -135,7 +121,7 @@ fn assignment_title(item: &AssignmentListItem) -> String {
 }
 
 fn pretty_assignment_path(workspace_root: &Path, item: &AssignmentListItem) -> String {
-    let assignment = item.assignment.as_ref().cloned().unwrap_or_default();
+    let assignment = item.assignment.as_ref();
     let root = if workspace_root.as_os_str().is_empty() {
         home_dir()
     } else {
@@ -144,7 +130,28 @@ fn pretty_assignment_path(workspace_root: &Path, item: &AssignmentListItem) -> S
     abbreviate_home(
         &root
             .join(course_directory(&item.course_name))
-            .join(assignment.problem_set_id),
+            .join(assignment.map_or("", |assignment| assignment.problem_set_id.as_str())),
+    )
+}
+
+fn assignment_sort_key(item: &AssignmentListItem) -> (&str, i64, i64, &str, &str) {
+    let assignment = item.assignment.as_ref();
+    (
+        assignment.map_or("", |assignment| assignment.course_id.as_str()),
+        item.due_at.as_ref().map_or(0, |ts| ts.seconds),
+        item.lock_at.as_ref().map_or(0, |ts| ts.seconds),
+        assignment.map_or("", |assignment| assignment.user_id.as_str()),
+        assignment.map_or("", |assignment| assignment.problem_set_id.as_str()),
+    )
+}
+
+fn student_assignment_sort_key(item: &AssignmentListItem) -> (&str, &str, i64, &str) {
+    let assignment = item.assignment.as_ref();
+    (
+        assignment.map_or("", |assignment| assignment.user_id.as_str()),
+        assignment.map_or("", |assignment| assignment.course_id.as_str()),
+        item.due_at.as_ref().map_or(0, |ts| ts.seconds),
+        assignment.map_or("", |assignment| assignment.problem_set_id.as_str()),
     )
 }
 

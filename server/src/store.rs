@@ -91,7 +91,11 @@ pub fn list_assignments(
     })?;
     let mut items = rows.collect::<Result<Vec<_>, _>>()?;
     for item in &mut items {
-        let key = item.assignment.as_ref().expect("assignment key set");
+        let Some(key) = item.assignment.as_ref() else {
+            return Err(AppError::Internal(
+                "assignment list item missing assignment key".to_owned(),
+            ));
+        };
         item.problems = list_assignment_problems(conn, &key.problem_set_id)?;
     }
     Ok(items)
@@ -121,7 +125,14 @@ pub fn get_assignment(
     key: &AssignmentKey,
     ip_allowed: bool,
 ) -> AppResult<GetAssignmentResponse> {
-    let row = conn
+    let (
+        problem_set_note,
+        course_name,
+        download_status,
+        restricted,
+        prerequisite_problem_set_id,
+        is_course_instructor,
+    ) = conn
         .query_row(
             "SELECT * FROM accessible_assignment_fields WHERE viewer_user_id = ? AND assignment_user_id = ? AND course_id = ? AND problem_set_id = ?",
             params![current_user.user_id, key.user_id, key.course_id, key.problem_set_id],
@@ -138,7 +149,7 @@ pub fn get_assignment(
         )
         .optional()?
         .ok_or_else(|| AppError::NotFound("assignment not found".to_owned()))?;
-    if !ip_allowed && row.3 && !row.5 {
+    if !ip_allowed && restricted && !is_course_instructor {
         return Err(AppError::Forbidden(
             "assignment is restricted to approved IP ranges".to_owned(),
         ));
@@ -162,11 +173,11 @@ pub fn get_assignment(
         .collect::<Result<Vec<_>, _>>()?;
     Ok(GetAssignmentResponse {
         assignment: Some(key.clone()),
-        problem_set_note: row.0,
-        course_name: row.1,
+        problem_set_note,
+        course_name,
         problems,
-        download_status: row.2,
-        prerequisite_problem_set_id: row.4,
+        download_status,
+        prerequisite_problem_set_id,
     })
 }
 
@@ -178,10 +189,12 @@ pub fn list_problem_types(conn: &Connection) -> AppResult<Vec<ProblemType>> {
         })?
         .collect::<Result<Vec<_>, _>>()?;
     rows.into_iter()
-        .map(|(name, container)| {
-            load_problem_type(conn, &name).map(|mut pb| {
-                pb.container = container;
-                pb
+        .map(|(problem_type, container)| {
+            Ok(ProblemType {
+                problem_type: problem_type.clone(),
+                container,
+                files: load_problem_type_files(conn, &problem_type)?,
+                actions: load_problem_type_actions(conn, &problem_type)?,
             })
         })
         .collect()

@@ -77,13 +77,7 @@ pub async fn command_get(extra: Vec<String>, trace: ApiTrace) -> Result<()> {
             }
             continue;
         }
-        download_assignment(
-            &mut session,
-            item.assignment.unwrap_or_default(),
-            &target_dir,
-            &pretty_full,
-        )
-        .await?;
+        download_assignment(&mut session, assignment, &target_dir, &pretty_full).await?;
     }
     Ok(())
 }
@@ -105,7 +99,7 @@ pub async fn download_assignment_to_root(
     pretty_root: &str,
 ) -> Result<PathBuf> {
     let info = session.get_assignment(assignment).await?;
-    let assignment = info.assignment.clone().unwrap_or_default();
+    let assignment = assignment_key_from_summary(&info)?;
     let target_dir = assignment_directory(root_dir, &info.course_name, &assignment.problem_set_id);
     let pretty_full = crate::config::abbreviate_home(
         &PathBuf::from(pretty_root)
@@ -126,6 +120,7 @@ pub async fn download_assignment_summary(
     root_dir: &Path,
     pretty_full: &str,
 ) -> Result<PathBuf> {
+    validate_assignment_summary(info)?;
     match info.download_status() {
         AssignmentDownloadStatus::Available => {}
         AssignmentDownloadStatus::PrereqNotReady => fail(format!(
@@ -172,28 +167,22 @@ async fn unpack_assignment(
     println!("unpacking problem set in {pretty_full}");
     let total_problems = info.problems.len();
     let mut infos = BTreeMap::new();
-    let assignment = info.assignment.clone().unwrap_or_default();
+    let assignment = assignment_key_from_summary(info)?.clone();
     for problem in &info.problems {
-        infos.insert(
-            problem.problem_id.clone(),
-            ProblemInfo {
-                problem_id: problem.problem_id.clone(),
-                step: problem.current_step_number,
-            },
-        );
+        let problem_id = problem.problem_id.clone();
         let target = if total_problems == 1 {
             root_dir.to_path_buf()
         } else {
-            root_dir.join(&problem.problem_id)
+            root_dir.join(&problem_id)
         };
         if total_problems > 1 {
             if problem.current_step_number > 1 {
                 println!(
                     "unpacking problem {} step {}",
-                    problem.problem_id, problem.current_step_number
+                    problem_id, problem.current_step_number
                 );
             } else {
-                println!("unpacking problem {}", problem.problem_id);
+                println!("unpacking problem {}", problem_id);
             }
         } else if problem.current_step_number > 1 {
             println!("unpacking step {}", problem.current_step_number);
@@ -201,7 +190,7 @@ async fn unpack_assignment(
         let workspace = session
             .get_workspace(
                 assignment.clone(),
-                problem.problem_id.clone(),
+                problem_id.clone(),
                 problem.current_step_number,
                 WorkspaceFileState::Current,
                 true,
@@ -211,6 +200,13 @@ async fn unpack_assignment(
         let mut files = workspace_file_map(&workspace.system_owned_files)?;
         files.extend(workspace_file_map(&workspace.student_owned_files)?);
         update_files(&target, &files, None, false)?;
+        infos.insert(
+            problem_id.clone(),
+            ProblemInfo {
+                problem_id,
+                step: problem.current_step_number,
+            },
+        );
     }
     save_dotfile(&DotFile {
         assignment: assignment_ref_from_key(&assignment),
@@ -218,6 +214,25 @@ async fn unpack_assignment(
         path: root_dir.join(".grind"),
     })?;
     Ok(root_dir.to_path_buf())
+}
+
+fn assignment_key_from_summary(info: &GetAssignmentResponse) -> Result<&AssignmentKey> {
+    info.assignment.as_ref().ok_or_else(|| {
+        crate::error::CliError::Message(
+            "server returned assignment summary without an assignment key".to_string(),
+        )
+    })
+}
+
+fn validate_assignment_summary(info: &GetAssignmentResponse) -> Result<&AssignmentKey> {
+    let assignment = assignment_key_from_summary(info)?;
+    if info.problems.is_empty() {
+        return fail(format!(
+            "server returned assignment {}/{} without any problems",
+            info.course_name, assignment.problem_set_id
+        ));
+    }
+    Ok(assignment)
 }
 
 pub fn existing_assignment_warning(
@@ -269,8 +284,8 @@ fn dotfile_matches_assignment(dotfile: &DotFile, assignment: &AssignmentKey) -> 
 fn dotfile_matches_problems(dotfile: &DotFile, problems: &[AssignmentListProblem]) -> bool {
     let actual = dotfile
         .problems
-        .values()
-        .map(|info| info.problem_id.clone())
+        .keys()
+        .cloned()
         .collect::<std::collections::BTreeSet<_>>();
     let expected = problems
         .iter()
@@ -294,4 +309,41 @@ fn dotfile_matches_assignment_summary(dotfile: &DotFile, info: &GetAssignmentRes
         })
         .collect::<BTreeMap<_, _>>();
     dotfile.problems == expected
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_assignment_summary;
+    use crate::proto::codegrinder::{
+        AssignmentKey, AssignmentProblemProgress, GetAssignmentResponse,
+    };
+
+    #[test]
+    fn assignment_summary_validation_rejects_missing_assignment_key() {
+        let info = GetAssignmentResponse {
+            problems: vec![AssignmentProblemProgress {
+                problem_id: "p1".to_string(),
+                current_step_number: 1,
+                ..AssignmentProblemProgress::default()
+            }],
+            ..GetAssignmentResponse::default()
+        };
+
+        assert!(validate_assignment_summary(&info).is_err());
+    }
+
+    #[test]
+    fn assignment_summary_validation_rejects_empty_problem_list() {
+        let info = GetAssignmentResponse {
+            assignment: Some(AssignmentKey {
+                user_id: "u1".to_string(),
+                course_id: "c1".to_string(),
+                problem_set_id: "ps1".to_string(),
+            }),
+            course_name: "Course".to_string(),
+            ..GetAssignmentResponse::default()
+        };
+
+        assert!(validate_assignment_summary(&info).is_err());
+    }
 }

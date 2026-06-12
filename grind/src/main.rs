@@ -230,7 +230,7 @@ async fn run(argv: impl IntoIterator<Item = OsString>) -> Result<()> {
     };
     let cli =
         Cli::from_arg_matches(&matches).map_err(|error| CliError::Message(error.to_string()))?;
-    dispatch(cli).await
+    dispatch(cli, roles).await
 }
 
 fn command_for_roles(roles: Roles) -> clap::Command {
@@ -260,14 +260,11 @@ fn command_for_roles(roles: Roles) -> clap::Command {
     command
 }
 
-async fn dispatch(cli: Cli) -> Result<()> {
+async fn dispatch(cli: Cli, roles: Roles) -> Result<()> {
     let trace =
         config::ApiTrace::with_timeout(cli.api, cli.api_dump, Duration::from_secs(cli.timeout));
     match cli.command {
         None => {
-            let roles = load_config_or_default()
-                .map(|config| config.roles)
-                .unwrap_or_default();
             command_for_roles(roles).print_help()?;
             println!();
             Err(CliError::Silent)

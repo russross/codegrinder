@@ -37,8 +37,7 @@ pub async fn command_sync(extra: Vec<String>, trace: ApiTrace) -> Result<()> {
     }
     let mut session = connect(trace).await?;
     let student = gather_student_context(&mut session, Path::new(".")).await?;
-    let response = save_current_student_files(&mut session, &student, "grind sync").await?;
-    let _ = response;
+    save_current_student_files(&mut session, &student, "grind sync").await?;
     clean_workspace_tree(
         &student.problem_dir,
         &workspace_official_paths(&student.workspace)?,
@@ -414,11 +413,12 @@ fn reset_matches(
 }
 
 fn update_dotfile_problem(dotfile: &mut DotFile, info: &ProblemInfo) {
-    for value in dotfile.problems.values_mut() {
-        if value.problem_id == info.problem_id {
-            value.step = info.step;
-            return;
-        }
+    if let Some(value) = dotfile
+        .problems
+        .values_mut()
+        .find(|value| value.problem_id == info.problem_id)
+    {
+        value.step = info.step;
     }
 }
 

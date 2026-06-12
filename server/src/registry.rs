@@ -98,23 +98,23 @@ impl DaycareRegistry {
     }
 
     pub fn snapshot(&self) -> AppResult<BTreeMap<String, DaycareRegistration>> {
-        let mut out = self
+        let mut entries = self
             .entries
             .lock()
             .map_err(|_| AppError::Internal("registry lock poisoned".to_owned()))?;
-        expire_entries(&mut out);
-        let mut out = out.clone();
+        expire_entries(&mut entries);
+        let mut snapshot = entries.clone();
         if let Some(local) = &self.local {
             let mut local = local.clone();
             local.version.clear();
             local.signature.clear();
-            out.insert(local.hostname.clone(), local);
+            snapshot.insert(local.hostname.clone(), local);
         }
-        Ok(out)
+        Ok(snapshot)
     }
 
     pub fn assign(&self, problem_types: &BTreeSet<String>) -> AppResult<String> {
-        let snapshot = self.snapshot().unwrap_or_default();
+        let snapshot = self.snapshot()?;
         let eligible = snapshot
             .values()
             .filter(|reg| {
