@@ -720,6 +720,14 @@ mod tests {
             &conn,
             "student",
             "base",
+            1,
+            true,
+            &[("answer.txt", b"passed")],
+        );
+        insert_commit(
+            &conn,
+            "student",
+            "base",
             2,
             false,
             &[("answer.txt", b"commit")],
@@ -1244,6 +1252,7 @@ mod tests {
             .unwrap(),
             &crate::config::ServerConfig {
                 hostname: "ta.example".to_owned(),
+                ta_hostname: String::new(),
                 daycare_secret: "daycare-secret".to_owned(),
                 lti_secret: "lti-secret".to_owned(),
                 session_secret: "session-secret".to_owned(),
@@ -1253,7 +1262,6 @@ mod tests {
                 tool_id: "codegrinder".to_owned(),
                 tool_description: "Programming exercises".to_owned(),
                 container_engine: "docker".to_owned(),
-                daycare_mount_dir: std::path::PathBuf::new(),
                 sqlite3_path: std::path::PathBuf::new(),
                 sessions_expire: Vec::new(),
                 ip_filter: crate::config::IpFilterConfig::default(),

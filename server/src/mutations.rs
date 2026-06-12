@@ -144,9 +144,9 @@ fn validate_action(name: &str, action: &ProblemTypeAction) -> AppResult<()> {
             "action limits must be positive".to_owned(),
         ));
     }
-    if action.max_memory < 0 {
+    if action.max_memory <= 0 {
         return Err(AppError::BadRequest(
-            "max memory cannot be negative".to_owned(),
+            "max memory must be positive".to_owned(),
         ));
     }
     Ok(())
@@ -487,6 +487,9 @@ pub fn save_problem(
         ));
     }
     validate_save_mode(conn, mode, "problems", "problem_id", &problem.problem_id)?;
+    if mode == SaveMode::Update as i32 {
+        validate_assigned_problem_shape(conn, &problem.problem_id, &bundle.problem_steps)?;
+    }
     let validated_commits = verify_validation_bundles(bundle, config, &current_user.user_id)?;
     let existing_created = if mode == SaveMode::Update as i32 {
         conn.query_row(
@@ -760,6 +763,102 @@ fn validate_save_mode(
     Ok(())
 }
 
+fn validate_assigned_problem_shape(
+    conn: &Connection,
+    problem_id: &str,
+    new_steps: &[ProblemStep],
+) -> AppResult<()> {
+    let assignment_count: i64 = conn.query_row(
+        "SELECT COUNT(1)
+         FROM assignments
+         JOIN problem_set_problems
+             ON problem_set_problems.problem_set_id = assignments.problem_set_id
+         WHERE problem_set_problems.problem_id = ?",
+        params![problem_id],
+        |row| row.get(0),
+    )?;
+    if assignment_count == 0 {
+        return Ok(());
+    }
+    let old_steps = conn
+        .prepare(
+            "SELECT step_number, problem_type FROM problem_steps WHERE problem_id = ? ORDER BY step_number",
+        )?
+        .query_map(params![problem_id], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    if old_steps.len() != new_steps.len() {
+        return Err(AppError::Conflict(
+            "cannot change the number of steps in an assigned problem".to_owned(),
+        ));
+    }
+    for (index, ((old_step, old_type), new_step)) in old_steps.iter().zip(new_steps).enumerate() {
+        let expected_step = (index + 1) as i64;
+        if *old_step != expected_step || new_step.step != expected_step {
+            return Err(AppError::BadRequest(format!(
+                "expected step {expected_step}, found {}",
+                new_step.step
+            )));
+        }
+        if old_type != &new_step.problem_type {
+            return Err(AppError::Conflict(format!(
+                "cannot change the problem type of step {expected_step} in an assigned problem"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_assigned_problem_set_shape(
+    conn: &Connection,
+    problem_set_id: &str,
+    bundle: &ProblemSetBundle,
+) -> AppResult<()> {
+    let assignment_count: i64 = conn.query_row(
+        "SELECT COUNT(1) FROM assignments WHERE problem_set_id = ?",
+        params![problem_set_id],
+        |row| row.get(0),
+    )?;
+    if assignment_count == 0 {
+        return Ok(());
+    }
+    let old_shape = conn
+        .prepare(
+            "SELECT problem_id, COALESCE(first_step, 0), COALESCE(last_step, 0)
+             FROM problem_set_problems
+             WHERE problem_set_id = ?
+             ORDER BY problem_id",
+        )?
+        .query_map(params![problem_set_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut new_shape = bundle
+        .problem_set_problems
+        .iter()
+        .map(|problem| {
+            (
+                problem.problem_id.clone(),
+                problem.first_step,
+                problem.last_step,
+            )
+        })
+        .collect::<Vec<_>>();
+    new_shape.sort();
+    if old_shape != new_shape {
+        return Err(AppError::Conflict(
+            "cannot change problem membership or slice bounds in an assigned problem set"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 fn insert_step_files(
     conn: &Connection,
     problem_id: &str,
@@ -822,6 +921,9 @@ pub fn save_problem_set(
         &problem_set.problem_set_id,
     )?;
     validate_problem_set_shape(conn, bundle)?;
+    if mode == SaveMode::Update as i32 {
+        validate_assigned_problem_set_shape(conn, &problem_set.problem_set_id, bundle)?;
+    }
     let created = problem_set
         .created_at
         .as_ref()
@@ -1153,6 +1255,7 @@ fn save_commit_core(
     let context = load_grading_context(conn, key, &commit.problem_id, commit.step)?;
     require_student_owned_files(&commit.files, &context.whitelist)?;
     let save_status = if policy.0 {
+        validate_commit_step_sequence(conn, key, &commit.problem_id, commit.step)?;
         persist_commit(conn, commit, persistence)?;
         CommitSaveStatus::Saved as i32
     } else if policy.2 {
@@ -1165,6 +1268,70 @@ fn save_commit_core(
         locked: policy.1,
         problem_note: context.problem_note,
     })
+}
+
+fn validate_commit_step_sequence(
+    conn: &Connection,
+    key: &AssignmentKey,
+    problem_id: &str,
+    step: i64,
+) -> AppResult<()> {
+    let missing_prior_step = conn.query_row(
+        "SELECT MIN(scope.step_number)
+         FROM problem_set_step_scope AS scope
+         LEFT JOIN passed_commit_steps AS passed
+            ON passed.user_id = ?
+            AND passed.course_id = ?
+            AND passed.problem_set_id = scope.problem_set_id
+            AND passed.problem_id = scope.problem_id
+            AND passed.step_number = scope.step_number
+         WHERE scope.problem_set_id = ?
+            AND scope.problem_id = ?
+            AND scope.step_number < ?
+            AND passed.step_number IS NULL",
+        params![
+            key.user_id,
+            key.course_id,
+            key.problem_set_id,
+            problem_id,
+            step
+        ],
+        |row| row.get::<_, Option<i64>>(0),
+    )?;
+    if let Some(missing_step) = missing_prior_step {
+        return Err(AppError::BadRequest(format!(
+            "cannot save step {step} before passing step {missing_step}"
+        )));
+    }
+
+    let later_started_step = conn.query_row(
+        "SELECT MIN(commits.step_number)
+         FROM commits
+         JOIN problem_set_step_scope AS scope
+            ON scope.problem_set_id = commits.problem_set_id
+            AND scope.problem_id = commits.problem_id
+            AND scope.step_number = commits.step_number
+         WHERE commits.user_id = ?
+            AND commits.course_id = ?
+            AND commits.problem_set_id = ?
+            AND commits.problem_id = ?
+            AND commits.step_number > ?",
+        params![
+            key.user_id,
+            key.course_id,
+            key.problem_set_id,
+            problem_id,
+            step
+        ],
+        |row| row.get::<_, Option<i64>>(0),
+    )?;
+    if let Some(later_step) = later_started_step {
+        return Err(AppError::BadRequest(format!(
+            "cannot save step {step} after saved work exists for step {later_step}"
+        )));
+    }
+
+    Ok(())
 }
 
 fn require_student_owned_files(files: &FileMap, whitelist: &BTreeSet<String>) -> AppResult<()> {
@@ -1687,6 +1854,59 @@ mod tests {
     }
 
     #[test]
+    fn commit_save_rejects_skipping_unpassed_scoped_steps() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_connection(&dir.path().join("db.sqlite")).unwrap();
+        seed_two_step_problem(&conn);
+        insert_problem_set(&conn, "ps1", None, &[("p1", 0, 0)]);
+        seed_assignment(&conn, "ps1");
+        let current_user = student_user();
+        let mut commit = commit_for_student("", "skip", b"step two");
+        commit.step = 2;
+
+        let error = save_workspace_commit(&conn, &current_user, &commit, true).unwrap_err();
+
+        assert!(error.to_string().contains("before passing step 1"));
+    }
+
+    #[test]
+    fn commit_save_rejects_rewriting_prior_step_after_later_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_connection(&dir.path().join("db.sqlite")).unwrap();
+        seed_two_step_problem(&conn);
+        insert_problem_set(&conn, "ps1", None, &[("p1", 0, 0)]);
+        seed_assignment(&conn, "ps1");
+        let current_user = student_user();
+        insert_passing_commit(&conn);
+        let mut later = commit_for_student("", "started step two", b"step two");
+        later.step = 2;
+        persist_commit(&conn, &later, CommitPersistence::FilesOnly).unwrap();
+        let commit = commit_for_student("", "rewrite step one", b"step one rewrite");
+
+        let error = save_workspace_commit(&conn, &current_user, &commit, true).unwrap_err();
+
+        assert!(error.to_string().contains("exists for step 2"));
+    }
+
+    #[test]
+    fn commit_sequence_uses_problem_set_step_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_connection(&dir.path().join("db.sqlite")).unwrap();
+        seed_two_step_problem(&conn);
+        insert_problem_set(&conn, "slice2", None, &[("p1", 2, 2)]);
+        seed_assignment(&conn, "slice2");
+        let current_user = student_user();
+        let mut commit = commit_for_student("", "slice step", b"step two");
+        let key = commit.assignment.as_mut().unwrap();
+        key.problem_set_id = "slice2".to_owned();
+        commit.step = 2;
+
+        let result = save_workspace_commit(&conn, &current_user, &commit, true).unwrap();
+
+        assert_eq!(result.0, CommitSaveStatus::Saved as i32);
+    }
+
+    #[test]
     fn graded_commit_rejects_runtime_for_different_user() {
         let dir = tempfile::tempdir().unwrap();
         let conn = open_connection(&dir.path().join("db.sqlite")).unwrap();
@@ -1935,30 +2155,17 @@ mod tests {
         let update_draft = AuthorProblemDraft {
             problem_id: "new-problem".to_owned(),
             problem_note: "Updated problem".to_owned(),
-            steps: vec![
-                AuthorProblemStepDraft {
-                    step_number: 1,
-                    problem_type: "python".to_owned(),
-                    note: "updated step one".to_owned(),
-                    weight: 1.0,
-                    files: vec![
-                        file("answer.txt", b"updated solution"),
-                        file("tests.py", b"new tests"),
-                    ],
-                    starter_files: vec![file("answer.txt", b"updated starter")],
-                },
-                AuthorProblemStepDraft {
-                    step_number: 2,
-                    problem_type: "python".to_owned(),
-                    note: "new step two".to_owned(),
-                    weight: 1.0,
-                    files: vec![
-                        file("answer.txt", b"step two solution"),
-                        file("tests.py", b"step two tests"),
-                    ],
-                    starter_files: Vec::new(),
-                },
-            ],
+            steps: vec![AuthorProblemStepDraft {
+                step_number: 1,
+                problem_type: "python".to_owned(),
+                note: "updated step one".to_owned(),
+                weight: 2.0,
+                files: vec![
+                    file("answer.txt", b"updated solution"),
+                    file("tests.py", b"new tests"),
+                ],
+                starter_files: vec![file("answer.txt", b"updated starter")],
+            }],
             ..AuthorProblemDraft::default()
         };
         let mut update =
@@ -2016,7 +2223,126 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(step_count, 2);
+        assert_eq!(step_count, 1);
+    }
+
+    #[test]
+    fn save_problem_rejects_assigned_step_count_or_type_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_connection(&dir.path().join("db.sqlite")).unwrap();
+        seed_problem_type(&conn);
+        save_problem_type(
+            &conn,
+            "other",
+            "other:latest",
+            &BTreeMap::from([(
+                "grade".to_owned(),
+                ProblemTypeAction {
+                    command: "pytest".to_owned(),
+                    parser: "xunit".to_owned(),
+                    max_cpu: 10,
+                    max_fd: 20,
+                    max_file_size: 30,
+                    max_memory: 40,
+                    max_threads: 2,
+                },
+            )]),
+        )
+        .unwrap();
+        save_problem_type_files(&conn, "other", &BTreeMap::new()).unwrap();
+        seed_problem(&conn, "p1", 1);
+        insert_problem_set(&conn, "ps1", None, &[("p1", 0, 0)]);
+        seed_assignment(&conn, "ps1");
+        let current_user = author_user();
+        let config = test_config();
+
+        let added_step = AuthorProblemDraft {
+            problem_id: "p1".to_owned(),
+            problem_note: "Updated problem".to_owned(),
+            steps: vec![
+                AuthorProblemStepDraft {
+                    step_number: 1,
+                    problem_type: "python".to_owned(),
+                    note: "step one".to_owned(),
+                    weight: 1.0,
+                    files: vec![file("answer.txt", b"solution")],
+                    starter_files: vec![file("answer.txt", b"starter")],
+                },
+                AuthorProblemStepDraft {
+                    step_number: 2,
+                    problem_type: "python".to_owned(),
+                    note: "step two".to_owned(),
+                    weight: 1.0,
+                    files: vec![file("answer.txt", b"solution")],
+                    starter_files: Vec::new(),
+                },
+            ],
+            ..AuthorProblemDraft::default()
+        };
+        let added_step_bundle =
+            prepared_author_bundle_from_draft(&conn, &current_user, &config, added_step);
+        assert!(matches!(
+            save_problem(
+                &conn,
+                &current_user,
+                SaveMode::Update as i32,
+                &added_step_bundle,
+                &config,
+            ),
+            Err(AppError::Conflict(_))
+        ));
+
+        let changed_type = AuthorProblemDraft {
+            problem_id: "p1".to_owned(),
+            problem_note: "Updated problem".to_owned(),
+            steps: vec![AuthorProblemStepDraft {
+                step_number: 1,
+                problem_type: "other".to_owned(),
+                note: "step one".to_owned(),
+                weight: 1.0,
+                files: vec![file("answer.txt", b"solution")],
+                starter_files: vec![file("answer.txt", b"starter")],
+            }],
+            ..AuthorProblemDraft::default()
+        };
+        let changed_type_bundle =
+            prepared_author_bundle_from_draft(&conn, &current_user, &config, changed_type);
+        assert!(matches!(
+            save_problem(
+                &conn,
+                &current_user,
+                SaveMode::Update as i32,
+                &changed_type_bundle,
+                &config,
+            ),
+            Err(AppError::Conflict(_))
+        ));
+    }
+
+    #[test]
+    fn save_problem_set_rejects_assigned_membership_or_slice_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_connection(&dir.path().join("db.sqlite")).unwrap();
+        seed_two_step_problem(&conn);
+        seed_problem(&conn, "p2", 1);
+        insert_problem_set(&conn, "ps1", None, &[("p1", 1, 1)]);
+        seed_assignment(&conn, "ps1");
+
+        let mut weight_only = problem_set_bundle("ps1", "", &[problem_set_problem("p1", 1, 1)]);
+        weight_only.problem_set_problems[0].weight = 2.0;
+        save_problem_set(&conn, SaveMode::Update as i32, &weight_only).unwrap();
+
+        let slice_change = problem_set_bundle("ps1", "", &[problem_set_problem("p1", 1, 2)]);
+        assert!(matches!(
+            save_problem_set(&conn, SaveMode::Update as i32, &slice_change),
+            Err(AppError::Conflict(_))
+        ));
+
+        let membership_change = problem_set_bundle("ps1", "", &[problem_set_problem("p2", 0, 0)]);
+        assert!(matches!(
+            save_problem_set(&conn, SaveMode::Update as i32, &membership_change),
+            Err(AppError::Conflict(_))
+        ));
     }
 
     #[test]
@@ -2193,6 +2519,7 @@ mod tests {
     fn test_config() -> ServerConfig {
         ServerConfig {
             hostname: "ta.example".to_owned(),
+            ta_hostname: String::new(),
             daycare_secret: "daycare-secret".to_owned(),
             lti_secret: "lti-secret".to_owned(),
             session_secret: "session-secret".to_owned(),
@@ -2202,7 +2529,6 @@ mod tests {
             tool_id: "codegrinder".to_owned(),
             tool_description: "Programming exercises".to_owned(),
             container_engine: "docker".to_owned(),
-            daycare_mount_dir: std::path::PathBuf::new(),
             sqlite3_path: std::path::PathBuf::new(),
             sessions_expire: Vec::new(),
             ip_filter: IpFilterConfig::default(),
@@ -2350,6 +2676,33 @@ mod tests {
             )
             .unwrap();
         }
+    }
+
+    fn seed_assignment(conn: &Connection, problem_set_id: &str) {
+        conn.execute(
+            "INSERT INTO users(user_id, user_name, user_login) VALUES ('u1', 'Student', 'student')
+             ON CONFLICT(user_id) DO NOTHING",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO courses(course_id, course_name) VALUES ('c1', 'Course')
+             ON CONFLICT(course_id) DO NOTHING",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO user_courses(user_id, course_id, course_roles) VALUES ('u1', 'c1', 'Learner')
+             ON CONFLICT(user_id, course_id) DO NOTHING",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO assignments(user_id, course_id, problem_set_id, assignment_title, restricted, grade_id, outcome_url, outcome_ext_accepted, consumer_key)
+             VALUES ('u1', 'c1', ?, 'Assignment', 0, 'grade1', 'https://lms.example/outcome', 'text', 'consumer')",
+            params![problem_set_id],
+        )
+        .unwrap();
     }
 
     fn commit_for_student(action: &str, note: &str, content: &[u8]) -> Commit {

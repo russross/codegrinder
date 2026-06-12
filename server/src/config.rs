@@ -17,6 +17,7 @@ pub struct IpFilterConfig {
 #[derive(Clone, Debug)]
 pub struct ServerConfig {
     pub hostname: String,
+    pub ta_hostname: String,
     pub daycare_secret: String,
     pub lti_secret: String,
     pub session_secret: String,
@@ -26,7 +27,6 @@ pub struct ServerConfig {
     pub tool_id: String,
     pub tool_description: String,
     pub container_engine: String,
-    pub daycare_mount_dir: PathBuf,
     pub sqlite3_path: PathBuf,
     pub sessions_expire: Vec<DateTime<Utc>>,
     pub ip_filter: IpFilterConfig,
@@ -48,6 +48,8 @@ struct RawConfig {
     #[serde(default)]
     hostname: String,
     #[serde(default)]
+    ta_hostname: String,
+    #[serde(default)]
     daycare_secret: String,
     #[serde(default)]
     lti_secret: String,
@@ -65,7 +67,6 @@ struct RawConfig {
     tool_description: String,
     #[serde(default = "default_container_engine")]
     container_engine: String,
-    daycare_mount_dir: Option<PathBuf>,
     #[serde(default)]
     sqlite3_path: PathBuf,
     sessions_expire: Option<Vec<String>>,
@@ -102,6 +103,7 @@ pub fn load_config(path: &Path, root: &Path) -> AppResult<ServerConfig> {
     };
     Ok(ServerConfig {
         hostname: raw.hostname,
+        ta_hostname: raw.ta_hostname,
         daycare_secret: decode_base64_if_needed(&raw.daycare_secret),
         lti_secret: raw.lti_secret,
         session_secret: decode_base64_if_needed(&raw.session_secret),
@@ -111,9 +113,6 @@ pub fn load_config(path: &Path, root: &Path) -> AppResult<ServerConfig> {
         tool_id: raw.tool_id,
         tool_description: raw.tool_description,
         container_engine: raw.container_engine,
-        daycare_mount_dir: raw
-            .daycare_mount_dir
-            .unwrap_or_else(|| path.parent().unwrap_or(root).join("daycare-mounts")),
         sqlite3_path: if raw.sqlite3_path.as_os_str().is_empty() {
             root.join("db").join("codegrinder.db")
         } else {
@@ -129,7 +128,11 @@ pub fn load_config(path: &Path, root: &Path) -> AppResult<ServerConfig> {
     })
 }
 
-pub fn validate_config(config: &ServerConfig, http_enabled: bool) -> AppResult<()> {
+pub fn validate_config(
+    config: &ServerConfig,
+    ta_enabled: bool,
+    daycare_enabled: bool,
+) -> AppResult<()> {
     if config.hostname.trim().is_empty() {
         return Err(AppError::Internal(
             "cannot run with no hostname in the config file".to_owned(),
@@ -140,14 +143,29 @@ pub fn validate_config(config: &ServerConfig, http_enabled: bool) -> AppResult<(
             "cannot run with no daycareSecret in the config file".to_owned(),
         ));
     }
-    if http_enabled && config.lti_secret.trim().is_empty() {
+    if ta_enabled && config.lti_secret.trim().is_empty() {
         return Err(AppError::Internal(
             "cannot run TA role with no ltiSecret in the config file".to_owned(),
         ));
     }
-    if http_enabled && config.session_secret.trim().is_empty() {
+    if ta_enabled && config.session_secret.trim().is_empty() {
         return Err(AppError::Internal(
             "cannot run TA role with no sessionSecret in the config file".to_owned(),
+        ));
+    }
+    if daycare_enabled && config.problem_types.is_empty() {
+        return Err(AppError::Internal(
+            "cannot run Daycare role with no problemTypes in the config file".to_owned(),
+        ));
+    }
+    if daycare_enabled && config.capacity == 0 {
+        return Err(AppError::Internal(
+            "Daycare capacity must be greater than zero".to_owned(),
+        ));
+    }
+    if daycare_enabled && !ta_enabled && config.ta_hostname.trim().is_empty() {
+        return Err(AppError::Internal(
+            "cannot run standalone Daycare role with no taHostname in the config file".to_owned(),
         ));
     }
     Ok(())

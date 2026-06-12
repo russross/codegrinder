@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
+use std::net::SocketAddr;
 use std::sync::Arc;
 
+use axum::extract::ConnectInfo;
 use rusqlite::{Connection, OptionalExtension, params};
 use tonic::{Request, Response, Status};
 
@@ -117,17 +119,21 @@ impl CodeGrinderServer {
         }
     }
 
+    fn require_catalog_search(user: &UserRow) -> AppResult<()> {
+        if user.admin || user.author || user.instructor {
+            Ok(())
+        } else {
+            Err(AppError::Forbidden(
+                "user is not an instructor or author".to_owned(),
+            ))
+        }
+    }
+
     fn ip_allowed<T>(&self, request: &Request<T>) -> bool {
         if !self.ip_filter.enabled() {
             return true;
         }
-        request
-            .metadata()
-            .get("x-real-ip")
-            .or_else(|| request.metadata().get("x-forwarded-for"))
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.split(',').next())
-            .is_some_and(|ip| self.ip_filter.allows(ip.trim()))
+        request_client_ip(request).is_some_and(|ip| self.ip_filter.allows(&ip))
     }
 
     fn select_daycare_host(&self, problem_types: &BTreeSet<String>) -> AppResult<String> {
@@ -222,6 +228,7 @@ impl CodeGrinderService for CodeGrinderServer {
             .authenticated_user(&request)
             .await
             .map_err(AppError::grpc_status)?;
+        Self::require_catalog_search(&current_user).map_err(AppError::grpc_status)?;
         let req = request.into_inner();
         let problem_sets = self
             .db
@@ -557,6 +564,31 @@ impl CodeGrinderService for CodeGrinderServer {
     }
 }
 
+fn request_client_ip<T>(request: &Request<T>) -> Option<String> {
+    request
+        .metadata()
+        .get("x-real-ip")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| value.trim().to_owned())
+        .or_else(|| {
+            request
+                .metadata()
+                .get("x-forwarded-for")
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.split(',').next())
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| value.trim().to_owned())
+        })
+        .or_else(|| request.remote_addr().map(|addr| addr.ip().to_string()))
+        .or_else(|| {
+            request
+                .extensions()
+                .get::<ConnectInfo<SocketAddr>>()
+                .map(|ConnectInfo(addr)| addr.ip().to_string())
+        })
+}
+
 fn hello_response(user: UserRow, version: Version, session_key: String) -> HelloResponse {
     HelloResponse {
         session_key,
@@ -664,7 +696,7 @@ mod tests {
     use crate::proto::{
         AssignmentKey, AuthorFile, AuthorProblemDraft, AuthorProblemStepDraft, Commit,
         GetProblemTypesRequest, ListAssignmentsRequest, ProblemTypeAction, RuntimeBundle,
-        SaveProblemTypeRequest,
+        SaveProblemTypeRequest, SearchProblemCatalogRequest,
     };
     use crate::sessions::create_session;
     use crate::timeutil::db_time;
@@ -786,6 +818,95 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn problem_catalog_search_requires_instructor_or_author() {
+        let service = test_service().await;
+        let sessions = seed_service_users(&service.db, true, true).await;
+
+        let err = service
+            .search_problem_catalog(auth_request(
+                SearchProblemCatalogRequest::default(),
+                &sessions.student,
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), Code::PermissionDenied);
+
+        service
+            .search_problem_catalog(auth_request(
+                SearchProblemCatalogRequest::default(),
+                &sessions.instructor,
+            ))
+            .await
+            .unwrap();
+        service
+            .search_problem_catalog(auth_request(
+                SearchProblemCatalogRequest::default(),
+                &sessions.admin,
+            ))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn restricted_assignment_ip_filter_uses_direct_peer_and_proxy_headers() {
+        let mut service = test_service().await;
+        service.ip_filter = IpFilter::from_entries(&["203.0.113.0/24".to_owned()]);
+        let sessions = seed_service_users(&service.db, false, false).await;
+        seed_service_assignments(&service.db).await;
+        service
+            .db
+            .transaction(|conn| {
+                conn.execute(
+                    "UPDATE assignments SET restricted = 1 WHERE user_id = 'student'",
+                    [],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        let mut direct = auth_request(ListAssignmentsRequest::default(), &sessions.student);
+        direct.extensions_mut().insert(ConnectInfo(
+            "203.0.113.9:12345".parse::<SocketAddr>().unwrap(),
+        ));
+        let direct_items = service
+            .list_assignments(direct)
+            .await
+            .unwrap()
+            .into_inner()
+            .items;
+        assert_eq!(direct_items.len(), 1);
+
+        let mut proxied = auth_request(ListAssignmentsRequest::default(), &sessions.student);
+        proxied.metadata_mut().insert(
+            "x-forwarded-for",
+            "203.0.113.10, 198.51.100.7".parse().unwrap(),
+        );
+        proxied.extensions_mut().insert(ConnectInfo(
+            "198.51.100.7:12345".parse::<SocketAddr>().unwrap(),
+        ));
+        let proxied_items = service
+            .list_assignments(proxied)
+            .await
+            .unwrap()
+            .into_inner()
+            .items;
+        assert_eq!(proxied_items.len(), 1);
+
+        let mut denied = auth_request(ListAssignmentsRequest::default(), &sessions.student);
+        denied.extensions_mut().insert(ConnectInfo(
+            "198.51.100.7:12345".parse::<SocketAddr>().unwrap(),
+        ));
+        let denied_items = service
+            .list_assignments(denied)
+            .await
+            .unwrap()
+            .into_inner()
+            .items;
+        assert!(denied_items.is_empty());
+    }
+
+    #[tokio::test]
     async fn passback_work_uses_assignment_score_and_marks_pending() {
         let service = test_service().await;
         seed_service_users(&service.db, false, false).await;
@@ -831,6 +952,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap().keep();
         let config = Arc::new(ServerConfig {
             hostname: "ta.example".to_owned(),
+            ta_hostname: String::new(),
             daycare_secret: "daycare-secret".to_owned(),
             lti_secret: "lti-secret".to_owned(),
             session_secret: "session-secret".to_owned(),
@@ -840,7 +962,6 @@ mod tests {
             tool_id: "codegrinder".to_owned(),
             tool_description: "Programming exercises".to_owned(),
             container_engine: "sh".to_owned(),
-            daycare_mount_dir: dir.join("daycare"),
             sqlite3_path: dir.join("db.sqlite"),
             sessions_expire: Vec::new(),
             ip_filter: IpFilterConfig::default(),

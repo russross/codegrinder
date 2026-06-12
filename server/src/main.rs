@@ -19,9 +19,11 @@ use std::env;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::{Router, http::StatusCode};
 use axum_server::tls_rustls::RustlsConfig;
+use chrono::Utc;
 use proto::code_grinder_service_server::CodeGrinderServiceServer;
 use tonic::codec::CompressionEncoding;
 use tower::Layer;
@@ -37,9 +39,11 @@ use crate::lti::{LtiState, VersionPayload};
 use crate::registry::DaycareRegistry;
 use crate::service::{CodeGrinderServer, CodeGrinderServerParts};
 use crate::sessions::{LoginTokens, delete_expired_sessions};
+use crate::signatures::compute_daycare_registration_signature;
 use crate::timeutil::now_utc;
 
 const VERSION: &str = "2.8.0";
+const DAYCARE_REGISTRATION_INTERVAL: Duration = Duration::from_secs(10);
 
 #[tokio::main]
 async fn main() -> AppResult<()> {
@@ -49,7 +53,7 @@ async fn main() -> AppResult<()> {
         .unwrap_or_else(|| dirs_home().join("codegrinder"));
     let config_path = args.config.unwrap_or_else(|| root.join("config.json"));
     let config = Arc::new(load_config(&config_path, &root)?);
-    validate_config(&config, args.ta)?;
+    validate_config(&config, args.ta, args.daycare)?;
     let db = Db::open(&config.sqlite3_path)?;
     if args.ta {
         db.transaction(|conn| delete_expired_sessions(conn, now_utc()))
@@ -67,6 +71,9 @@ async fn main() -> AppResult<()> {
     } else {
         None
     };
+    if args.daycare && !args.ta {
+        tokio::spawn(register_daycare(config.clone(), VERSION.to_owned()));
+    }
     let version = VersionPayload {
         version: VERSION.to_owned(),
         grind_version_required: "2.7.0".to_owned(),
@@ -108,6 +115,81 @@ async fn main() -> AppResult<()> {
     }
     .layer(CompressionLayer::new());
     serve(app, args.bind, config).await
+}
+
+async fn register_daycare(config: Arc<config::ServerConfig>, version: String) {
+    let client = reqwest::Client::new();
+    let url = if config.ta_hostname.starts_with("http://")
+        || config.ta_hostname.starts_with("https://")
+    {
+        format!(
+            "{}/daycare_registrations",
+            config.ta_hostname.trim_end_matches('/')
+        )
+    } else {
+        format!("https://{}/daycare_registrations", config.ta_hostname)
+    };
+    let mut last_status = String::new();
+    loop {
+        let started = std::time::Instant::now();
+        let now = Utc::now();
+        let signature = compute_daycare_registration_signature(
+            &config.hostname,
+            &config.problem_types,
+            config.capacity,
+            now,
+            &version,
+            &config.daycare_secret,
+        );
+        let request = signature.map(|signature| registry::DaycareRegistration {
+            hostname: config.hostname.clone(),
+            problem_types: config.problem_types.clone(),
+            capacity: config.capacity,
+            time: now,
+            version: version.clone(),
+            signature,
+        });
+        match request {
+            Ok(registration) => match client.post(&url).json(&registration).send().await {
+                Ok(response) if response.status().is_success() => {
+                    if last_status != "succeeded" {
+                        eprintln!(
+                            "registered daycare with {url}; attempt took {:?}",
+                            started.elapsed()
+                        );
+                    }
+                    last_status = "succeeded".to_owned();
+                }
+                Ok(response) => {
+                    let status = response.status();
+                    let body = response.text().await.unwrap_or_default();
+                    if last_status != "failed" {
+                        eprintln!("unexpected status from {url}: {status}");
+                        for line in body.lines().filter(|line| !line.is_empty()) {
+                            eprintln!("--> {line}");
+                        }
+                    }
+                    last_status = "failed".to_owned();
+                }
+                Err(err) => {
+                    if last_status != "failed" {
+                        eprintln!(
+                            "error connecting to register daycare: {err}; attempt took {:?}",
+                            started.elapsed()
+                        );
+                    }
+                    last_status = "failed".to_owned();
+                }
+            },
+            Err(err) => {
+                if last_status != "failed" {
+                    eprintln!("error signing daycare registration: {err}");
+                }
+                last_status = "failed".to_owned();
+            }
+        }
+        tokio::time::sleep(DAYCARE_REGISTRATION_INTERVAL).await;
+    }
 }
 
 async fn serve(app: Router, bind: SocketAddr, config: Arc<config::ServerConfig>) -> AppResult<()> {

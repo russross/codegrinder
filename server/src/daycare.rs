@@ -1,12 +1,13 @@
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::io::{Cursor, Read};
 use std::process::Stdio;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use sha2::Digest;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tokio::sync::{Mutex, Semaphore, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
@@ -29,51 +30,16 @@ const TRANSCRIPT_DATA_LIMIT: usize = 100_000;
 const WORKSPACE_FILE_READ_LIMIT: usize = 100_000_000;
 const SIGNED_REQUEST_MAX_AGE: chrono::Duration = chrono::Duration::minutes(15);
 const DAYCARE_CONTAINER_LABEL: &str = "codegrinder.daycare=1";
-
-unsafe extern "C" {
-    fn getuid() -> u32;
-    fn getgid() -> u32;
-}
-
-#[cfg(not(test))]
-fn validate_workspace_mount(path: &Path) -> AppResult<()> {
-    let target = std::fs::canonicalize(path)?;
-    let mountinfo = std::fs::read_to_string("/proc/self/mountinfo")?;
-    let mut best: Option<(&str, &str)> = None;
-    for line in mountinfo.lines() {
-        let Some((mount_fields, fs_fields)) = line.split_once(" - ") else {
-            continue;
-        };
-        let fields = mount_fields.split_whitespace().collect::<Vec<_>>();
-        let fs = fs_fields.split_whitespace().next().unwrap_or("");
-        let Some(mount_point) = fields.get(4) else {
-            continue;
-        };
-        let mount_path = Path::new(mount_point);
-        if target.starts_with(mount_path)
-            && best
-                .map(|(best_mount, _)| mount_point.len() > best_mount.len())
-                .unwrap_or(true)
-        {
-            best = Some((mount_point, fs));
-        }
-    }
-    if best.map(|(_, fs)| fs) == Some("tmpfs") {
-        return Ok(());
-    }
-    Err(AppError::Internal(format!(
-        "daycare mount directory {} must be on tmpfs",
-        path.display()
-    )))
-}
+const STUDENT_UID: u64 = 1001;
+const STUDENT_GID: u64 = 1001;
 
 #[derive(Clone)]
 pub struct DaycareRuntime {
     config: Arc<ServerConfig>,
     container_command: Arc<Vec<String>>,
-    workspace_base: PathBuf,
     container_slots: Arc<Semaphore>,
-    user_locks: Arc<Mutex<BTreeMap<String, Arc<Mutex<()>>>>>,
+    active_runs: Arc<Mutex<BTreeMap<String, u64>>>,
+    next_run_id: Arc<AtomicU64>,
 }
 
 impl DaycareRuntime {
@@ -87,15 +53,12 @@ impl DaycareRuntime {
                 .map(ToOwned::to_owned)
                 .collect::<Vec<_>>()
         };
-        std::fs::create_dir_all(&config.daycare_mount_dir)?;
-        #[cfg(not(test))]
-        validate_workspace_mount(&config.daycare_mount_dir)?;
         Ok(Self {
-            workspace_base: config.daycare_mount_dir.clone(),
-            container_slots: Arc::new(Semaphore::new(config.capacity.max(1))),
+            container_slots: Arc::new(Semaphore::new(config.capacity)),
             config,
             container_command: Arc::new(command),
-            user_locks: Arc::new(Mutex::new(BTreeMap::new())),
+            active_runs: Arc::new(Mutex::new(BTreeMap::new())),
+            next_run_id: Arc::new(AtomicU64::new(1)),
         })
     }
 
@@ -132,25 +95,20 @@ impl DaycareRuntime {
         )?;
         let limits = effective_limits(&bundle)?;
         let nanny_name = format!("nanny-{}", safe_user_dir_name(&bundle.user_id));
-        let user_lock = {
-            let mut locks = self.user_locks.lock().await;
-            locks
-                .entry(nanny_name.clone())
-                .or_insert_with(|| Arc::new(Mutex::new(())))
-                .clone()
-        };
+        let run_id = self.next_run_id.fetch_add(1, Ordering::Relaxed);
+        self.mark_active(&nanny_name, run_id).await;
         preempt_container(&self.container_command, &nanny_name).await;
-        let _user_guard = user_lock.lock().await;
         let _slot = self
             .container_slots
             .acquire()
             .await
             .map_err(|_| AppError::Internal("container limiter closed".to_owned()))?;
-        let workspace = WorkspaceMount::create(&self.workspace_base, &bundle.user_id).await?;
+        self.require_active(&nanny_name, run_id).await?;
         let deadline = Instant::now() + action_timeout(&limits);
         let container = match Container::create(
             &self.container_command,
-            &workspace,
+            &self.active_runs,
+            run_id,
             &nanny_name,
             &bundle,
             &limits,
@@ -159,14 +117,14 @@ impl DaycareRuntime {
         .await
         {
             Ok(container) => container,
-            Err(err) => {
-                workspace.cleanup().await;
-                return Err(err);
-            }
+            Err(err) => return self.finish_run(&nanny_name, run_id, Err(err)).await,
         };
+        if let Err(err) = self.require_active(&nanny_name, run_id).await {
+            let _ = container.shutdown().await;
+            return Err(err);
+        }
         let result = run_action(
             &container,
-            &workspace,
             &mut bundle,
             &self.config.daycare_secret,
             deadline,
@@ -174,10 +132,38 @@ impl DaycareRuntime {
         )
         .await;
         let shutdown = container.shutdown().await;
-        workspace.cleanup().await;
+        self.clear_active(&nanny_name, run_id).await;
         result?;
         shutdown?;
         Ok(())
+    }
+
+    async fn mark_active(&self, name: &str, run_id: u64) {
+        let mut active = self.active_runs.lock().await;
+        active.insert(name.to_owned(), run_id);
+    }
+
+    async fn require_active(&self, name: &str, run_id: u64) -> AppResult<()> {
+        let active = self.active_runs.lock().await;
+        if active.get(name) == Some(&run_id) {
+            Ok(())
+        } else {
+            Err(AppError::BadRequest(
+                "daycare request was superseded by a newer request".to_owned(),
+            ))
+        }
+    }
+
+    async fn clear_active(&self, name: &str, run_id: u64) {
+        let mut active = self.active_runs.lock().await;
+        if active.get(name) == Some(&run_id) {
+            active.remove(name);
+        }
+    }
+
+    async fn finish_run<T>(&self, name: &str, run_id: u64, result: AppResult<T>) -> AppResult<T> {
+        self.clear_active(name, run_id).await;
+        result
     }
 }
 
@@ -257,7 +243,22 @@ fn effective_limits(bundle: &RuntimeBundle) -> AppResult<RuntimeLimits> {
             _ => {}
         }
     }
+    validate_runtime_limits(&limits)?;
     Ok(limits)
+}
+
+fn validate_runtime_limits(limits: &RuntimeLimits) -> AppResult<()> {
+    if limits.max_cpu <= 0
+        || limits.max_fd <= 0
+        || limits.max_file_size <= 0
+        || limits.max_memory <= 0
+        || limits.max_threads <= 0
+    {
+        return Err(AppError::BadRequest(
+            "runtime limits must be positive".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 fn action_timeout(limits: &RuntimeLimits) -> Duration {
@@ -267,13 +268,12 @@ fn action_timeout(limits: &RuntimeLimits) -> Duration {
 
 async fn run_action(
     container: &Container,
-    workspace: &WorkspaceMount,
     bundle: &mut RuntimeBundle,
     secret: &str,
     deadline: Instant,
     tx: mpsc::Sender<Result<DaycareResponse, Status>>,
 ) -> AppResult<()> {
-    workspace.write_files(&bundle.files, 0o666).await?;
+    container.put_files(&bundle.files, 0o666, deadline).await?;
     let mut transcript = TranscriptCapture::default();
     let command = bundle
         .command
@@ -362,8 +362,8 @@ async fn run_action(
         } else {
             parse_xunit(
                 &mut report,
-                &workspace
-                    .read_regular_file("test_detail.xml")
+                &container
+                    .read_regular_file("test_detail.xml", deadline)
                     .await
                     .unwrap_or_default(),
             );
@@ -383,8 +383,8 @@ async fn run_action(
         } else {
             parse_check(
                 &mut report,
-                &workspace
-                    .read_regular_file("test_detail.xml")
+                &container
+                    .read_regular_file("test_detail.xml", deadline)
                     .await
                     .unwrap_or_default(),
             );
@@ -412,7 +412,7 @@ async fn run_action(
     }
     for option in &bundle.problem_options {
         if let Some(paths) = option.strip_prefix("download=") {
-            match read_download_files(workspace, paths).await {
+            match container.download_files(paths, deadline).await {
                 Ok(files) if !files.is_empty() => {
                     emit_event(
                         &tx,
@@ -683,38 +683,23 @@ fn failure_context(details: &str) -> String {
     String::new()
 }
 
-async fn read_download_files(
-    workspace: &WorkspaceMount,
+fn select_download_files(
+    all_files: &BTreeMap<String, Vec<u8>>,
     raw_paths: &str,
-) -> AppResult<BTreeMap<String, Vec<u8>>> {
+) -> BTreeMap<String, Vec<u8>> {
     let mut files = BTreeMap::new();
-    let mut total_bytes = 0usize;
     for path in raw_paths.split(',').filter(|path| !path.is_empty()) {
         if has_glob_meta(path) {
-            for candidate in workspace.regular_file_paths().await? {
-                if glob_matches(path, &candidate) && !files.contains_key(&candidate) {
-                    let content = workspace.read_regular_file(&candidate).await?;
-                    total_bytes += content.len();
-                    if total_bytes > WORKSPACE_FILE_READ_LIMIT {
-                        return Err(AppError::BadRequest(
-                            "downloaded file data exceeds limit".to_owned(),
-                        ));
-                    }
-                    files.insert(candidate, content);
+            for (candidate, content) in all_files {
+                if glob_matches(path, candidate) && !files.contains_key(candidate) {
+                    files.insert(candidate.clone(), content.clone());
                 }
             }
-        } else if workspace.path_exists(path).await? {
-            let content = workspace.read_regular_file(path).await?;
-            total_bytes += content.len();
-            if total_bytes > WORKSPACE_FILE_READ_LIMIT {
-                return Err(AppError::BadRequest(
-                    "downloaded file data exceeds limit".to_owned(),
-                ));
-            }
-            files.insert(path.to_owned(), content);
+        } else if let Some(content) = all_files.get(path) {
+            files.insert(path.to_owned(), content.clone());
         }
     }
-    Ok(files)
+    files
 }
 
 fn has_glob_meta(path: &str) -> bool {
@@ -769,110 +754,70 @@ fn char_class_matches(class: &[u8], value: u8) -> bool {
     if negated { !matched } else { matched }
 }
 
-struct WorkspaceMount {
-    root: PathBuf,
+fn build_input_tar(files: &BTreeMap<String, Vec<u8>>, mode: u32) -> AppResult<Vec<u8>> {
+    let mut archive = tar::Builder::new(Vec::new());
+    for (path, content) in files {
+        checked_relative_path(path)?;
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Regular);
+        header.set_mode(mode);
+        header.set_uid(STUDENT_UID);
+        header.set_gid(STUDENT_GID);
+        header.set_size(content.len() as u64);
+        header.set_mtime(0);
+        header.set_cksum();
+        archive.append_data(&mut header, path, Cursor::new(content))?;
+    }
+    archive.finish()?;
+    archive.into_inner().map_err(Into::into)
 }
 
-impl WorkspaceMount {
-    async fn create(base: &Path, user_id: &str) -> AppResult<Self> {
-        let root = base.join(safe_user_dir_name(user_id));
-        let _ = tokio::fs::remove_dir_all(&root).await;
-        tokio::fs::create_dir_all(&root).await?;
-        Ok(Self { root })
-    }
-
-    async fn write_files(&self, files: &BTreeMap<String, Vec<u8>>, mode: u32) -> AppResult<()> {
-        for (path, content) in files {
-            let relative = checked_relative_path(path)?;
-            let target = self.root.join(relative);
-            if let Some(parent) = target.parent() {
-                tokio::fs::create_dir_all(parent).await?;
-            }
-            tokio::fs::write(&target, content).await?;
-            set_mode(&target, mode).await?;
+fn read_output_tar(raw: &[u8]) -> AppResult<BTreeMap<String, Vec<u8>>> {
+    let mut archive = tar::Archive::new(Cursor::new(raw));
+    let mut files = BTreeMap::new();
+    let mut total_bytes = 0usize;
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        if !entry.header().entry_type().is_file() {
+            continue;
         }
-        Ok(())
-    }
-
-    async fn path_exists(&self, path: &str) -> AppResult<bool> {
-        let target = self.root.join(checked_relative_path(path)?);
-        match tokio::fs::try_exists(target).await {
-            Ok(exists) => Ok(exists),
-            Err(err) => Err(err.into()),
+        let path = normalized_tar_path(&entry)?;
+        let size = entry.header().size()? as usize;
+        total_bytes = total_bytes
+            .checked_add(size)
+            .ok_or_else(|| AppError::BadRequest("downloaded file data exceeds limit".to_owned()))?;
+        if total_bytes > WORKSPACE_FILE_READ_LIMIT {
+            return Err(AppError::BadRequest(
+                "downloaded file data exceeds limit".to_owned(),
+            ));
         }
+        let mut content = Vec::with_capacity(size);
+        entry.read_to_end(&mut content)?;
+        files.insert(path, content);
     }
-
-    async fn read_regular_file(&self, path: &str) -> AppResult<Vec<u8>> {
-        let target = self.root.join(checked_relative_path(path)?);
-        let meta = tokio::fs::symlink_metadata(&target).await?;
-        if !meta.is_file() {
-            return Err(AppError::BadRequest(format!(
-                "refusing non-regular output path {path}"
-            )));
-        }
-        if meta.len() as usize > WORKSPACE_FILE_READ_LIMIT {
-            return Err(AppError::BadRequest(format!(
-                "output file {path} exceeds read limit"
-            )));
-        }
-        let file = tokio::fs::File::open(&target).await?;
-        let opened = file.metadata().await?;
-        if !opened.is_file() {
-            return Err(AppError::BadRequest(format!(
-                "refusing non-regular output path {path}"
-            )));
-        }
-        Ok(tokio::fs::read(target).await?)
-    }
-
-    async fn regular_file_paths(&self) -> AppResult<Vec<String>> {
-        let root = self.root.clone();
-        tokio::task::spawn_blocking(move || regular_file_paths_blocking(&root))
-            .await
-            .map_err(|err| AppError::Internal(err.to_string()))?
-    }
-
-    async fn cleanup(&self) {
-        let _ = tokio::fs::remove_dir_all(&self.root).await;
-    }
+    Ok(files)
 }
 
-fn regular_file_paths_blocking(root: &Path) -> AppResult<Vec<String>> {
-    let mut paths = Vec::new();
-    let mut stack = vec![root.to_owned()];
-    while let Some(current) = stack.pop() {
-        for entry in std::fs::read_dir(&current)? {
-            let entry = entry?;
-            let path = entry.path();
-            let meta = std::fs::symlink_metadata(&path)?;
-            if meta.file_type().is_symlink() {
-                continue;
-            }
-            if meta.is_dir() {
-                stack.push(path);
-            } else if meta.is_file() {
-                let rel = path
-                    .strip_prefix(root)
-                    .map_err(|err| AppError::Internal(err.to_string()))?
-                    .to_string_lossy()
-                    .replace('\\', "/");
-                paths.push(rel);
+fn normalized_tar_path<R: std::io::Read>(entry: &tar::Entry<'_, R>) -> AppResult<String> {
+    let path = entry.path()?;
+    let mut parts = Vec::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(part) => parts.push(part.to_string_lossy().to_string()),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir
+            | std::path::Component::RootDir
+            | std::path::Component::Prefix(_) => {
+                return Err(AppError::BadRequest(format!(
+                    "bad output path {:?}",
+                    path.display()
+                )));
             }
         }
     }
-    paths.sort();
-    Ok(paths)
-}
-
-async fn set_mode(path: &Path, mode: u32) -> AppResult<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = tokio::fs::metadata(path).await?.permissions();
-        perms.set_mode(mode);
-        tokio::fs::set_permissions(path, perms).await?;
-    }
-    Ok(())
+    let normalized = parts.join("/");
+    checked_relative_path(&normalized)?;
+    Ok(normalized)
 }
 
 struct Container {
@@ -883,14 +828,20 @@ struct Container {
 impl Container {
     async fn create(
         command: &Arc<Vec<String>>,
-        workspace: &WorkspaceMount,
+        active_runs: &Arc<Mutex<BTreeMap<String, u64>>>,
+        run_id: u64,
         name: &str,
         bundle: &RuntimeBundle,
         limits: &RuntimeLimits,
         deadline: Instant,
     ) -> AppResult<Self> {
         let memory = format!("{}m", limits.max_memory);
-        let disk_bytes = limits.max_file_size.max(0) * 1024 * 1024;
+        let disk_bytes = limits
+            .max_file_size
+            .checked_mul(1024 * 1024)
+            .ok_or_else(|| {
+                AppError::BadRequest("runtime file size limit is too large".to_owned())
+            })?;
         let docker_args = vec![
             "run".to_owned(),
             "-d".to_owned(),
@@ -903,10 +854,7 @@ impl Container {
             container_user(),
             "--net=none".to_owned(),
             "--mount".to_owned(),
-            format!(
-                "type=bind,source={},target=/home/student",
-                workspace.root.display()
-            ),
+            format!("type=tmpfs,target=/home/student,tmpfs-size={disk_bytes},tmpfs-mode=1777"),
             "--label".to_owned(),
             DAYCARE_CONTAINER_LABEL.to_owned(),
             "--label".to_owned(),
@@ -933,7 +881,19 @@ impl Container {
             "/bin/sleep".to_owned(),
             format!("{}s", (limits.max_cpu * 2).max(1)),
         ];
-        let result = run_command(command, &docker_args, deadline).await?;
+        let mut result = run_command(command, &docker_args, deadline).await?;
+        if result.status != 0 && command_output_contains(&result, "already in use") {
+            let active = active_runs.lock().await;
+            if active.get(name) != Some(&run_id) {
+                return Err(AppError::BadRequest(
+                    "daycare request was superseded by a newer request".to_owned(),
+                ));
+            }
+            drop(active);
+            preempt_container(command, name).await;
+            ensure_active(active_runs, name, run_id).await?;
+            result = run_command(command, &docker_args, deadline).await?;
+        }
         if result.status != 0 {
             return Err(AppError::Internal(format!(
                 "container run failed: exit={}; output={}",
@@ -947,10 +907,86 @@ impl Container {
                 "container run failed: empty container ID".to_owned(),
             ));
         }
+        if let Err(err) = ensure_active(active_runs, name, run_id).await {
+            let _ = run_command(
+                command,
+                &["rm".to_owned(), "-f".to_owned(), id.clone()],
+                Instant::now() + Duration::from_secs(5),
+            )
+            .await;
+            return Err(err);
+        }
         Ok(Self {
             command: command.clone(),
             id,
         })
+    }
+
+    async fn put_files(
+        &self,
+        files: &BTreeMap<String, Vec<u8>>,
+        mode: u32,
+        deadline: Instant,
+    ) -> AppResult<()> {
+        if files.is_empty() {
+            return Ok(());
+        }
+        let tar = build_input_tar(files, mode)?;
+        let args = vec![
+            "cp".to_owned(),
+            "-".to_owned(),
+            format!("{}:/home/student/", self.id),
+        ];
+        let result = run_command_with_input(&self.command, &args, tar, deadline).await?;
+        if result.status != 0 {
+            return Err(AppError::Internal(format!(
+                "container cp failed: exit={}; output={}",
+                result.status,
+                String::from_utf8_lossy(&[result.stdout, result.stderr].concat())
+            )));
+        }
+        Ok(())
+    }
+
+    async fn read_regular_file(&self, path: &str, deadline: Instant) -> AppResult<Vec<u8>> {
+        let files = self.copy_student_files(deadline).await?;
+        files.get(path).cloned().ok_or_else(|| {
+            AppError::BadRequest(format!(
+                "output file {path} was not produced by the container"
+            ))
+        })
+    }
+
+    async fn download_files(
+        &self,
+        raw_paths: &str,
+        deadline: Instant,
+    ) -> AppResult<BTreeMap<String, Vec<u8>>> {
+        let files = self.copy_student_files(deadline).await?;
+        Ok(select_download_files(&files, raw_paths))
+    }
+
+    async fn copy_student_files(&self, deadline: Instant) -> AppResult<BTreeMap<String, Vec<u8>>> {
+        let args = vec![
+            "cp".to_owned(),
+            format!("{}:/home/student/.", self.id),
+            "-".to_owned(),
+        ];
+        let result = run_command_with_output_limit(
+            &self.command,
+            &args,
+            deadline,
+            WORKSPACE_FILE_READ_LIMIT + 1_000_000,
+        )
+        .await?;
+        if result.status != 0 {
+            return Err(AppError::Internal(format!(
+                "container cp from container failed: exit={}; output={}",
+                result.status,
+                String::from_utf8_lossy(&[result.stdout, result.stderr].concat())
+            )));
+        }
+        read_output_tar(&result.stdout)
     }
 
     async fn exec(&self, cmd: &[String], deadline: Instant) -> AppResult<CommandResult> {
@@ -987,10 +1023,28 @@ impl Container {
     }
 }
 
+async fn ensure_active(
+    active_runs: &Arc<Mutex<BTreeMap<String, u64>>>,
+    name: &str,
+    run_id: u64,
+) -> AppResult<()> {
+    let active = active_runs.lock().await;
+    if active.get(name) == Some(&run_id) {
+        Ok(())
+    } else {
+        Err(AppError::BadRequest(
+            "daycare request was superseded by a newer request".to_owned(),
+        ))
+    }
+}
+
+fn command_output_contains(result: &CommandResult, needle: &str) -> bool {
+    String::from_utf8_lossy(&result.stdout).contains(needle)
+        || String::from_utf8_lossy(&result.stderr).contains(needle)
+}
+
 fn container_user() -> String {
-    let uid = unsafe { getuid() };
-    let gid = unsafe { getgid() };
-    format!("{uid}:{gid}")
+    format!("{STUDENT_UID}:{STUDENT_GID}")
 }
 
 async fn preempt_container(command: &Arc<Vec<String>>, name: &str) {
@@ -1013,16 +1067,54 @@ async fn run_command(
     args: &[String],
     deadline: Instant,
 ) -> AppResult<CommandResult> {
+    run_command_with_output_limit(command, args, deadline, COMMAND_OUTPUT_LIMIT).await
+}
+
+async fn run_command_with_output_limit(
+    command: &Arc<Vec<String>>,
+    args: &[String],
+    deadline: Instant,
+    output_limit: usize,
+) -> AppResult<CommandResult> {
+    run_command_inner(command, args, None, deadline, output_limit).await
+}
+
+async fn run_command_with_input(
+    command: &Arc<Vec<String>>,
+    args: &[String],
+    input: Vec<u8>,
+    deadline: Instant,
+) -> AppResult<CommandResult> {
+    run_command_inner(command, args, Some(input), deadline, COMMAND_OUTPUT_LIMIT).await
+}
+
+async fn run_command_inner(
+    command: &Arc<Vec<String>>,
+    args: &[String],
+    input: Option<Vec<u8>>,
+    deadline: Instant,
+    output_limit: usize,
+) -> AppResult<CommandResult> {
     let mut cmd = Command::new(&command[0]);
     cmd.args(command.iter().skip(1))
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if input.is_some() {
+        cmd.stdin(Stdio::piped());
+    }
     let mut child = cmd.spawn()?;
+    if let Some(input) = input {
+        let mut stdin = child.stdin.take().expect("stdin piped");
+        tokio::spawn(async move {
+            let _ = stdin.write_all(&input).await;
+        });
+    }
     let mut stdout = child.stdout.take().expect("stdout piped");
     let mut stderr = child.stderr.take().expect("stderr piped");
-    let stdout_task = tokio::spawn(async move { read_limited(&mut stdout).await });
-    let stderr_task = tokio::spawn(async move { read_limited(&mut stderr).await });
+    let stdout_task = tokio::spawn(async move { read_limited(&mut stdout, output_limit).await });
+    let stderr_task =
+        tokio::spawn(async move { read_limited(&mut stderr, COMMAND_OUTPUT_LIMIT).await });
     let wait = child.wait();
     let status = match tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), wait).await
     {
@@ -1045,7 +1137,7 @@ async fn run_command(
     })
 }
 
-async fn read_limited<R: AsyncReadExt + Unpin>(reader: &mut R) -> AppResult<Vec<u8>> {
+async fn read_limited<R: AsyncReadExt + Unpin>(reader: &mut R, limit: usize) -> AppResult<Vec<u8>> {
     let mut out = Vec::new();
     let mut buf = [0_u8; 8192];
     let mut truncated = false;
@@ -1057,7 +1149,7 @@ async fn read_limited<R: AsyncReadExt + Unpin>(reader: &mut R) -> AppResult<Vec<
             }
             return Ok(out);
         }
-        let remaining = COMMAND_OUTPUT_LIMIT.saturating_sub(out.len());
+        let remaining = limit.saturating_sub(out.len());
         out.extend_from_slice(&buf[..n.min(remaining)]);
         if n > remaining {
             truncated = true;
@@ -1068,6 +1160,7 @@ async fn read_limited<R: AsyncReadExt + Unpin>(reader: &mut R) -> AppResult<Vec<
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
 
     use chrono::{Duration, Utc};
@@ -1134,58 +1227,51 @@ mod tests {
         assert_eq!(score_from_report(&report), 0.5);
     }
 
+    #[test]
+    fn runtime_limit_overrides_cannot_disable_resource_controls() {
+        let config = test_config(tempfile::tempdir().unwrap().path());
+        let signed = signed_runtime(&config, |bundle| {
+            bundle.problem_options = vec!["maxMemory=0".to_owned()];
+        });
+        let bundle =
+            validate_and_decode_action(&signed, &config.daycare_secret, &config.hostname).unwrap();
+
+        assert!(effective_limits(&bundle).is_err());
+    }
+
     #[tokio::test]
     async fn workspace_mount_rejects_escaping_paths_and_large_result_files() {
-        let dir = tempfile::tempdir().unwrap();
-        let workspace = WorkspaceMount::create(dir.path(), "student").await.unwrap();
-
         assert!(
-            workspace
-                .write_files(
-                    &BTreeMap::from([("../x".to_owned(), b"bad".to_vec())]),
-                    0o666
-                )
-                .await
-                .is_err()
+            build_input_tar(
+                &BTreeMap::from([("../x".to_owned(), b"bad".to_vec())]),
+                0o666
+            )
+            .is_err()
         );
 
-        let large = workspace.root.join("test_detail.xml");
-        fs::write(&large, vec![b'x'; WORKSPACE_FILE_READ_LIMIT + 1]).unwrap();
-        assert!(
-            workspace
-                .read_regular_file("test_detail.xml")
-                .await
-                .is_err()
-        );
-        workspace.cleanup().await;
+        let tar = output_tar(&[(
+            "test_detail.xml",
+            &vec![b'x'; WORKSPACE_FILE_READ_LIMIT + 1],
+        )]);
+        assert!(read_output_tar(&tar).is_err());
     }
 
     #[tokio::test]
     async fn downloaded_artifacts_support_globs_and_reject_symlinks() {
-        let dir = tempfile::tempdir().unwrap();
-        let workspace = WorkspaceMount::create(dir.path(), "student").await.unwrap();
-        fs::write(workspace.root.join("artifact-one.txt"), b"one").unwrap();
-        fs::create_dir(workspace.root.join("sub")).unwrap();
-        fs::write(workspace.root.join("sub").join("artifact-two.txt"), b"two").unwrap();
-        #[cfg(unix)]
-        std::os::unix::fs::symlink("/etc/passwd", workspace.root.join("artifact-link.txt"))
-            .unwrap();
-
-        let files = read_download_files(&workspace, "artifact-*.txt,sub/artifact-*.txt")
-            .await
-            .unwrap();
+        let tar = output_tar_with_symlink(
+            &[
+                ("./artifact-one.txt", b"one".as_slice()),
+                ("./sub/artifact-two.txt", b"two".as_slice()),
+            ],
+            "artifact-link.txt",
+            "/etc/passwd",
+        );
+        let all_files = read_output_tar(&tar).unwrap();
+        let files = select_download_files(&all_files, "artifact-*.txt,sub/artifact-*.txt");
 
         assert_eq!(files.get("artifact-one.txt"), Some(&b"one".to_vec()));
         assert_eq!(files.get("sub/artifact-two.txt"), Some(&b"two".to_vec()));
         assert!(!files.contains_key("artifact-link.txt"));
-        #[cfg(unix)]
-        assert!(
-            workspace
-                .read_regular_file("artifact-link.txt")
-                .await
-                .is_err()
-        );
-        workspace.cleanup().await;
     }
 
     #[tokio::test]
@@ -1220,6 +1306,9 @@ mod tests {
         assert!(log.contains("rm -f nanny-student"));
         assert!(log.contains("run -d"));
         assert!(log.contains("--user "));
+        assert!(log.contains(
+            "--mount type=tmpfs,target=/home/student,tmpfs-size=10485760,tmpfs-mode=1777"
+        ));
         assert!(log.contains("--label codegrinder.daycare=1"));
         assert!(log.contains("--label codegrinder.user_id=student"));
         assert!(log.contains("--ulimit core=0:0"));
@@ -1227,7 +1316,6 @@ mod tests {
         assert!(log.contains("--ulimit fsize=10485760"));
         assert!(log.contains("--ulimit nofile=10:10"));
         assert!(log.contains("fake-container true"));
-        assert!(!config.daycare_mount_dir.join("student").exists());
     }
 
     #[tokio::test]
@@ -1373,6 +1461,60 @@ mod tests {
         assert_eq!(report.note, "Passed 1/1 tests");
     }
 
+    fn output_tar(files: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut archive = tar::Builder::new(Vec::new());
+        for (path, content) in files {
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Regular);
+            header.set_mode(0o666);
+            header.set_uid(STUDENT_UID);
+            header.set_gid(STUDENT_GID);
+            header.set_size(content.len() as u64);
+            header.set_mtime(0);
+            header.set_cksum();
+            archive
+                .append_data(&mut header, *path, Cursor::new(*content))
+                .unwrap();
+        }
+        archive.finish().unwrap();
+        archive.into_inner().unwrap()
+    }
+
+    fn output_tar_with_symlink(
+        files: &[(&str, &[u8])],
+        link_path: &str,
+        link_target: &str,
+    ) -> Vec<u8> {
+        let mut archive = tar::Builder::new(Vec::new());
+        for (path, content) in files {
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Regular);
+            header.set_mode(0o666);
+            header.set_uid(STUDENT_UID);
+            header.set_gid(STUDENT_GID);
+            header.set_size(content.len() as u64);
+            header.set_mtime(0);
+            header.set_cksum();
+            archive
+                .append_data(&mut header, *path, Cursor::new(*content))
+                .unwrap();
+        }
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Symlink);
+        header.set_mode(0o777);
+        header.set_uid(STUDENT_UID);
+        header.set_gid(STUDENT_GID);
+        header.set_size(0);
+        header.set_mtime(0);
+        header.set_link_name(link_target).unwrap();
+        header.set_cksum();
+        archive
+            .append_data(&mut header, link_path, Cursor::new([]))
+            .unwrap();
+        archive.finish().unwrap();
+        archive.into_inner().unwrap()
+    }
+
     fn signed_runtime(
         config: &ServerConfig,
         mutate: impl FnOnce(&mut RuntimeBundle),
@@ -1443,14 +1585,24 @@ mod tests {
 
     fn fake_check_engine(base: &Path) -> PathBuf {
         let script = base.join("fake-check-engine.sh");
-        let workspace = base.join("mounts").join("student");
+        let output = base.join("check-output.tar");
+        fs::write(
+            &output,
+            output_tar(&[
+                (
+                    "test_detail.xml",
+                    b"<suite><test result=\"success\"><id>ok</id></test><test result=\"failure\"><id>bad</id><message>nope</message><fn>test_bad</fn></test></suite>",
+                ),
+                ("artifact.txt", b"artifact"),
+            ]),
+        )
+        .unwrap();
         fs::write(
             &script,
             format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}/engine.log\ncase \"$1\" in\n  run) echo fake-container ;;\n  exec) printf 'student stdout\\n'; printf 'student stderr\\n' >&2; cat > {}/test_detail.xml <<'XML'\n<suite><test result=\"success\"><id>ok</id></test><test result=\"failure\"><id>bad</id><message>nope</message><fn>test_bad</fn></test></suite>\nXML\nprintf artifact > {}/artifact.txt; exit 0 ;;\n  stop) exit 0 ;;\n  rm) exit 0 ;;\n  *) exit 0 ;;\nesac\n",
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}/engine.log\ncase \"$1\" in\n  run) echo fake-container ;;\n  exec) printf 'student stdout\\n'; printf 'student stderr\\n' >&2; exit 0 ;;\n  cp) if [ \"$2\" = \"-\" ]; then cat >/dev/null; else cat {}; fi ;;\n  stop) exit 0 ;;\n  rm) exit 0 ;;\n  *) exit 0 ;;\nesac\n",
                 base.display(),
-                workspace.display(),
-                workspace.display(),
+                output.display(),
             ),
         )
         .unwrap();
@@ -1466,14 +1618,22 @@ mod tests {
 
     fn fake_passing_check_exit_engine(base: &Path, exit_status: i32) -> PathBuf {
         let script = base.join("fake-passing-check-exit-engine.sh");
-        let workspace = base.join("mounts").join("student");
+        let output = base.join("passing-check-output.tar");
+        fs::write(
+            &output,
+            output_tar(&[(
+                "test_detail.xml",
+                b"<suite><test result=\"success\"><id>ok</id></test></suite>",
+            )]),
+        )
+        .unwrap();
         fs::write(
             &script,
             format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}/engine.log\ncase \"$1\" in\n  run) echo fake-container ;;\n  exec) cat > {}/test_detail.xml <<'XML'\n<suite><test result=\"success\"><id>ok</id></test></suite>\nXML\nexit {} ;;\n  stop) exit 0 ;;\n  rm) exit 0 ;;\n  *) exit 0 ;;\nesac\n",
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}/engine.log\ncase \"$1\" in\n  run) echo fake-container ;;\n  exec) exit {} ;;\n  cp) if [ \"$2\" = \"-\" ]; then cat >/dev/null; else cat {}; fi ;;\n  stop) exit 0 ;;\n  rm) exit 0 ;;\n  *) exit 0 ;;\nesac\n",
                 base.display(),
-                workspace.display(),
                 exit_status,
+                output.display(),
             ),
         )
         .unwrap();
@@ -1490,6 +1650,7 @@ mod tests {
     fn test_config(base: &Path) -> ServerConfig {
         ServerConfig {
             hostname: "ta.example".to_owned(),
+            ta_hostname: String::new(),
             daycare_secret: "daycare-secret".to_owned(),
             lti_secret: "lti-secret".to_owned(),
             session_secret: "session-secret".to_owned(),
@@ -1499,7 +1660,6 @@ mod tests {
             tool_id: "codegrinder".to_owned(),
             tool_description: "Programming exercises".to_owned(),
             container_engine: "docker".to_owned(),
-            daycare_mount_dir: base.join("mounts"),
             sqlite3_path: base.join("db.sqlite"),
             sessions_expire: Vec::new(),
             ip_filter: IpFilterConfig::default(),

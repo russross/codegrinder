@@ -28,7 +28,7 @@ CREATE TABLE problem_type_actions (
     CHECK (max_cpu > 0),
     CHECK (max_fd > 0),
     CHECK (max_file_size > 0),
-    CHECK (max_memory >= 0),
+    CHECK (max_memory > 0),
     CHECK (max_threads > 0)
 ) WITHOUT ROWID;
 

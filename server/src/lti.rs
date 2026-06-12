@@ -450,6 +450,7 @@ mod tests {
     fn test_config() -> ServerConfig {
         ServerConfig {
             hostname: "ta.example".to_owned(),
+            ta_hostname: String::new(),
             daycare_secret: "daycare-secret".to_owned(),
             lti_secret: "lti-secret".to_owned(),
             session_secret: "session-secret".to_owned(),
@@ -459,7 +460,6 @@ mod tests {
             tool_id: "codegrinder".to_owned(),
             tool_description: "Programming exercises".to_owned(),
             container_engine: "docker".to_owned(),
-            daycare_mount_dir: PathBuf::new(),
             sqlite3_path: PathBuf::new(),
             sessions_expire: Vec::new(),
             ip_filter: IpFilterConfig::default(),
