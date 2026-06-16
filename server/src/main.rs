@@ -52,7 +52,12 @@ async fn main() -> AppResult<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| dirs_home().join("codegrinder"));
     let config_path = args.config.unwrap_or_else(|| root.join("config.json"));
-    let config = Arc::new(load_config(&config_path, &root)?);
+    let mut config = load_config(&config_path, &root)?;
+    if args.dev_http {
+        config.tls_cert = None;
+        config.tls_key = None;
+    }
+    let config = Arc::new(config);
     validate_config(&config, args.ta, args.daycare)?;
     let db = Db::open(&config.sqlite3_path)?;
     if args.ta {
@@ -221,6 +226,7 @@ struct Args {
     bind: SocketAddr,
     ta: bool,
     daycare: bool,
+    dev_http: bool,
 }
 
 impl Args {
@@ -229,6 +235,7 @@ impl Args {
         let mut ta = false;
         let mut daycare = false;
         let mut role_specified = false;
+        let mut dev_http = false;
         let mut bind = "127.0.0.1:8443"
             .parse::<SocketAddr>()
             .map_err(|err| AppError::BadRequest(format!("invalid default bind: {err}")))?;
@@ -249,6 +256,21 @@ impl Args {
                         .parse()
                         .map_err(|err| AppError::BadRequest(format!("invalid --bind: {err}")))?;
                 }
+                "--dev-http" => {
+                    let value = args.next().ok_or_else(|| {
+                        AppError::BadRequest("--dev-http requires an unprivileged port".to_owned())
+                    })?;
+                    let port = value.parse::<u16>().map_err(|err| {
+                        AppError::BadRequest(format!("invalid --dev-http port: {err}"))
+                    })?;
+                    if port < 1024 {
+                        return Err(AppError::BadRequest(
+                            "--dev-http requires an unprivileged port".to_owned(),
+                        ));
+                    }
+                    bind = SocketAddr::from(([127, 0, 0, 1], port));
+                    dev_http = true;
+                }
                 "-ta" | "--ta" => {
                     ta = true;
                     role_specified = true;
@@ -259,7 +281,7 @@ impl Args {
                 }
                 "--help" | "-h" => {
                     println!(
-                        "usage: codegrinder-server [-ta] [-daycare] [--config PATH] [--bind HOST:PORT]"
+                        "usage: codegrinder-server [-ta] [-daycare] [--config PATH] [--bind HOST:PORT] [--dev-http PORT]"
                     );
                     std::process::exit(0);
                 }
@@ -275,6 +297,7 @@ impl Args {
             bind,
             ta,
             daycare,
+            dev_http,
         })
     }
 }

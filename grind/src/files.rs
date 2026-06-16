@@ -128,6 +128,7 @@ pub fn clean_workspace_tree(directory: &Path, official_paths: &BTreeSet<String>)
         if rel
             .components()
             .any(|component| component.as_os_str() == ".git")
+            || rel.as_os_str() == ".grind"
         {
             continue;
         }
@@ -224,15 +225,17 @@ mod tests {
     }
 
     #[test]
-    fn clean_workspace_tree_preserves_git_directory() {
+    fn clean_workspace_tree_preserves_metadata_and_git_directory() {
         let dir = tempdir().expect("tempdir");
         fs::create_dir_all(dir.path().join(".git")).expect("mkdir");
         fs::write(dir.path().join(".git/config"), "[core]\n").expect("write");
+        fs::write(dir.path().join(".grind"), "assignment = {}\n").expect("write");
         fs::write(dir.path().join("scratch.txt"), "scratch").expect("write");
 
         clean_workspace_tree(dir.path(), &BTreeSet::new()).expect("clean");
 
         assert!(dir.path().join(".git/config").exists());
+        assert!(dir.path().join(".grind").exists());
         assert!(!dir.path().join("scratch.txt").exists());
     }
 }

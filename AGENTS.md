@@ -18,6 +18,12 @@ Daycare container concurrency policy:
 - A later session always kills an earlier session for the same user. This is policy, not an accidental implementation detail.
 - Do not "fix" race conditions by removing the user id from container names, making names unique per session, or otherwise allowing multiple active containers for one user. This single-container policy has repeatedly exposed real race conditions; preserve it and fix those races at their source.
 
+Daycare container lifecycle policy:
+
+- Student runtime files should be staged into the already-running container with `docker cp` or the equivalent Docker API operation, then executed inside the container.
+- Do not bind mount, volume mount, or tmpfs mount student workspace directories into daycare containers unless explicitly directed. The robust deployed model is that the runtime workspace lives inside the container.
+- Keep daycare containers disposable and self-contained: create the container, copy in the runtime workspace, run the requested command inside it, copy out only the required results, and remove the container when the session ends.
+
 For Rust server startup and checks:
 
 - The production server lives under `server/` as the Rust `codegrinder-server` crate. The old Python server is kept only for port comparison under `pyserver/`.

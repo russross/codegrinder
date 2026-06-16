@@ -701,8 +701,8 @@ fn expected_validation_runtime(bundle: &ProblemBundle, index: usize) -> AppResul
             problem_type.problem_type
         ))
     })?;
-    let mut runtime_files = problem_type.files.clone();
-    runtime_files.extend(step.files.clone());
+    let mut runtime_files = step.files.clone();
+    runtime_files.extend(problem_type.files.clone());
     runtime_files.extend(commit.files.clone());
     let mut runtime_commit = commit.clone();
     runtime_commit.problem_id = problem.problem_id.clone();

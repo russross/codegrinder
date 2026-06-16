@@ -381,15 +381,43 @@ pub fn decode_runtime(
 }
 
 async fn new_grpc_client(config: &Config) -> Result<CodeGrinderServiceClient<Channel>> {
-    let uri = format!("https://{}:443", config.host);
-    let endpoint = Endpoint::from_shared(uri)?;
-    let tls = ClientTlsConfig::new()
-        .with_webpki_roots()
-        .domain_name(config.host.clone());
-    let channel = endpoint.tls_config(tls)?.connect().await?;
+    let uri = endpoint_uri(&config.host)?;
+    let endpoint = Endpoint::from_shared(uri.clone())?;
+    let channel = if uri.starts_with("http://") {
+        endpoint.connect().await?
+    } else {
+        let tls = ClientTlsConfig::new()
+            .with_webpki_roots()
+            .domain_name(tls_domain_name(&uri)?);
+        endpoint.tls_config(tls)?.connect().await?
+    };
     Ok(CodeGrinderServiceClient::new(channel)
         .send_compressed(tonic::codec::CompressionEncoding::Gzip)
         .accept_compressed(tonic::codec::CompressionEncoding::Gzip))
+}
+
+fn endpoint_uri(host: &str) -> Result<String> {
+    let host = host.trim();
+    if host.starts_with("http://") || host.starts_with("https://") {
+        Ok(host.trim_end_matches('/').to_string())
+    } else {
+        Ok(format!("https://{host}:443"))
+    }
+}
+
+fn tls_domain_name(uri: &str) -> Result<String> {
+    let rest = uri
+        .strip_prefix("https://")
+        .ok_or_else(|| CliError::Message(format!("invalid HTTPS endpoint {uri:?}")))?;
+    let authority = rest.split('/').next().unwrap_or(rest);
+    if authority.starts_with('[') {
+        return authority
+            .split(']')
+            .next()
+            .map(|host| format!("{host}]"))
+            .ok_or_else(|| CliError::Message(format!("invalid HTTPS endpoint {uri:?}")));
+    }
+    Ok(authority.split(':').next().unwrap_or(authority).to_string())
 }
 
 fn authorize<T>(mut request: Request<T>, session_key: &str) -> Result<Request<T>> {

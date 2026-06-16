@@ -853,8 +853,6 @@ impl Container {
             "--user".to_owned(),
             container_user(),
             "--net=none".to_owned(),
-            "--mount".to_owned(),
-            format!("type=tmpfs,target=/home/student,tmpfs-size={disk_bytes},tmpfs-mode=1777"),
             "--label".to_owned(),
             DAYCARE_CONTAINER_LABEL.to_owned(),
             "--label".to_owned(),
@@ -1106,9 +1104,8 @@ async fn run_command_inner(
     let mut child = cmd.spawn()?;
     if let Some(input) = input {
         let mut stdin = child.stdin.take().expect("stdin piped");
-        tokio::spawn(async move {
-            let _ = stdin.write_all(&input).await;
-        });
+        stdin.write_all(&input).await?;
+        stdin.shutdown().await?;
     }
     let mut stdout = child.stdout.take().expect("stdout piped");
     let mut stderr = child.stderr.take().expect("stderr piped");

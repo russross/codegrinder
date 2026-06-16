@@ -767,9 +767,6 @@ fn report_whitespace_issues(label: &str, content: &[u8]) {
     if !text.is_empty() && !text.ends_with('\n') {
         issues.push("missing final newline");
     }
-    if text.lines().any(|line| line.ends_with(' ')) {
-        issues.push("trailing spaces");
-    }
     if !issues.is_empty() {
         println!("warning: {label} has {}", issues.join(", "));
     }

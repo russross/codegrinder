@@ -92,9 +92,19 @@ pub fn print_problem_catalog(problem_sets: &[ProblemCatalogSet], host: &str) {
         }
         println!();
         println!(
-            "  -> https://{host}/lti/problem_sets/cli/{}",
+            "  -> {}/lti/problem_sets/cli/{}",
+            server_base_url(host),
             pset.problem_set_id
         );
+    }
+}
+
+fn server_base_url(host: &str) -> String {
+    let host = host.trim_end_matches('/');
+    if host.starts_with("http://") || host.starts_with("https://") {
+        host.to_string()
+    } else {
+        format!("https://{host}")
     }
 }
 

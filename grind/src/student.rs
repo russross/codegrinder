@@ -29,6 +29,7 @@ pub struct StudentCommandContext {
     pub problem_dir: PathBuf,
     pub problem_info: ProblemInfo,
     pub current_paths: BTreeSet<String>,
+    pub missing_student_files: BTreeMap<String, Vec<u8>>,
 }
 
 pub async fn command_sync(extra: Vec<String>, trace: ApiTrace) -> Result<()> {
@@ -36,8 +37,14 @@ pub async fn command_sync(extra: Vec<String>, trace: ApiTrace) -> Result<()> {
         fail("usage: grind sync")?;
     }
     let mut session = connect(trace).await?;
-    let student = gather_student_context(&mut session, Path::new(".")).await?;
+    let student = gather_student_context_for_sync(&mut session, Path::new(".")).await?;
     save_current_student_files(&mut session, &student, "grind sync").await?;
+    update_files(
+        &student.problem_dir,
+        &student.missing_student_files,
+        None,
+        true,
+    )?;
     clean_workspace_tree(
         &student.problem_dir,
         &workspace_official_paths(&student.workspace)?,
@@ -285,6 +292,21 @@ pub async fn gather_student_context(
     session: &mut Session,
     start: &Path,
 ) -> Result<StudentCommandContext> {
+    gather_student_context_inner(session, start, false).await
+}
+
+async fn gather_student_context_for_sync(
+    session: &mut Session,
+    start: &Path,
+) -> Result<StudentCommandContext> {
+    gather_student_context_inner(session, start, true).await
+}
+
+async fn gather_student_context_inner(
+    session: &mut Session,
+    start: &Path,
+    restore_missing_student_files: bool,
+) -> Result<StudentCommandContext> {
     let (dotfile, problem_dir, problem_id, info) = resolve_student_problem(start)?;
     let workspace = session
         .get_workspace(
@@ -303,13 +325,23 @@ pub async fn gather_student_context(
         .keys()
         .map(|path| clean_relative_path(path).map(|clean| clean.as_posix()))
         .collect::<Result<Vec<_>>>()?;
+    let fallback_student_files = if restore_missing_student_files {
+        workspace_file_map(&workspace.student_owned_files)?
+    } else {
+        BTreeMap::new()
+    };
     let commit = build_commit_from_disk(
         &problem_dir,
         &student_owned_paths,
+        &fallback_student_files,
         workspace.assignment.clone().unwrap_or_default(),
         &workspace.problem_id,
         workspace.step_number,
     )?;
+    let missing_student_files = fallback_student_files
+        .into_iter()
+        .filter(|(path, _)| !problem_dir.join(Path::new(path)).exists())
+        .collect();
     let current_paths = workspace_official_paths(&workspace)?;
     Ok(StudentCommandContext {
         workspace,
@@ -318,12 +350,14 @@ pub async fn gather_student_context(
         problem_dir,
         problem_info: info,
         current_paths,
+        missing_student_files,
     })
 }
 
 pub fn build_commit_from_disk(
     problem_dir: &Path,
     student_owned_paths: &[String],
+    fallback_student_files: &BTreeMap<String, Vec<u8>>,
     assignment: AssignmentKey,
     problem_id: &str,
     step_number: i64,
@@ -334,7 +368,11 @@ pub fn build_commit_from_disk(
         let relative = clean_relative_path(name)?;
         let path = problem_dir.join(relative.as_path());
         if !path.exists() {
-            missing.push(name.clone());
+            if let Some(content) = fallback_student_files.get(name) {
+                files.insert(relative.as_posix(), content.clone());
+            } else {
+                missing.push(name.clone());
+            }
             continue;
         }
         files.insert(relative.as_posix(), fs::read(path)?);
