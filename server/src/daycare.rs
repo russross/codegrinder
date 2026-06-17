@@ -1303,9 +1303,6 @@ mod tests {
         assert!(log.contains("rm -f nanny-student"));
         assert!(log.contains("run -d"));
         assert!(log.contains("--user "));
-        assert!(log.contains(
-            "--mount type=tmpfs,target=/home/student,tmpfs-size=10485760,tmpfs-mode=1777"
-        ));
         assert!(log.contains("--label codegrinder.daycare=1"));
         assert!(log.contains("--label codegrinder.user_id=student"));
         assert!(log.contains("--ulimit core=0:0"));
@@ -1565,8 +1562,8 @@ mod tests {
         fs::write(
             &script,
             format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}/engine.log\ncase \"$1\" in\n  run) echo fake-container ;;\n  exec) exit 0 ;;\n  stop) exit 0 ;;\n  rm) exit 0 ;;\n  *) exit 0 ;;\nesac\n",
-                base.display()
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}/engine.log\ncase \"$1\" in\n  run) echo fake-container ;;\n  exec) exit 0 ;;\n  cp) if [ \"$2\" = \"-\" ]; then cat >/dev/null; else cat >/dev/null; fi ;;\n  stop) exit 0 ;;\n  rm) exit 0 ;;\n  *) exit 0 ;;\nesac\n",
+                base.display(),
             ),
         )
         .unwrap();

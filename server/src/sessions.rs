@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use chrono::{DateTime, Duration, Utc};
+use rand::RngExt;
 use rand::distr::{Alphanumeric, SampleString};
 use rusqlite::{Connection, params};
 
@@ -74,7 +75,7 @@ fn make_login_token() -> String {
     let mut rng = rand::rng();
     (0..8)
         .map(|_| {
-            let idx = rand::Rng::random_range(&mut rng, 0..LOGIN_TOKEN_CHARS.len());
+            let idx = rng.random_range(0..LOGIN_TOKEN_CHARS.len());
             LOGIN_TOKEN_CHARS[idx] as char
         })
         .collect()

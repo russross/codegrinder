@@ -3,7 +3,7 @@ use std::fmt::Write as _;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use prost::Message;
 use sha1::Sha1;
 use sha2::Sha256;

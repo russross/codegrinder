@@ -132,7 +132,7 @@ fn run_job(conn: &Connection, job: DbJob, deadline: Option<Instant>) -> AppResul
 fn set_job_deadline(conn: &Connection, deadline: Option<Instant>) -> AppResult<()> {
     let Some(deadline) = deadline else {
         conn.busy_timeout(DEFAULT_BUSY_TIMEOUT)?;
-        conn.progress_handler(0, None::<fn() -> bool>);
+        conn.progress_handler(0, None::<fn() -> bool>)?;
         return Ok(());
     };
     let remaining = deadline
@@ -142,12 +142,12 @@ fn set_job_deadline(conn: &Connection, deadline: Option<Instant>) -> AppResult<(
     conn.progress_handler(
         SQLITE_PROGRESS_OPS,
         Some(move || Instant::now() >= deadline),
-    );
+    )?;
     Ok(())
 }
 
 fn clear_job_deadline(conn: &Connection) -> AppResult<()> {
-    conn.progress_handler(0, None::<fn() -> bool>);
+    conn.progress_handler(0, None::<fn() -> bool>)?;
     conn.busy_timeout(DEFAULT_BUSY_TIMEOUT)?;
     Ok(())
 }
