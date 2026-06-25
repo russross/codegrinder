@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width">
+  <link rel="stylesheet" href="styles.css">
+  <title>JavaScript Editor - Test Mode</title>
+  <script>
+    // Redirect to index.html with dummy mode and test file
+    const testFile = {
+      children: {
+        "test.js": {
+          content: `// Simple hello world test
+console.log("Hello, World!");
+console.log("JavaScript execution is working!");
+
+// Test basic operations
+const sum = 5 + 3;
+console.log("5 + 3 =", sum);
+
+// Test objects
+const person = { name: "Alice", age: 30 };
+console.log("Person object:", person);
+
+// Test arrays
+const numbers = [1, 2, 3, 4, 5];
+console.log("Numbers:", numbers);
+
+// Test function
+function greet(name) {
+    return \`Hello, \${name}!\`;
+}
+console.log(greet("Student"));`
+        }
+      }
+    };
+
+    const filesParam = encodeURIComponent(JSON.stringify(testFile));
+    window.location.href = `index.html?dummy=true&files=${filesParam}`;
+  </script>
+</head>
+<body>
+  <p>Loading test environment...</p>
+</body>
+</html>

@@ -1,5 +1,5 @@
 "use strict"
-const version = '0.1.110';
+const version = '0.2.0'; // Updated for JavaScript execution
 const appCache = location.pathname.split("/").slice(1, -1).join("/") + "#"; // Unique across origin (Current Path)
 const versionedCache = appCache + version; // Unique across versions
 const localFilesToCache = [
@@ -13,8 +13,8 @@ const localFilesToCache = [
   './scripts/firefoxPolyfillAtomicsWaitAsync.js',
   './scripts/iframeSharedArrayBufferWorkaround.js',
   './scripts/prompt.js',
-  './scripts/pythonHandler.js',
-  './scripts/pythonWorker.js',
+  './scripts/jsHandler.js',
+  './scripts/jsWorker.js',
   './scripts/resizeInstructions.js',
   './scripts/resizeTerminal.js',
 ];

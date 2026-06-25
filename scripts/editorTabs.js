@@ -71,7 +71,7 @@ class Tab {
     this.#path = value;
     this.#nameElement.innerText = this.name;
     this.element.title = value;
-    const mode = value === UNTITLED ? "ace/mode/python" : modelist.getModeForPath(this.path).mode;
+    const mode = value === UNTITLED ? "ace/mode/javascript" : modelist.getModeForPath(this.path).mode;
     this.#ace.session.setMode(mode);
   }
   get name() {

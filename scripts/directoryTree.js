@@ -1,5 +1,5 @@
 // Consider https://github.com/use-strict/file-system-access
-// Because pyodide supports pyodide.mountNativeFS() (takes a FileSystemDirectoryHandle)
+// Could use native File System Access API (takes a FileSystemDirectoryHandle)
 function nameFromPath(path) {
   const parts = path.split("/");
   return parts[parts.length - 1];

@@ -1,6 +1,6 @@
 import { Tabs } from './editorTabs.js';
 import { FileSystem, FileSystemUI, extension } from './directoryTree.js';
-import { PythonRunner } from './pythonHandler.js'
+import { JavaScriptRunner } from './jsHandler.js'
 import { CodeGrinder, CodeGrinderUI } from './codeGrinder.js';
 import { decodeBase64ToUTF8, encodeUTF8OrLatin1AsBase64 } from './encodingHelpers.js';
 const output_terminal_label = document.getElementById("output_terminal")
@@ -26,7 +26,7 @@ const tabs = new Tabs(document.getElementById("tabs"), (path, content) => {
     fileSystemUI.refreshUI();
 });
 
-const pythonRunner = new PythonRunner();
+const javaScriptRunner = new JavaScriptRunner();
 const urlParams = new URLSearchParams(window.location.search);
 
 // Set up files dropdown
@@ -97,23 +97,21 @@ function writeTerminal(str, color) {
     previousSpan.innerText += str;
 }
 
-// Set up python
-let pythonRunning = false;
+// Set up JavaScript execution
+let javaScriptRunning = false;
 let serverRunning = false;
-let turtleRunning = false;
 window.iframeSharedArrayBufferWorkaroundServiceWorkerLoss = function () {
-    pythonRunner.stopPython();
+    javaScriptRunner.stopJavaScript();
 }
 let serverStdin;
-let skulptInput;
 run.disabled = true;
-pythonRunner.ready.then(() => {
+javaScriptRunner.ready.then(() => {
     run.disabled = false;
     run.innerText = "Run";
     writeTerminal(">> ", "orange");
 });
 input_terminal.addEventListener("keydown", event => {
-    input_terminal.style.color = pythonRunning || turtleRunning ? "grey" : "blue";
+    input_terminal.style.color = javaScriptRunning ? "grey" : "blue";
     if (event.key === "Enter") {
         const withoutTrailingNewline = input_terminal.value.replace(/\n+$/, "")
         let value = withoutTrailingNewline + "\n";
@@ -124,123 +122,54 @@ input_terminal.addEventListener("keydown", event => {
             serverStdin(value)
             return;
         }
-        if (turtleRunning) {
+        if (javaScriptRunning) {
             writeTerminal(value, "grey");
-            skulptInput?.(withoutTrailingNewline)
-            return;
-        }
-        if (pythonRunning) {
-            writeTerminal(value, "grey");
-            pythonRunner.writeStdin(value);
+            javaScriptRunner.writeStdin(value);
         } else {
             writeTerminal(value, "blue");
             run.innerText = "Stop"
-            pythonRunning = true;
-            if (tabs.tabs[tabs.currentTab].path.endsWith(".sql")) {
-                value = 'run_sql_line("""' + value + '""")'
-            }
-            pythonRunner.runPython(fileSystem, value).then(async () => {
-                await pythonRunner.ready;
+            javaScriptRunning = true;
+            javaScriptRunner.runJavaScript(fileSystem, value).then(async () => {
+                await javaScriptRunner.ready;
                 setTimeout(() => writeTerminal(">> ", "orange"), 1000);
-                pythonRunning = false;
+                javaScriptRunning = false;
                 run.innerText = "Run";
                 run.disabled = false;
             });
         }
     }
 })
-pythonRunner.setStdoutCallback(str => {
+javaScriptRunner.setStdoutCallback(str => {
     writeTerminal(str, "black");
 })
-pythonRunner.setStderrCallback(str => {
+javaScriptRunner.setStderrCallback(str => {
     writeTerminal(str, "red");
 });
-function builtinRead(x) {
-    if (Sk.builtinFiles === undefined || Sk.builtinFiles["files"][x] === undefined)
-        throw "File not found: '" + x + "'";
-    return Sk.builtinFiles["files"][x];
-}
-async function runSkulpt(code) {
-    Sk.configure({
-        inputfun: function () {
-            return new Promise((resolve, reject) => {
-                skulptInput = resolve;
-            })
-        }, output: (text) => { writeTerminal(text, "black") }, read: builtinRead
-    });
-    document.getElementById("turtle").style.pointerEvents = "none";
-    (Sk.TurtleGraphics || (Sk.TurtleGraphics = {})).target = 'turtle';
-    var myPromise = Sk.misceval.asyncToPromise(function () {
-        return Sk.importMainWithBody("<stdin>", false, code, true);
-    });
-    await myPromise.then(function (mod) {
-    },
-        function (err) {
-            writeTerminal(err.toString() + "\n", "red");
-        });
-}
-pythonRunner.setToMainThreadCallback(data => {
-    const img = new Image();
-    img.src = "data:image/png;base64," + data.showImage;
-    document.getElementById("turtle").innerText = "";
-    document.getElementById("turtle").appendChild(img);
+javaScriptRunner.setToMainThreadCallback(data => {
+    // Hook for future extensions (e.g., displaying images or other data)
+    console.log('Message from worker:', data);
 });
-async function runPython(path, clearFiles = false) {
-    document.getElementById("turtle").innerText = "";
-    let content = "";
-    try {
-        content = fileSystem.touch(path).content;
-    } catch {
-        // If the above failed it is most likely because the path is invalid
-        // In which case pyodide has a better error message
-        // Pass invalid path on intentionally
-    }
-    if (content.includes("import turtle")) {
-        turtleRunning = true;
-        await runSkulpt(content);
-        turtleRunning = false;
-        writeTerminal(">> ", "orange")
-        return;
-    }
-    if (pythonRunning) {
+async function runJavaScript(path, clearFiles = false) {
+    if (javaScriptRunning) {
         run.disabled = true;
-        pythonRunning = false;
-        pythonRunner.stopPython();
+        javaScriptRunning = false;
+        javaScriptRunner.stopJavaScript();
         run.innerText = "Stopping";
     } else {
         run.innerText = "Stop"
-        pythonRunning = true;
+        javaScriptRunning = true;
         writeTerminal("Running " + path + "\n", "orange");
-        await pythonRunner.runPython(fileSystem, `run_script(".${path}")`, clearFiles);
-        await pythonRunner.ready;
+        await javaScriptRunner.runJavaScript(fileSystem, `run_script(".${path}")`, clearFiles);
+        await javaScriptRunner.ready;
         setTimeout(() => writeTerminal(">> ", "orange"), 1000);
-        pythonRunning = false;
+        javaScriptRunning = false;
         run.innerText = "Run";
         run.disabled = false;
     }
 }
 run.addEventListener("click", async () => {
     const path = tabs.tabs[tabs.currentTab].path
-    if (path.endsWith(".sql")) {
-        if (pythonRunning) {
-            run.disabled = true;
-            pythonRunning = false;
-            pythonRunner.stopPython();
-            run.innerText = "Stopping";
-        } else {
-            run.innerText = "Stop"
-            pythonRunning = true;
-            writeTerminal("Running " + path + "\n", "orange");
-            await pythonRunner.runPython(fileSystem, "run_sql_file('." + path + "')")
-            await pythonRunner.ready;
-            setTimeout(() => writeTerminal(">> ", "orange"), 1000);
-            pythonRunning = false;
-            run.innerText = "Run";
-            run.disabled = false;
-        }
-    } else {
-        runPython(path);
-    }
+    runJavaScript(path);
 })
 
 function setupCodegrinder() {
@@ -256,71 +185,25 @@ function setupCodegrinder() {
         currentProblemUnique = unique;
         fileSystem.clear();
         tabs.closeAll();
-        const modules = [];
         for (let filename in currentProblemsFiles[unique]) {
-            if (filename.endsWith(".sql")) {
-                modules.push("sqlite3", "pandas");
-            }
             let content = currentProblemsFiles[unique][filename];
-            if (filename.includes("requirements.txt")) {
-                modules.push(...content.split("\n").filter(value => !value.includes("#")));
-            }
-            if (filename.includes("asttest")) {
-                // A super hack, changes asttest.py to avoid problems with tracer
-                content = content.replace(`# write tracing results to a *.cover file
-        tracer.results().write_results(coverdir='.')
-        # count how many lines were skipped
-        all_skipped = []
-        f = open(basename+".cover")
-        lineno = 0
-        for line in f:
-            lineno += 1
-            if line[:6] == ">>>>>>":
-                # skipped line
-                all_skipped.append((line[8:], lineno))
-        f.close()
-        # clean up cover file
-        os.remove(basename+".cover")
-        # count executable lines
-        visitor = FindExecutableLines()
-        visitor.visit(self.tree)
-        all_executable_lines = set(visitor.lines)`, `# count executable lines
-        visitor = FindExecutableLines()
-        visitor.visit(self.tree)
-        all_executable_lines = set(visitor.lines)
-        # count how many lines were skipped
-        lines_hit = set()
-        for filename, lineno in tracer.results().counts:
-            if basename in ".".join(filename.split(".")[:-1]).split("/"):
-                lines_hit.add(lineno)
-        all_skipped = []
-        source = self.file.split("\\n")
-        for line in all_executable_lines:
-            if line not in lines_hit:
-                all_skipped.append((source[line-1], line))`)
-            }
             fileSystem.touch("/" + filename).content = content;
             if (currentProblemsWhitelist[unique][filename]) {
                 tabs.addSwitchTab("/" + filename, content);
             }
         }
-        if (modules.length > 0) {
-            pythonRunner.loadModules(modules);
-        }
-        fileSystem.touch("/.run_all_tests.py").content = `
-import unittest
-loader = unittest.TestLoader()
-start_dir = './tests'
-suite = loader.discover(start_dir)
-runner = unittest.TextTestRunner()
-runner.run(suite)`;
+        // Create a basic test runner file for JavaScript
+        fileSystem.touch("/.run_all_tests.js").content = `
+// Basic test runner - run all test files in tests/ directory
+console.log("Test runner not yet implemented for JavaScript version");
+`;
         mdElement.innerHTML = fileSystem.touch("/doc/index.html").content;
         fileSystemUI.refreshUI();
         const finished = currentDotFile.completed.has(unique);
         codeGrinderUI.buttonGrade.innerText = finished ? "Finished" : "Grade";
         codeGrinderUI.buttonGrade.disabled = finished;
-        if (fileSystem.rootNode.children?.bin.children?.["setup.py"]) {
-            runPython("/bin/setup.py", true);
+        if (fileSystem.rootNode.children?.bin.children?.["setup.js"]) {
+            runJavaScript("/bin/setup.js", true);
         }
 
     }
@@ -359,7 +242,7 @@ runner.run(suite)`;
         }
     }
     codeGrinderUI.buttonRunTests.addEventListener("click", () => {
-        runPython("/.run_all_tests.py", true);
+        runJavaScript("/.run_all_tests.js", true);
     })
     function toFiles(directory, path = "/", files = {}) {
         for (let name in directory.children) {
@@ -447,17 +330,7 @@ if (urlDummy) {
     document.getElementById("instructions_container").style.display = "none";
     if (Object.keys(fileSystem.rootNode.children).length === 0) {
         document.getElementsByClassName("tabs-container")[0].style.display = "none";
-        tabs.addSwitchTab("/main.py", "")
-    }
-    const modules = [];
-    if (urlFiles.includes(".sql")) {
-        modules.push("sqlite3", "pandas");
-    }
-    if (fileSystem.rootNode.children["requirements.txt"]?.content) {
-        modules.push(...fileSystem.rootNode.children["requirements.txt"]?.content.split("\n").filter(value => !value.includes("#")));
-    }
-    if (modules.length > 0) {
-        pythonRunner.loadModules(modules);
+        tabs.addSwitchTab("/main.js", "")
     }
     document.getElementsByClassName("path-input")[0].style.display = "none";
     run.style.position = "absolute";

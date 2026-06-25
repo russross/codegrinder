@@ -228,8 +228,8 @@ class CodeGrinder {
       infos[problem.unique] = info;
       commits[problem.unique] = commit;
       steps[problem.unique] = step;
-      if (step.problemType !== "python3unittest") {
-        console.warning("This only supports python3unittest not ", step.problemType)
+      if (step.problemType !== "javascript") {
+        console.warning("This only supports javascript problems not ", step.problemType)
       }
       if (!(step.problemType in types)) {
         types[step.problemType] = await this.getProblemType(step.problemType);

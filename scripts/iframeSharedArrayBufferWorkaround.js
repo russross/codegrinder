@@ -65,7 +65,7 @@ if (!globalThis.SharedArrayBuffer) {
   globalThis.Atomics.notify = (int32arr, index, count = Infinity) => {
     const xhr = new XMLHttpRequest();
     // Only edge browser (even though chromium based?), doesn't send async network requests until returning to event loop
-    // In the python worker, this results in not being able to notify the main thread that stdout has been written to until python stops running.
+    // In the JavaScript worker, this results in not being able to notify the main thread that stdout has been written to until the script stops running.
     // Therefore in the worker this needs to be synchronous
     xhr.open('POST', `./ponyfill/Atomics.notify/${int32arr.buffer.identifier}/${index + int32arr.byteOffset / 4}/${count}`, !(typeof WorkerGlobalScope !== 'undefined' && self instanceof WorkerGlobalScope));
     send(xhr, int32arr);

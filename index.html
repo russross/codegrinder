@@ -5,16 +5,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width">
   <link rel="stylesheet" href="styles.css">
-  <title>Python Editor</title>
-  <meta name="description" content="A python editor for Codegrinder. Utilizes pyodide and webworkers.">
+  <title>JavaScript Editor</title>
+  <meta name="description" content="A JavaScript editor for CodeGrinder. Utilizes web workers for safe code execution.">
   <script>
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('sw.js')
         .then(function (registration) {
           if (!navigator.serviceWorker.controller) {
             // Reload the page to ensure the service worker is active
-            // It needs to be active for python to run in an iframe
-            // It also needs to be running for codegrinder requests
+            // It needs to be active for JavaScript code execution in an iframe
+            // It also needs to be running for CodeGrinder requests
             // to go through in an iframe
             window.location.reload();
           }
@@ -67,7 +67,7 @@
   <!-- Firefox polyfill... Even Safari supports Atomics.waitAsync... Just sad :( -->
   <!-- Remove when firefox gets support eventually. hopefully??? -->
   <script src="scripts/firefoxPolyfillAtomicsWaitAsync.js" type="module"></script>
-  <!-- AtomicQueue cannot be a module see it's comment. Only used in pythonHandler.js and pythonWorker.js -->
+  <!-- AtomicQueue cannot be a module see it's comment. Only used in jsHandler.js and jsWorker.js -->
   <script src="scripts/atomicQueue.js"></script>
   <!-- app.js contains all glue code between different modules -->
   <script src="scripts/app.js" type="module"></script>
@@ -76,12 +76,6 @@
   <script src="scripts/resizeTerminal.js" type="module"></script>
   <!-- This is a safe markdown viewer. It doesn't evaluate html in the markdown. Only used in app.js -->
   <script crossorigin src="https://cdn.jsdelivr.net/npm/markdown-it@13.0.1/dist/markdown-it.min.js"></script>
-  <!-- This is used to run python on the main thread, only needed for turtle and potentially other gui stuff -->
-  <!-- Skulpt (being a js based interpreter for python) has worse error messages than native python (pyodide is just native python compiled for web) -->
-  <!-- As it uses the main thread it can hang the page with infinite loops -->
-  <!-- Looks like it might support python debugging though -->
-  <script defer src="skulpt/skulpt.min.js" type="text/javascript"></script>
-  <script defer src="skulpt/skulpt-stdlib.js" type="text/javascript"></script>
 </body>
 
 </html>
