@@ -7,6 +7,8 @@ import sqlite3
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from e2e_common import (
@@ -15,9 +17,7 @@ from e2e_common import (
     COURSE_NAME,
     DAYCARE_SECRET,
     DB_PATH,
-    HOST,
     LEGACY_WORKSPACE_DIR,
-    PORT,
     ROOT,
     RUN_ROOT,
     SERVER_CONFIG_PATH,
@@ -30,10 +30,10 @@ from e2e_common import (
     CommandResult,
     e2e_env,
     format_failure,
-    port_is_open,
     require,
     run,
     run_expect_failure,
+    server_endpoint,
     session_key_hash,
     stop_process,
 )
@@ -79,8 +79,32 @@ def ensure_server_not_running(env: dict[str, str]) -> None:
             raise RuntimeError(
                 "codegrinder-server service was already running; stopped it and aborting"
             )
-    if port_is_open(PORT):
-        raise RuntimeError(f"localhost:{PORT} is already in use")
+
+
+def ensure_caddy_running(env: dict[str, str]) -> None:
+    commands = [
+        ["rc-service", "caddy", "status"],
+        ["systemctl", "is-active", "--quiet", "caddy"],
+        ["service", "caddy", "status"],
+    ]
+    for command in commands:
+        if shutil.which(command[0]) is None:
+            continue
+        result = subprocess.run(
+            command,
+            cwd=ROOT,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        combined = f"{result.stdout}\n{result.stderr}".lower()
+        if result.returncode == 0 and (
+            command[0] == "systemctl" or "started" in combined or "running" in combined
+        ):
+            return
+    raise RuntimeError("caddy is not running; start caddy before running tests/e2e.py")
 
 
 def ensure_docker_running(env: dict[str, str]) -> None:
@@ -101,10 +125,11 @@ def check_version_without_config(env: dict[str, str]) -> None:
 def check_login_argument_shapes(env: dict[str, str]) -> None:
     isolated_env = env.copy()
     isolated_env["XDG_CONFIG_HOME"] = str(ARTIFACT_DIR / "login-config")
+    host = server_endpoint()
     for command in [
         ["grind", "login"],
-        ["grind", "login", HOST],
-        ["grind", "login", HOST, "token", "extra"],
+        ["grind", "login", host],
+        ["grind", "login", host, "token", "extra"],
     ]:
         result = run_expect_failure(command, env=isolated_env)
         require(
@@ -155,7 +180,7 @@ def write_grind_config() -> None:
     CONFIG_PATH.write_text(
         "\n".join(
             [
-                f'host = "{HOST}"',
+                f'host = "{server_endpoint()}"',
                 f'session_key = "{SESSION_KEY}"',
                 f'workspace_root = "{RUN_ROOT}"',
                 "is_author = true",
@@ -172,8 +197,8 @@ def write_server_config() -> None:
     SERVER_CONFIG_PATH.write_text(
         json.dumps(
             {
-                "hostname": "localhost",
-                "taHostname": HOST,
+                "hostname": "dev.russross.com",
+                "taHostname": "https://dev.russross.com",
                 "daycareSecret": DAYCARE_SECRET,
                 "ltiSecret": "e2e-test-lti-secret",
                 "sessionSecret": SESSION_SECRET,
@@ -199,8 +224,6 @@ def start_server(env: dict[str, str]) -> subprocess.Popen[str]:
             str(TARGET_DEBUG / "codegrinder-server"),
             "--config",
             str(SERVER_CONFIG_PATH),
-            "--dev-http",
-            str(PORT),
         ],
         cwd=ROOT,
         env=env,
@@ -212,11 +235,23 @@ def start_server(env: dict[str, str]) -> subprocess.Popen[str]:
     while time.monotonic() < deadline:
         if server.poll() is not None:
             raise RuntimeError(f"server exited early; see {SERVER_LOG}")
-        if port_is_open(PORT):
+        if public_version_is_reachable():
             return server
         time.sleep(0.25)
     stop_process(server)
-    raise RuntimeError(f"server did not listen on localhost:{PORT}; see {SERVER_LOG}")
+    raise RuntimeError(
+        f"{server_endpoint()} did not reach the e2e CodeGrinder server through Caddy; "
+        f"check Caddy routing to the default localhost:1400 backend and see {SERVER_LOG}"
+    )
+
+
+def public_version_is_reachable() -> bool:
+    request = urllib.request.Request(f"{server_endpoint()}/version")
+    try:
+        with urllib.request.urlopen(request, timeout=2) as response:
+            return response.status == 200
+    except (OSError, urllib.error.URLError):
+        return False
 
 
 def seed_user_session() -> None:
@@ -288,7 +323,28 @@ def run_api_trace_check(env: dict[str, str]) -> None:
 def sync_problem_types(env: dict[str, str]) -> None:
     run(["problemtypes/bin/sync-actions", "cinout", "riscv"], env=env)
     run(["problemtypes/bin/sync-files", "cinout", "riscv"], env=env)
+    require_public_mutation_reached_local_database()
     run(["grind", "problemtype", "list"], env=env)
+
+
+def require_public_mutation_reached_local_database() -> None:
+    with sqlite3.connect(DB_PATH) as db:
+        rows = db.execute(
+            """
+            SELECT problem_type
+            FROM problem_types
+            WHERE problem_type IN ('cinout', 'riscv')
+            ORDER BY problem_type
+            """
+        ).fetchall()
+    found = {str(row[0]) for row in rows}
+    require(
+        found == {"cinout", "riscv"},
+        "problem type sync succeeded through the public HTTPS endpoint, but the local e2e "
+        "database was not updated; this may be a setup problem such as Caddy routing to the "
+        "wrong backend, the config hostname pointing at the wrong server, or an existing "
+        "non-e2e CodeGrinder process",
+    )
 
 
 def create_containment_problem_type(env: dict[str, str]) -> None:

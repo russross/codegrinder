@@ -1278,8 +1278,6 @@ mod tests {
                 sqlite3_path: std::path::PathBuf::new(),
                 sessions_expire: Vec::new(),
                 ip_filter: crate::config::IpFilterConfig::default(),
-                tls_cert: None,
-                tls_key: None,
                 www_root: std::path::PathBuf::new(),
             },
             true,

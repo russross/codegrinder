@@ -5,7 +5,6 @@ edition.workspace = true
 
 [dependencies]
 axum = { workspace = true, features = ["http1", "http2", "tokio", "form", "json"] }
-axum-server = { workspace = true, features = ["tls-rustls"] }
 base64.workspace = true
 bytes.workspace = true
 chrono = { workspace = true, features = ["clock", "serde", "std"] }
@@ -29,7 +28,7 @@ tempfile.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "process", "signal", "fs", "io-util", "sync", "time"] }
 tokio-stream.workspace = true
-tonic = { workspace = true, features = ["transport", "codegen", "tls-ring", "gzip"] }
+tonic = { workspace = true, features = ["transport", "codegen", "gzip"] }
 tonic-prost.workspace = true
 tonic-web.workspace = true
 tower.workspace = true

@@ -26,6 +26,7 @@ from e2e_setup import (
     create_assignment,
     create_problem_sources,
     create_sudoku_slices,
+    ensure_caddy_running,
     delete_assignment,
     ensure_docker_running,
     ensure_server_not_running,
@@ -53,6 +54,8 @@ def main() -> int:
     try:
         prepare_clean_start()
         ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+        write_server_config()
+        ensure_caddy_running(env)
         ensure_server_not_running(env)
         ensure_docker_running(env)
         build_rust(env)
@@ -62,7 +65,6 @@ def main() -> int:
         build_containers(env)
         rebuild_database(env)
         write_grind_config()
-        write_server_config()
         server = start_server(env)
         seed_user_session()
         wait_for_grind(env)

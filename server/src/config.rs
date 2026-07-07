@@ -30,8 +30,6 @@ pub struct ServerConfig {
     pub sqlite3_path: PathBuf,
     pub sessions_expire: Vec<DateTime<Utc>>,
     pub ip_filter: IpFilterConfig,
-    pub tls_cert: Option<PathBuf>,
-    pub tls_key: Option<PathBuf>,
     pub www_root: PathBuf,
 }
 
@@ -71,8 +69,6 @@ struct RawConfig {
     sqlite3_path: PathBuf,
     sessions_expire: Option<Vec<String>>,
     ip_filter: Option<RawIpFilter>,
-    tls_cert: Option<PathBuf>,
-    tls_key: Option<PathBuf>,
     www_root: Option<PathBuf>,
 }
 
@@ -122,8 +118,6 @@ pub fn load_config(path: &Path, root: &Path) -> AppResult<ServerConfig> {
         ip_filter: IpFilterConfig {
             whitelist: raw.ip_filter.map(|ip| ip.whitelist).unwrap_or_default(),
         },
-        tls_cert: raw.tls_cert,
-        tls_key: raw.tls_key,
         www_root: raw.www_root.unwrap_or_else(|| root.join("www")),
     })
 }

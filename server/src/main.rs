@@ -16,13 +16,12 @@ mod store;
 mod timeutil;
 
 use std::env;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::{Router, http::StatusCode};
-use axum_server::tls_rustls::RustlsConfig;
 use chrono::Utc;
 use proto::code_grinder_service_server::CodeGrinderServiceServer;
 use tonic::codec::CompressionEncoding;
@@ -44,6 +43,7 @@ use crate::timeutil::now_utc;
 
 const VERSION: &str = "2.8.0";
 const DAYCARE_REGISTRATION_INTERVAL: Duration = Duration::from_secs(10);
+const DEFAULT_BIND_PORT: u16 = 1400;
 
 #[tokio::main]
 async fn main() -> AppResult<()> {
@@ -52,12 +52,7 @@ async fn main() -> AppResult<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| dirs_home().join("codegrinder"));
     let config_path = args.config.unwrap_or_else(|| root.join("config.json"));
-    let mut config = load_config(&config_path, &root)?;
-    if args.dev_http {
-        config.tls_cert = None;
-        config.tls_key = None;
-    }
-    let config = Arc::new(config);
+    let config = Arc::new(load_config(&config_path, &root)?);
     validate_config(&config, args.ta, args.daycare)?;
     let db = Db::open(&config.sqlite3_path)?;
     if args.ta {
@@ -120,7 +115,7 @@ async fn main() -> AppResult<()> {
         grpc_router.fallback(|| async { (StatusCode::NOT_FOUND, "not found") })
     }
     .layer(CompressionLayer::new());
-    serve(app, args.bind, config).await
+    serve(app, args.bind).await
 }
 
 async fn register_daycare(config: Arc<config::ServerConfig>, version: String) {
@@ -198,27 +193,14 @@ async fn register_daycare(config: Arc<config::ServerConfig>, version: String) {
     }
 }
 
-async fn serve(app: Router, bind: SocketAddr, config: Arc<config::ServerConfig>) -> AppResult<()> {
-    match (&config.tls_cert, &config.tls_key) {
-        (Some(cert), Some(key)) => {
-            let tls = RustlsConfig::from_pem_file(cert, key)
-                .await
-                .map_err(|err| AppError::Internal(format!("failed to load TLS config: {err}")))?;
-            axum_server::bind_rustls(bind, tls)
-                .serve(app.into_make_service_with_connect_info::<SocketAddr>())
-                .await
-                .map_err(|err| AppError::Internal(format!("server error: {err}")))
-        }
-        _ => {
-            let listener = tokio::net::TcpListener::bind(bind).await?;
-            axum::serve(
-                listener,
-                app.into_make_service_with_connect_info::<SocketAddr>(),
-            )
-            .await
-            .map_err(|err| AppError::Internal(format!("server error: {err}")))
-        }
-    }
+async fn serve(app: Router, bind: SocketAddr) -> AppResult<()> {
+    let listener = tokio::net::TcpListener::bind(bind).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .map_err(|err| AppError::Internal(format!("server error: {err}")))
 }
 
 struct Args {
@@ -226,7 +208,6 @@ struct Args {
     bind: SocketAddr,
     ta: bool,
     daycare: bool,
-    dev_http: bool,
 }
 
 impl Args {
@@ -235,10 +216,7 @@ impl Args {
         let mut ta = false;
         let mut daycare = false;
         let mut role_specified = false;
-        let mut dev_http = false;
-        let mut bind = "127.0.0.1:8443"
-            .parse::<SocketAddr>()
-            .map_err(|err| AppError::BadRequest(format!("invalid default bind: {err}")))?;
+        let mut bind = default_bind()?;
         let mut args = env::args().skip(1);
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -250,26 +228,9 @@ impl Args {
                 }
                 "--bind" => {
                     let value = args.next().ok_or_else(|| {
-                        AppError::BadRequest("--bind requires host:port".to_owned())
+                        AppError::BadRequest("--bind requires an address".to_owned())
                     })?;
-                    bind = value
-                        .parse()
-                        .map_err(|err| AppError::BadRequest(format!("invalid --bind: {err}")))?;
-                }
-                "--dev-http" => {
-                    let value = args.next().ok_or_else(|| {
-                        AppError::BadRequest("--dev-http requires an unprivileged port".to_owned())
-                    })?;
-                    let port = value.parse::<u16>().map_err(|err| {
-                        AppError::BadRequest(format!("invalid --dev-http port: {err}"))
-                    })?;
-                    if port < 1024 {
-                        return Err(AppError::BadRequest(
-                            "--dev-http requires an unprivileged port".to_owned(),
-                        ));
-                    }
-                    bind = SocketAddr::from(([127, 0, 0, 1], port));
-                    dev_http = true;
+                    bind = parse_bind(&value, bind)?;
                 }
                 "-ta" | "--ta" => {
                     ta = true;
@@ -281,7 +242,7 @@ impl Args {
                 }
                 "--help" | "-h" => {
                     println!(
-                        "usage: codegrinder-server [-ta] [-daycare] [--config PATH] [--bind HOST:PORT] [--dev-http PORT]"
+                        "usage: codegrinder-server [-ta] [-daycare] [--config PATH] [--bind ADDRESS]"
                     );
                     std::process::exit(0);
                 }
@@ -297,13 +258,90 @@ impl Args {
             bind,
             ta,
             daycare,
-            dev_http,
         })
     }
+}
+
+fn default_bind() -> AppResult<SocketAddr> {
+    resolve_bind_host("localhost", DEFAULT_BIND_PORT)
+}
+
+fn parse_bind(raw: &str, default: SocketAddr) -> AppResult<SocketAddr> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return Err(AppError::BadRequest(
+            "invalid --bind: empty address".to_owned(),
+        ));
+    }
+    if let Some(port) = value.strip_prefix(':') {
+        let port = parse_port(port)?;
+        return Ok(SocketAddr::new(default.ip(), port));
+    }
+    if let Ok(addr) = value.parse::<SocketAddr>() {
+        return Ok(addr);
+    }
+    if let Ok(ip) = value.parse::<IpAddr>() {
+        return Ok(SocketAddr::new(ip, default.port()));
+    }
+    if value.contains(':') && !value.starts_with('[') {
+        return resolve_bind_authority(value);
+    }
+    resolve_bind_host(value, default.port())
+}
+
+fn parse_port(raw: &str) -> AppResult<u16> {
+    raw.parse::<u16>()
+        .map_err(|err| AppError::BadRequest(format!("invalid --bind port: {err}")))
+}
+
+fn resolve_bind_host(host: &str, port: u16) -> AppResult<SocketAddr> {
+    resolve_bind_authority(&format!("{host}:{port}"))
+}
+
+fn resolve_bind_authority(authority: &str) -> AppResult<SocketAddr> {
+    authority
+        .to_socket_addrs()
+        .map_err(|err| AppError::BadRequest(format!("invalid --bind: {err}")))?
+        .next()
+        .ok_or_else(|| {
+            AppError::BadRequest(format!(
+                "invalid --bind: {authority} resolved to no addresses"
+            ))
+        })
 }
 
 fn dirs_home() -> PathBuf {
     env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::Ipv4Addr;
+
+    #[test]
+    fn parse_bind_defaults_to_localhost_port_1400() {
+        let bind = default_bind().unwrap();
+        assert_eq!(bind.port(), 1400);
+        assert!(matches!(
+            bind.ip(),
+            IpAddr::V4(Ipv4Addr::LOCALHOST) | IpAddr::V6(_)
+        ));
+    }
+
+    #[test]
+    fn parse_bind_accepts_host_port_and_port_only_forms() {
+        let default = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 1400);
+        assert_eq!(parse_bind("127.0.0.1", default).unwrap(), default);
+        assert_eq!(
+            parse_bind(":18080", default).unwrap(),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 18080)
+        );
+        assert_eq!(
+            parse_bind("0.0.0.0:18081", default).unwrap(),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 18081)
+        );
+    }
 }

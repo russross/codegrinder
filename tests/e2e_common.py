@@ -4,9 +4,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
 import os
 import signal
-import socket
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -31,8 +31,6 @@ COURSE_NAME = "CS 2810 E2E"
 COURSE_DIR = "cs2810"
 WORKSPACE_DIR = RUN_ROOT / COURSE_DIR
 LEGACY_WORKSPACE_DIR = Path("/tmp") / COURSE_DIR
-PORT = int(os.environ.get("CODEGRINDER_E2E_PORT", "18080"))
-HOST = f"http://localhost:{PORT}"
 SERVER_LOG = ARTIFACT_DIR / "server.log"
 
 
@@ -122,10 +120,18 @@ def session_key_hash(session_key: str, session_secret: str) -> str:
     return base64.b64encode(digest).decode("ascii")
 
 
-def port_is_open(port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.settimeout(0.2)
-        return sock.connect_ex(("127.0.0.1", port)) == 0
+def server_endpoint() -> str:
+    if SERVER_CONFIG_PATH.is_file():
+        config = json.loads(SERVER_CONFIG_PATH.read_text(encoding="utf-8"))
+        raw = config.get("taHostname") or config.get("hostname")
+        if not isinstance(raw, str) or raw.strip() == "":
+            raise RuntimeError(f"{SERVER_CONFIG_PATH} does not define hostname or taHostname")
+        host = raw.strip().rstrip("/")
+    else:
+        host = os.environ.get("CODEGRINDER_E2E_HOST", "https://dev.russross.com").rstrip("/")
+    if host.startswith("http://") or host.startswith("https://"):
+        return host
+    return f"https://{host}"
 
 
 def stop_process(process: subprocess.Popen[str]) -> None:

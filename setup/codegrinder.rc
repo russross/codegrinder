@@ -14,11 +14,10 @@ respawn_delay=2
 respawn_max=10
 respawn_period=300
 
-command="/home/russ/go/bin/server"
-command_args="-daycare"
+command="/usr/local/bin/codegrinder-server"
+command_args="-ta -daycare"
 command_user="russ:russ"
 command_background="true"
 pidfile="/run/${RC_SVCNAME}.pid"
-capabilities="^cap_net_bind_service"
 output_logger="logger -t codegrinder"
 error_logger="logger -t codegrinder"

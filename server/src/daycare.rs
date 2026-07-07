@@ -1657,8 +1657,6 @@ mod tests {
             sqlite3_path: base.join("db.sqlite"),
             sessions_expire: Vec::new(),
             ip_filter: IpFilterConfig::default(),
-            tls_cert: None,
-            tls_key: None,
             www_root: base.join("www"),
         }
     }

@@ -463,8 +463,6 @@ mod tests {
             sqlite3_path: PathBuf::new(),
             sessions_expire: Vec::new(),
             ip_filter: IpFilterConfig::default(),
-            tls_cert: None,
-            tls_key: None,
             www_root: PathBuf::new(),
         }
     }
