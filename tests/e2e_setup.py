@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
+import socket
 import sqlite3
 import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 
 from e2e_common import (
@@ -17,9 +20,10 @@ from e2e_common import (
     COURSE_NAME,
     DAYCARE_SECRET,
     DB_PATH,
-    LEGACY_WORKSPACE_DIR,
     ROOT,
+    RUN_MARKER,
     RUN_ROOT,
+    SERVER_BIND_PORT,
     SERVER_CONFIG_PATH,
     SERVER_LOG,
     SESSION_KEY,
@@ -41,8 +45,14 @@ TESTS_DIR = ROOT / "tests"
 
 
 def prepare_clean_start() -> None:
+    if RUN_ROOT.exists() and not RUN_MARKER.is_file():
+        raise RuntimeError(
+            f"refusing to remove unmarked e2e run directory {RUN_ROOT}; "
+            f"remove it manually or choose a different CODEGRINDER_E2E_RUN_ROOT"
+        )
     shutil.rmtree(RUN_ROOT, ignore_errors=True)
-    shutil.rmtree(LEGACY_WORKSPACE_DIR, ignore_errors=True)
+    RUN_ROOT.mkdir(parents=True)
+    RUN_MARKER.write_text("CodeGrinder e2e scratch directory\n", encoding="utf-8")
     subprocess.run(
         ["docker", "rm", "-f", f"nanny-{USER_ID}"],
         cwd=ROOT,
@@ -53,32 +63,62 @@ def prepare_clean_start() -> None:
 
 
 def cleanup_success_artifacts() -> None:
+    if not RUN_MARKER.is_file():
+        raise RuntimeError(f"refusing to remove unmarked e2e run directory {RUN_ROOT}")
     shutil.rmtree(RUN_ROOT, ignore_errors=True)
-    shutil.rmtree(LEGACY_WORKSPACE_DIR, ignore_errors=True)
 
 
 def ensure_server_not_running(env: dict[str, str]) -> None:
-    if shutil.which("doas") is not None:
-        status = subprocess.run(
-            ["doas", "rc-service", "codegrinder-server", "status"],
-            cwd=ROOT,
-            env=env,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-        )
-        combined = f"{status.stdout}\n{status.stderr}".lower()
-        if status.returncode == 0 and "started" in combined:
-            subprocess.run(
-                ["doas", "rc-service", "codegrinder-server", "stop"],
-                cwd=ROOT,
-                env=env,
-                check=False,
-            )
+    listener = listening_process_on_port(SERVER_BIND_PORT, env)
+    if listener is None:
+        if port_accepts_connections(SERVER_BIND_PORT):
             raise RuntimeError(
-                "codegrinder-server service was already running; stopped it and aborting"
+                f"port {SERVER_BIND_PORT} is already accepting connections, but the "
+                "listening process could not be identified; stop it before running tests/e2e.py"
             )
+        return
+
+    raise RuntimeError(
+        f"port {SERVER_BIND_PORT} is already in use by pid {listener.pid} "
+        f"({listener.program}); stop it before running tests/e2e.py"
+    )
+
+
+@dataclass(frozen=True)
+class ListeningProcess:
+    pid: int
+    program: str
+
+
+def listening_process_on_port(port: int, env: dict[str, str]) -> ListeningProcess | None:
+    if shutil.which("netstat") is None:
+        return None
+    result = subprocess.run(
+        ["netstat", "-ltnp"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    pattern = re.compile(
+        rf"^tcp\s+\d+\s+\d+\s+\S+:{port}\s+\S+\s+LISTEN\s+(\d+)/(\S+)"
+    )
+    for line in result.stdout.splitlines():
+        match = pattern.match(line)
+        if match is None:
+            continue
+        return ListeningProcess(pid=int(match.group(1)), program=match.group(2))
+    return None
+
+
+def port_accepts_connections(port: int) -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=1):
+            return True
+    except OSError:
+        return False
 
 
 def ensure_caddy_running(env: dict[str, str]) -> None:

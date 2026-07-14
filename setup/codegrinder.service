@@ -5,8 +5,8 @@ After=docker.service
 
 [Service]
 Type=simple
-User=russ
-ExecStart=/usr/local/bin/codegrinder-server -ta -daycare
+User=codegrinder
+ExecStart=/usr/local/bin/codegrinder-server -ta -daycare --config /etc/codegrinder/config.json
 Restart=always
 RestartSec=5
 

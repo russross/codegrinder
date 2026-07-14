@@ -1,4 +1,4 @@
-dev.russross.com {
+codegrinder.example.edu {
 	tls {
 		protocols tls1.3
 	}

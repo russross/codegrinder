@@ -48,11 +48,15 @@ const DEFAULT_BIND_PORT: u16 = 1400;
 #[tokio::main]
 async fn main() -> AppResult<()> {
     let args = Args::parse()?;
-    let root = env::var_os("CODEGRINDERROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| dirs_home().join("codegrinder"));
-    let config_path = args.config.unwrap_or_else(|| root.join("config.json"));
-    let config = Arc::new(load_config(&config_path, &root)?);
+    let config_path = args
+        .config
+        .or_else(|| env::var_os("CODEGRINDER_CONFIG").map(PathBuf::from))
+        .ok_or_else(|| {
+            AppError::BadRequest(
+                "no config file selected; use --config PATH or CODEGRINDER_CONFIG".to_owned(),
+            )
+        })?;
+    let config = Arc::new(load_config(&config_path)?);
     validate_config(&config, args.ta, args.daycare)?;
     let db = Db::open(&config.sqlite3_path)?;
     if args.ta {
@@ -242,7 +246,7 @@ impl Args {
                 }
                 "--help" | "-h" => {
                     println!(
-                        "usage: codegrinder-server [-ta] [-daycare] [--config PATH] [--bind ADDRESS]"
+                        "usage: codegrinder-server [-ta] [-daycare] --config PATH [--bind ADDRESS]"
                     );
                     std::process::exit(0);
                 }
@@ -308,12 +312,6 @@ fn resolve_bind_authority(authority: &str) -> AppResult<SocketAddr> {
                 "invalid --bind: {authority} resolved to no addresses"
             ))
         })
-}
-
-fn dirs_home() -> PathBuf {
-    env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 #[cfg(test)]

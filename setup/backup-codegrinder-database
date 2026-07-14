@@ -2,11 +2,34 @@
 
 set -e
 
-if [ -z "$CODEGRINDERROOT" ]; then
-    CODEGRINDERROOT="$HOME/codegrinder"
-fi
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+SOURCE="$ROOT/db/codegrinder.db"
+BACKUPDIR="$ROOT/backup"
 
-BACKUPDIR="$CODEGRINDERROOT/backup"
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --database)
+            if [ "$#" -lt 2 ]; then
+                echo "--database requires a path" >&2
+                exit 2
+            fi
+            SOURCE=$2
+            shift 2
+            ;;
+        --backup-dir)
+            if [ "$#" -lt 2 ]; then
+                echo "--backup-dir requires a path" >&2
+                exit 2
+            fi
+            BACKUPDIR=$2
+            shift 2
+            ;;
+        *)
+            echo "usage: $0 [--database PATH] [--backup-dir PATH]" >&2
+            exit 2
+            ;;
+    esac
+done
 
 # make sure all the backup directories exist
 mkdir -p "$BACKUPDIR"
@@ -15,7 +38,6 @@ mkdir -p "$BACKUPDIR/monthly"
 mkdir -p "$BACKUPDIR/weekly"
 mkdir -p "$BACKUPDIR/daily"
 
-SOURCE="$CODEGRINDERROOT/db/codegrinder.db"
 DBFILE=codegrinder_`date '+%Y-%m-%d'`.db
 
 #/usr/bin/sqlite3 "$SOURCE" vacuum 2> /dev/null

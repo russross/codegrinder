@@ -15,7 +15,8 @@ from pathlib import Path
 
 TESTS_DIR = Path(__file__).resolve().parent
 ROOT = TESTS_DIR.parent
-RUN_ROOT = Path("/tmp/codegrinder-e2e")
+RUN_ROOT = Path(os.environ.get("CODEGRINDER_E2E_RUN_ROOT", "/tmp/codegrinder-e2e")).resolve()
+RUN_MARKER = RUN_ROOT / ".codegrinder-e2e"
 ARTIFACT_DIR = RUN_ROOT / "artifacts"
 XDG_CONFIG_HOME = RUN_ROOT / "xdg-config"
 CONFIG_PATH = XDG_CONFIG_HOME / "codegrinder" / "config.toml"
@@ -30,8 +31,8 @@ COURSE_ID = "e2e-course"
 COURSE_NAME = "CS 2810 E2E"
 COURSE_DIR = "cs2810"
 WORKSPACE_DIR = RUN_ROOT / COURSE_DIR
-LEGACY_WORKSPACE_DIR = Path("/tmp") / COURSE_DIR
 SERVER_LOG = ARTIFACT_DIR / "server.log"
+SERVER_BIND_PORT = 1400
 
 
 @dataclass(frozen=True)
@@ -45,7 +46,6 @@ class CommandResult:
 
 def e2e_env() -> dict[str, str]:
     env = os.environ.copy()
-    env["CODEGRINDERROOT"] = str(ROOT)
     env["CONTAINER_ENGINE"] = "docker"
     env["XDG_CONFIG_HOME"] = str(XDG_CONFIG_HOME)
     return env

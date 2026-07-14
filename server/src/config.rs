@@ -88,8 +88,9 @@ fn default_container_engine() -> String {
     "docker".to_owned()
 }
 
-pub fn load_config(path: &Path, root: &Path) -> AppResult<ServerConfig> {
+pub fn load_config(path: &Path) -> AppResult<ServerConfig> {
     let raw: RawConfig = serde_json::from_slice(&fs::read(path)?)?;
+    let config_dir = path.parent().unwrap_or_else(|| Path::new("."));
     let sessions_expire = match raw.sessions_expire {
         Some(values) => values
             .iter()
@@ -109,17 +110,34 @@ pub fn load_config(path: &Path, root: &Path) -> AppResult<ServerConfig> {
         tool_id: raw.tool_id,
         tool_description: raw.tool_description,
         container_engine: raw.container_engine,
-        sqlite3_path: if raw.sqlite3_path.as_os_str().is_empty() {
-            root.join("db").join("codegrinder.db")
-        } else {
-            raw.sqlite3_path
-        },
+        sqlite3_path: resolve_config_path(
+            config_dir,
+            raw.sqlite3_path,
+            Path::new("db/codegrinder.db"),
+        ),
         sessions_expire,
         ip_filter: IpFilterConfig {
             whitelist: raw.ip_filter.map(|ip| ip.whitelist).unwrap_or_default(),
         },
-        www_root: raw.www_root.unwrap_or_else(|| root.join("www")),
+        www_root: resolve_config_path(
+            config_dir,
+            raw.www_root.unwrap_or_default(),
+            Path::new("www"),
+        ),
     })
+}
+
+fn resolve_config_path(config_dir: &Path, configured: PathBuf, default: &Path) -> PathBuf {
+    let path = if configured.as_os_str().is_empty() {
+        default
+    } else {
+        &configured
+    };
+    if path.is_absolute() {
+        path.to_owned()
+    } else {
+        config_dir.join(path)
+    }
 }
 
 pub fn validate_config(
@@ -179,10 +197,31 @@ fn decode_base64_if_needed(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn decodes_base64_secrets_when_possible() {
         assert_eq!(decode_base64_if_needed("c2VjcmV0"), "secret");
         assert_eq!(decode_base64_if_needed("not base64"), "not base64");
+    }
+
+    #[test]
+    fn resolves_data_paths_from_the_config_directory() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("server.json");
+        fs::write(
+            &config_path,
+            r#"{
+                "hostname": "example.test",
+                "sqlite3Path": "state/server.db",
+                "wwwRoot": "public"
+            }"#,
+        )
+        .unwrap();
+
+        let config = load_config(&config_path).unwrap();
+
+        assert_eq!(config.sqlite3_path, dir.path().join("state/server.db"));
+        assert_eq!(config.www_root, dir.path().join("public"));
     }
 }

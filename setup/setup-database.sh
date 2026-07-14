@@ -2,21 +2,42 @@
 
 set -e
 
-if [ -z "$CODEGRINDERROOT" ]; then
-    CODEGRINDERROOT="$HOME"/codegrinder
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+DBFILE="$ROOT/db/codegrinder.db"
+FORCE=false
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --database)
+            if [ "$#" -lt 2 ]; then
+                echo "--database requires a path" >&2
+                exit 2
+            fi
+            DBFILE=$2
+            shift 2
+            ;;
+        --force)
+            FORCE=true
+            shift
+            ;;
+        *)
+            echo "usage: $0 --force [--database PATH]" >&2
+            exit 2
+            ;;
+    esac
+done
+
+if [ "$FORCE" != true ]; then
+    echo "refusing to replace a database without --force" >&2
+    echo "usage: $0 --force [--database PATH]" >&2
+    exit 2
 fi
 
-DBFILE="$CODEGRINDERROOT"/db/codegrinder.db
+echo "Creating $(dirname -- "$DBFILE") if needed"
+mkdir -p "$(dirname -- "$DBFILE")"
 
-if [ ! -f "$HOME"/.sqliterc ]; then
-    cp "$CODEGRINDERROOT"/setup/sqliterc "$HOME"/.sqliterc
-fi
-
-echo Creating directory if needed
-mkdir -p "$CODEGRINDERROOT"/db
-
-echo Deleting old database if it exists
+echo "Replacing $DBFILE"
 rm -f "$DBFILE"
 
 echo Creating database tables
-sqlite3 "$DBFILE" < "$CODEGRINDERROOT"/setup/schema.sql
+sqlite3 "$DBFILE" < "$ROOT/setup/schema.sql"

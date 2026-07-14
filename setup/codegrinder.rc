@@ -15,9 +15,9 @@ respawn_max=10
 respawn_period=300
 
 command="/usr/local/bin/codegrinder-server"
-command_args="-ta -daycare"
-command_user="russ:russ"
+command_args="${codegrinder_roles:--ta -daycare} --config ${codegrinder_config:-/etc/codegrinder/config.json}"
+command_user="${codegrinder_user:-codegrinder}:${codegrinder_group:-codegrinder}"
 command_background="true"
 pidfile="/run/${RC_SVCNAME}.pid"
-output_logger="logger -t codegrinder"
-error_logger="logger -t codegrinder"
+output_logger="logger -t ${RC_SVCNAME}"
+error_logger="logger -t ${RC_SVCNAME}"
