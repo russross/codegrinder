@@ -585,7 +585,13 @@ CREATE VIEW assignment_problem_progress AS
                 END
             ),
             MAX(problem_set_step_scope.step_number)
-        ) AS current_step_number
+        ) AS current_step_number,
+        MIN(
+            CASE
+                WHEN passed_commit_steps.step_number IS NULL THEN 0
+                ELSE 1
+            END
+        ) AS completed
     FROM assignments
     NATURAL JOIN problem_set_step_scope
     NATURAL JOIN problems

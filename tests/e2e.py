@@ -8,12 +8,13 @@ TESTS_DIR = Path(__file__).resolve().parent
 if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
 
-from e2e_common import ARTIFACT_DIR, RUN_ROOT, e2e_env, require, run
+from e2e_common import ARTIFACT_DIR, ROOT, RUN_ROOT, e2e_env, require, run
 from e2e_containment import run_containment_flow
 from e2e_flows import (
     run_array_max_flow,
     run_followup_download_checks,
     run_huff_flow,
+    run_javascript_hello_flow,
     run_sudoku_flow,
 )
 from e2e_setup import (
@@ -59,7 +60,9 @@ def main() -> int:
         ensure_server_not_running(env)
         ensure_docker_running(env)
         build_rust(env)
-        env["PATH"] = f"{Path(__file__).resolve().parents[1] / 'target' / 'debug'}:{env['PATH']}"
+        target_debug = ROOT / "target" / "debug"
+        preinstalled_riscv_tools = ROOT / "problemtypes" / "containers" / "riscv"
+        env["PATH"] = f"{target_debug}:{preinstalled_riscv_tools}:{env['PATH']}"
         check_version_without_config(env)
         check_login_argument_shapes(env)
         build_containers(env)
@@ -79,8 +82,10 @@ def main() -> int:
         list_problem_catalog(env)
         set_course_roles("Learner")
         create_assignment("array-max", "Array Max")
+        create_assignment("javascript-hello", "JavaScript Hello World")
         create_assignment("containment", "Daycare Containment")
         run_array_max_flow(env)
+        run_javascript_hello_flow(env)
         run_containment_flow(env)
         create_assignment("huff", "Huffman Encoder")
         create_assignment("sudoku-1", "Sudoku Pencil Marks 1")

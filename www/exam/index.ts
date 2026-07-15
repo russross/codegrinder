@@ -260,7 +260,7 @@ function buildProblemData(summary: AssignmentProblemProgress, workspace: {
         mergedFileList: [...mergedFiles.keys()],
         editablePaths: new Set(studentFiles.keys()),
         instructionsHtml: renderInstructionsMarkdown(mergedFiles.get(DOC_PATH)),
-        isComplete: false,
+        isComplete: summary.completed,
     };
 }
 
@@ -706,7 +706,7 @@ function renderMenuBar(): void {
 
     for (const problem of window.problemSet) {
         const problemButton = document.createElement("button");
-        problemButton.textContent = problem.note;
+        problemButton.textContent = problem.isComplete ? `✓ ${problem.note}` : problem.note;
         problemButton.classList.add("problem-button");
         if (problem.problemId === currentProblem.problemId) {
             problemButton.disabled = true;
@@ -753,6 +753,7 @@ function renderMenuBar(): void {
         const actionButton = document.createElement("button");
         actionButton.id = `action-${action}-button`;
         actionButton.textContent = actionLabel(action);
+        actionButton.disabled = currentProblem.isComplete && action === "grade";
         actionButton.addEventListener("click", async (): Promise<void> => {
             await saveIfNeeded();
             await doAction(action);

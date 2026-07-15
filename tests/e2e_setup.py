@@ -179,7 +179,11 @@ def check_login_argument_shapes(env: dict[str, str]) -> None:
 
 
 def build_containers(env: dict[str, str]) -> None:
-    run(["problemtypes/bin/build-containers", "c", "riscv"], env=env, timeout=1800)
+    run(
+        ["problemtypes/bin/build-containers", "c", "javascript", "riscv"],
+        env=env,
+        timeout=1800,
+    )
 
 
 def rebuild_database(env: dict[str, str]) -> None:
@@ -243,7 +247,12 @@ def write_server_config() -> None:
                 "ltiSecret": "e2e-test-lti-secret",
                 "sessionSecret": SESSION_SECRET,
                 "capacity": 1,
-                "problemTypes": ["cinout", "riscv", "containment-c"],
+                "problemTypes": [
+                    "cinout",
+                    "riscv",
+                    "javascriptunittest",
+                    "containment-c",
+                ],
                 "containerEngine": "docker",
                 "sqlite3Path": str(DB_PATH),
                 "wwwRoot": str(ROOT / "www"),
@@ -361,8 +370,9 @@ def run_api_trace_check(env: dict[str, str]) -> None:
 
 
 def sync_problem_types(env: dict[str, str]) -> None:
-    run(["problemtypes/bin/sync-actions", "cinout", "riscv"], env=env)
-    run(["problemtypes/bin/sync-files", "cinout", "riscv"], env=env)
+    problem_types = ["cinout", "javascriptunittest", "riscv"]
+    run(["problemtypes/bin/sync-actions", *problem_types], env=env)
+    run(["problemtypes/bin/sync-files", *problem_types], env=env)
     require_public_mutation_reached_local_database()
     run(["grind", "problemtype", "list"], env=env)
 
@@ -373,13 +383,13 @@ def require_public_mutation_reached_local_database() -> None:
             """
             SELECT problem_type
             FROM problem_types
-            WHERE problem_type IN ('cinout', 'riscv')
+            WHERE problem_type IN ('cinout', 'javascriptunittest', 'riscv')
             ORDER BY problem_type
             """
         ).fetchall()
     found = {str(row[0]) for row in rows}
     require(
-        found == {"cinout", "riscv"},
+        found == {"cinout", "javascriptunittest", "riscv"},
         "problem type sync succeeded through the public HTTPS endpoint, but the local e2e "
         "database was not updated; this may be a setup problem such as Caddy routing to the "
         "wrong backend, the config hostname pointing at the wrong server, or an existing "
@@ -410,6 +420,10 @@ def create_containment_problem_type(env: dict[str, str]) -> None:
 def run_problem_type_command_checks(env: dict[str, str]) -> None:
     type_list = run(["grind", "type", "--list"], env=env).stdout
     require("cinout" in type_list, "grind type --list did not show cinout")
+    require(
+        "javascriptunittest" in type_list,
+        "grind type --list did not show javascriptunittest",
+    )
     require("riscv" in type_list, "grind type --list did not show riscv")
 
     type_dir = ARTIFACT_DIR / "type-riscv"
@@ -420,7 +434,7 @@ def run_problem_type_command_checks(env: dict[str, str]) -> None:
 
 
 def create_problem_sources(env: dict[str, str]) -> None:
-    for name in ["array-max", "sudoku", "huff", "containment"]:
+    for name in ["array-max", "sudoku", "huff", "javascript-hello", "containment"]:
         run(["grind", "create"], cwd=TESTS_DIR / name, env=env, timeout=1800)
     run(["grind", "problem", "cs2810"], env=env)
 
@@ -495,6 +509,8 @@ def list_problem_catalog(env: dict[str, str]) -> None:
     output = run(["grind", "problem", "sudoku"], env=env).stdout
     for problem_set_id in ["sudoku", "sudoku-1", "sudoku-2", "sudoku-3"]:
         require(problem_set_id in output, f"catalog is missing {problem_set_id}")
+    javascript_output = run(["grind", "problem", "javascript"], env=env).stdout
+    require("javascript-hello" in javascript_output, "catalog is missing javascript-hello")
 
 
 def create_assignment(

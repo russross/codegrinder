@@ -155,7 +155,7 @@ pub fn get_assignment(
         ));
     }
     let mut stmt = conn.prepare(
-        "SELECT problem_id, problem_note, current_step_number, first_step_number, last_step_number FROM assignment_problem_progress WHERE user_id = ? AND course_id = ? AND problem_set_id = ? ORDER BY problem_id",
+        "SELECT problem_id, problem_note, current_step_number, first_step_number, last_step_number, completed FROM assignment_problem_progress WHERE user_id = ? AND course_id = ? AND problem_set_id = ? ORDER BY problem_id",
     )?;
     let problems = stmt
         .query_map(
@@ -167,6 +167,7 @@ pub fn get_assignment(
                     current_step_number: row.get(2)?,
                     first_step_number: row.get(3)?,
                     last_step_number: row.get(4)?,
+                    completed: row.get(5)?,
                 })
             },
         )?
@@ -1047,6 +1048,7 @@ mod tests {
         let full = get_assignment(&conn, &student, &key("student", "base"), true).unwrap();
         assert_eq!(full.problems[0].current_step_number, 2);
         assert!(full.problems[0].last_step_number > full.problems[0].first_step_number);
+        assert!(!full.problems[0].completed);
         let full_score = list_assignments(&conn, &student, &["Base".to_owned()], false, true)
             .unwrap()
             .pop()
@@ -1058,6 +1060,7 @@ mod tests {
         assert_eq!(slice.problems[0].first_step_number, 1);
         assert_eq!(slice.problems[0].last_step_number, 1);
         assert_eq!(slice.problems[0].current_step_number, 1);
+        assert!(slice.problems[0].completed);
         let slice_score = list_assignments(&conn, &student, &["Slice One".to_owned()], false, true)
             .unwrap()
             .pop()

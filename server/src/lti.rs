@@ -24,6 +24,41 @@ use crate::timeutil::{db_time, parse_canvas_time};
 
 const BOOTSTRAP_ASSIGNMENT_NAME: &str = "bootstrap-codegrinder";
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LaunchUi {
+    Cli,
+    Web,
+    Js,
+    Exam,
+}
+
+impl LaunchUi {
+    fn parse(raw: &str) -> AppResult<Self> {
+        match raw {
+            "cli" => Ok(Self::Cli),
+            "web" => Ok(Self::Web),
+            "js" => Ok(Self::Js),
+            "exam" => Ok(Self::Exam),
+            _ => Err(AppError::BadRequest(format!(
+                "UI type must be cli, web, js, or exam, not {raw:?}"
+            ))),
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Cli => "cli",
+            Self::Web => "web",
+            Self::Js => "js",
+            Self::Exam => "exam",
+        }
+    }
+
+    const fn is_restricted(self) -> bool {
+        matches!(self, Self::Exam)
+    }
+}
+
 #[derive(Clone)]
 pub struct LtiState {
     pub db: Db,
@@ -110,11 +145,7 @@ async fn launch_inner(
     ui: String,
     unique: String,
 ) -> AppResult<String> {
-    if !matches!(ui.as_str(), "cli" | "web" | "exam") {
-        return Err(AppError::BadRequest(format!(
-            "UI type must be cli, web, or exam, not {ui:?}"
-        )));
-    }
+    let ui = LaunchUi::parse(&ui)?;
     if unique.is_empty() {
         return Err(AppError::BadRequest(
             "malformed URL: missing unique ID for problem".to_owned(),
@@ -149,11 +180,14 @@ async fn launch_inner(
         .or_else(|| headers.get(header::HOST))
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    let request_url = format!("{scheme}://{host}/lti/problem_sets/{ui}/{unique}");
+    let request_url = format!(
+        "{scheme}://{host}/lti/problem_sets/{}/{unique}",
+        ui.as_str()
+    );
     validate_oauth_signature("POST", &request_url, &form, &state.config.lti_secret)?;
     let roles = form_first(&form, "roles");
     let client_ip = extract_ip(&headers, Some(peer));
-    let restricted = ui == "exam";
+    let restricted = ui.is_restricted();
     let ip_allowed = !state.ip_filter.enabled()
         || client_ip
             .as_deref()
@@ -172,12 +206,17 @@ async fn launch_inner(
         .transaction(move |conn| update_launch(conn, &form_for_db, &unique, restricted, now))
         .await?;
     let token = state.login_tokens.insert(&user_id, now)?;
-    Ok(format!(
-        "/{ui}/?assignment={}&token={}&course={}",
-        urlencoding::encode(&assignment_key),
-        urlencoding::encode(&token),
-        urlencoding::encode(&course_label)
-    ))
+    Ok(launch_location(ui, &assignment_key, &token, &course_label))
+}
+
+fn launch_location(ui: LaunchUi, assignment_key: &str, token: &str, course_label: &str) -> String {
+    format!(
+        "/{}/?assignment={}&token={}&course={}",
+        ui.as_str(),
+        urlencoding::encode(assignment_key),
+        urlencoding::encode(token),
+        urlencoding::encode(course_label)
+    )
 }
 
 fn update_launch(
@@ -389,6 +428,24 @@ mod tests {
         assert!(xml.contains("$Canvas.assignment.dueAt.iso8601"));
         assert!(xml.contains("canvas_assignment_lock_at"));
         assert!(xml.contains("$Canvas.assignment.lockAt.iso8601"));
+    }
+
+    #[test]
+    fn launch_ui_paths_preserve_web_and_add_javascript() {
+        for (raw, expected_path) in [("web", "/web/"), ("js", "/js/")] {
+            let ui = LaunchUi::parse(raw).unwrap();
+            let location = launch_location(ui, "u1:c1:ps1", "one time", "CS 101");
+
+            assert!(location.starts_with(expected_path));
+            assert!(location.contains("assignment=u1%3Ac1%3Aps1"));
+            assert!(location.contains("token=one%20time"));
+            assert!(location.contains("course=CS%20101"));
+            assert!(!ui.is_restricted());
+        }
+
+        assert!(LaunchUi::parse("exam").unwrap().is_restricted());
+        let error = LaunchUi::parse("javascript").unwrap_err();
+        assert!(error.to_string().contains("cli, web, js, or exam"));
     }
 
     #[test]

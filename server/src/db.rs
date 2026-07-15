@@ -216,6 +216,28 @@ mod tests {
         assert_eq!(count, 1);
     }
 
+    #[test]
+    fn assignment_completion_view_migration_preserves_dependent_views() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_connection(&dir.path().join("db.sqlite")).unwrap();
+
+        conn.execute_batch(include_str!(
+            "../../setup/migrate-assignment-problem-completion.sql"
+        ))
+        .unwrap();
+
+        let completed_columns: i64 = conn
+            .query_row(
+                "SELECT COUNT(1) FROM pragma_table_info('assignment_problem_progress') WHERE name = 'completed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(completed_columns, 1);
+        conn.prepare("SELECT * FROM workspace_step_context")
+            .unwrap();
+    }
+
     #[tokio::test]
     async fn expired_transaction_deadline_does_not_run_job() {
         let dir = tempfile::tempdir().unwrap();

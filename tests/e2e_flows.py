@@ -111,6 +111,19 @@ def run_array_max_flow(env: dict[str, str]) -> None:
     require_score("array-max", 1.0)
 
 
+def run_javascript_hello_flow(env: dict[str, str]) -> None:
+    assignment_dir = WORKSPACE_DIR / "javascript-hello"
+    require(assignment_dir.is_dir(), f"{assignment_dir} was not downloaded")
+    require_current_step(assignment_dir, "javascript-hello", 1)
+
+    run(["grind", "grade"], cwd=assignment_dir, env=env, check=False, expect_code=0)
+    require_score("javascript-hello", 0.0)
+
+    run(["grind", "solve"], cwd=assignment_dir, env=env)
+    run(["grind", "grade"], cwd=assignment_dir, env=env)
+    require_score("javascript-hello", 1.0)
+
+
 def run_followup_download_checks(env: dict[str, str]) -> None:
     run(["grind", "list"], env=env)
     require_download_status("sudoku", 1)

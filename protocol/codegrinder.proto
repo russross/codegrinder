@@ -379,6 +379,7 @@ message AssignmentProblemProgress {
   int64 current_step_number = 3;
   int64 first_step_number = 4;
   int64 last_step_number = 5;
+  bool completed = 6;
 }
 
 // Response for GetAssignment
