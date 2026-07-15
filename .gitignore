@@ -4,3 +4,7 @@
 # Editor files
 .vscode/
 .idea/
+
+# Generated API sources and local build dependencies
+generated/
+node_modules/

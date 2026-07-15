@@ -1,8 +1,7 @@
 import { Tabs } from './editorTabs.js';
 import { FileSystem, FileSystemUI, extension } from './directoryTree.js';
 import { JavaScriptRunner } from './jsHandler.js'
-import { CodeGrinder, CodeGrinderUI } from './codeGrinder.js';
-import { decodeBase64ToUTF8, encodeUTF8OrLatin1AsBase64 } from './encodingHelpers.js';
+import { CodeGrinder, CodeGrinderUI } from './codeGrinderApi.js';
 const output_terminal_label = document.getElementById("output_terminal")
 const output_terminal = output_terminal_label.getElementsByTagName("pre")[0];
 const input_terminal = output_terminal_label.getElementsByTagName("textarea")[0];
@@ -25,6 +24,7 @@ const tabs = new Tabs(document.getElementById("tabs"), (path, content) => {
     mostRecentChange = new Date();
     fileSystemUI.refreshUI();
 });
+let editablePaths = null;
 
 const javaScriptRunner = new JavaScriptRunner();
 const urlParams = new URLSearchParams(window.location.search);
@@ -43,12 +43,11 @@ document.addEventListener("click", event => {
 // Set up tabs
 fileSystemUI.fileClick = (fileNode, path) => {
     filesList.style.display = "none";
-    tabs.addSwitchTab(path, fileNode.content);
+    const relativePath = path.replace(/^\//, "");
+    const readOnly = editablePaths !== null && !editablePaths.has(relativePath);
+    tabs.addSwitchTab(path, fileNode.content, readOnly);
     if (extension(path) === "md") {
         mdElement.innerHTML = md.render(fileNode.content);
-    } else if (extension(path) === "html") {
-        console.warn("Running potentially untrusted html");
-        mdElement.innerHTML = fileNode.content;
     }
 };
 newTab.addEventListener("click", () => {
@@ -99,11 +98,9 @@ function writeTerminal(str, color) {
 
 // Set up JavaScript execution
 let javaScriptRunning = false;
-let serverRunning = false;
 window.iframeSharedArrayBufferWorkaroundServiceWorkerLoss = function () {
     javaScriptRunner.stopJavaScript();
 }
-let serverStdin;
 run.disabled = true;
 javaScriptRunner.ready.then(() => {
     run.disabled = false;
@@ -118,10 +115,6 @@ input_terminal.addEventListener("keydown", event => {
         input_terminal.value = "";
         input_terminal.focus();
         event.preventDefault();
-        if (serverRunning) {
-            serverStdin(value)
-            return;
-        }
         if (javaScriptRunning) {
             writeTerminal(value, "grey");
             javaScriptRunner.writeStdin(value);
@@ -145,10 +138,6 @@ javaScriptRunner.setStdoutCallback(str => {
 javaScriptRunner.setStderrCallback(str => {
     writeTerminal(str, "red");
 });
-javaScriptRunner.setToMainThreadCallback(data => {
-    // Hook for future extensions (e.g., displaying images or other data)
-    console.log('Message from worker:', data);
-});
 async function runJavaScript(path, clearFiles = false) {
     if (javaScriptRunning) {
         run.disabled = true;
@@ -168,157 +157,255 @@ async function runJavaScript(path, clearFiles = false) {
     }
 }
 run.addEventListener("click", async () => {
-    const path = tabs.tabs[tabs.currentTab].path
-    runJavaScript(path);
+    const currentTab = tabs.tabs[tabs.currentTab];
+    if (currentTab) {
+        runJavaScript(currentTab.path);
+    }
 })
 
 function setupCodegrinder() {
-    const codegrinderCookie = "codegrinderCookie";
-    const codeGrinder = new CodeGrinder(window.localStorage.getItem(codegrinderCookie));
-    const codeGrinderUI = new CodeGrinderUI(navBar, codeGrinder, cookie => window.localStorage.setItem(codegrinderCookie, cookie));
+    const sessionStorageKey = "codegrinderSessionKey";
+    const savedSessionKey = window.localStorage.getItem(sessionStorageKey) ?? "";
+    const codeGrinder = new CodeGrinder(savedSessionKey);
+    let currentAssignment = null;
+    let currentProblem = null;
+    let syncPromise = Promise.resolve();
+    let syncRunning = false;
+    let serverOperationRunning = false;
 
-    let currentProblemsFiles;
-    let currentDotFile;
-    let currentProblemUnique;
-    let currentProblemsWhitelist;
-    function switchProblem(unique) {
-        currentProblemUnique = unique;
+    function reportError(error) {
+        const message = error instanceof Error ? error.message : String(error);
+        writeTerminal(`Error: ${message}\n`, "red");
+        console.error(error);
+    }
+
+    const codeGrinderUI = new CodeGrinderUI(
+        navBar,
+        codeGrinder,
+        sessionKey => {
+            if (sessionKey === "") {
+                window.localStorage.removeItem(sessionStorageKey);
+            } else {
+                window.localStorage.setItem(sessionStorageKey, sessionKey);
+            }
+        },
+        assignment => loadAssignment(assignment),
+        reportError,
+    );
+
+    function loadProblem(problem) {
+        currentProblem = problem;
+        editablePaths = problem.studentPaths;
         fileSystem.clear();
         tabs.closeAll();
-        for (let filename in currentProblemsFiles[unique]) {
-            let content = currentProblemsFiles[unique][filename];
-            fileSystem.touch("/" + filename).content = content;
-            if (currentProblemsWhitelist[unique][filename]) {
-                tabs.addSwitchTab("/" + filename, content);
+        for (const [path, content] of Object.entries(problem.files)) {
+            fileSystem.touch(`/${path}`).content = content;
+            if (problem.studentPaths.has(path)) {
+                tabs.addSwitchTab(`/${path}`, content, false);
             }
         }
-        // Create a basic test runner file for JavaScript
-        fileSystem.touch("/.run_all_tests.js").content = `
-// Basic test runner - run all test files in tests/ directory
-console.log("Test runner not yet implemented for JavaScript version");
-`;
-        mdElement.innerHTML = fileSystem.touch("/doc/index.html").content;
+        const instructions = problem.files["doc/doc.md"] ?? "";
+        mdElement.innerHTML = md.render(instructions);
         fileSystemUI.refreshUI();
-        const finished = currentDotFile.completed.has(unique);
-        codeGrinderUI.buttonGrade.innerText = finished ? "Finished" : "Grade";
-        codeGrinderUI.buttonGrade.disabled = finished;
-        if (fileSystem.rootNode.children?.bin.children?.["setup.js"]) {
-            runJavaScript("/bin/setup.js", true);
-        }
-
+        codeGrinderUI.buttonGrade.innerText = problem.completed ? "Finished" : "Grade";
+        codeGrinderUI.buttonGrade.disabled = problem.completed;
+        codeGrinderUI.setActions(problem.actions);
     }
-    function problemSetHandler({ problemsFiles, dotFile, problemsWhitelist }, current) {
-        currentProblemsFiles = problemsFiles;
-        currentDotFile = dotFile;
-        currentProblemsWhitelist = problemsWhitelist;
-        let firstUnfinished = null;
+
+    function loadAssignment(assignment, preferredProblemId = null) {
+        currentAssignment = assignment;
+        tabs.autoSave = true;
+        tabs.setPathChangesAllowed(false);
+        newTab.hidden = true;
+        embed.hidden = true;
         codeGrinderUI.problemsList.innerText = "";
-        const keys = [];
-        for (let key in currentDotFile.problems) {
-            keys.push(key);
-        }
-        keys.sort()
-        for (let problem of keys) {
+        const problems = [...assignment.problems].sort((left, right) => left.problemId.localeCompare(right.problemId));
+        for (const problem of problems) {
             const li = document.createElement("li");
             const button = document.createElement("button");
             li.appendChild(button);
             codeGrinderUI.problemsList.appendChild(li);
-            if (currentDotFile.completed.has(problem)) {
-                button.innerText = "✓ " + problem;
-            } else {
-                button.innerText = problem;
-                if (!firstUnfinished) {
-                    firstUnfinished = problem;
-                }
-            }
-            button.addEventListener("click", async () => {
-                switchProblem(problem);
-            })
+            button.innerText = `${problem.completed ? "✓ " : ""}${problem.problemId}`;
+            button.addEventListener("click", () => loadProblem(problem));
         }
-        if (current && !currentDotFile.completed.has(current)) {
-            switchProblem(current)
-        } else {
-            switchProblem(firstUnfinished || keys[0]);
-        }
+        const preferred = problems.find(problem => problem.problemId === preferredProblemId && !problem.completed);
+        loadProblem(preferred ?? problems.find(problem => !problem.completed) ?? problems[0]);
     }
-    codeGrinderUI.buttonRunTests.addEventListener("click", () => {
-        runJavaScript("/.run_all_tests.js", true);
-    })
-    function toFiles(directory, path = "/", files = {}) {
-        for (let name in directory.children) {
+
+    function toFiles(directory, path = "", files = {}) {
+        for (const name in directory.children) {
             const node = directory.children[name];
-            // If is directory
             if (node.children) {
-                toFiles(node, path + name + "/", files);
+                toFiles(node, `${path}${name}/`, files);
             } else {
-                files[path + name] = encodeUTF8OrLatin1AsBase64(node.content);
+                files[`${path}${name}`] = node.content;
             }
         }
         return files;
     }
-    codeGrinderUI.buttonSync.addEventListener("click", async () => {
-        const files = toFiles(fileSystem.rootNode, "");
-        await codeGrinder.commandSync((await codeGrinderUI.me), files, currentDotFile, currentProblemUnique);
-    })
-    codeGrinderUI.buttonReset.addEventListener("click", async () => {
-        currentProblemsFiles[currentProblemUnique] = await codeGrinder.commandReset(currentDotFile, currentProblemUnique);
-        switchProblem(currentProblemUnique);
-    })
-    codeGrinderUI.buttonGrade.addEventListener("click", async () => {
-        const files = toFiles(fileSystem.rootNode, "");
-        await codeGrinder.commandGrade((await codeGrinderUI.me), files, currentDotFile, currentProblemUnique, stdoutStr => {
-            writeTerminal(stdoutStr, "green");
-        }, stderrStr => {
-            writeTerminal(stderrStr, "darkgreen");
-        });
-        await codeGrinder.commandGet(currentDotFile.assignmentID).then(res => problemSetHandler(res, currentProblemUnique));
-    })
-    codeGrinder.actionHandler = async (action) => {
-        const files = toFiles(fileSystem.rootNode, "");
-        await codeGrinder.commandAction((await codeGrinderUI.me), files, currentDotFile, currentProblemUnique,
-            () => {
-                writeTerminal(stdoutStr, "purple");
-            }, stdoutStr => {
-                writeTerminal(stdoutStr, "purple");
-            }, stderrStr => {
-                writeTerminal(stderrStr, "darkpurple");
-            });
-    }
-    codeGrinderUI.problemSetHandler = problemSetHandler;
-    const urlSession = urlParams.get("session");
-    let codeGrinderReadyPromise = new Promise((resolve) => resolve());
-    if (urlSession) {
-        codeGrinderReadyPromise = codeGrinder.login(urlSession);
-        codeGrinderReadyPromise.then(() => { codeGrinderUI.me = codeGrinder.getMe(); codeGrinderUI.updateAuthenticationStatus() });
-        codeGrinderUI.buttonAuthenticator.style.display = "none";
-    }
-    const urlAssignment = urlParams.get('assignment');
-    if (urlAssignment) {
-        // Simplify interface if assignment is known
-        newTab.style.display = "none";
-        saveCurrent.style.display = "none";
-        saveAll.style.display = "none";
-        codeGrinderUI.buttonAssignments.style.display = "none";
-        codeGrinderUI.buttonSync.style.display = "none";
-        embed.style.display = "none";
-        tabs.autoSave = true;
-        codeGrinderReadyPromise.then(() => codeGrinder.commandGet(urlAssignment)).then(res => problemSetHandler(res));
-        let lastSyncedChange = mostRecentChange;
-        setInterval(async () => {
-            const currentFiles = toFiles(fileSystem.rootNode, "");
-            for (let filename in currentProblemsFiles[currentProblemUnique]) {
-                const content = currentProblemsFiles[currentProblemUnique][filename];
-                if (decodeBase64ToUTF8(currentFiles[filename]) !== content) {
-                    if (mostRecentChange > lastSyncedChange) {
-                        lastSyncedChange = mostRecentChange;
-                        console.log("Auto Sync")
-                        await codeGrinder.commandSync((await codeGrinderUI.me), currentFiles, currentDotFile, currentProblemUnique);
-                        break;
+
+    function queueSync(showStatus) {
+        const problem = currentProblem;
+        if (!problem || syncRunning || serverOperationRunning) {
+            return Promise.resolve();
+        }
+        tabs.saveAllTabs();
+        const files = toFiles(fileSystem.rootNode);
+        syncPromise = syncPromise
+            .catch(() => {})
+            .then(async () => {
+                syncRunning = true;
+                tabs.setInteractionDisabled(true);
+                try {
+                    const result = await codeGrinder.sync(problem, files);
+                    if (result.message !== "") {
+                        writeTerminal(`${result.message}\n`, "red");
+                    } else if (showStatus) {
+                        if (currentProblem === problem) {
+                            loadProblem(problem);
+                        }
+                        writeTerminal(`Problem ${problem.problemId} step ${problem.stepNumber} synced\n`, "green");
                     }
+                } finally {
+                    syncRunning = false;
+                    tabs.setInteractionDisabled(serverOperationRunning);
                 }
-            }
-        }, 5000);
+            })
+            .catch(reportError);
+        return syncPromise;
     }
+
+    async function runServerOperation(operation) {
+        if (serverOperationRunning) {
+            return;
+        }
+        serverOperationRunning = true;
+        tabs.setInteractionDisabled(true);
+        try {
+            await syncPromise;
+            return await operation();
+        } finally {
+            serverOperationRunning = false;
+            tabs.setInteractionDisabled(syncRunning);
+        }
+    }
+
+    codeGrinderUI.buttonSync.addEventListener("click", () => queueSync(true));
+    codeGrinderUI.buttonReset.addEventListener("click", async () => {
+        if (!currentProblem || !window.confirm("Restore all student files to the beginning of this step?")) {
+            return;
+        }
+        const problem = currentProblem;
+        await runServerOperation(async () => {
+            try {
+                await codeGrinder.reset(problem);
+                loadProblem(problem);
+            } catch (error) {
+                reportError(error);
+            }
+        });
+    });
+    codeGrinderUI.buttonGrade.addEventListener("click", async () => {
+        if (!currentProblem) {
+            return;
+        }
+        codeGrinderUI.buttonGrade.disabled = true;
+        tabs.saveAllTabs();
+        const problem = currentProblem;
+        const problemId = problem.problemId;
+        const files = toFiles(fileSystem.rootNode);
+        await runServerOperation(async () => {
+            try {
+                const result = await codeGrinder.grade(
+                    problem,
+                    files,
+                    output => writeTerminal(output, "green"),
+                    output => writeTerminal(output, "darkgreen"),
+                );
+                const note = result.commit.reportCard?.note;
+                if (note) {
+                    writeTerminal(`${note}\n`, result.passed ? "green" : "red");
+                }
+                if (result.passed) {
+                    writeTerminal(
+                        result.problem.completed
+                            ? `Completed ${problemId}\n`
+                            : `Moving to step ${result.problem.stepNumber}\n`,
+                        "green",
+                    );
+                }
+                if (result.message !== "") {
+                    writeTerminal(`${result.message}\n`, "red");
+                }
+                if (currentAssignment?.lockedForLms) {
+                    writeTerminal("Grade was not posted to the LMS because the assignment is locked\n", "red");
+                }
+                loadAssignment(currentAssignment, problemId);
+            } catch (error) {
+                reportError(error);
+            } finally {
+                codeGrinderUI.buttonGrade.disabled = currentProblem?.completed ?? true;
+            }
+        });
+    });
+    codeGrinderUI.actionHandler = async (action) => {
+        if (!currentProblem) {
+            return;
+        }
+        const problem = currentProblem;
+        tabs.saveAllTabs();
+        const files = toFiles(fileSystem.rootNode);
+        await runServerOperation(async () => {
+            const result = await codeGrinder.action(
+                problem,
+                files,
+                action,
+                output => writeTerminal(output, "purple"),
+                output => writeTerminal(output, "darkpurple"),
+            );
+            if (result.message !== "") {
+                writeTerminal(`${result.message}\n`, "red");
+            }
+            loadProblem(problem);
+        });
+    };
+
+    async function initialize() {
+        const loginToken = urlParams.get("token") ?? "";
+        const assignmentKey = urlParams.get("assignment");
+        try {
+            if (loginToken !== "") {
+                await codeGrinder.login(loginToken);
+                window.localStorage.setItem(sessionStorageKey, codeGrinder.sessionKey);
+                const cleanUrl = new URL(window.location.href);
+                cleanUrl.searchParams.delete("token");
+                window.history.replaceState(null, "", cleanUrl);
+            } else if (savedSessionKey !== "") {
+                await codeGrinder.restoreSession();
+            }
+            codeGrinderUI.updateAuthenticationStatus();
+            if (assignmentKey && codeGrinder.getMe()) {
+                await loadAssignment(await codeGrinder.loadAssignment(assignmentKey));
+                codeGrinderUI.buttonAssignments.hidden = true;
+            }
+        } catch (error) {
+            window.localStorage.removeItem(sessionStorageKey);
+            codeGrinder.logout();
+            codeGrinderUI.updateAuthenticationStatus();
+            reportError(error);
+        }
+    }
+
+    initialize();
+
+    let lastSyncedChange = mostRecentChange;
+    setInterval(() => {
+        if (!currentProblem || syncRunning || serverOperationRunning || mostRecentChange <= lastSyncedChange) {
+            return;
+        }
+        lastSyncedChange = mostRecentChange;
+        queueSync(false);
+    }, 5000);
 }
 const urlDummy = urlParams.get("dummy");
 if (urlDummy) {

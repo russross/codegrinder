@@ -1,461 +1,590 @@
-import { decodeBase64ToUTF8OrLatin1 } from "./encodingHelpers.js";
+import { GrpcWebFetchTransport } from "@protobuf-ts/grpcweb-transport";
+import {
+  AssignmentDownloadStatus,
+  Commit,
+  CommitSaveStatus,
+  DaycareRequest,
+  GetAssignmentRequest,
+  GetWorkspaceRequest,
+  GradingCommit,
+  HelloRequest,
+  ListAssignmentsRequest,
+  RuntimeBundle,
+  SaveGradedCommitRequest,
+  SaveUngradedCommitRequest,
+  SaveWorkspaceCommitRequest,
+  WorkspaceFileState,
+} from "../generated/codegrinder.js";
+import { CodeGrinderServiceClient } from "../generated/codegrinder.client.js";
+import { Timestamp } from "../generated/google/protobuf/timestamp.js";
 import { createPrompt } from "./prompt.js";
-// Hacky trampoline to get around cors in testing environment
-function trampoline(url, options) {
-  return fetch("/trampoline", {
-    method: "POST",
-    body: JSON.stringify({ url, options }),
-    headers: {
-      'Content-Type': "application/json"
-    },
-  })
+
+const textDecoder = new TextDecoder("utf-8", { fatal: true });
+const textEncoder = new TextEncoder();
+
+function parseAssignmentKey(value) {
+  const parts = value.split(":");
+  if (parts.length !== 3 || parts.some((part) => part.trim() === "")) {
+    throw new Error(`Invalid assignment key ${JSON.stringify(value)}`);
+  }
+  return {
+    userId: parts[0],
+    courseId: parts[1],
+    problemSetId: parts[2],
+  };
 }
+
+function formatAssignmentKey(assignment) {
+  return `${assignment.userId}:${assignment.courseId}:${assignment.problemSetId}`;
+}
+
+function normalizeRelativePath(path) {
+  if (path === "" || path.startsWith("/") || path.includes("\\")) {
+    throw new Error(`Invalid workspace path ${JSON.stringify(path)}`);
+  }
+  const parts = path.split("/");
+  if (parts.some((part) => part === "" || part === "." || part === "..")) {
+    throw new Error(`Invalid workspace path ${JSON.stringify(path)}`);
+  }
+  return parts.join("/");
+}
+
+function decodeFileMap(files) {
+  const decoded = {};
+  for (const [rawPath, content] of Object.entries(files)) {
+    const path = normalizeRelativePath(rawPath);
+    try {
+      decoded[path] = textDecoder.decode(content);
+    } catch (error) {
+      throw new Error(`Workspace file ${JSON.stringify(path)} is not UTF-8 text`, { cause: error });
+    }
+  }
+  return decoded;
+}
+
+function encodeFileMap(files) {
+  return Object.fromEntries(
+    Object.entries(files).map(([path, content]) => [normalizeRelativePath(path), textEncoder.encode(content)]),
+  );
+}
+
+function workspaceState(workspace, completed = false) {
+  const systemFiles = decodeFileMap(workspace.systemOwnedFiles);
+  const studentFiles = decodeFileMap(workspace.studentOwnedFiles);
+  return {
+    assignment: workspace.assignment,
+    problemId: workspace.problemId,
+    problemNote: workspace.problemNote,
+    stepNumber: workspace.stepNumber,
+    firstStepNumber: workspace.firstStepNumber,
+    lastStepNumber: workspace.lastStepNumber,
+    problemType: workspace.problemType,
+    stepNote: workspace.stepNote,
+    actions: [...workspace.actions].sort((left, right) => left.localeCompare(right)),
+    systemFiles,
+    studentFiles,
+    files: { ...systemFiles, ...studentFiles },
+    studentPaths: new Set(Object.keys(studentFiles)),
+    completed,
+  };
+}
+
+function copyWorkspaceState(target, source) {
+  Object.assign(target, source);
+  return target;
+}
+
+function localStudentFiles(problem, localFiles) {
+  const studentFiles = {};
+  for (const path of problem.studentPaths) {
+    studentFiles[path] = localFiles[path] ?? problem.studentFiles[path];
+  }
+  return studentFiles;
+}
+
+function buildCommit(problem, action, note) {
+  if (!problem.assignment) {
+    throw new Error("Workspace response did not include its assignment key");
+  }
+  const now = Timestamp.fromDate(new Date());
+  return Commit.create({
+    assignment: problem.assignment,
+    problemId: problem.problemId,
+    step: problem.stepNumber,
+    action,
+    note,
+    files: encodeFileMap(problem.studentFiles),
+    createdAt: now,
+    updatedAt: now,
+  });
+}
+
+function assignmentsEqual(left, right) {
+  return left?.userId === right?.userId
+    && left?.courseId === right?.courseId
+    && left?.problemSetId === right?.problemSetId;
+}
+
+function timestampHasPassed(timestamp) {
+  if (!timestamp) {
+    return false;
+  }
+  const seconds = BigInt(timestamp.seconds);
+  return seconds * 1000n + BigInt(Math.floor(timestamp.nanos / 1_000_000)) <= BigInt(Date.now());
+}
+
+function saveStatusMessage(status, operation) {
+  if (status === CommitSaveStatus.SAVED) {
+    return "";
+  }
+  if (status === CommitSaveStatus.NOT_SAVED_NOT_OWNER) {
+    return `${operation} was not saved because you do not own this assignment`;
+  }
+  if (status === CommitSaveStatus.NOT_SAVED_LOCKED) {
+    return `${operation} was not saved because the assignment is locked`;
+  }
+  return `${operation} returned an unknown save status`;
+}
+
 class CodeGrinder {
-  constructor(cookie, host = "codegrinder.russross.com") {
-    this.host = host;
-    this.cookie = cookie;
-    this.urlPrefix = "";
+  constructor(sessionKey = "", baseUrl = window.location.origin) {
+    this.sessionKey = sessionKey ?? "";
+    this.user = null;
+    this.client = this.#createClient(baseUrl, "same-origin");
   }
-  #cookied(url, options) {
-    if (!options) {
-      options = {};
-    }
-    if (!options.headers) {
-      options.headers = {};
-    }
-    options.headers.Cookie = this.cookie;
-    if (location.hostname === this.host) {
-      return fetch(url, options);
-    } else {
-      return trampoline(url, options);
-    }
+
+  #createClient(baseUrl, credentials) {
+    return new CodeGrinderServiceClient(
+      new GrpcWebFetchTransport({ baseUrl, fetchInit: { credentials } }),
+    );
   }
-  async #getObject(path) {
-    const response = await this.#cookied("https://" + this.host + this.urlPrefix + path);
-    if (response.status !== 200) {
-      const text = await response.text();
+
+  #authOptions() {
+    if (this.sessionKey === "") {
+      throw new Error("You are not logged in");
+    }
+    return { meta: { authorization: `Bearer ${this.sessionKey}` } };
+  }
+
+  #rememberHello(hello) {
+    if (hello.sessionKey !== "") {
+      this.sessionKey = hello.sessionKey;
+    }
+    if (hello.userId === "" || this.sessionKey === "") {
+      throw new Error("Hello did not return an authenticated session");
+    }
+    this.user = {
+      id: hello.userId,
+      name: hello.userName,
+      login: hello.userLogin,
+    };
+    return this.user;
+  }
+
+  async login(token) {
+    if (token.trim() === "") {
+      throw new Error("A login token is required");
+    }
+    const call = await this.client.hello(HelloRequest.create({ token }), {});
+    return this.#rememberHello(call.response);
+  }
+
+  async restoreSession() {
+    if (this.sessionKey === "") {
       return null;
-    } else {
-      const json = await response.json();
-      return json;
+    }
+    try {
+      const call = await this.client.hello(HelloRequest.create({ token: "" }), this.#authOptions());
+      return this.#rememberHello(call.response);
+    } catch (error) {
+      this.logout();
+      throw error;
     }
   }
-  async #postObject(path, data) {
-    const response = await this.#cookied("https://" + this.host + this.urlPrefix + path, {
-      method: "POST",
-      body: JSON.stringify(data)
-    });
-    if (response.status !== 200) {
-      const text = await response.text();
-      return null;
-    } else {
-      const json = await response.json();
-      return json;
-    }
+
+  logout() {
+    this.sessionKey = "";
+    this.user = null;
   }
-  async login(key) {
-    const json = await this.#getObject("/users/session?key=" + key);
-    if (json) {
-      this.cookie = json.cookie
-    }
-    return json;
-  }
-  // Use this to determine if the user is logged in.
+
   getMe() {
-    return this.#getObject("/users/me");
+    return this.user;
   }
-  getUserAssignments(id) {
-    return this.#getObject("/users/" + id + "/assignments");
-  }
-  getAssignment(id) {
-    return this.#getObject("/assignments/" + id);
-  }
-  getProblemSets() {
-    return this.#getObject("/problem_sets");
-  }
-  getProblemSet(id) {
-    return this.#getObject("/problem_sets/" + id);
-  }
-  getProblemTypes() {
-    return this.#getObject("/problem_types");
-  }
-  getProblemType(typeName) {
-    return this.#getObject("/problem_types/" + typeName);
-  }
-  getProblemSetProblems(id) {
-    return this.#getObject("/problem_sets/" + id + "/problems");
-  }
-  getProblemSetProblem(problemSetId, id) {
-    return this.#getObject("/problem_sets/" + problemSetId + "/problems/" + id);
-  }
-  getProblemSteps(id) {
-    return this.#getObject("/problems/" + id + "/steps");
-  }
-  getProblemStep(problemId, step) {
-    return this.#getObject("/problems/" + problemId + '/steps/' + step);
-  }
-  getProblem(id) {
-    return this.#getObject("/problems/" + id);
-  }
-  getCourse(id) {
-    return this.#getObject("/courses/" + id);
-  }
-  getLastCommit(assignmentId, problemId) {
-    return this.#getObject("/assignments/" + assignmentId + "/problems/" + problemId + "/commits/last");
-  }
-  async nextStep(info, problem, commit, types) {
-    // advance to the next step
-    const newStep = await this.getProblemStep(problem.id, commit.step + 1);
-    if (!newStep) {
-      return null;
-    }
 
-    // gather all the files for the new step
-    const files = {};
-    if (commit) {
-      for (const [name, contents] of Object.entries(commit.files)) {
-        files[name] = decodeBase64ToUTF8OrLatin1(contents);
-      }
-    }
-
-    // commit files may be overwritten by new step files
-    for (const [name, contents] of Object.entries(newStep.files)) {
-      files[name] = decodeBase64ToUTF8OrLatin1(contents);
-    }
-    files["doc/index.html"] = newStep.instructions;
-    for (const [name, contents] of Object.entries(types[newStep.problemType].files)) {
-      if (files[name] !== undefined) {
-        console.log(`warning: problem type file is overwriting problem file: ${name}`);
-      }
-      files[name] = decodeBase64ToUTF8OrLatin1(contents);
-    }
-    info.step++;
-    return files;
-  }
-  async gatherStudent(files, dotfile, problem_unique) {
-    const now = new Date();
-    // get the assignment
-    //const assignment = await this.getAssignment(dotfile.assignmentID);
-    const info = dotfile.problems[problem_unique];
-    const step = await this.getProblemStep(info.id, info.step);
-    //const problemType = await this.getProblemType(step.problemType);
-    // gather the commit files from the file system
-    const filtered_files = {};
-    for (const name in step.whitelist) {
-      filtered_files[name] = files[name];
-    }
-
-    // form a commit object
-    const commit = {
-      id: 0,
-      assignmentID: dotfile.assignmentID,
-      problemID: info.id,
-      step: info.step,
-      files: filtered_files,
-      createdAt: now.toISOString(),
-      updatedAt: now.toISOString(),
-    };
-
-    return commit;
-  }
-  mustConfirmCommitBundle(bundle, stdoutCallback, stderrCallback) {
-    const url = `wss://${bundle.hostname}${this.urlPrefix}/sockets/${bundle.problemType.name}/${bundle.commit.action}`;
-    const socket = new WebSocket(url);
-
-    socket.onopen = () => {
-      const req = {
-        commitBundle: bundle
-      };
-      socket.send(JSON.stringify(req));
-    };
-
-    return new Promise((resolve, reject) => {
-      socket.onmessage = (event) => {
-        const reply = JSON.parse(event.data);
-        console.log(reply);
-        if (reply.error) {
-          console.log("Server returned an error:");
-          console.log(reply.error);
-          reject(new Error(reply.error));
-        } else if (reply.commitBundle) {
-          resolve(reply.commitBundle);
-        } else if (reply.event) {
-          if (reply.event.event == "stdout") {
-            stdoutCallback(decodeBase64ToUTF8OrLatin1(reply.event.streamData));
-          } else if (reply.event.event == "stderr") {
-            stderrCallback(decodeBase64ToUTF8OrLatin1(reply.event.streamData));
-          } else if (reply.event.event == "exit") {
-            // console.log("Exit Code: ", reply.event.event.exitStatus);
-          } else {
-            // exec events
-            // console.log(reply.event);
-          }
-        } else {
-          reject(new Error("Unexpected reply from server"));
-        }
-      };
-
-      socket.onerror = (event) => {
-        console.log("Socket error:", event);
-        reject(new Error("Socket error"));
-      };
+  async listAssignments() {
+    const call = await this.client.listAssignments(
+      ListAssignmentsRequest.create({ search: [], includeStudentContext: false }),
+      this.#authOptions(),
+    );
+    return [...call.response.items].sort((left, right) => {
+      const courseOrder = left.courseName.localeCompare(right.courseName);
+      return courseOrder || left.assignmentTitle.localeCompare(right.assignmentTitle);
     });
   }
-  // See https://github.com/russross/codegrinder/blob/70d9a02cc8e3cf2868f19bb26e5b0b17304ccbc1/cli/get.go#L48C54-L48C54
-  async commandGet(assignmentId) {
-    const assignment = await this.getAssignment(assignmentId);
-    // Codegrinder CMD called these functions but we don't use them
-    // const course = await this.getCourse(assignment.courseID);
-    // const problemSet = await this.getProblemSet(assignment.problemSetID);
-    const problemSetProblems = await this.getProblemSetProblems(assignment.problemSetID);
-    const commits = {};
-    const infos = {};
-    const problems = {};
-    const steps = {};
-    const types = {};
-    for (let elt of problemSetProblems) {
-      const problem = await this.getProblem(elt.problemID);
-      problems[problem.unique] = problem;
-      const info = {};
-      const commit = await this.getLastCommit(assignment.id, problem.id);
-      info.id = problem.id;
-      if (commit) {
-        info.step = commit.step;
-      } else {
-        info.step = 1;
-      }
-      const step = await this.getProblemStep(problem.id, info.step);
-      infos[problem.unique] = info;
-      commits[problem.unique] = commit;
-      steps[problem.unique] = step;
-      if (step.problemType !== "javascript") {
-        console.warning("This only supports javascript problems not ", step.problemType)
-      }
-      if (!(step.problemType in types)) {
-        types[step.problemType] = await this.getProblemType(step.problemType);
-      }
+
+  async #getWorkspace(assignment, problemId, stepNumber, fileState) {
+    const call = await this.client.getWorkspace(
+      GetWorkspaceRequest.create({
+        assignment,
+        problemId,
+        stepNumber,
+        fileState,
+        includeContents: true,
+        includeSolutionFiles: false,
+      }),
+      this.#authOptions(),
+    );
+    return workspaceState(call.response);
+  }
+
+  async loadAssignment(key) {
+    const assignment = typeof key === "string" ? parseAssignmentKey(key) : key;
+    const [assignmentCall, items] = await Promise.all([
+      this.client.getAssignment(
+        GetAssignmentRequest.create({ assignment }),
+        this.#authOptions(),
+      ),
+      this.listAssignments(),
+    ]);
+    const response = assignmentCall.response;
+    if (!response.assignment || !assignmentsEqual(response.assignment, assignment)) {
+      throw new Error("GetAssignment returned the wrong assignment key");
     }
-    const problemsFiles = {};
-    const problemsWhitelist = {};
-    const completed = new Set();
-    for (let unique in steps) {
-      const commit = commits[unique];
-      const problem = problems[unique];
-      const step = steps[unique];
-      problemsFiles[unique] = {};
-      problemsWhitelist[unique] = step.whitelist;
-      const files = problemsFiles[unique];
-      for (let name in step.files) {
-        files[name] = decodeBase64ToUTF8OrLatin1(step.files[name]);
+    if (response.downloadStatus !== AssignmentDownloadStatus.AVAILABLE) {
+      if (response.downloadStatus === AssignmentDownloadStatus.NOT_OPEN) {
+        throw new Error("This assignment is not open yet");
       }
-      files["doc/index.html"] = step.instructions;
-
-      if (commit !== null) {
-        for (let name in commit.files) {
-          files[name] = decodeBase64ToUTF8OrLatin1(commit.files[name]);
-        }
+      if (response.downloadStatus === AssignmentDownloadStatus.PREREQ_NOT_READY) {
+        throw new Error(`Complete ${response.prerequisiteProblemSetId || "the prerequisite assignment"} first`);
       }
-
-      for (let name in types[step.problemType].files) {
-        if (files[name] !== undefined) {
-          console.log("warning: problem type file is overwriting problem file: " + name);
-        }
-        files[name] = decodeBase64ToUTF8OrLatin1(types[step.problemType].files[name]);
-      }
-      if (commit?.reportCard?.passed && commit.score === 1.0) {
-        const nextStepFiles = await this.nextStep(infos[unique], problem, commit, types);
-        if (nextStepFiles) {
-          problemsFiles[unique] = nextStepFiles;
-        } else {
-          completed.add(unique);
-        }
-      }
+      throw new Error("This assignment is not available");
     }
-
-    const dotFile = {
-      assignmentID: assignment.id,
-      problems: infos,
-      completed,
+    const problems = await Promise.all(response.problems.map(async (summary) => {
+      const problem = await this.#getWorkspace(
+        assignment,
+        summary.problemId,
+        "0",
+        WorkspaceFileState.CURRENT,
+      );
+      problem.completed = summary.completed;
+      return problem;
+    }));
+    if (problems.length === 0) {
+      throw new Error("This assignment has no problems");
+    }
+    const listItem = items.find((item) => assignmentsEqual(item.assignment, assignment));
+    return {
+      assignment,
+      assignmentKey: formatAssignmentKey(assignment),
+      courseName: response.courseName,
+      problemSetNote: response.problemSetNote,
+      problems,
+      lockedForLms: timestampHasPassed(listItem?.lockAt),
     };
-    return { problemsFiles, dotFile, problemsWhitelist };
   }
-  async commandSync(user, files, dotfile, problem_unique) {
-    const commit = await this.gatherStudent(files, dotfile, problem_unique);
-    commit.action = "";
-    commit.note = "web autosave";
-    const unsigned = {
-      userID: user.id,
-      commit: commit,
-    }
 
-    // send the commit to the server
-    const signed = await this.#postObject("/commit_bundles/unsigned", unsigned);
-    // TODO: fix the server
-    // this returns too much information: it returns the solution files
-    // under problemSteps[0].solution with base64 encoding as usual
-    // This was tested on a Testing Student canvas account. This be bad!
+  async #refreshProblem(problem, localFiles, fileState = WorkspaceFileState.CURRENT) {
+    const refreshed = await this.#getWorkspace(
+      problem.assignment,
+      problem.problemId,
+      problem.stepNumber,
+      fileState,
+    );
+    if (localFiles && fileState === WorkspaceFileState.CURRENT) {
+      refreshed.studentFiles = localStudentFiles(refreshed, localFiles);
+      refreshed.files = { ...refreshed.systemFiles, ...refreshed.studentFiles };
+    }
+    return copyWorkspaceState(problem, refreshed);
   }
-  async commandReset(dotfile, problem_unique) {
-    // gather all the files that make up this step
-    const files = {};
-    const currentStep = dotfile.problems[problem_unique].step;
-    const assignmentID = dotfile.assignmentID;
-    const problemID = dotfile.problems[problem_unique].id;
-    const step = await this.getProblemStep(problemID, currentStep);
-    // get the commit from the previous step if applicable
-    if (currentStep > 1) {
-      const commit = await this.#getObject(`/assignments/${assignmentID}/problems/${problemID}/steps/${currentStep - 1}/commits/last`);
-      for (const name in commit.files) {
-        files[name] = decodeBase64ToUTF8OrLatin1(commit.files[name]);
+
+  async sync(problem, localFiles) {
+    await this.#refreshProblem(problem, localFiles);
+    const call = await this.client.saveWorkspaceCommit(
+      SaveWorkspaceCommitRequest.create({
+        commit: buildCommit(problem, "", "web autosave"),
+      }),
+      this.#authOptions(),
+    );
+    return {
+      problem,
+      saveStatus: call.response.saveStatus,
+      message: saveStatusMessage(call.response.saveStatus, "work"),
+    };
+  }
+
+  async reset(problem) {
+    return this.#refreshProblem(problem, null, WorkspaceFileState.STEP_START);
+  }
+
+  async #prepareAction(problem, localFiles, action) {
+    await this.#refreshProblem(problem, localFiles);
+    if (!problem.actions.includes(action)) {
+      throw new Error(`Action ${JSON.stringify(action)} is not available for this step`);
+    }
+    const call = await this.client.saveUngradedCommit(
+      SaveUngradedCommitRequest.create({
+        commit: GradingCommit.create({
+          hostname: "",
+          userId: this.user?.id ?? "",
+          commit: buildCommit(problem, action, `web ${action}`),
+        }),
+      }),
+      this.#authOptions(),
+    );
+    if (!call.response.bundle || call.response.bundle.bundle.length === 0) {
+      throw new Error("The server could not prepare a daycare runtime");
+    }
+    return call.response;
+  }
+
+  async #runDaycare(signedBundle, stdoutCallback, stderrCallback, fileCallback) {
+    const runtime = RuntimeBundle.fromBinary(signedBundle.bundle);
+    if (runtime.hostname === "") {
+      throw new Error("The runtime bundle does not name a daycare host");
+    }
+    const daycare = this.#createClient(`${window.location.protocol}//${runtime.hostname}`, "omit");
+    const call = daycare.daycare(DaycareRequest.create({ bundle: signedBundle, args: [] }), {});
+    for await (const response of call.responses) {
+      switch (response.response.oneofKind) {
+        case "error":
+          throw new Error(response.response.error);
+        case "bundle":
+          return response.response.bundle;
+        case "event": {
+          const event = response.response.event;
+          if (event.event === "stdout") {
+            stdoutCallback(textDecoder.decode(event.streamData));
+          } else if (event.event === "stderr") {
+            stderrCallback(textDecoder.decode(event.streamData));
+          } else if (event.event === "error") {
+            stderrCallback(`${event.error}\n`);
+          } else if (event.event === "files") {
+            fileCallback(decodeFileMap(event.files));
+          }
+          break;
+        }
+        default:
+          break;
       }
     }
-
-    // commit files may be overwritten by new step files
-    for (const name in step.files) {
-      files[name] = decodeBase64ToUTF8OrLatin1(step.files[name]);
-    }
-    files["doc/index.html"] = step.instructions;
-    const problemType = await this.getProblemType(step.problemType);
-    for (const name in problemType.files) {
-      files[name] = decodeBase64ToUTF8OrLatin1(problemType.files[name]);
-    }
-    return files;
+    throw new Error("Daycare ended without returning a signed runtime bundle");
   }
-  async commandGrade(user, files, dotfile, problem_unique, stdoutCallback, stderrCallback) {
-    const commit = await this.gatherStudent(files, dotfile, problem_unique);
-    commit.action = "grade";
-    commit.note = "grind grade";
-    const unsigned = {
-      userID: user.id,
-      commit: commit,
+
+  #applyReturnedFiles(problem, files) {
+    for (const [path, content] of Object.entries(files)) {
+      if (!problem.studentPaths.has(path)) {
+        continue;
+      }
+      problem.studentFiles[path] = content;
+      problem.files[path] = content;
     }
-    const signed = await this.#postObject("/commit_bundles/unsigned", unsigned);
-    const graded = await this.mustConfirmCommitBundle(signed, stdoutCallback, stderrCallback);
-    const toSave = {
-      hostname: graded.hostname,
-      userID: graded.userID,
-      commit: graded.commit,
-      commitSignature: graded.commitSignature
+  }
+
+  async grade(problem, localFiles, stdoutCallback, stderrCallback) {
+    const prepared = await this.#prepareAction(problem, localFiles, "grade");
+    const finalBundle = await this.#runDaycare(
+      prepared.bundle,
+      stdoutCallback,
+      stderrCallback,
+      (files) => this.#applyReturnedFiles(problem, files),
+    );
+    const runtime = RuntimeBundle.fromBinary(finalBundle.bundle);
+    if (!runtime.commit) {
+      throw new Error("Daycare returned no graded commit");
     }
-    const saved = await this.#postObject("/commit_bundles/signed", toSave);
-    const savedCommit = saved.commit;
-    stdoutCallback(savedCommit.reportCard.note);
+    const saved = await this.client.saveGradedCommit(
+      SaveGradedCommitRequest.create({ bundle: finalBundle }),
+      this.#authOptions(),
+    );
+    const passed = runtime.commit.reportCard?.passed === true && runtime.commit.score === 1;
+    if (passed && saved.response.saveStatus === CommitSaveStatus.SAVED) {
+      if (BigInt(problem.stepNumber) < BigInt(problem.lastStepNumber)) {
+        const next = await this.#getWorkspace(
+          problem.assignment,
+          problem.problemId,
+          (BigInt(problem.stepNumber) + 1n).toString(),
+          WorkspaceFileState.CURRENT,
+        );
+        copyWorkspaceState(problem, next);
+      } else {
+        problem.completed = true;
+      }
+    }
+    return {
+      problem,
+      passed,
+      commit: runtime.commit,
+      saveStatus: saved.response.saveStatus,
+      message: saveStatusMessage(saved.response.saveStatus, "grade"),
+    };
+  }
+
+  async action(problem, localFiles, action, stdoutCallback, stderrCallback) {
+    if (action === "grade") {
+      throw new Error("Use Grade to submit work for grading");
+    }
+    const prepared = await this.#prepareAction(problem, localFiles, action);
+    await this.#runDaycare(
+      prepared.bundle,
+      stdoutCallback,
+      stderrCallback,
+      (files) => this.#applyReturnedFiles(problem, files),
+    );
+    return {
+      problem,
+      saveStatus: prepared.saveStatus,
+      message: saveStatusMessage(prepared.saveStatus, "work"),
+    };
   }
 }
-class CodeGrinderUI {
-  constructor(navBar, codeGrinder = new CodeGrinder("codegrinder=notloggedin"),
-    authenticatorHandler = (cookie) => { },
-    problemSetHandler = ({ problemsFiles, dotFile }) => { }) {
-    this.codeGrinder = codeGrinder;
-    const liAssignments = document.createElement("li");
-    const liProblems = document.createElement("li");
-    const liRunTests = document.createElement("li");
-    const liGrade = document.createElement("li");
-    const liSync = document.createElement("li");
-    const liReset = document.createElement("li");
-    const liAuthenticator = document.createElement("li");
-    const liAction = document.createElement("li");
-    navBar.appendChild(liAssignments);
-    navBar.appendChild(liProblems);
-    navBar.appendChild(liRunTests);
-    navBar.appendChild(liGrade);
-    navBar.appendChild(liSync);
-    navBar.appendChild(liReset);
-    navBar.appendChild(liAuthenticator);
-    navBar.appendChild(liAction);
-    this.buttonAssignments = document.createElement("button");
-    this.buttonProblems = document.createElement("button");
-    this.buttonRunTests = document.createElement("button");
-    this.buttonGrade = document.createElement("button");
-    this.buttonSync = document.createElement("button");
-    this.buttonReset = document.createElement("button");
-    this.buttonAuthenticator = document.createElement("button");
-    this.buttonAction = document.createElement("button");
-    liAssignments.appendChild(this.buttonAssignments);
-    liProblems.appendChild(this.buttonProblems);
-    liRunTests.appendChild(this.buttonRunTests);
-    liGrade.appendChild(this.buttonGrade);
-    liSync.appendChild(this.buttonSync);
-    liReset.appendChild(this.buttonReset);
-    liAuthenticator.appendChild(this.buttonAuthenticator);
-    liAction.appendChild(this.buttonAction);
-    this.buttonAssignments.innerText = "Assignments";
-    this.buttonProblems.innerText = "Problems";
-    this.buttonRunTests.innerText = "Test";
-    this.buttonGrade.innerText = "Grade";
-    this.buttonSync.innerText = "Sync";
-    this.buttonReset.innerText = "Reset";
-    this.buttonAction.innerText = "Action";
 
-    this.authenticatorHandler = authenticatorHandler;
-    this.problemSetHandler = problemSetHandler;
-    this.me = this.codeGrinder.getMe();
+class CodeGrinderUI {
+  constructor(navBar, codeGrinder, sessionHandler, assignmentHandler, errorHandler) {
+    this.codeGrinder = codeGrinder;
+    this.sessionHandler = sessionHandler;
+    this.assignmentHandler = assignmentHandler;
+    this.errorHandler = errorHandler;
+    this.actionHandler = () => {};
+
+    const controls = [
+      ["Assignments", "buttonAssignments"],
+      ["Problems", "buttonProblems"],
+      ["Grade", "buttonGrade"],
+      ["Sync", "buttonSync"],
+      ["Reset", "buttonReset"],
+      ["Action", "buttonAction"],
+      ["Login", "buttonAuthenticator"],
+    ];
+    for (const [label, property] of controls) {
+      const item = document.createElement("li");
+      const button = document.createElement("button");
+      button.innerText = label;
+      item.appendChild(button);
+      navBar.appendChild(item);
+      this[property] = button;
+    }
 
     this.assignmentsList = document.createElement("ol");
     this.assignmentsList.classList.add("dropdown");
-    liAssignments.appendChild(this.assignmentsList);
-
+    this.buttonAssignments.parentElement.appendChild(this.assignmentsList);
     this.problemsList = document.createElement("ol");
     this.problemsList.classList.add("dropdown");
-    liProblems.appendChild(this.problemsList);
+    this.buttonProblems.parentElement.appendChild(this.problemsList);
 
-    this.buttonAuthenticator.addEventListener("click", async () => {
-      let user = await this.me;
-      if (user) {
-        this.codeGrinder.cookie = undefined;
-      } else {
-        const parts = (await createPrompt("CodeGrinder login key")).trim().split(" ");
-        this.buttonAuthenticator.disabled = true;
-        await this.codeGrinder.login(parts[parts.length - 1]);
-        this.buttonAuthenticator.disabled = false;
-      }
-      this.authenticatorHandler(this.codeGrinder.cookie);
-      this.me = this.codeGrinder.getMe();
-      await this.updateAuthenticationStatus();
-    })
-    this.buttonAssignments.addEventListener("click", async () => {
-      const user = await this.me;
-      if (!user) return;
-      const assignments = await this.codeGrinder.getUserAssignments(user.id);
-      this.assignmentsList.style.display = "block";
-      this.assignmentsList.innerText = "";
-      for (let assignment of assignments) {
-        const li = document.createElement("li");
-        const button = document.createElement("button");
-        button.innerText = assignment.canvasTitle;
-        li.appendChild(button);
-        this.assignmentsList.appendChild(li);
-        button.addEventListener("click", async () => {
-          const info = await this.codeGrinder.commandGet(assignment.id);
-          this.problemSetHandler(info);
-        })
-      }
-    })
+    this.buttonAuthenticator.addEventListener("click", () => this.#handleLogin());
+    this.buttonAssignments.addEventListener("click", () => this.#showAssignments());
     this.buttonProblems.addEventListener("click", () => {
       this.problemsList.style.display = "block";
-    })
-    document.addEventListener("click", event => {
+    });
+    this.buttonAction.addEventListener("click", async () => {
+      try {
+        const actions = this.actions.filter((action) => action !== "grade");
+        const response = await createPrompt(`Available actions: ${actions.join(", ")}`);
+        const action = response?.trim() ?? "";
+        if (action !== "") {
+          await this.actionHandler(action);
+        }
+      } catch (error) {
+        this.errorHandler(error);
+      }
+    });
+    document.addEventListener("click", (event) => {
       if (event.target !== this.buttonProblems) {
         this.problemsList.style.display = "none";
       }
       if (event.target !== this.buttonAssignments) {
         this.assignmentsList.style.display = "none";
       }
-    })
+    });
+    this.actions = [];
     this.updateAuthenticationStatus();
   }
-  async updateAuthenticationStatus() {
-    const user = await this.me;
-    if (!user) {
-      this.buttonAuthenticator.innerText = "Login";
-    } else {
-      this.buttonAuthenticator.innerText = "Logout";
+
+  async #handleLogin() {
+    this.buttonAuthenticator.disabled = true;
+    try {
+      if (this.codeGrinder.getMe()) {
+        this.codeGrinder.logout();
+      } else {
+        const response = await createPrompt("CodeGrinder login token");
+        if (response === null) {
+          return;
+        }
+        const token = response.trim().split(/\s+/).at(-1);
+        await this.codeGrinder.login(token ?? "");
+      }
+      this.sessionHandler(this.codeGrinder.sessionKey);
+      this.updateAuthenticationStatus();
+    } catch (error) {
+      this.errorHandler(error);
+    } finally {
+      this.buttonAuthenticator.disabled = false;
     }
-    this.buttonAssignments.disabled = !Boolean(user);
-    this.buttonProblems.disabled = !Boolean(user);
-    this.buttonRunTests.disabled = !Boolean(user);
-    this.buttonGrade.disabled = !Boolean(user);
-    this.buttonSync.disabled = !Boolean(user);
+  }
+
+  async #showAssignments() {
+    this.buttonAssignments.disabled = true;
+    try {
+      const assignments = await this.codeGrinder.listAssignments();
+      this.assignmentsList.replaceChildren();
+      for (const item of assignments) {
+        if (!item.assignment) {
+          continue;
+        }
+        const listItem = document.createElement("li");
+        const button = document.createElement("button");
+        button.innerText = `${item.courseName}: ${item.assignmentTitle}`;
+        listItem.appendChild(button);
+        this.assignmentsList.appendChild(listItem);
+        button.addEventListener("click", async () => {
+          button.disabled = true;
+          try {
+            await this.assignmentHandler(await this.codeGrinder.loadAssignment(item.assignment));
+          } catch (error) {
+            this.errorHandler(error);
+          } finally {
+            button.disabled = false;
+          }
+        });
+      }
+      if (this.assignmentsList.children.length === 0) {
+        const message = document.createElement("li");
+        message.innerText = "Launch an assignment from Canvas before opening it here.";
+        this.assignmentsList.appendChild(message);
+      }
+      this.assignmentsList.style.display = "block";
+    } catch (error) {
+      this.errorHandler(error);
+    } finally {
+      this.buttonAssignments.disabled = !this.codeGrinder.getMe();
+    }
+  }
+
+  setActions(actions) {
+    this.actions = [...actions];
+    const hasInteractiveAction = actions.some((action) => action !== "grade");
+    this.buttonAction.parentElement.hidden = !hasInteractiveAction;
+    this.buttonAction.disabled = !hasInteractiveAction;
+    this.buttonGrade.parentElement.hidden = !actions.includes("grade");
+  }
+
+  updateAuthenticationStatus() {
+    const authenticated = Boolean(this.codeGrinder.getMe());
+    this.buttonAuthenticator.innerText = authenticated ? "Logout" : "Login";
+    this.buttonAssignments.disabled = !authenticated;
+    this.buttonProblems.disabled = !authenticated;
+    this.buttonGrade.disabled = !authenticated;
+    this.buttonSync.disabled = !authenticated;
+    this.buttonReset.disabled = !authenticated;
+    this.buttonAction.disabled = !authenticated || !this.actions.some((action) => action !== "grade");
   }
 }
-export { CodeGrinder, CodeGrinderUI }
+
+export {
+  CodeGrinder,
+  CodeGrinderUI,
+  CommitSaveStatus,
+  formatAssignmentKey,
+  normalizeRelativePath,
+  parseAssignmentKey,
+};

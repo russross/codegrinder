@@ -329,6 +329,11 @@ body {
   border-radius: 5px;
 }
 
+.prompt-label {
+  display: grid;
+  gap: 8px;
+}
+
 .prompt-input {
   margin-bottom: 10px;
 }

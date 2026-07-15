@@ -6,12 +6,9 @@ class JavaScriptWorker {
   #stdin = new AtomicQueue;
   #stdout = new AtomicQueue;
   #stderr = new AtomicQueue;
-  #toMainThread = new AtomicJSONQueue;
-  #interrupt;
-  constructor(stdoutCallback = (str) => { }, stderrCallback = (str) => { }, toMainThreadCallback = (data) => { }) {
+  constructor(stdoutCallback = (str) => { }, stderrCallback = (str) => { }) {
     this.stdoutCallback = stdoutCallback;
     this.stderrCallback = stderrCallback;
-    this.toMainThreadCallback = toMainThreadCallback;
     this.#worker = new Worker(new URL('./jsWorker.js', import.meta.url));
     this.runningJavaScript = false;
     this.destroyed = new Promise((accept) => {
@@ -25,15 +22,12 @@ class JavaScriptWorker {
     });
     this.#worker.addEventListener("message", (e) => {
       if (e.data.loaded) {
-        this.#interrupt = e.data.interrupt;
         e.data.stdin.identifier = e.data.stdinid;
         e.data.stdout.identifier = e.data.stdoutid;
         e.data.stderr.identifier = e.data.stderrid;
-        e.data.toMainThread.identifier = e.data.toMainThreadid;
         this.#stdin = new AtomicQueue(e.data.stdin);
         this.#stdout = new AtomicQueue(e.data.stdout);
         this.#stderr = new AtomicQueue(e.data.stderr);
-        this.#toMainThread = new AtomicJSONQueue(e.data.toMainThread);
         this.#loaded();
       }
       if (e.data.finishedJavaScript) {
@@ -47,16 +41,6 @@ class JavaScriptWorker {
       this.#registerStream(this.#stderr, (str) => {
         this.stderrCallback(str);
       })
-      while (true) {
-        const data = await Promise.race([this.#toMainThread.dequeueMessageAsync(), this.destroyed]);
-        if (!data) {
-          return;
-        }
-        this.toMainThreadCallback(data);
-
-        // don't block page
-        await new Promise((accept) => requestAnimationFrame(() => accept()));
-      }
     })
   }
   destroy() {
@@ -72,10 +56,6 @@ class JavaScriptWorker {
     this.#worker.postMessage({ fileSystem, run: code, clearFiles });
     await Promise.race([execution, this.destroyed]);
     this.runningJavaScript = false;
-  }
-  async loadModules(list) {
-    await this.ready
-    this.#worker.postMessage({ loadModules: list });
   }
   async writeStdin(str) {
     await this.ready;
@@ -103,20 +83,15 @@ class JavaScriptRunner {
   #worker;
   #stdoutCallback;
   #stderrCallback;
-  #toMainThreadCallback;
-  #modules;
-  constructor(stdoutCallback = (str) => { }, stderrCallback = (str) => { }, toMainThreadCallback = (data) => { }) {
+  constructor(stdoutCallback = (str) => { }, stderrCallback = (str) => { }) {
     this.#stdoutCallback = stdoutCallback;
     this.#stderrCallback = stderrCallback;
-    this.#toMainThreadCallback = toMainThreadCallback;
-    this.#worker = new JavaScriptWorker(this.#stdoutCallback, this.#stderrCallback, this.#toMainThreadCallback);
-    this.#modules = [];
+    this.#worker = new JavaScriptWorker(this.#stdoutCallback, this.#stderrCallback);
     this.ready = this.#worker.ready;
   }
   stopJavaScript() {
     this.#worker.destroy();
-    this.#worker = new JavaScriptWorker(this.#stdoutCallback, this.#stderrCallback, this.#toMainThreadCallback);
-    this.#worker.loadModules(this.#modules)
+    this.#worker = new JavaScriptWorker(this.#stdoutCallback, this.#stderrCallback);
     this.ready = this.#worker.ready;
   }
   async runJavaScript(fileSystem, code, clearFiles = false) {
@@ -133,16 +108,8 @@ class JavaScriptRunner {
     this.#stderrCallback = callback;
     this.#worker.stderrCallback = callback;
   }
-  setToMainThreadCallback(callback) {
-    this.#toMainThreadCallback = callback;
-    this.#worker.toMainThreadCallback = callback;
-  }
   async writeStdin(str) {
     await this.#worker.writeStdin(str);
-  }
-  loadModules(list) {
-    this.#modules = list;
-    this.#worker.loadModules(list)
   }
 }
 export { JavaScriptRunner };

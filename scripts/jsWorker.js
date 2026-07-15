@@ -2,16 +2,13 @@ importScripts("iframeSharedArrayBufferWorkaround.js", "./atomicQueue.js");
 
 (async () => {
   // SharedArrayBuffers for communication with main thread
-  const interrupt = new SharedArrayBuffer(4);
   const stdin = new SharedArrayBuffer(4000);
   const stdout = new SharedArrayBuffer(4000);
   const stderr = new SharedArrayBuffer(4000);
-  const toMainThread = new SharedArrayBuffer(4000);
 
   const stdinQueue = new AtomicQueue(stdin);
   const stdoutQueue = new AtomicQueue(stdout);
   const stderrQueue = new AtomicQueue(stderr);
-  const toMainThreadQueue = new AtomicJSONQueue(toMainThread);
 
   // Store the filesystem for code execution
   let fileSystem = null;
@@ -22,6 +19,15 @@ importScripts("iframeSharedArrayBufferWorkaround.js", "./atomicQueue.js");
     const utf8Bytes = encoder.encode(str);
     queue.enqueueChunkedMultipleSync(utf8Bytes);
   }
+
+  function readStdin() {
+    return new TextDecoder().decode(new Uint8Array(stdinQueue.dequeueAllSync()));
+  }
+
+  globalThis.readline = readStdin;
+  globalThis.prompt = function() {
+    return readStdin().replace(/\r?\n$/, '');
+  };
 
   // Capture console output
   const originalConsoleLog = console.log;
@@ -91,60 +97,51 @@ importScripts("iframeSharedArrayBufferWorkaround.js", "./atomicQueue.js");
     return current.content;
   }
 
-  // Simple module cache to prevent circular dependencies and repeated execution
   const moduleCache = {};
 
-  // Simple require() function for loading other files from fileSystem
-  globalThis.require = function(modulePath) {
+  function resolveModulePath(modulePath, parentPath) {
+    const parentParts = parentPath.split('/').filter(Boolean);
+    parentParts.pop();
+    const parts = modulePath.startsWith('/') ? [] : parentParts;
+    for (const part of modulePath.split('/')) {
+      if (part === '' || part === '.') {
+        continue;
+      }
+      if (part === '..') {
+        if (parts.length === 0) {
+          throw new Error(`Module path escapes the workspace: ${modulePath}`);
+        }
+        parts.pop();
+        continue;
+      }
+      parts.push(part);
+    }
+    let resolved = `/${parts.join('/')}`;
+    if (!resolved.endsWith('.js')) {
+      resolved += '.js';
+    }
+    return resolved;
+  }
+
+  function loadModule(path) {
+    if (Object.hasOwn(moduleCache, path)) {
+      return moduleCache[path].exports;
+    }
+    const module = { exports: {} };
+    moduleCache[path] = module;
     try {
-      // Normalize path
-      let normalizedPath = modulePath;
-
-      // Handle relative paths starting with ./
-      if (modulePath.startsWith('./')) {
-        normalizedPath = '/' + modulePath.substring(2);
-      }
-      // Handle relative paths starting with ../
-      else if (modulePath.startsWith('../')) {
-        // For now, just treat ../ as root (could implement proper path resolution later)
-        normalizedPath = '/' + modulePath.replace(/^\.\.\//, '');
-      }
-      // If it doesn't start with /, make it absolute
-      else if (!modulePath.startsWith('/')) {
-        normalizedPath = '/' + modulePath;
-      }
-
-      // Add .js extension if not present
-      if (!normalizedPath.endsWith('.js')) {
-        normalizedPath += '.js';
-      }
-
-      // Check cache first
-      if (moduleCache[normalizedPath]) {
-        return moduleCache[normalizedPath];
-      }
-
-      // Load the file content
-      const code = getFileContent(normalizedPath);
-
-      // Create a module object to capture exports
-      const module = { exports: {} };
-      const exports = module.exports;
-
-      // Execute the module code with module and exports in scope
+      const code = getFileContent(path);
+      const localRequire = modulePath => loadModule(resolveModulePath(modulePath, path));
       const fn = new Function('module', 'exports', 'require', 'console', code);
-      fn(module, exports, globalThis.require, console);
-
-      // Cache the result
-      moduleCache[normalizedPath] = module.exports;
-
+      fn(module, module.exports, localRequire, console);
       return module.exports;
     } catch (error) {
-      const errorMessage = `Error requiring module ${modulePath}: ${error.message}\n`;
-      writeToQueue(stderrQueue, errorMessage);
+      delete moduleCache[path];
       throw error;
     }
-  };
+  }
+
+  globalThis.require = modulePath => loadModule(resolveModulePath(modulePath, '/'));
 
   // Function to run a script file
   globalThis.run_script = function(scriptPath) {
@@ -155,20 +152,7 @@ importScripts("iframeSharedArrayBufferWorkaround.js", "./atomicQueue.js");
         delete moduleCache[key];
       }
 
-      // Normalize path (remove leading ./)
-      const normalizedPath = scriptPath.replace(/^\.\//, '/');
-      const code = getFileContent(normalizedPath);
-
-      // Create a module context for the script
-      const module = { exports: {} };
-      const exports = module.exports;
-
-      // Execute with module, exports, and require available
-      const fn = new Function('module', 'exports', 'require', 'console', code);
-      fn(module, exports, globalThis.require, console);
-
-      // If the script exported anything, it's now in module.exports
-      // (though run_script typically doesn't need to return anything)
+      loadModule(resolveModulePath(scriptPath, '/'));
     } catch (error) {
       const errorMessage = `Error running script ${scriptPath}: ${error.message}\n`;
       writeToQueue(stderrQueue, errorMessage);
@@ -178,13 +162,6 @@ importScripts("iframeSharedArrayBufferWorkaround.js", "./atomicQueue.js");
   // Message handler
   addEventListener("message", (e) => {
     const data = e.data;
-
-    if (data.loadModules) {
-      // Module loading is not implemented for JavaScript execution
-      // This is here for interface compatibility but is a no-op
-      // In the future, this could potentially load external JS libraries via importScripts
-      console.log('Note: loadModules is not implemented for JavaScript execution');
-    }
 
     if (data.clearFiles) {
       // Clear the file system reference and module cache
@@ -217,7 +194,5 @@ importScripts("iframeSharedArrayBufferWorkaround.js", "./atomicQueue.js");
     stdin, stdinid: stdin.identifier,
     stdout, stdoutid: stdout.identifier,
     stderr, stderrid: stderr.identifier,
-    toMainThread, toMainThreadid: toMainThread.identifier,
-    interrupt,
   });
 })();

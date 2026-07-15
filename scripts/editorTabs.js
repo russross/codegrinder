@@ -20,7 +20,8 @@ class Tab {
   #saved;
   #path;
   #ace;
-  constructor(path = UNTITLED, content = "") {
+  #readOnly;
+  constructor(path = UNTITLED, content = "", readOnly = false) {
     // Set up Tab
     this.element = document.createElement('li');
     this.#nameElement = document.createElement("span");
@@ -49,6 +50,7 @@ class Tab {
     this.changeHandler = null;
     // Set magic properties
     this.path = path;
+    this.readOnly = readOnly;
     this.saved = true;
   }
   updateSize() {
@@ -83,6 +85,16 @@ class Tab {
   set content(value) {
     this.#ace.setValue(value, -1);
   }
+  get readOnly() {
+    return this.#readOnly;
+  }
+  set readOnly(value) {
+    this.#readOnly = value;
+    this.#ace.setReadOnly(value);
+  }
+  setInteractionDisabled(disabled) {
+    this.#ace.setReadOnly(disabled || this.#readOnly);
+  }
 }
 class Tabs {
   constructor(tabbedEditorElement, saveHandler) {
@@ -99,7 +111,7 @@ class Tabs {
     this.editorListElement.classList.add("editor-container");
     this.tabbedEditorElement.appendChild(this.editorListElement);
     this.pathInput.addEventListener("change", () => {
-      if (this.tabs[this.currentTab]) {
+      if (this.pathChangesAllowed && this.tabs[this.currentTab]) {
         this.tabs[this.currentTab].saved = false;
         this.tabs[this.currentTab].path = this.pathInput.value;
       }
@@ -107,6 +119,8 @@ class Tabs {
 
     this.saveHandler = saveHandler;
     this.tabs = [];
+    this.autoSave = false;
+    this.pathChangesAllowed = true;
     this.addNewTab();
 
     // Attach a listener to the resize event of the editor's container
@@ -117,10 +131,9 @@ class Tabs {
       }
       debouncer = setTimeout(() => this.tabs[this.currentTab]?.updateSize(), 500);
     }).observe(this.editorListElement);
-    this.autoSave = false;
   };
   saveTab(tab) {
-    if (tab.saved) {
+    if (tab.saved || tab.readOnly) {
       return;
     }
     if (tab.path === UNTITLED) {
@@ -146,6 +159,18 @@ class Tabs {
     for (let tab of this.tabs) {
       this.saveTab(tab);
     }
+  }
+  setInteractionDisabled(disabled) {
+    for (const tab of this.tabs) {
+      tab.setInteractionDisabled(disabled);
+    }
+    this.pathInput.disabled = disabled
+      || !this.pathChangesAllowed
+      || (this.tabs[this.currentTab]?.readOnly ?? false);
+  }
+  setPathChangesAllowed(allowed) {
+    this.pathChangesAllowed = allowed;
+    this.pathInput.disabled = !allowed || (this.tabs[this.currentTab]?.readOnly ?? false);
   }
   closeTab(tab, canCloseLast) {
     const currentTab = this.tabs[this.currentTab];
@@ -210,15 +235,16 @@ class Tabs {
     }
     this.tabs[this.currentTab]?.updateSize();
     this.pathInput.value = this.tabs[this.currentTab]?.path;
+    this.pathInput.disabled = !this.pathChangesAllowed || (this.tabs[this.currentTab]?.readOnly ?? false);
   };
-  addSwitchTab(path, content) {
+  addSwitchTab(path, content, readOnly = false) {
     for (let tab in this.tabs) {
       if (this.tabs[tab].path === path) {
         this.switchTab(tab);
         return;
       }
     }
-    this.addNewTab(new Tab(path, content));
+    this.addNewTab(new Tab(path, content, readOnly));
   }
   closeAll() {
     while (this.tabs.length > 0) {

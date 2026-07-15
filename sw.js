@@ -1,5 +1,5 @@
 "use strict"
-const version = '0.2.0'; // Updated for JavaScript execution
+const version = '0.3.0';
 const appCache = location.pathname.split("/").slice(1, -1).join("/") + "#"; // Unique across origin (Current Path)
 const versionedCache = appCache + version; // Unique across versions
 const localFilesToCache = [
@@ -7,7 +7,7 @@ const localFilesToCache = [
   './styles.css',
   './scripts/app.js',
   './scripts/atomicQueue.js',
-  './scripts/codeGrinder.js',
+  './scripts/codeGrinderApi.js',
   './scripts/directoryTree.js',
   './scripts/editorTabs.js',
   './scripts/firefoxPolyfillAtomicsWaitAsync.js',
@@ -61,23 +61,10 @@ self.addEventListener('activate', function (event) {
 });
 async function cacheFirst(request) {
   const url = new URL(request.url);
-  // Static hosted means no query parameters go to server
-  if (url.host == location.host) {
+  if (url.host === location.host) {
     url.search = '';
+    request = new Request(url, request);
   }
-  const modifiedHeaders = new Headers(request.headers);
-  // Modify the request's headers to include CORS headers
-  modifiedHeaders.append('Origin', self.origin);
-
-  // Create a new request with the modified headers
-  request = new Request(url, {
-    method: request.method,
-    headers: modifiedHeaders,
-    mode: 'cors',
-    credentials: 'omit',
-    redirect: 'follow'
-  });
-  // Try opening the cache
   const cache = await caches.open(versionedCache);
   const response = await cache.match(request);
   if (response) {
@@ -141,8 +128,7 @@ self.addEventListener('fetch', (event) => {
   if (url.host == location.host) {
     // When hosted on the same server as the api, don't cache api requests (different paths)
     if (!url.pathname.startsWith(location.pathname.split("/sw.js")[0])) {
-      // This line is needed for iframes
-      event.respondWith(fetch(request, { headers: { 'Cache-Control': 'no-cache' } }));
+      event.respondWith(fetch(request));
       return;
     }
     // SharedArrayBufferWorkaround
@@ -152,7 +138,7 @@ self.addEventListener('fetch', (event) => {
       return;
     }
   }
-  // When not hosted on same server as api, all api requests are proxied through POST trampoline; don't cache
+  // Cross-origin API requests are never cached.
   if (request.method !== "GET") {
     return;
   }
