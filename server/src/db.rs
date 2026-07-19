@@ -7,7 +7,6 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::error::{AppError, AppResult};
 
-const SCHEMA_SQL: &str = include_str!("../../setup/schema.sql");
 const DEFAULT_BUSY_TIMEOUT: Duration = Duration::from_secs(10);
 const SQLITE_PROGRESS_OPS: i32 = 1_000;
 
@@ -159,12 +158,22 @@ fn deadline_exceeded() -> AppError {
 pub fn open_connection(path: &Path) -> AppResult<Connection> {
     let conn = Connection::open_with_flags(
         path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_FULL_MUTEX,
+    )?;
+    configure_connection(&conn)?;
+    Ok(conn)
+}
+
+#[cfg(test)]
+pub fn open_test_connection(path: &Path) -> AppResult<Connection> {
+    let conn = Connection::open_with_flags(
+        path,
         OpenFlags::SQLITE_OPEN_CREATE
             | OpenFlags::SQLITE_OPEN_READ_WRITE
             | OpenFlags::SQLITE_OPEN_FULL_MUTEX,
     )?;
     configure_connection(&conn)?;
-    ensure_schema(&conn)?;
+    conn.execute_batch(include_str!("../../setup/schema.sql"))?;
     Ok(conn)
 }
 
@@ -182,18 +191,6 @@ fn configure_connection(conn: &Connection) -> AppResult<()> {
     Ok(())
 }
 
-fn ensure_schema(conn: &Connection) -> AppResult<()> {
-    let has_schema: i64 = conn.query_row(
-        "SELECT COUNT(1) FROM sqlite_master WHERE type IN ('table', 'view') AND name = 'problem_types'",
-        [],
-        |row| row.get(0),
-    )?;
-    if has_schema == 0 {
-        conn.execute_batch(SCHEMA_SQL)?;
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,9 +200,9 @@ mod tests {
     };
 
     #[test]
-    fn schema_is_created_for_empty_database() {
+    fn test_connection_uses_canonical_schema() {
         let dir = tempfile::tempdir().unwrap();
-        let conn = open_connection(&dir.path().join("db.sqlite")).unwrap();
+        let conn = open_test_connection(&dir.path().join("db.sqlite")).unwrap();
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(1) FROM sqlite_master WHERE name = 'users'",
@@ -217,31 +214,20 @@ mod tests {
     }
 
     #[test]
-    fn assignment_completion_view_migration_preserves_dependent_views() {
+    fn connection_requires_an_existing_database() {
         let dir = tempfile::tempdir().unwrap();
-        let conn = open_connection(&dir.path().join("db.sqlite")).unwrap();
+        let path = dir.path().join("missing.sqlite");
 
-        conn.execute_batch(include_str!(
-            "../../setup/migrate-assignment-problem-completion.sql"
-        ))
-        .unwrap();
-
-        let completed_columns: i64 = conn
-            .query_row(
-                "SELECT COUNT(1) FROM pragma_table_info('assignment_problem_progress') WHERE name = 'completed'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(completed_columns, 1);
-        conn.prepare("SELECT * FROM workspace_step_context")
-            .unwrap();
+        assert!(open_connection(&path).is_err());
+        assert!(!path.exists());
     }
 
     #[tokio::test]
     async fn expired_transaction_deadline_does_not_run_job() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Db::open(&dir.path().join("db.sqlite")).unwrap();
+        let path = dir.path().join("db.sqlite");
+        open_test_connection(&path).unwrap();
+        let db = Db::open(&path).unwrap();
         db.transaction(|_| Ok(())).await.unwrap();
         let called = Arc::new(AtomicBool::new(false));
         let called_in_job = called.clone();

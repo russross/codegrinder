@@ -152,7 +152,11 @@ def ensure_docker_running(env: dict[str, str]) -> None:
 
 
 def build_rust(env: dict[str, str]) -> None:
-    run(["cargo", "build", "-p", "codegrinder-server", "-p", "grind"], env=env, timeout=1800)
+    run(
+        ["cargo", "build", "--release", "-p", "codegrinder-server", "-p", "grind"],
+        env=env,
+        timeout=1800,
+    )
 
 
 def check_version_without_config(env: dict[str, str]) -> None:

@@ -415,7 +415,7 @@ mod tests {
 
     use super::*;
     use crate::config::IpFilterConfig;
-    use crate::db::open_connection;
+    use crate::db::open_test_connection;
 
     #[test]
     fn config_xml_includes_canvas_assignment_time_custom_fields() {
@@ -451,7 +451,7 @@ mod tests {
     #[test]
     fn launch_update_stores_assignment_time_fields() {
         let dir = tempfile::tempdir().unwrap();
-        let conn = open_connection(&dir.path().join("db.sqlite")).unwrap();
+        let conn = open_test_connection(&dir.path().join("db.sqlite")).unwrap();
         conn.execute(
             "INSERT INTO problem_sets(problem_set_id, problem_set_note, problem_set_tags, problem_set_created_at, problem_set_updated_at)
              VALUES ('ps1', 'Set', '[]', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",

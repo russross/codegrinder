@@ -25,13 +25,13 @@ setup:
 	cargo fetch
 
 build:
-	cargo build --workspace
+	cargo build --release --workspace
 
 server:
-	cargo build -p codegrinder-server
+	cargo build --release -p codegrinder-server
 
 grind:
-	cargo build -p grind
+	cargo build --release -p grind
 
 grind-dist: grind-linux-amd64 grind-linux-arm64 grind-macos-amd64 grind-macos-arm64
 
@@ -70,8 +70,8 @@ grind-macos-arm64:
 	cp target/aarch64-apple-darwin/release/grind $(DIST_DIR)/grind.darwin_arm64
 
 test:
-	cargo test --workspace
-	cargo clippy --workspace -- -D warnings
+	cargo test --release --workspace
+	cargo clippy --release --workspace -- -D warnings
 	cargo fmt --all --check
 
 clean:

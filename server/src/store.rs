@@ -524,7 +524,9 @@ pub fn search_problem_catalog(
     current_user: &UserRow,
     search: &[String],
 ) -> AppResult<Vec<ProblemCatalogSet>> {
-    let mut sql = if current_user.author {
+    let can_search_full_catalog =
+        current_user.admin || current_user.author || current_user.instructor;
+    let mut sql = if can_search_full_catalog {
         String::from(
             "SELECT problem_set_id, problem_set_note, problem_set_tags FROM problem_catalog_sets WHERE 1",
         )
@@ -533,7 +535,7 @@ pub fn search_problem_catalog(
             "SELECT problem_set_id, problem_set_note, problem_set_tags FROM accessible_problem_catalog_sets WHERE viewer_user_id = ?",
         )
     };
-    let mut values = if current_user.author {
+    let mut values = if can_search_full_catalog {
         Vec::new()
     } else {
         vec![current_user.user_id.clone()]
@@ -631,7 +633,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::db::open_connection;
+    use crate::db::open_test_connection;
     use crate::mutations::{save_problem_type, save_problem_type_files};
     use crate::proto::{Commit, CommitSaveStatus, ReportCard, WorkspaceFileState};
     use crate::timeutil::db_time;
@@ -640,7 +642,7 @@ mod tests {
     #[test]
     fn download_status_is_view_owned_for_unlock_lock_prereq_and_instructors() {
         let dir = tempfile::tempdir().unwrap();
-        let conn = open_connection(&dir.path().join("db.sqlite")).unwrap();
+        let conn = open_test_connection(&dir.path().join("db.sqlite")).unwrap();
         seed_store_fixture(&conn);
         insert_assignment(
             &conn,
@@ -727,7 +729,7 @@ mod tests {
     #[test]
     fn current_workspace_layers_problem_type_and_commit_files_without_contents() {
         let dir = tempfile::tempdir().unwrap();
-        let conn = open_connection(&dir.path().join("db.sqlite")).unwrap();
+        let conn = open_test_connection(&dir.path().join("db.sqlite")).unwrap();
         seed_store_fixture(&conn);
         insert_assignment(&conn, "student", "base", None, None);
         insert_commit(
@@ -787,7 +789,7 @@ mod tests {
     #[test]
     fn solution_files_require_author_or_course_instructor() {
         let dir = tempfile::tempdir().unwrap();
-        let conn = open_connection(&dir.path().join("db.sqlite")).unwrap();
+        let conn = open_test_connection(&dir.path().join("db.sqlite")).unwrap();
         seed_store_fixture(&conn);
         insert_assignment(&conn, "student", "base", None, None);
         let student = user(&conn, "student");
@@ -828,7 +830,7 @@ mod tests {
     #[test]
     fn ip_restrictions_use_course_access_policy_not_global_role_flags() {
         let dir = tempfile::tempdir().unwrap();
-        let conn = open_connection(&dir.path().join("db.sqlite")).unwrap();
+        let conn = open_test_connection(&dir.path().join("db.sqlite")).unwrap();
         seed_store_fixture(&conn);
         insert_assignment(&conn, "student", "base", None, None);
         conn.execute(
@@ -896,7 +898,7 @@ mod tests {
     #[test]
     fn later_step_start_overlays_current_starters_on_previous_state() {
         let dir = tempfile::tempdir().unwrap();
-        let conn = open_connection(&dir.path().join("db.sqlite")).unwrap();
+        let conn = open_test_connection(&dir.path().join("db.sqlite")).unwrap();
         seed_store_fixture(&conn);
         insert_assignment(&conn, "student", "base", None, None);
         let student = user(&conn, "student");
@@ -943,29 +945,31 @@ mod tests {
     }
 
     #[test]
-    fn author_problem_catalog_search_sees_unassigned_problem_sets() {
+    fn catalog_search_roles_see_unassigned_problem_sets() {
         let dir = tempfile::tempdir().unwrap();
-        let conn = open_connection(&dir.path().join("db.sqlite")).unwrap();
+        let conn = open_test_connection(&dir.path().join("db.sqlite")).unwrap();
         seed_store_fixture(&conn);
         conn.execute("INSERT INTO authors(user_id) VALUES ('author')", [])
             .unwrap();
 
-        let author = user(&conn, "author");
-        let results = search_problem_catalog(&conn, &author, &["Slice".to_owned()]).unwrap();
+        for catalog_user in [user(&conn, "author"), user(&conn, "teacher")] {
+            let results =
+                search_problem_catalog(&conn, &catalog_user, &["Slice".to_owned()]).unwrap();
 
-        assert_eq!(
-            results
-                .iter()
-                .map(|item| item.problem_set_id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["slice1", "slice2"]
-        );
+            assert_eq!(
+                results
+                    .iter()
+                    .map(|item| item.problem_set_id.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["slice1", "slice2"]
+            );
+        }
     }
 
     #[test]
     fn continuation_step_start_overlays_current_starters_on_previous_slice_commit() {
         let dir = tempfile::tempdir().unwrap();
-        let conn = open_connection(&dir.path().join("db.sqlite")).unwrap();
+        let conn = open_test_connection(&dir.path().join("db.sqlite")).unwrap();
         seed_store_fixture(&conn);
         insert_assignment(&conn, "student", "slice1", None, None);
         insert_assignment(&conn, "student", "slice2", None, None);
@@ -1015,7 +1019,7 @@ mod tests {
     #[test]
     fn assignment_scores_and_progress_are_scoped_to_problem_set_steps() {
         let dir = tempfile::tempdir().unwrap();
-        let conn = open_connection(&dir.path().join("db.sqlite")).unwrap();
+        let conn = open_test_connection(&dir.path().join("db.sqlite")).unwrap();
         seed_store_fixture(&conn);
         insert_assignment(&conn, "student", "base", None, None);
         insert_assignment(&conn, "student", "slice1", None, None);

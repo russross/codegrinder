@@ -746,6 +746,7 @@ mod tests {
 
     use super::*;
     use crate::config::{IpFilterConfig, ServerConfig};
+    use crate::db::open_test_connection;
     use crate::proto::{
         AssignmentKey, AuthorFile, AuthorProblemDraft, AuthorProblemStepDraft, Commit,
         GetProblemTypesRequest, ListAssignmentsRequest, ProblemTypeAction, RuntimeBundle,
@@ -1034,6 +1035,7 @@ mod tests {
             ip_filter: IpFilterConfig::default(),
             www_root: dir.join("www"),
         });
+        open_test_connection(&config.sqlite3_path).unwrap();
         let db = Db::open(&config.sqlite3_path).unwrap();
         let daycare = DaycareRuntime::new(config.clone()).unwrap();
         CodeGrinderServer::new(CodeGrinderServerParts {

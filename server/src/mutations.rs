@@ -1545,7 +1545,7 @@ mod tests {
 
     use super::*;
     use crate::config::{IpFilterConfig, ServerConfig};
-    use crate::db::open_connection;
+    use crate::db::open_test_connection as open_connection;
     use crate::proto::{
         AuthorFile, AuthorProblemStepDraft, ProblemSet, ProblemSetProblem, ReportCard,
         ReportCardResult,
