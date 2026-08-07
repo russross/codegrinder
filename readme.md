@@ -48,8 +48,8 @@ Source layout
 *   `scripts/jsHandler.js` and `scripts/jsWorker.js` run JavaScript in a worker.
 *   `scripts/atomicQueue.js` carries terminal input and output between the page
     and the worker.
-*   `sw.js` caches application assets and supplies the SharedArrayBuffer iframe
-    fallback. It deliberately bypasses all API traffic.
+*   `sw.js` supplies the SharedArrayBuffer iframe fallback. It intercepts only
+    the fallback's `ponyfill/` requests and does not cache application assets.
 
 Student files run only in the worker. System-owned files are visible but
 read-only in the editor. The local runner supports workspace CommonJS modules,
@@ -77,11 +77,13 @@ CodeGrinder serves this directory and its gRPC-Web endpoint from the same
 origin. Daycare calls may use another registered host; CORS is therefore
 required at the daycare boundary.
 
-The page uses SharedArrayBuffer when cross-origin isolation is available. In an
-LMS iframe it falls back to the service-worker implementation in
-`iframeSharedArrayBufferWorkaround.js`. The service-worker cache version in
-`sw.js` must change whenever a deployed asset changes.
+The server sends cross-origin isolation headers for the application document so
+a top-level tab can use SharedArrayBuffer directly. In an LMS iframe the page
+falls back to the service-worker implementation in
+`iframeSharedArrayBufferWorkaround.js`. All ordinary application and API
+requests use the browser's normal HTTP behavior; offline operation is not
+supported.
 
 Ace and markdown-it are loaded from jsDelivr by `index.html`. A deployment must
 allow those resources in its content-security policy and must have network
-access on first load; the service worker caches them afterward.
+access to load them.

@@ -2,6 +2,9 @@ import { Tabs } from './editorTabs.js';
 import { FileSystem, FileSystemUI, extension } from './directoryTree.js';
 import { JavaScriptRunner } from './jsHandler.js'
 import { CodeGrinder, CodeGrinderUI } from './codeGrinderApi.js';
+
+await window.codeGrinderServiceWorkerReady;
+
 const output_terminal_label = document.getElementById("output_terminal")
 const output_terminal = output_terminal_label.getElementsByTagName("pre")[0];
 const input_terminal = output_terminal_label.getElementsByTagName("textarea")[0];
