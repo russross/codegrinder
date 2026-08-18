@@ -41,6 +41,7 @@ from e2e_common import (
     session_key_hash,
     stop_process,
 )
+
 TESTS_DIR = ROOT / "tests"
 
 
@@ -90,7 +91,9 @@ class ListeningProcess:
     program: str
 
 
-def listening_process_on_port(port: int, env: dict[str, str]) -> ListeningProcess | None:
+def listening_process_on_port(
+    port: int, env: dict[str, str]
+) -> ListeningProcess | None:
     if shutil.which("netstat") is None:
         return None
     result = subprocess.run(
@@ -102,9 +105,7 @@ def listening_process_on_port(port: int, env: dict[str, str]) -> ListeningProces
         stderr=subprocess.PIPE,
         check=False,
     )
-    pattern = re.compile(
-        rf"^tcp\s+\d+\s+\d+\s+\S+:{port}\s+\S+\s+LISTEN\s+(\d+)/(\S+)"
-    )
+    pattern = re.compile(rf"^tcp\s+\d+\s+\d+\s+\S+:{port}\s+\S+\s+LISTEN\s+(\d+)/(\S+)")
     for line in result.stdout.splitlines():
         match = pattern.match(line)
         if match is None:
@@ -163,7 +164,10 @@ def check_version_without_config(env: dict[str, str]) -> None:
     isolated_env = env.copy()
     isolated_env["XDG_CONFIG_HOME"] = str(ARTIFACT_DIR / "empty-config")
     result = run(["grind", "version"], env=isolated_env)
-    require(result.stdout.startswith("grind "), "grind version did not print the local version")
+    require(
+        result.stdout.startswith("grind "),
+        "grind version did not print the local version",
+    )
 
 
 def check_login_argument_shapes(env: dict[str, str]) -> None:
@@ -177,7 +181,8 @@ def check_login_argument_shapes(env: dict[str, str]) -> None:
     ]:
         result = run_expect_failure(command, env=isolated_env)
         require(
-            "login <hostname> <token>" in result.stdout or "login <hostname> <token>" in result.stderr,
+            "login <hostname> <token>" in result.stdout
+            or "login <hostname> <token>" in result.stderr,
             f"{' '.join(command)} did not print login guidance",
         )
 
@@ -217,7 +222,9 @@ def rebuild_database(env: dict[str, str]) -> None:
     if command_result.stderr:
         print(command_result.stderr, end="", file=sys.stderr)
     if command_result.returncode != 0:
-        raise RuntimeError(format_failure(command_result, "database schema load failed"))
+        raise RuntimeError(
+            format_failure(command_result, "database schema load failed")
+        )
 
 
 def write_grind_config() -> None:
@@ -433,48 +440,56 @@ def run_problem_type_command_checks(env: dict[str, str]) -> None:
     type_dir = ARTIFACT_DIR / "type-riscv"
     type_dir.mkdir(parents=True, exist_ok=False)
     run(["grind", "type", "riscv"], cwd=type_dir, env=env)
-    require((type_dir / "Makefile").is_file(), "grind type riscv did not write Makefile")
+    require(
+        (type_dir / "Makefile").is_file(), "grind type riscv did not write Makefile"
+    )
     require((type_dir / "print.s").is_file(), "grind type riscv did not write print.s")
 
 
 def create_problem_sources(env: dict[str, str]) -> None:
-    for name in ["array-max", "sudoku", "huff", "javascript-hello", "containment"]:
+    for name in [
+        "fixture-riscv-single",
+        "fixture-riscv-slices",
+        "fixture-c-steps",
+        "javascript-hello",
+    ]:
         run(["grind", "create"], cwd=TESTS_DIR / name, env=env, timeout=1800)
-    run(["grind", "problem", "cs2810"], env=env)
+    run(["grind", "create"], cwd=TESTS_DIR / "containment", env=env, timeout=1800)
+    run(["grind", "problem", "e2e"], env=env)
 
 
-def create_sudoku_slices(env: dict[str, str]) -> None:
+def create_riscv_slices(env: dict[str, str]) -> None:
     psets = {
-        "sudoku-1.cfg": """
+        "fixture-riscv-slices-1.cfg": """
 [problemset]
-unique = sudoku-1
-note = Sudoku Pencil Marks 1
-tag = cs2810
+unique = fixture-riscv-slices-1
+note = End-to-end RISC-V slice 1
+tag = e2e
 tag = riscv
 
-[problem "sudoku"]
+[problem "fixture-riscv-slices"]
 steps = 1-2
 """,
-        "sudoku-2.cfg": """
+        "fixture-riscv-slices-2.cfg": """
 [problemset]
-unique = sudoku-2
-note = Sudoku Pencil Marks 2
-tag = cs2810
+unique = fixture-riscv-slices-2
+note = End-to-end RISC-V slice 2
+tag = e2e
 tag = riscv
-continues = sudoku-1
+continues = fixture-riscv-slices-1
 
-[problem "sudoku"]
+[problem "fixture-riscv-slices"]
 steps = 3-3
 """,
-        "sudoku-3.cfg": """
+        "fixture-riscv-slices-3.cfg": """
 [problemset]
-unique = sudoku-3
-note = Sudoku Pencil Marks 3
-tag = cs2810
+unique = fixture-riscv-slices-3
+note = End-to-end RISC-V slice 3
+tag = e2e
 tag = riscv
-continues = sudoku-2
+continues = fixture-riscv-slices-2
 
-[problem "sudoku"]
+[problem "fixture-riscv-slices"]
 steps = 4-4
 """,
     }
@@ -488,19 +503,22 @@ steps = 4-4
 
 def run_author_catalog_checks(env: dict[str, str]) -> None:
     run_expect_failure(["grind", "problem", "definitely-not-an-e2e-problem"], env=env)
-    run_expect_failure(["grind", "create", str(ARTIFACT_DIR / "psets" / "sudoku-1.cfg")], env=env)
+    run_expect_failure(
+        ["grind", "create", str(ARTIFACT_DIR / "psets" / "fixture-riscv-slices-1.cfg")],
+        env=env,
+    )
 
-    invalid = ARTIFACT_DIR / "psets" / "sudoku-bad-gap.cfg"
+    invalid = ARTIFACT_DIR / "psets" / "fixture-riscv-slices-bad-gap.cfg"
     invalid.write_text(
         """
 [problemset]
-unique = sudoku-bad-gap
-note = Sudoku Bad Gap
-tag = cs2810
+unique = fixture-riscv-slices-bad-gap
+note = End-to-end invalid slice gap
+tag = e2e
 tag = riscv
-continues = sudoku-1
+continues = fixture-riscv-slices-1
 
-[problem "sudoku"]
+[problem "fixture-riscv-slices"]
 steps = 4-4
 """.strip()
         + "\n",
@@ -510,11 +528,18 @@ steps = 4-4
 
 
 def list_problem_catalog(env: dict[str, str]) -> None:
-    output = run(["grind", "problem", "sudoku"], env=env).stdout
-    for problem_set_id in ["sudoku", "sudoku-1", "sudoku-2", "sudoku-3"]:
+    output = run(["grind", "problem", "fixture-riscv-slices"], env=env).stdout
+    for problem_set_id in [
+        "fixture-riscv-slices",
+        "fixture-riscv-slices-1",
+        "fixture-riscv-slices-2",
+        "fixture-riscv-slices-3",
+    ]:
         require(problem_set_id in output, f"catalog is missing {problem_set_id}")
     javascript_output = run(["grind", "problem", "javascript"], env=env).stdout
-    require("javascript-hello" in javascript_output, "catalog is missing javascript-hello")
+    require(
+        "javascript-hello" in javascript_output, "catalog is missing javascript-hello"
+    )
 
 
 def create_assignment(

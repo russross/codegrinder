@@ -11,11 +11,11 @@ if str(TESTS_DIR) not in sys.path:
 from e2e_common import ARTIFACT_DIR, ROOT, RUN_ROOT, e2e_env, require, run
 from e2e_containment import run_containment_flow
 from e2e_flows import (
-    run_array_max_flow,
+    run_c_steps_flow,
     run_followup_download_checks,
-    run_huff_flow,
     run_javascript_hello_flow,
-    run_sudoku_flow,
+    run_riscv_single_flow,
+    run_riscv_slices_flow,
 )
 from e2e_setup import (
     build_containers,
@@ -26,7 +26,7 @@ from e2e_setup import (
     create_containment_problem_type,
     create_assignment,
     create_problem_sources,
-    create_sudoku_slices,
+    create_riscv_slices,
     ensure_caddy_running,
     delete_assignment,
     ensure_docker_running,
@@ -77,25 +77,31 @@ def main() -> int:
         create_containment_problem_type(env)
         run_problem_type_command_checks(env)
         create_problem_sources(env)
-        create_sudoku_slices(env)
+        create_riscv_slices(env)
         run_author_catalog_checks(env)
         list_problem_catalog(env)
         set_course_roles("Learner")
-        create_assignment("array-max", "Array Max")
+        create_assignment(
+            "fixture-riscv-single", "End-to-end RISC-V single-step fixture"
+        )
         create_assignment("javascript-hello", "JavaScript Hello World")
         create_assignment("containment", "Daycare Containment")
-        run_array_max_flow(env)
+        run_riscv_single_flow(env)
         run_javascript_hello_flow(env)
         run_containment_flow(env)
-        create_assignment("huff", "Huffman Encoder")
-        create_assignment("sudoku-1", "Sudoku Pencil Marks 1")
-        create_assignment("sudoku-2", "Sudoku Pencil Marks 2")
-        create_assignment("sudoku-3", "Sudoku Pencil Marks 3")
-        create_assignment("sudoku", "Future Full Sudoku", unlock_at="2099-01-01 00:00:00")
+        create_assignment("fixture-c-steps", "End-to-end cumulative C fixture")
+        create_assignment("fixture-riscv-slices-1", "End-to-end RISC-V slice 1")
+        create_assignment("fixture-riscv-slices-2", "End-to-end RISC-V slice 2")
+        create_assignment("fixture-riscv-slices-3", "End-to-end RISC-V slice 3")
+        create_assignment(
+            "fixture-riscv-slices",
+            "Future-locked RISC-V fixture",
+            unlock_at="2099-01-01 00:00:00",
+        )
         run_followup_download_checks(env)
-        delete_assignment("sudoku")
-        run_huff_flow(env)
-        run_sudoku_flow(env)
+        delete_assignment("fixture-riscv-slices")
+        run_c_steps_flow(env)
+        run_riscv_slices_flow(env)
         run(["grind", "list"], env=env)
         completed = True
         print("e2e test completed")
