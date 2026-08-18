@@ -1,0 +1,354 @@
+/*
+I am not supporting ancient browser's css quirks
+this project requires webassembly anyway so anything older than that is useless
+*/
+:not(:where(#instructions *)) {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  border: none;
+  background-color: transparent;
+  color: inherit;
+  outline: none;
+}
+
+button:hover {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: initial;
+}
+
+#nav_bar>li {
+  float: left;
+}
+
+#nav_bar>li>button {
+  color: white;
+  padding: 14px 16px;
+  width: fit-content;
+}
+
+#nav_bar>li>button:hover {
+  background-color: #111;
+}
+
+#nav_bar>li>button:disabled {
+  background-color: #444;
+  color: grey;
+}
+
+#nav_bar {
+  background-color: #333;
+  list-style-type: none;
+  overflow: auto;
+}
+
+/*======================SIDEBAR======================*/
+/* The side navigation menu */
+#files_list {
+  display: none;
+  background-color: #111;
+  overflow: hidden;
+  position: absolute;
+  /* To show up in front of the editor*/
+  z-index: 5;
+  font-family: sans-serif;
+}
+
+#directory_tree {
+  padding: 5px;
+}
+
+/* The navigation menu links */
+#files_list li {
+  padding: 4px 0px 0px 16px;
+  color: white;
+  display: block;
+}
+
+/* When you mouse over the navigation links, change their color */
+#files_list li:hover {
+  color: #0772ff;
+  cursor: pointer;
+}
+
+/* Remove default bullets */
+#files_list ul {
+  list-style-type: none;
+  overflow: hidden;
+  width: fit-content
+}
+
+/* Create the caret/arrow with a unicode, and style it */
+.folder::before {
+  content: "\25B6";
+  color: white;
+  display: inline-block;
+  padding-right: 6px;
+  transform: rotate(90deg);
+}
+
+/* Rotate the caret/arrow icon when clicked on (using JavaScript) */
+.folder.collapsed::before {
+  transform: rotate(0deg);
+}
+
+/* Hide the nested list */
+.folder.collapsed ul {
+  height: 0;
+}
+
+.tabs-container {
+  list-style-type: none;
+  overflow: hidden;
+  background-color: #1b1c17;
+  color: lightgrey;
+  font-family: sans-serif;
+}
+
+.tabs-container li {
+  border: 1px solid #36372f;
+  border-left: none;
+  display: inline-block;
+  cursor: pointer;
+}
+
+.tabs-container li:hover {
+  background-color: #272822;
+}
+
+.tabs-container li.active {
+  border-bottom: 1px solid #272822;
+  border-top: 2px solid blue;
+  background-color: #272822;
+  color: white;
+}
+
+.tabs-container li.active span {
+  padding-top: 7px;
+}
+
+.tabs-container li span {
+  padding: 8px;
+  padding-right: 0px;
+  display: inline-block;
+}
+
+.tabs-container button {
+  padding: 3px 5px 3px 5px;
+  margin-right: 2px;
+  margin-left: 2px;
+  border-radius: 2px;
+}
+
+.tabs-container li button:hover {
+  background-color: grey;
+}
+
+.path-input {
+  display: block;
+  width: 100%;
+  background-color: #272822;
+  color: lightgrey;
+  padding: 4px;
+}
+
+.ace_editor {
+  height: 100%;
+}
+
+#tabs {
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  min-height: 100%;
+  grid-template-areas:
+    "tabs"
+    "path"
+    "editor"
+}
+
+.tabs-container {
+  grid-area: tabs;
+}
+
+.path-input {
+  grid-area: path;
+}
+
+.editor-container {
+  grid-area: editor;
+}
+
+.editor-container>div {
+  display: none;
+}
+
+.editor-container>div.active {
+  display: block;
+}
+
+body {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  /* Main content area and Sidebar */
+  grid-template-rows: auto 1fr auto;
+  /* Header, Body (growing), Footer */
+  height: 100vh;
+  grid-template-areas:
+    "nav nav"
+    "tabbedEditor instructions"
+    "terminal instructions";
+}
+
+#nav_bar {
+  grid-area: nav;
+}
+
+#tabs {
+  grid-area: tabbedEditor;
+}
+
+#terminal_container {
+  grid-area: terminal;
+  height: 200px;
+  max-height: 100vh;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  grid-template-areas:
+    "anchor"
+    "content";
+}
+
+.resize-handle {
+  background-color: #ddd;
+  transition: background-color 0.3s ease;
+  grid-area: anchor;
+}
+
+.resize-handle:hover {
+  background-color: #aaa;
+}
+
+#instructions_container {
+  max-width: 50vw;
+  grid-area: instructions;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-areas:
+    "anchor content";
+}
+
+.bar-content {
+  grid-area: content;
+  overflow: auto;
+  position: relative;
+}
+
+#turtle {
+  position: absolute;
+  width: 100%;
+}
+
+#output_terminal,
+#instructions {
+  padding-left: 1em;
+  display: block;
+}
+
+#instructions {
+  height: 100%;
+}
+
+#instructions {
+  user-select: none;
+}
+
+#instructions code {
+  user-select: text;
+}
+
+#instructions_container .resize-handle {
+  width: 20px;
+  cursor: col-resize;
+  height: 100%;
+}
+
+#terminal_container .resize-handle {
+  height: 20px;
+  cursor: row-resize;
+}
+
+#output_terminal pre {
+  padding-bottom: 2em;
+}
+
+#output_terminal textarea {
+  width: 100%;
+  font-family: inherit;
+  color: grey;
+  resize: none;
+  overflow: hidden;
+}
+
+#terminal_container img {
+  width: 100%;
+}
+
+.dropdown {
+  list-style-type: none;
+  background-color: #111;
+  display: none;
+  overflow: hidden;
+  position: absolute;
+  /* To show up in front of the editor*/
+  z-index: 5;
+}
+
+.dropdown>li>button {
+  padding: 4px;
+  color: white;
+}
+
+.prompt-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.prompt-container {
+  background-color: white;
+  padding: 20px;
+  border-radius: 5px;
+}
+
+.prompt-label {
+  display: grid;
+  gap: 8px;
+}
+
+.prompt-input {
+  margin-bottom: 10px;
+}
+
+.prompt-buttons {
+  text-align: right;
+}
+
+.prompt-choices {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.prompt-choices>button {
+  padding: 8px 12px;
+  text-align: left;
+}

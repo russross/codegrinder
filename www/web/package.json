@@ -1,0 +1,22 @@
+{
+  "name": "codegrinder-web",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "npm run proto:generate && esbuild scripts/codeGrinder.js --bundle --format=esm --platform=browser --target=es2022 --minify --outfile=scripts/codeGrinderApi.js",
+    "proto:generate": "./proto-gen.sh",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@protobuf-ts/grpcweb-transport": "2.11.1",
+    "@protobuf-ts/runtime": "2.11.1",
+    "@protobuf-ts/runtime-rpc": "2.11.1"
+  },
+  "devDependencies": {
+    "@protobuf-ts/plugin": "2.11.1",
+    "esbuild": "0.28.1",
+    "grpc-tools": "1.13.1",
+    "typescript": "5.9.3"
+  }
+}
