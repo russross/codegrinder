@@ -1,5 +1,5 @@
 [package]
-name = "codegrinder-server"
+name = "codegrinder"
 version.workspace = true
 edition.workspace = true
 

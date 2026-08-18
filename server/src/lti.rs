@@ -75,8 +75,6 @@ pub struct VersionPayload {
     pub version: String,
     pub grind_version_required: String,
     pub grind_version_recommended: String,
-    pub thonny_version_required: String,
-    pub thonny_version_recommended: String,
 }
 
 pub fn router(state: LtiState) -> Router {

@@ -14,7 +14,7 @@ respawn_delay=2
 respawn_max=10
 respawn_period=300
 
-command="/usr/local/bin/codegrinder-server"
+command="/usr/local/bin/codegrinder"
 command_args="${codegrinder_roles:--ta -daycare} --config ${codegrinder_config:-/etc/codegrinder/config.json}"
 command_user="${codegrinder_user:-codegrinder}:${codegrinder_group:-codegrinder}"
 command_background="true"

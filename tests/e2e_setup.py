@@ -28,7 +28,7 @@ from e2e_common import (
     SERVER_LOG,
     SESSION_KEY,
     SESSION_SECRET,
-    TARGET_DEBUG,
+    TARGET_RELEASE,
     USER_ID,
     WORKSPACE_DIR,
     CommandResult,
@@ -153,7 +153,7 @@ def ensure_docker_running(env: dict[str, str]) -> None:
 
 def build_rust(env: dict[str, str]) -> None:
     run(
-        ["cargo", "build", "--release", "-p", "codegrinder-server", "-p", "grind"],
+        ["cargo", "build", "--release", "-p", "codegrinder", "-p", "grind"],
         env=env,
         timeout=1800,
     )
@@ -274,7 +274,7 @@ def start_server(env: dict[str, str]) -> subprocess.Popen[str]:
     log = SERVER_LOG.open("w", encoding="utf-8")
     server = subprocess.Popen(
         [
-            str(TARGET_DEBUG / "codegrinder-server"),
+            str(TARGET_RELEASE / "codegrinder"),
             "--config",
             str(SERVER_CONFIG_PATH),
         ],

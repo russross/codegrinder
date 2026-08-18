@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read};
 use std::process::Stdio;
 use std::sync::Arc;
@@ -32,6 +32,8 @@ const SIGNED_REQUEST_MAX_AGE: chrono::Duration = chrono::Duration::minutes(15);
 const DAYCARE_CONTAINER_LABEL: &str = "codegrinder.daycare=1";
 const STUDENT_UID: u64 = 1001;
 const STUDENT_GID: u64 = 1001;
+const STUDENT_DIRECTORY_MODE: u32 = 0o755;
+const STUDENT_FILE_MODE: u32 = 0o644;
 
 #[derive(Clone)]
 pub struct DaycareRuntime {
@@ -273,7 +275,7 @@ async fn run_action(
     deadline: Instant,
     tx: mpsc::Sender<Result<DaycareResponse, Status>>,
 ) -> AppResult<()> {
-    container.put_files(&bundle.files, 0o666, deadline).await?;
+    container.put_files(&bundle.files, deadline).await?;
     let mut transcript = TranscriptCapture::default();
     let command = bundle
         .command
@@ -754,13 +756,35 @@ fn char_class_matches(class: &[u8], value: u8) -> bool {
     if negated { !matched } else { matched }
 }
 
-fn build_input_tar(files: &BTreeMap<String, Vec<u8>>, mode: u32) -> AppResult<Vec<u8>> {
+fn build_input_tar(files: &BTreeMap<String, Vec<u8>>) -> AppResult<Vec<u8>> {
     let mut archive = tar::Builder::new(Vec::new());
+    let mut directories = BTreeSet::new();
+    for path in files.keys() {
+        let path = checked_relative_path(path)?;
+        for directory in path.ancestors().skip(1) {
+            if directory.as_os_str().is_empty() {
+                break;
+            }
+            directories.insert(directory.to_owned());
+        }
+    }
+    let mut directories = directories.into_iter().collect::<Vec<_>>();
+    directories.sort_by_key(|path| path.components().count());
+    for directory in directories {
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Directory);
+        header.set_mode(STUDENT_DIRECTORY_MODE);
+        header.set_uid(STUDENT_UID);
+        header.set_gid(STUDENT_GID);
+        header.set_size(0);
+        header.set_mtime(0);
+        header.set_cksum();
+        archive.append_data(&mut header, directory, Cursor::new([]))?;
+    }
     for (path, content) in files {
-        checked_relative_path(path)?;
         let mut header = tar::Header::new_gnu();
         header.set_entry_type(tar::EntryType::Regular);
-        header.set_mode(mode);
+        header.set_mode(STUDENT_FILE_MODE);
         header.set_uid(STUDENT_UID);
         header.set_gid(STUDENT_GID);
         header.set_size(content.len() as u64);
@@ -875,6 +899,8 @@ impl Container {
             format!("fsize={disk_bytes}"),
             "--ulimit".to_owned(),
             format!("nofile={0}:{0}", limits.max_fd),
+            "--ulimit".to_owned(),
+            "nproc=-1:-1".to_owned(),
             bundle.container.clone(),
             "/bin/sleep".to_owned(),
             format!("{}s", (limits.max_cpu * 2).max(1)),
@@ -923,15 +949,15 @@ impl Container {
     async fn put_files(
         &self,
         files: &BTreeMap<String, Vec<u8>>,
-        mode: u32,
         deadline: Instant,
     ) -> AppResult<()> {
         if files.is_empty() {
             return Ok(());
         }
-        let tar = build_input_tar(files, mode)?;
+        let tar = build_input_tar(files)?;
         let args = vec![
             "cp".to_owned(),
+            "--archive".to_owned(),
             "-".to_owned(),
             format!("{}:/home/student/", self.id),
         ];
@@ -1236,15 +1262,75 @@ mod tests {
         assert!(effective_limits(&bundle).is_err());
     }
 
-    #[tokio::test]
-    async fn workspace_mount_rejects_escaping_paths_and_large_result_files() {
-        assert!(
-            build_input_tar(
-                &BTreeMap::from([("../x".to_owned(), b"bad".to_vec())]),
-                0o666
-            )
-            .is_err()
+    #[test]
+    fn input_tar_includes_owned_parent_directories() {
+        let raw = build_input_tar(&BTreeMap::from([
+            ("nested/a.txt".to_owned(), b"a".to_vec()),
+            ("nested/deeper/b.txt".to_owned(), b"b".to_vec()),
+            ("root.txt".to_owned(), b"root".to_vec()),
+        ]))
+        .unwrap();
+        let mut archive = tar::Archive::new(Cursor::new(raw));
+        let entries = archive
+            .entries()
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                (
+                    entry.path().unwrap().to_string_lossy().to_string(),
+                    entry.header().entry_type(),
+                    entry.header().mode().unwrap(),
+                    entry.header().uid().unwrap(),
+                    entry.header().gid().unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            entries,
+            vec![
+                (
+                    "nested".to_owned(),
+                    tar::EntryType::Directory,
+                    STUDENT_DIRECTORY_MODE,
+                    STUDENT_UID,
+                    STUDENT_GID,
+                ),
+                (
+                    "nested/deeper".to_owned(),
+                    tar::EntryType::Directory,
+                    STUDENT_DIRECTORY_MODE,
+                    STUDENT_UID,
+                    STUDENT_GID,
+                ),
+                (
+                    "nested/a.txt".to_owned(),
+                    tar::EntryType::Regular,
+                    STUDENT_FILE_MODE,
+                    STUDENT_UID,
+                    STUDENT_GID,
+                ),
+                (
+                    "nested/deeper/b.txt".to_owned(),
+                    tar::EntryType::Regular,
+                    STUDENT_FILE_MODE,
+                    STUDENT_UID,
+                    STUDENT_GID,
+                ),
+                (
+                    "root.txt".to_owned(),
+                    tar::EntryType::Regular,
+                    STUDENT_FILE_MODE,
+                    STUDENT_UID,
+                    STUDENT_GID,
+                ),
+            ]
         );
+    }
+
+    #[tokio::test]
+    async fn workspace_archives_reject_escaping_paths_and_large_result_files() {
+        assert!(build_input_tar(&BTreeMap::from([("../x".to_owned(), b"bad".to_vec())])).is_err());
 
         let tar = output_tar(&[(
             "test_detail.xml",
@@ -1309,6 +1395,8 @@ mod tests {
         assert!(log.contains("--ulimit cpu=1"));
         assert!(log.contains("--ulimit fsize=10485760"));
         assert!(log.contains("--ulimit nofile=10:10"));
+        assert!(log.contains("--ulimit nproc=-1:-1"));
+        assert!(log.contains("cp --archive - fake-container:/home/student/"));
         assert!(log.contains("fake-container true"));
     }
 
@@ -1562,7 +1650,7 @@ mod tests {
         fs::write(
             &script,
             format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}/engine.log\ncase \"$1\" in\n  run) echo fake-container ;;\n  exec) exit 0 ;;\n  cp) if [ \"$2\" = \"-\" ]; then cat >/dev/null; else cat >/dev/null; fi ;;\n  stop) exit 0 ;;\n  rm) exit 0 ;;\n  *) exit 0 ;;\nesac\n",
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}/engine.log\ncase \"$1\" in\n  run) echo fake-container ;;\n  exec) exit 0 ;;\n  cp) if [ \"$2\" = \"--archive\" ]; then cat >/dev/null; else cat >/dev/null; fi ;;\n  stop) exit 0 ;;\n  rm) exit 0 ;;\n  *) exit 0 ;;\nesac\n",
                 base.display(),
             ),
         )
@@ -1594,7 +1682,7 @@ mod tests {
         fs::write(
             &script,
             format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}/engine.log\ncase \"$1\" in\n  run) echo fake-container ;;\n  exec) printf 'student stdout\\n'; printf 'student stderr\\n' >&2; exit 0 ;;\n  cp) if [ \"$2\" = \"-\" ]; then cat >/dev/null; else cat {}; fi ;;\n  stop) exit 0 ;;\n  rm) exit 0 ;;\n  *) exit 0 ;;\nesac\n",
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}/engine.log\ncase \"$1\" in\n  run) echo fake-container ;;\n  exec) printf 'student stdout\\n'; printf 'student stderr\\n' >&2; exit 0 ;;\n  cp) if [ \"$2\" = \"--archive\" ]; then cat >/dev/null; else cat {}; fi ;;\n  stop) exit 0 ;;\n  rm) exit 0 ;;\n  *) exit 0 ;;\nesac\n",
                 base.display(),
                 output.display(),
             ),
@@ -1624,7 +1712,7 @@ mod tests {
         fs::write(
             &script,
             format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}/engine.log\ncase \"$1\" in\n  run) echo fake-container ;;\n  exec) exit {} ;;\n  cp) if [ \"$2\" = \"-\" ]; then cat >/dev/null; else cat {}; fi ;;\n  stop) exit 0 ;;\n  rm) exit 0 ;;\n  *) exit 0 ;;\nesac\n",
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}/engine.log\ncase \"$1\" in\n  run) echo fake-container ;;\n  exec) exit {} ;;\n  cp) if [ \"$2\" = \"--archive\" ]; then cat >/dev/null; else cat {}; fi ;;\n  stop) exit 0 ;;\n  rm) exit 0 ;;\n  *) exit 0 ;;\nesac\n",
                 base.display(),
                 exit_status,
                 output.display(),

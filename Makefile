@@ -28,7 +28,7 @@ build:
 	cargo build --release --workspace
 
 server:
-	cargo build --release -p codegrinder-server
+	cargo build --release -p codegrinder
 
 grind:
 	cargo build --release -p grind

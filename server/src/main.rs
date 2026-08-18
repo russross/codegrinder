@@ -89,8 +89,6 @@ async fn main() -> AppResult<()> {
         version: VERSION.to_owned(),
         grind_version_required: "2.7.0".to_owned(),
         grind_version_recommended: "2.7.0".to_owned(),
-        thonny_version_required: "2.7.0".to_owned(),
-        thonny_version_recommended: "2.7.0".to_owned(),
     };
     let service = CodeGrinderServer::new(CodeGrinderServerParts {
         db: db.clone(),
@@ -270,9 +268,7 @@ impl Args {
                     role_specified = true;
                 }
                 "--help" | "-h" => {
-                    println!(
-                        "usage: codegrinder-server [-ta] [-daycare] --config PATH [--bind ADDRESS]"
-                    );
+                    println!("usage: codegrinder [-ta] [-daycare] --config PATH [--bind ADDRESS]");
                     std::process::exit(0);
                 }
                 other => return Err(AppError::BadRequest(format!("unknown argument {other:?}"))),

@@ -9,7 +9,7 @@ The Rust workspace uses the host toolchain for normal development:
     make build
     make test
 
-`make server` builds only `codegrinder-server` for the current host.
+`make server` builds only `codegrinder` for the current host.
 The production server is always a native build; promoting a checkout
 does not change source files or build flags.
 
@@ -43,7 +43,7 @@ Server configuration
 
 The server requires an explicit configuration path:
 
-    codegrinder-server --config /etc/codegrinder/config.json -ta -daycare
+    codegrinder --config /etc/codegrinder/config.json -ta -daycare
 
 `CODEGRINDER_CONFIG` may select the path instead. The server never
 searches a user's home directory for configuration or data. Relative
@@ -56,7 +56,7 @@ the populated config outside the repository.
 The checked-in OpenRC and systemd definitions use the generic
 `codegrinder` service account and `/etc/codegrinder/config.json`.
 Customize the installed unit, not the repository copy. OpenRC settings
-can be overridden in `/etc/conf.d/codegrinder-server`:
+can be overridden in `/etc/conf.d/codegrinder`:
 
     codegrinder_user="codegrinder"
     codegrinder_group="codegrinder"

@@ -12,8 +12,6 @@ message Version {
   string version = 1;
   string grind_version_required = 2;
   string grind_version_recommended = 3;
-  string thonny_version_required = 4;
-  string thonny_version_recommended = 5;
 }
 
 // AssignmentKey is the natural key for one assignment.

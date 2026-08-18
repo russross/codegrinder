@@ -27,7 +27,7 @@ Daycare container lifecycle policy:
 For Rust server startup and checks:
 
 - All Cargo builds, tests, and Clippy checks must use `--release` so Rust artifacts share the release cache.
-- The production server lives under `server/` as the Rust `codegrinder-server` crate. The old Python server is kept only for port comparison under `pyserver/`.
+- The production server lives under `server/` as the Rust `codegrinder` crate. The old Python server is kept only for port comparison under `pyserver/`.
 - The Rust server is not public-facing. Caddy is the public TLS front end and reverse-proxies to the Rust server over cleartext HTTP/h2c.
 - The Rust server binds to `localhost:1400` by default. System startup should rely on that default unless an explicit local override is required.
 - The Rust server does not load TLS certificates or manage public HTTPS. Public hostnames and certificates belong to Caddy.
@@ -35,8 +35,8 @@ For Rust server startup and checks:
 - TA role serves LTI, version/daycare-registration routes, static files, and TA gRPC methods. Daycare role serves the `Daycare` gRPC runtime path and registers the local daycare capacity when configured.
 - The secondary test/dev combined TA+daycare instance is reached through Caddy at `https://dev.russross.com`.
 - The end-to-end test script expects Caddy to already be running and uses `https://dev.russross.com` for all server traffic; it starts and stops only its own temporary CodeGrinder process.
-- Build and check the Rust server with `cargo build --release -p codegrinder-server`, `cargo test --release -p codegrinder-server`, `cargo clippy --release -p codegrinder-server -- -D warnings`, and `cargo fmt --all --check`.
-- Stop, start, restart, and check the local CodeGrinder server with `doas rc-service codegrinder-server ...`; do not launch ad hoc background server processes.
+- Build and check the Rust server with `cargo build --release -p codegrinder`, `cargo test --release -p codegrinder`, `cargo clippy --release -p codegrinder -- -D warnings`, and `cargo fmt --all --check`.
+- Stop, start, restart, and check the local CodeGrinder server with `doas rc-service codegrinder ...`; do not launch ad hoc background server processes.
 
 For Rust `grind` client checks:
 

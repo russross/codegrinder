@@ -146,8 +146,6 @@ impl CodeGrinderServer {
             version: self.version.version.clone(),
             grind_version_required: self.version.grind_version_required.clone(),
             grind_version_recommended: self.version.grind_version_recommended.clone(),
-            thonny_version_required: self.version.thonny_version_required.clone(),
-            thonny_version_recommended: self.version.thonny_version_recommended.clone(),
         }
     }
 }
@@ -1055,8 +1053,6 @@ mod tests {
                 version: "test".to_owned(),
                 grind_version_required: String::new(),
                 grind_version_recommended: String::new(),
-                thonny_version_required: String::new(),
-                thonny_version_recommended: String::new(),
             },
             ta_enabled: true,
             daycare_enabled: true,

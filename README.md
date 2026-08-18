@@ -19,7 +19,7 @@ author to inquire about alternate licensing.
 What is here
 ============
 
-This repository currently hosts three tools:
+This repository currently hosts two tools:
 
 1.  The CodeGrinder server. This is further divided into two parts,
     which can run as part of the same service, or can be hosted on
@@ -43,10 +43,6 @@ This repository currently hosts three tools:
     intereface for students, instructors, and problem authors.
     Students can see their currently-assigned problems, pull them
     onto their local machines, and submit them for grading.
-
-3.  The Thonny plugin. This adds a CodeGrinder menu to Thonny for
-    Python problems. Students can log in and out, download new
-    assignments, test their code locally, and submit it for grading.
 
 Installation
 ============
