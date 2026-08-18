@@ -17,9 +17,15 @@ use crate::version::CURRENT_VERSION;
 use prost::Message;
 use semver::Version;
 use std::collections::BTreeMap;
+use std::env;
+use std::ffi::OsStr;
 use std::fmt::Debug;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::str::FromStr;
 use std::time::Duration;
+use tokio::process::Command;
 use tonic::metadata::MetadataValue;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use tonic::{Request, Streaming};
@@ -62,7 +68,7 @@ impl Session {
         dump(&config.trace, "Hello", true, &request.get_ref());
         let response = client.hello(request).await?.into_inner();
         dump(&config.trace, "Hello", false, &response);
-        check_version(&response)?;
+        check_version(&response, &config.host).await?;
         let user = user_from_hello(&response)?;
         if config.roles != user.roles {
             config.roles = user.roles;
@@ -321,7 +327,7 @@ pub async fn login(host: &str, token: &str, trace: ApiTrace) -> Result<HelloResp
         .await?
         .into_inner();
     dump(&trace, "Hello", false, &response);
-    check_version(&response)?;
+    check_version(&response, &config.host).await?;
     if response.user_id.is_empty() {
         fail("failed to fetch user: empty response")
     } else {
@@ -329,7 +335,7 @@ pub async fn login(host: &str, token: &str, trace: ApiTrace) -> Result<HelloResp
     }
 }
 
-pub fn check_version(response: &HelloResponse) -> Result<()> {
+pub async fn check_version(response: &HelloResponse, host: &str) -> Result<()> {
     let version = response
         .version
         .as_ref()
@@ -339,6 +345,12 @@ pub fn check_version(response: &HelloResponse) -> Result<()> {
     let required = Version::parse(&version.grind_version_required)
         .map_err(|error| CliError::Message(error.to_string()))?;
     if required > current {
+        if let Some(updater) = updater_in_path() {
+            if upgrade_grind(&updater, host).await {
+                fail("grind upgraded; try the command again")?;
+            }
+            fail("grind upgrade failed")?;
+        }
         fail(format!(
             "this is grind version {CURRENT_VERSION}, but the server requires {} or higher\n  you must upgrade to continue",
             version.grind_version_required
@@ -347,6 +359,14 @@ pub fn check_version(response: &HelloResponse) -> Result<()> {
     let recommended = Version::parse(&version.grind_version_recommended)
         .map_err(|error| CliError::Message(error.to_string()))?;
     if recommended > current {
+        if let Some(updater) = updater_in_path() {
+            if upgrade_grind(&updater, host).await {
+                eprintln!("grind upgraded; continuing");
+            } else {
+                eprintln!("grind upgrade failed; continuing");
+            }
+            return Ok(());
+        }
         eprintln!(
             "this is grind version {CURRENT_VERSION}, but the server recommends {} or higher",
             version.grind_version_recommended
@@ -354,6 +374,45 @@ pub fn check_version(response: &HelloResponse) -> Result<()> {
         eprintln!("  please upgrade as soon as possible");
     }
     Ok(())
+}
+
+fn updater_in_path() -> Option<PathBuf> {
+    let path = env::var_os("PATH")?;
+    updater_in_paths(&path)
+}
+
+fn updater_in_paths(path: &OsStr) -> Option<PathBuf> {
+    env::split_paths(path)
+        .map(|directory| directory.join("update-grind"))
+        .find(|candidate| {
+            candidate.metadata().is_ok_and(|metadata| {
+                metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+            })
+        })
+}
+
+async fn upgrade_grind(updater: &Path, host: &str) -> bool {
+    let Some(hostname) = server_hostname(host) else {
+        return false;
+    };
+    Command::new(updater)
+        .arg("grind")
+        .arg(hostname)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .is_ok_and(|status| status.success())
+}
+
+fn server_hostname(host: &str) -> Option<String> {
+    endpoint_uri(host)
+        .ok()?
+        .parse::<http::Uri>()
+        .ok()?
+        .host()
+        .map(str::to_owned)
 }
 
 pub fn user_from_hello(response: &HelloResponse) -> Result<AuthenticatedUser> {
@@ -481,11 +540,15 @@ fn summarize_debug(message: &impl Debug) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::env;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
     use std::time::Duration;
 
     use prost::Message;
+    use tempfile::tempdir;
 
-    use super::{daycare_timeout, timed_request};
+    use super::{daycare_timeout, timed_request, updater_in_paths, upgrade_grind};
     use crate::proto::codegrinder::{
         DaycareRequest, RuntimeBundle, RuntimeLimits, SignedRuntimeBundle,
     };
@@ -526,6 +589,44 @@ mod tests {
         assert_eq!(
             daycare_timeout(&request, Duration::from_secs(10)),
             Duration::from_secs(35)
+        );
+    }
+
+    #[test]
+    fn updater_lookup_skips_non_executable_matches() {
+        let first = tempdir().expect("create first PATH directory");
+        let second = tempdir().expect("create second PATH directory");
+        fs::write(first.path().join("update-grind"), "not executable")
+            .expect("write non-executable updater");
+        let executable = second.path().join("update-grind");
+        fs::write(&executable, "#!/bin/sh\nexit 0\n").expect("write executable updater");
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755))
+            .expect("make updater executable");
+        let path = env::join_paths([first.path(), second.path()]).expect("construct PATH");
+
+        assert_eq!(updater_in_paths(&path), Some(executable));
+    }
+
+    #[tokio::test]
+    async fn upgrade_passes_mode_and_hostname_to_updater() {
+        let directory = tempdir().expect("create updater directory");
+        let updater = directory.path().join("update-grind");
+        let arguments = directory.path().join("update-grind.args");
+        fs::write(
+            &updater,
+            "#!/bin/sh\nprintf '%s\\n%s\\n' \"$1\" \"$2\" >\"${0}.args\"\n",
+        )
+        .expect("write updater");
+        fs::set_permissions(&updater, fs::Permissions::from_mode(0o755))
+            .expect("make updater executable");
+
+        assert!(
+            upgrade_grind(&updater, "https://dev.russross.com:443/api").await,
+            "updater should succeed"
+        );
+        assert_eq!(
+            fs::read_to_string(arguments).expect("read updater arguments"),
+            "grind\ndev.russross.com\n"
         );
     }
 }

@@ -21,7 +21,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::{Router, http::StatusCode};
+use axum::extract::Request;
+use axum::middleware::{self, Next};
+use axum::response::Response;
+use axum::{
+    Router,
+    http::{HeaderValue, StatusCode},
+};
 use chrono::Utc;
 use proto::code_grinder_service_server::CodeGrinderServiceServer;
 use tonic::codec::CompressionEncoding;
@@ -118,8 +124,27 @@ async fn main() -> AppResult<()> {
     } else {
         grpc_router.fallback(|| async { (StatusCode::NOT_FOUND, "not found") })
     }
-    .layer(CompressionLayer::new());
+    .layer(CompressionLayer::new())
+    .layer(middleware::from_fn(add_web_runtime_isolation_headers));
     serve(app, args.bind).await
+}
+
+async fn add_web_runtime_isolation_headers(request: Request, next: Next) -> Response {
+    let path = request.uri().path();
+    let web_runtime_path = path.starts_with("/web/") || path.starts_with("/js/");
+    let mut response = next.run(request).await;
+    if !web_runtime_path {
+        return response;
+    }
+    response.headers_mut().insert(
+        "cross-origin-opener-policy",
+        HeaderValue::from_static("same-origin"),
+    );
+    response.headers_mut().insert(
+        "cross-origin-embedder-policy",
+        HeaderValue::from_static("require-corp"),
+    );
+    response
 }
 
 async fn register_daycare(config: Arc<config::ServerConfig>, version: String) {

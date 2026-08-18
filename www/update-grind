@@ -1,0 +1,383 @@
+#!/bin/sh
+
+set -eu
+
+BIN_DIR=
+
+grind_temp=
+updater_temp=
+risclet_temp=
+installation_completed=false
+
+cleanup() {
+    exit_status=$?
+    if [ -n "$grind_temp" ]; then
+        rm -f "$grind_temp" || :
+    fi
+    if [ -n "$updater_temp" ]; then
+        rm -f "$updater_temp" || :
+    fi
+    if [ -n "$risclet_temp" ]; then
+        rm -f "$risclet_temp" || :
+    fi
+    if [ "$installation_completed" = false ]; then
+        printf '%s\n' 'FAILED: installation did not complete.' >&2
+    fi
+    trap - 0
+    exit "$exit_status"
+}
+trap cleanup 0
+trap 'exit 1' 1 2 15
+
+fail() {
+    printf 'update-grind: %s\n' "$*" >&2
+    exit 1
+}
+
+succeed() {
+    printf 'SUCCESS: %s\n' "$*"
+    installation_completed=true
+}
+
+profile_configures_path() {
+    [ -r "$1" ] && awk '
+        /^[[:space:]]*#/ { next }
+        /(^|[^[:alnum:]_])PATH[[:space:]]*=/ && /\.local\/bin/ { found = 1 }
+        END { exit found ? 0 : 1 }
+    ' "$1"
+}
+
+installed_grind_is_in_path() {
+    if ! grind_command=$(command -v grind 2>/dev/null); then
+        return 1
+    fi
+    if [ "$grind_command" = "$BIN_DIR/grind" ]; then
+        return 0
+    fi
+    [ -e "$grind_command" ] && [ "$grind_command" -ef "$BIN_DIR/grind" ]
+}
+
+select_profile() {
+    shell_path=${SHELL:-}
+    if [ -z "$shell_path" ]; then
+        user_name=$(id -un)
+        if command -v getent >/dev/null 2>&1; then
+            shell_path=$(getent passwd "$user_name" 2>/dev/null \
+                | awk -F: 'NR == 1 { print $7 }')
+        fi
+        if [ -z "$shell_path" ] && [ -r /etc/passwd ]; then
+            shell_path=$(awk -F: -v user="$user_name" \
+                '$1 == user { print $7; exit }' /etc/passwd)
+        fi
+        if [ -z "$shell_path" ] && command -v dscl >/dev/null 2>&1; then
+            shell_path=$(dscl . -read "/Users/$user_name" UserShell 2>/dev/null \
+                | awk 'NR == 1 { print $2 }')
+        fi
+    fi
+
+    shell_name=${shell_path##*/}
+    profile=
+    case "$shell_name" in
+        bash)
+            if [ -f "$HOME/.bash_profile" ]; then
+                profile=$HOME/.bash_profile
+            elif [ -f "$HOME/.bash_login" ]; then
+                profile=$HOME/.bash_login
+            else
+                profile=$HOME/.profile
+            fi
+            ;;
+        ash|dash|ksh|sh) profile=$HOME/.profile ;;
+        zsh) profile=${ZDOTDIR:-$HOME}/.zprofile ;;
+        *) return 1 ;;
+    esac
+}
+
+configure_grind_path() {
+    path_activation=
+    if installed_grind_is_in_path; then
+        return
+    fi
+
+    if ! select_profile; then
+        path_activation="export PATH=\"$BIN_DIR:\$PATH\""
+        return
+    fi
+
+    if ! profile_configures_path "$profile"; then
+        profile_directory=${profile%/*}
+        mkdir -p "$profile_directory" \
+            || fail "could not create $profile_directory"
+        {
+            printf '\n%s\n' '# CodeGrinder user binaries'
+            printf '%s\n' 'case ":$PATH:" in'
+            printf '%s\n' '    *:"$HOME/.local/bin":*) ;;'
+            printf '%s\n' '    *) PATH="$HOME/.local/bin:$PATH" ;;'
+            printf '%s\n' 'esac'
+            printf '%s\n' 'export PATH'
+        } >>"$profile" || fail "could not update $profile"
+    fi
+
+    path_activation=". \"$profile\""
+}
+
+configure_server() {
+    hostname=$1
+    case "$hostname" in
+        ''|.*|*.|*..*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.-]*)
+            fail "invalid hostname: $hostname"
+            ;;
+    esac
+    [ "${#hostname}" -le 253 ] || fail "hostname is too long: $hostname"
+
+    hostname_labels=$hostname
+    while :; do
+        case "$hostname_labels" in
+            *.*)
+                hostname_label=${hostname_labels%%.*}
+                hostname_labels=${hostname_labels#*.}
+                ;;
+            *)
+                hostname_label=$hostname_labels
+                hostname_labels=
+                ;;
+        esac
+        [ "${#hostname_label}" -le 63 ] \
+            || fail "hostname label is too long: $hostname_label"
+        case "$hostname_label" in
+            -*|*-) fail "invalid hostname label: $hostname_label" ;;
+        esac
+        [ -n "$hostname_labels" ] || break
+    done
+
+    server=https://$hostname
+}
+
+configure_risclet_version() {
+    version_input=$1
+    case "$version_input" in
+        v*) version_body=${version_input#v} ;;
+        *) version_body=$version_input ;;
+    esac
+
+    major_version=${version_body%%.*}
+    version_remainder=${version_body#*.}
+    [ "$version_remainder" != "$version_body" ] \
+        || fail "invalid risclet version: $version_input"
+    minor_version=${version_remainder%%.*}
+    patch_version=${version_remainder#*.}
+    [ "$patch_version" != "$version_remainder" ] \
+        || fail "invalid risclet version: $version_input"
+    case "$patch_version" in
+        *.*) fail "invalid risclet version: $version_input" ;;
+    esac
+    for version_component in "$major_version" "$minor_version" "$patch_version"; do
+        case "$version_component" in
+            ''|*[!0123456789]*) fail "invalid risclet version: $version_input" ;;
+        esac
+    done
+
+    risclet_requested_version=v$version_body
+}
+
+download() {
+    url=$1
+    destination=$2
+    description=$3
+    downloader_found=false
+
+    if command -v curl >/dev/null 2>&1; then
+        downloader_found=true
+        if curl -fsSL "$url" -o "$destination" 2>/dev/null; then
+            return
+        fi
+    fi
+    if command -v wget >/dev/null 2>&1; then
+        downloader_found=true
+        if wget -q -O "$destination" "$url" 2>/dev/null; then
+            return
+        fi
+    fi
+    if command -v python3 >/dev/null 2>&1; then
+        downloader_found=true
+        if python3 - "$url" "$destination" 2>/dev/null <<'PYTHON'
+import shutil
+import sys
+import urllib.request
+
+url = sys.argv[1]
+destination = sys.argv[2]
+with urllib.request.urlopen(url, timeout=60) as response:
+    with open(destination, "wb") as destination_file:
+        shutil.copyfileobj(response, destination_file)
+PYTHON
+        then
+            return
+        fi
+    fi
+
+    if [ "$downloader_found" = false ]; then
+        fail "curl, wget, or python3 is required to download $description"
+    fi
+    fail "could not download $description from $url"
+}
+
+reject_sudo_installation() {
+    if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] \
+        && [ "$SUDO_USER" != root ]; then
+        fail 'run this installer without sudo'
+    fi
+}
+
+remove_legacy_binary() {
+    legacy_path=/usr/local/bin/$1
+    if [ ! -e "$legacy_path" ] && [ ! -L "$legacy_path" ]; then
+        return
+    fi
+
+    printf 'Removing legacy %s\n' "$legacy_path"
+    if [ "$(id -u)" -eq 0 ]; then
+        rm -f "$legacy_path" || fail "could not remove $legacy_path"
+        return
+    fi
+    command -v sudo >/dev/null 2>&1 \
+        || fail "sudo is required to remove $legacy_path"
+    sudo rm -f "$legacy_path" || fail "could not remove $legacy_path"
+}
+
+detect_platform() {
+    os_name=$(uname -s)
+    architecture=$(uname -m)
+    case "$os_name-$architecture" in
+        Linux-x86_64|Linux-amd64) platform=linux_amd64 ;;
+        Linux-aarch64|Linux-arm64) platform=linux_arm64 ;;
+        Darwin-x86_64|Darwin-amd64) platform=darwin_amd64 ;;
+        Darwin-aarch64|Darwin-arm64) platform=darwin_arm64 ;;
+        *) fail "unsupported platform: $os_name on $architecture" ;;
+    esac
+}
+
+validate_grind() {
+    [ -s "$1" ] || fail 'downloaded grind binary is empty'
+    chmod 755 "$1" || fail 'could not make the downloaded grind binary executable'
+    "$1" --help >/dev/null 2>&1 \
+        || fail 'downloaded grind binary failed its startup check'
+}
+
+validate_updater() {
+    [ -s "$1" ] || fail 'downloaded updater is empty'
+    updater_first_line=
+    IFS= read -r updater_first_line <"$1" || :
+    [ "$updater_first_line" = '#!/bin/sh' ] \
+        || fail 'downloaded updater is not a POSIX shell script'
+    sh -n "$1" 2>/dev/null || fail 'downloaded updater has invalid shell syntax'
+    chmod 755 "$1" || fail 'could not make the downloaded updater executable'
+}
+
+install_grind() {
+    detect_platform
+    printf 'Installing grind for %s\n' "$platform"
+
+    grind_temp=$(mktemp "$BIN_DIR/.grind.XXXXXX") \
+        || fail "could not create a temporary file in $BIN_DIR"
+    updater_temp=$(mktemp "$BIN_DIR/.update-grind.XXXXXX") \
+        || fail "could not create a temporary file in $BIN_DIR"
+    download "$server/grind.$platform" "$grind_temp" "grind for $platform"
+    download "$server/update-grind" "$updater_temp" update-grind
+    validate_grind "$grind_temp"
+    validate_updater "$updater_temp"
+
+    remove_legacy_binary grind
+    mv -f "$updater_temp" "$BIN_DIR/update-grind" \
+        || fail "could not install $BIN_DIR/update-grind"
+    updater_temp=
+    mv -f "$grind_temp" "$BIN_DIR/grind" \
+        || fail "could not install $BIN_DIR/grind"
+    grind_temp=
+}
+
+risclet_version() {
+    "$1" --version 2>/dev/null | awk '
+        {
+            for (i = 1; i <= NF; i++) {
+                if ($i ~ /^v?[0-9]+\.[0-9]+\.[0-9]+$/) {
+                    sub(/^v/, "", $i)
+                    print "v" $i
+                    exit
+                }
+            }
+        }
+    '
+}
+
+install_risclet() {
+    requested_version=$1
+    installed_version=
+    if [ -x "$BIN_DIR/risclet" ]; then
+        installed_version=$(risclet_version "$BIN_DIR/risclet")
+    fi
+    if [ "$installed_version" = "$requested_version" ]; then
+        remove_legacy_binary risclet
+        return
+    fi
+
+    detect_platform
+    case "$platform" in
+        darwin_amd64) binary=risclet-x86_64-apple-darwin ;;
+        darwin_arm64) binary=risclet-aarch64-apple-darwin ;;
+        linux_amd64) binary=risclet-x86_64-unknown-linux-musl ;;
+        linux_arm64) binary=risclet-aarch64-unknown-linux-musl ;;
+    esac
+    printf 'Installing risclet %s\n' "$requested_version"
+    risclet_temp=$(mktemp "$BIN_DIR/.risclet.XXXXXX") \
+        || fail "could not create a temporary file in $BIN_DIR"
+    download "https://github.com/russross/risclet/releases/download/$requested_version/$binary" \
+        "$risclet_temp" "risclet $requested_version"
+    [ -s "$risclet_temp" ] || fail 'downloaded risclet binary is empty'
+    chmod 755 "$risclet_temp" \
+        || fail 'could not make the downloaded risclet binary executable'
+    downloaded_version=$(risclet_version "$risclet_temp")
+    [ "$downloaded_version" = "$requested_version" ] \
+        || fail "downloaded risclet did not report version $requested_version"
+
+    remove_legacy_binary risclet
+    mv -f "$risclet_temp" "$BIN_DIR/risclet" \
+        || fail "could not install $BIN_DIR/risclet"
+    risclet_temp=
+}
+
+if [ "$#" -ne 2 ]; then
+    fail 'usage: update-grind grind HOSTNAME | update-grind risclet VERSION'
+fi
+case "$1" in
+    grind)
+        mode=grind
+        configure_server "$2"
+        ;;
+    risclet)
+        mode=risclet
+        configure_risclet_version "$2"
+        ;;
+    *) fail 'usage: update-grind grind HOSTNAME | update-grind risclet VERSION' ;;
+esac
+
+reject_sudo_installation
+[ -n "${HOME:-}" ] || fail 'HOME is not set'
+BIN_DIR=$HOME/.local/bin
+mkdir -p "$BIN_DIR" || fail "could not create $BIN_DIR"
+
+case "$mode" in
+    grind)
+        install_grind
+        configure_grind_path
+        if [ -n "$path_activation" ]; then
+            succeed "grind installed; run $path_activation before using it."
+        else
+            succeed 'grind is installed and ready.'
+        fi
+        ;;
+    risclet)
+        install_risclet "$risclet_requested_version"
+        succeed "risclet $risclet_requested_version is installed."
+        ;;
+esac

@@ -71,31 +71,6 @@
     a:hover {
       color:#ba1c21;
     }
-     .tab {
-       display: inline-block;
-       padding: 10px 15px;
-       background-color: #333;
-       color: #fff;
-       border-radius: 10px 10px 0 0;
-       cursor: pointer;
-       margin-right: 5px;
-     }
-
-     .tab.active {
-       background-color: #ba1c21;
-     }
-
-     .tab-content {
-       display: none;
-       border: 1px solid #333;
-       border-radius: 0 10px 10px 10px;
-       padding: 15px;
-       background-color: #f9f9f9;
-     }
-
-     .tab-content.active {
-       display: block;
-     }
    </style>
 </head>
 <body>
@@ -129,89 +104,32 @@
         return query_string;
     })();
 
-    // Determine default tab based on course
-    var course = QueryString.course || '';
-    var normalizedCourse = course.replace(/[-\s]/g, '').toLowerCase();
-    var isThonny = ['cs1030', 'cs1400', 'cs1410'].includes(normalizedCourse);
-    var defaultTab = isThonny ? 'thonny' : 'cli';
-
-    function switchTab(tabName) {
-        var tabs = document.querySelectorAll('.tab');
-        var contents = document.querySelectorAll('.tab-content');
-        tabs.forEach(function(tab) {
-            tab.classList.remove('active');
-        });
-        contents.forEach(function(content) {
-            content.classList.remove('active');
-        });
-        document.getElementById(tabName + '-tab').classList.add('active');
-        document.getElementById(tabName + '-content').classList.add('active');
-    }
 </script>
 
 <h1>CodeGrinder</h1>
 
-<h2 class="tab" id="thonny-tab" onclick="switchTab('thonny')">CodeGrinder for Thonny (Python only)</h2>
-<h2 class="tab" id="cli-tab" onclick="switchTab('cli')">CodeGrinder for the command line</h2>
-
-<div id="thonny-content" class="tab-content">
-<p>Thonny is an Integrated Development Environment (IDE) designed for students learning to program in Python. You must install it on your computer and set it up with the CodeGrinder plugin in order to complete this assignment. <a href="https://www.youtube.com/watch?v=DGCeENx7Fsg" target="_blank">This 8-minute screencast will show you the basics.</a></p>
-
-<h3>Installing Thonny</h3>
-<div>
-  <p>To install Thonny on a machine that does not already have it, <a href="https://thonny.org/" target="_blank">click here to go to the Thonny website</a> and follow the instructions near the top of the page. You will need Thonny version 3.0 or higher.</p>
-</div>
-
-<h3>Installing the CodeGrinder plugin in Thonny</h3>
-<div>
-  <p>To install the CodeGrinder plugin, launch Thonny and follow these steps:</p>
-  <ol>
-    <li>Click on the “Tools” menu</li>
-    <li>Select the “Manage plug-ins…” option in the menu</li>
-    <li>Type “thonny_codegrinder_plugin” into the search box and click “Find package from PyPI”</li>
-    <li>Once it finds the plugin, click the “Install” button</li>
-    <li>Close the “Thonny plug-ins” dialog box, quit Thonny, and then reload Thonny</li>
-  </ol>
-  <p>If it was successful, there will now be a “CodeGrinder” menu in the menu bar.</p>
-</div>
-
-<h3>Logging in</h3>
-<div>
-  <p>You should normally only need to log in once a semester. To login follow these steps:</p>
-  <ol>
-    <li>Open Thonny</li>
-    <li>Click on the “CodeGrinder” menu (if you do not see it, you may need to install the CodeGrinder plugin)</li>
-    <li>Select the “Login…” option in the menu (if you cannot select it, you may already be logged in. In that case, select “Logout” and then try again)</li>
-    <li>Copy the following and paste it into the box: <pre>grind login <script>document.write(document.location.hostname + ' ' + QueryString.token)</script></pre></li>
-    <li>If it does not accept your login credentials, you may need to refresh this page. The login token is only valid for 5 minutes, and can only be used once.</li>
-  </ol>
-</div>
-
-<h3>Starting a new assignment</h3>
-<div>
-    <p>You have to click on each assignment in Canvas one time to activate it in CodeGrinder. After that, you can select the “Download new assignments” option from the “CodeGrinder” menu in Thonny to download the assignment to your computer. Make note of the directory where the assignment is downloaded (it assumes you are starting from your home directory) and then open the files directly in Thonny. Your instructor will demonstrate this in class.</p>
-     <p>If you have already downloaded an assignment, "Download new assignments" will not do anything.</p>
-</div>
-</div>
-
-<div id="cli-content" class="tab-content">
 <p>You must install the <tt>grind</tt> command-line tool to interact with CodeGrinder and complete this assignment.</p>
 
 <h3>Installing <tt>grind</tt></h3>
 <div>
   <p>Run the following command once in a command-line shell to download the <tt>grind</tt> tool and its updater:</p>
   <div style="position: relative; background-color: #f4f4f4; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-family: monospace;">
-    <code id="install-command">curl -fsSL https://codegrinder.russross.com/install-grind.sh | sh</code>
-    <button onclick="copyCommand()" style="position: absolute; top: 10px; right: 10px; background: none; border: none; cursor: pointer;" title="Copy to clipboard">
+    <code id="install-command"></code>
+    <button onclick="copyCommand('install-command', 'install-copy-message')" style="position: absolute; top: 10px; right: 10px; background: none; border: none; cursor: pointer;" title="Copy to clipboard">
         &#128203; <!-- This is a clipboard emoji as a standard copy icon -->
     </button>
-    <span id="copy-message" style="position: absolute; top: 10px; right: 40px; color: #28a745; display: none;">Copied!</span>
+    <span id="install-copy-message" style="position: absolute; top: 10px; right: 40px; color: #28a745; display: none;">Copied!</span>
   </div>
   <script>
-      function copyCommand() {
-          var text = document.getElementById('install-command').innerText;
+      var host = window.location.host;
+      document.getElementById('install-command').textContent =
+          'curl -fsSL "https://' + host + '/update-grind" | sh -s -- grind ' +
+          window.location.hostname;
+
+      function copyCommand(commandId, messageId) {
+          var text = document.getElementById(commandId).innerText;
           navigator.clipboard.writeText(text).then(function() {
-              var message = document.getElementById('copy-message');
+              var message = document.getElementById(messageId);
               message.style.display = 'inline';
               setTimeout(function() {
                   message.style.display = 'none';
@@ -221,7 +139,11 @@
           });
       }
   </script>
-  <p>The installer will tell you if a command is needed to activate <tt>grind</tt> in your current shell. To upgrade it later, run <tt>update-grind</tt>.</p>
+  <p>The installer will tell you if a command is needed to activate <tt>grind</tt> in your current shell. To upgrade it later, run <tt id="update-command"></tt>.</p>
+  <script>
+      document.getElementById('update-command').textContent =
+          'update-grind grind ' + window.location.hostname;
+  </script>
   <p>Type <tt>grind</tt> and hit enter to make sure the command is recognized. If not (if you see the message “grind: command not found”), get help.</p>
   <p>Note: if it is not working for you, please seek help! Do not fall behind on your assignments just because you ran into problems getting the tools set up.
      A TA or your instructor will be happy to sit down with you and help you get it running.</p>
@@ -230,9 +152,18 @@
 <h3>Logging in</h3>
 <div>
   <p>After you install <tt>grind</tt> you must log in. You will normally only need to do this once per semester. To do so, type this command:</p>
-  <pre>grind login <script>document.write(document.location.hostname + ' ' + QueryString.token)</script></pre>
+  <div style="position: relative; background-color: #f4f4f4; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-family: monospace;">
+    <code id="login-command"></code>
+    <button onclick="copyCommand('login-command', 'login-copy-message')" style="position: absolute; top: 10px; right: 10px; background: none; border: none; cursor: pointer;" title="Copy to clipboard">
+        &#128203; <!-- This is a clipboard emoji as a standard copy icon -->
+    </button>
+    <span id="login-copy-message" style="position: absolute; top: 10px; right: 40px; color: #28a745; display: none;">Copied!</span>
+  </div>
+  <script>
+      document.getElementById('login-command').textContent =
+          'grind login ' + window.location.hostname + ' ' + QueryString.token;
+  </script>
    <p>Note that the command given above is custom to you, and will expire 5 minutes from when you first loaded this page. If you need a fresh login token, reload this page.</p>
-</div>
 </div>
 
 
@@ -256,22 +187,12 @@
             }
         };
 
-        // Reorder tabs and contents so default is on the left
-        if (defaultTab === 'cli') {
-            var parent = document.body;
-            parent.insertBefore(document.getElementById('cli-tab'), document.getElementById('thonny-tab'));
-            parent.insertBefore(document.getElementById('cli-content'), document.getElementById('thonny-content'));
-        }
-
         var h3 = document.getElementsByTagName('h3');
         for (var i = 0; i < h3.length; i++) {
             h3[i].style.cursor = 'pointer';
             h3[i].nextElementSibling.style.display = 'none';
             h3[i].addEventListener('click', toggle);
         }
-
-        // Set default active tab
-        switchTab(defaultTab);
     })();
 </script>
 </body>

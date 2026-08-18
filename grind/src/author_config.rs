@@ -110,13 +110,72 @@ pub fn parse_gcfg(path: &Path) -> Result<Vec<GcfgSection>> {
         };
         section.items.push(GcfgValue {
             key: key.trim().to_lowercase(),
-            value: value.trim().to_string(),
+            value: parse_gcfg_value(value.trim(), path, line_no)?,
         });
     }
     if let Some(section) = current.take() {
         sections.push(section);
     }
     Ok(sections)
+}
+
+fn parse_gcfg_value(raw: &str, path: &Path, line_no: usize) -> Result<String> {
+    let mut value = String::new();
+    let mut pending_whitespace = String::new();
+    let mut chars = raw.chars();
+    let mut quoted = false;
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' => {
+                value.push_str(&pending_whitespace);
+                pending_whitespace.clear();
+                quoted = !quoted;
+            }
+            '\\' if quoted => {
+                let Some(escaped) = chars.next() else {
+                    return fail(format!(
+                        "failed to parse {}: unterminated escape at line {line_no}",
+                        path.display()
+                    ));
+                };
+                let decoded = match escaped {
+                    '\\' => '\\',
+                    '"' => '"',
+                    'n' => '\n',
+                    't' => '\t',
+                    _ => {
+                        return fail(format!(
+                            "failed to parse {}: invalid escape sequence at line {line_no}",
+                            path.display()
+                        ));
+                    }
+                };
+                value.push(decoded);
+            }
+            '\\' => {
+                return fail(format!(
+                    "failed to parse {}: unquoted backslash at line {line_no}",
+                    path.display()
+                ));
+            }
+            '#' | ';' if !quoted => break,
+            ' ' | '\t' | '\r' if !quoted => pending_whitespace.push(ch),
+            _ => {
+                value.push_str(&pending_whitespace);
+                pending_whitespace.clear();
+                value.push(ch);
+            }
+        }
+    }
+
+    if quoted {
+        return fail(format!(
+            "failed to parse {}: unterminated quoted value at line {line_no}",
+            path.display()
+        ));
+    }
+    Ok(value)
 }
 
 pub fn parse_author_problem_config(path: &Path) -> Result<AuthorProblemConfig> {
@@ -386,5 +445,61 @@ mod tests {
         assert_eq!(parsed.continues_problem_set_id, "loops-part-1");
         assert_eq!(parsed.problems[0].first_step, 3);
         assert_eq!(parsed.problems[0].last_step, 5);
+    }
+
+    #[test]
+    fn parse_problem_cfg_decodes_quoted_gcfg_values() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("problem.cfg");
+        fs::write(
+            &path,
+            concat!(
+                "[problem]\n",
+                "unique = \"quoted-values\"\n",
+                "note = \"Quoted # note with \\\"detail\\\"\" ; trailing comment\n",
+                "type = \"riscv\"\n",
+                "tag = \"assembly language\"\n",
+                "option = \"line one\\nline two\"\n",
+            ),
+        )
+        .expect("write");
+
+        let parsed = parse_author_problem_config(&path).expect("parse");
+
+        assert_eq!(parsed.problem_id, "quoted-values");
+        assert_eq!(parsed.note, "Quoted # note with \"detail\"");
+        assert_eq!(parsed.problem_type, "riscv");
+        assert_eq!(parsed.steps[0].problem_type, "riscv");
+        assert_eq!(parsed.tags, ["assembly language"]);
+        assert_eq!(parsed.options, ["line one\nline two"]);
+    }
+
+    #[test]
+    fn parse_problem_set_cfg_decodes_quoted_values_used_as_identifiers() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("set.cfg");
+        fs::write(
+            &path,
+            concat!(
+                "[problemset]\n",
+                "unique = \"loops-part-2\"\n",
+                "note = \"Loops, part 2\"\n",
+                "continues = \"loops-part-1\"\n",
+                "\n",
+                "[problem \"loops\"]\n",
+                "steps = \"3-5\"\n",
+                "weight = \"2.5\"\n",
+            ),
+        )
+        .expect("write");
+
+        let parsed = parse_author_problem_set_config(&path).expect("parse");
+
+        assert_eq!(parsed.problem_set_id, "loops-part-2");
+        assert_eq!(parsed.continues_problem_set_id, "loops-part-1");
+        assert_eq!(parsed.problems[0].problem_id, "loops");
+        assert_eq!(parsed.problems[0].first_step, 3);
+        assert_eq!(parsed.problems[0].last_step, 5);
+        assert_eq!(parsed.problems[0].weight, 2.5);
     }
 }
