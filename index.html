@@ -5,8 +5,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width">
   <link rel="stylesheet" href="styles.css">
-  <title>JavaScript Editor</title>
-  <meta name="description" content="A JavaScript editor for CodeGrinder. Utilizes web workers for safe code execution.">
+  <title>CodeGrinder Web Editor</title>
+  <meta name="description" content="A browser editor for CodeGrinder JavaScript and Python problems.">
   <script>
     window.codeGrinderServiceWorkerReady = Promise.resolve();
     if ('serviceWorker' in navigator) {
@@ -67,7 +67,7 @@
   <!-- Firefox polyfill... Even Safari supports Atomics.waitAsync... Just sad :( -->
   <!-- Remove when firefox gets support eventually. hopefully??? -->
   <script src="scripts/firefoxPolyfillAtomicsWaitAsync.js" type="module"></script>
-  <!-- AtomicQueue cannot be a module see it's comment. Only used in jsHandler.js and jsWorker.js -->
+  <!-- AtomicQueue is shared by the lazily loaded JavaScript and Python workers. -->
   <script src="scripts/atomicQueue.js"></script>
   <!-- app.js contains all glue code between different modules -->
   <script src="scripts/app.js" type="module"></script>

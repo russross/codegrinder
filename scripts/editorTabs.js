@@ -20,8 +20,9 @@ class Tab {
   #saved;
   #path;
   #ace;
+  #defaultMode;
   #readOnly;
-  constructor(path = UNTITLED, content = "", readOnly = false) {
+  constructor(path = UNTITLED, content = "", readOnly = false, defaultMode = "ace/mode/text") {
     // Set up Tab
     this.element = document.createElement('li');
     this.#nameElement = document.createElement("span");
@@ -49,6 +50,7 @@ class Tab {
     this.saveHandler = null;
     this.changeHandler = null;
     // Set magic properties
+    this.#defaultMode = defaultMode;
     this.path = path;
     this.readOnly = readOnly;
     this.saved = true;
@@ -73,7 +75,7 @@ class Tab {
     this.#path = value;
     this.#nameElement.innerText = this.name;
     this.element.title = value;
-    const mode = value === UNTITLED ? "ace/mode/javascript" : modelist.getModeForPath(this.path).mode;
+    const mode = value === UNTITLED ? this.#defaultMode : modelist.getModeForPath(this.path).mode;
     this.#ace.session.setMode(mode);
   }
   get name() {
@@ -94,6 +96,12 @@ class Tab {
   }
   setInteractionDisabled(disabled) {
     this.#ace.setReadOnly(disabled || this.#readOnly);
+  }
+  setDefaultMode(mode) {
+    this.#defaultMode = mode;
+    if (this.path === UNTITLED) {
+      this.#ace.session.setMode(mode);
+    }
   }
 }
 class Tabs {
@@ -120,6 +128,7 @@ class Tabs {
     this.saveHandler = saveHandler;
     this.tabs = [];
     this.autoSave = false;
+    this.defaultMode = "ace/mode/text";
     this.pathChangesAllowed = true;
     this.addNewTab();
 
@@ -172,6 +181,12 @@ class Tabs {
     this.pathChangesAllowed = allowed;
     this.pathInput.disabled = !allowed || (this.tabs[this.currentTab]?.readOnly ?? false);
   }
+  setDefaultMode(mode) {
+    this.defaultMode = mode;
+    for (const tab of this.tabs) {
+      tab.setDefaultMode(mode);
+    }
+  }
   closeTab(tab, canCloseLast) {
     const currentTab = this.tabs[this.currentTab];
     const closingCurrent = currentTab === tab;
@@ -201,7 +216,8 @@ class Tabs {
     this.closeTab(tab, canCloseLast);
     return true;
   }
-  addNewTab(tab = new Tab()) {
+  addNewTab(tab = null) {
+    tab ??= new Tab(UNTITLED, "", false, this.defaultMode);
     tab.saveHandler = () => {
       this.saveTab(tab);
     };
@@ -244,7 +260,7 @@ class Tabs {
         return;
       }
     }
-    this.addNewTab(new Tab(path, content, readOnly));
+    this.addNewTab(new Tab(path, content, readOnly, this.defaultMode));
   }
   closeAll() {
     while (this.tabs.length > 0) {

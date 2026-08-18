@@ -1,9 +1,13 @@
 import { Tabs } from './editorTabs.js';
 import { FileSystem, FileSystemUI, extension } from './directoryTree.js';
-import { JavaScriptRunner } from './jsHandler.js'
 import { CodeGrinder, CodeGrinderUI } from './codeGrinderApi.js';
+import { createEmbedHtml, legacyWebProblemType, standaloneProblemType } from './embed.js';
+import { LocalRuntimeController, loadLocalRuntimeConfig } from './localRuntime.js';
+import { createChoicePrompt } from './prompt.js';
 
 await window.codeGrinderServiceWorkerReady;
+
+const localRuntimeConfig = await loadLocalRuntimeConfig(new URL('../local-runtimes.json', import.meta.url));
 
 const output_terminal_label = document.getElementById("output_terminal")
 const output_terminal = output_terminal_label.getElementsByTagName("pre")[0];
@@ -28,9 +32,20 @@ const tabs = new Tabs(document.getElementById("tabs"), (path, content) => {
     fileSystemUI.refreshUI();
 });
 let editablePaths = null;
+let activeLocalProblemType = null;
 
-const javaScriptRunner = new JavaScriptRunner();
 const urlParams = new URLSearchParams(window.location.search);
+
+function workspaceFiles(directory, path = "", files = {}) {
+    for (const [name, node] of Object.entries(directory.children)) {
+        if (node.children) {
+            workspaceFiles(node, `${path}${name}/`, files);
+            continue;
+        }
+        files[`${path}${name}`] = node.content;
+    }
+    return files;
+}
 
 // Set up files dropdown
 filesButton.addEventListener("click", () => {
@@ -62,11 +77,19 @@ saveCurrent.addEventListener("click", () => {
 saveAll.addEventListener("click", () => {
     tabs.saveAllTabs();
 })
-embed.addEventListener("click", () => {
-    const files = encodeURIComponent(JSON.stringify(fileSystem.rootNode));
-    const string = `<div style="position: relative; padding-bottom: 56.25%; padding-top: 0px; height: 0; overflow: hidden;"><iframe style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;" src="${location.origin + location.pathname}?dummy=true&files=${files}"></iframe></div>`;
-    navigator.clipboard.writeText(string);
-    console.log(string);
+embed.addEventListener("click", async () => {
+    const problemType = await createChoicePrompt(
+        "Choose a problem type",
+        [...localRuntimeConfig.keys()],
+        activeLocalProblemType ?? legacyWebProblemType,
+    );
+    if (problemType === null) {
+        return;
+    }
+    await activateLocalRuntime(problemType, workspaceFiles(fileSystem.rootNode));
+    const html = createEmbedHtml(location, fileSystem.rootNode, problemType);
+    await navigator.clipboard.writeText(html);
+    console.log(html);
 })
 const urlFiles = urlParams.get("files");
 if (urlFiles) {
@@ -99,71 +122,148 @@ function writeTerminal(str, color) {
     previousSpan.innerText += str;
 }
 
-// Set up JavaScript execution
-let javaScriptRunning = false;
-window.iframeSharedArrayBufferWorkaroundServiceWorkerLoss = function () {
-    javaScriptRunner.stopJavaScript();
-}
-run.disabled = true;
-javaScriptRunner.ready.then(() => {
+// Set up local execution. Runtime modules are imported only after a supported
+// problem type is selected.
+const display = document.getElementById("turtle");
+const localRuntime = new LocalRuntimeController(localRuntimeConfig, {
+    displayImage: image => {
+        const element = new Image();
+        element.src = `data:image/png;base64,${image}`;
+        display.replaceChildren(element);
+    },
+    stderr: value => writeTerminal(value, "red"),
+    stdout: value => writeTerminal(value, "black"),
+});
+let localRuntimeAvailable = false;
+let localRuntimeOperation = 0;
+let localRuntimeRunning = false;
+input_terminal.disabled = true;
+
+function setLocalRuntimeReady() {
+    localRuntimeAvailable = true;
+    input_terminal.disabled = false;
     run.disabled = false;
     run.innerText = "Run";
-    writeTerminal(">> ", "orange");
-});
-input_terminal.addEventListener("keydown", event => {
-    input_terminal.style.color = javaScriptRunning ? "grey" : "blue";
-    if (event.key === "Enter") {
-        const withoutTrailingNewline = input_terminal.value.replace(/\n+$/, "")
-        let value = withoutTrailingNewline + "\n";
-        input_terminal.value = "";
-        input_terminal.focus();
-        event.preventDefault();
-        if (javaScriptRunning) {
-            writeTerminal(value, "grey");
-            javaScriptRunner.writeStdin(value);
-        } else {
-            writeTerminal(value, "blue");
-            run.innerText = "Stop"
-            javaScriptRunning = true;
-            javaScriptRunner.runJavaScript(fileSystem, value).then(async () => {
-                await javaScriptRunner.ready;
-                setTimeout(() => writeTerminal(">> ", "orange"), 1000);
-                javaScriptRunning = false;
-                run.innerText = "Run";
-                run.disabled = false;
-            });
-        }
+    run.title = "";
+}
+
+async function activateLocalRuntime(problemType, files) {
+    const operation = ++localRuntimeOperation;
+    activeLocalProblemType = null;
+    if (localRuntimeRunning) {
+        localRuntimeRunning = false;
+        await localRuntime.stop();
     }
-})
-javaScriptRunner.setStdoutCallback(str => {
-    writeTerminal(str, "black");
-})
-javaScriptRunner.setStderrCallback(str => {
-    writeTerminal(str, "red");
-});
-async function runJavaScript(path, clearFiles = false) {
-    if (javaScriptRunning) {
-        run.disabled = true;
-        javaScriptRunning = false;
-        javaScriptRunner.stopJavaScript();
-        run.innerText = "Stopping";
-    } else {
-        run.innerText = "Stop"
-        javaScriptRunning = true;
-        writeTerminal("Running " + path + "\n", "orange");
-        await javaScriptRunner.runJavaScript(fileSystem, `run_script(".${path}")`, clearFiles);
-        await javaScriptRunner.ready;
-        setTimeout(() => writeTerminal(">> ", "orange"), 1000);
-        javaScriptRunning = false;
-        run.innerText = "Run";
-        run.disabled = false;
+    localRuntimeAvailable = false;
+    input_terminal.disabled = true;
+    run.disabled = true;
+    run.innerText = "Loading";
+    run.title = "";
+    display.replaceChildren();
+    try {
+        const runtimeName = await localRuntime.select(problemType);
+        if (operation !== localRuntimeOperation) {
+            return;
+        }
+        if (runtimeName === null) {
+            tabs.setDefaultMode("ace/mode/text");
+            run.innerText = "Run unavailable";
+            run.title = `No local runtime is configured for ${problemType}`;
+            return;
+        }
+        tabs.setDefaultMode(runtimeName === "python" ? "ace/mode/python" : "ace/mode/javascript");
+        await localRuntime.configure(files);
+        if (operation !== localRuntimeOperation) {
+            return;
+        }
+        activeLocalProblemType = problemType;
+        setLocalRuntimeReady();
+        writeTerminal(">> ", "orange");
+    } catch (error) {
+        if (operation === localRuntimeOperation) {
+            localRuntime.destroy();
+            run.innerText = "Run unavailable";
+            run.title = `The local runtime for ${problemType} could not start`;
+        }
+        throw error;
     }
 }
-run.addEventListener("click", async () => {
-    const currentTab = tabs.tabs[tabs.currentTab];
-    if (currentTab) {
-        runJavaScript(currentTab.path);
+
+async function executeLocally(operation) {
+    if (!localRuntimeAvailable || localRuntimeRunning) {
+        return;
     }
+    const operationNumber = ++localRuntimeOperation;
+    localRuntimeRunning = true;
+    run.disabled = false;
+    run.innerText = "Stop";
+    try {
+        await operation();
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        writeTerminal(`${message}\n`, "red");
+    } finally {
+        if (operationNumber === localRuntimeOperation) {
+            localRuntimeRunning = false;
+            setLocalRuntimeReady();
+            setTimeout(() => writeTerminal(">> ", "orange"), 1000);
+        }
+    }
+}
+
+async function stopLocalRuntime() {
+    if (!localRuntimeRunning) {
+        return;
+    }
+    const operation = ++localRuntimeOperation;
+    localRuntimeRunning = false;
+    run.disabled = true;
+    run.innerText = "Stopping";
+    await localRuntime.stop();
+    if (operation === localRuntimeOperation) {
+        setLocalRuntimeReady();
+        writeTerminal(">> ", "orange");
+    }
+}
+
+window.iframeSharedArrayBufferWorkaroundServiceWorkerLoss = function () {
+    stopLocalRuntime().catch(error => console.error(error));
+}
+
+run.disabled = true;
+input_terminal.addEventListener("keydown", async event => {
+    input_terminal.style.color = localRuntimeRunning ? "grey" : "blue";
+    if (event.key !== "Enter") {
+        return;
+    }
+    const value = `${input_terminal.value.replace(/\n+$/, "")}\n`;
+    input_terminal.value = "";
+    input_terminal.focus();
+    event.preventDefault();
+    if (localRuntimeRunning) {
+        writeTerminal(value, "grey");
+        await localRuntime.writeStdin(value);
+        return;
+    }
+    if (!localRuntimeAvailable) {
+        return;
+    }
+    writeTerminal(value, "blue");
+    const currentPath = tabs.tabs[tabs.currentTab]?.path ?? "";
+    await executeLocally(() => localRuntime.runLine(fileSystem, value, currentPath));
+})
+
+run.addEventListener("click", async () => {
+    if (localRuntimeRunning) {
+        await stopLocalRuntime();
+        return;
+    }
+    const currentTab = tabs.tabs[tabs.currentTab];
+    if (!currentTab) {
+        return;
+    }
+    writeTerminal(`Running ${currentTab.path}\n`, "orange");
+    await executeLocally(() => localRuntime.runFile(fileSystem, currentTab.path));
 })
 
 function setupCodegrinder() {
@@ -196,7 +296,7 @@ function setupCodegrinder() {
         reportError,
     );
 
-    function loadProblem(problem) {
+    async function loadProblem(problem) {
         currentProblem = problem;
         editablePaths = problem.studentPaths;
         fileSystem.clear();
@@ -213,9 +313,10 @@ function setupCodegrinder() {
         codeGrinderUI.buttonGrade.innerText = problem.completed ? "Finished" : "Grade";
         codeGrinderUI.buttonGrade.disabled = problem.completed;
         codeGrinderUI.setActions(problem.actions);
+        await activateLocalRuntime(problem.problemType, problem.files);
     }
 
-    function loadAssignment(assignment, preferredProblemId = null) {
+    async function loadAssignment(assignment, preferredProblemId = null) {
         currentAssignment = assignment;
         tabs.autoSave = true;
         tabs.setPathChangesAllowed(false);
@@ -229,22 +330,10 @@ function setupCodegrinder() {
             li.appendChild(button);
             codeGrinderUI.problemsList.appendChild(li);
             button.innerText = `${problem.completed ? "✓ " : ""}${problem.problemId}`;
-            button.addEventListener("click", () => loadProblem(problem));
+            button.addEventListener("click", () => loadProblem(problem).catch(reportError));
         }
         const preferred = problems.find(problem => problem.problemId === preferredProblemId && !problem.completed);
-        loadProblem(preferred ?? problems.find(problem => !problem.completed) ?? problems[0]);
-    }
-
-    function toFiles(directory, path = "", files = {}) {
-        for (const name in directory.children) {
-            const node = directory.children[name];
-            if (node.children) {
-                toFiles(node, `${path}${name}/`, files);
-            } else {
-                files[`${path}${name}`] = node.content;
-            }
-        }
-        return files;
+        await loadProblem(preferred ?? problems.find(problem => !problem.completed) ?? problems[0]);
     }
 
     function queueSync(showStatus) {
@@ -253,7 +342,7 @@ function setupCodegrinder() {
             return Promise.resolve();
         }
         tabs.saveAllTabs();
-        const files = toFiles(fileSystem.rootNode);
+        const files = workspaceFiles(fileSystem.rootNode);
         syncPromise = syncPromise
             .catch(() => {})
             .then(async () => {
@@ -265,7 +354,7 @@ function setupCodegrinder() {
                         writeTerminal(`${result.message}\n`, "red");
                     } else if (showStatus) {
                         if (currentProblem === problem) {
-                            loadProblem(problem);
+                            await loadProblem(problem);
                         }
                         writeTerminal(`Problem ${problem.problemId} step ${problem.stepNumber} synced\n`, "green");
                     }
@@ -302,7 +391,7 @@ function setupCodegrinder() {
         await runServerOperation(async () => {
             try {
                 await codeGrinder.reset(problem);
-                loadProblem(problem);
+                await loadProblem(problem);
             } catch (error) {
                 reportError(error);
             }
@@ -316,7 +405,7 @@ function setupCodegrinder() {
         tabs.saveAllTabs();
         const problem = currentProblem;
         const problemId = problem.problemId;
-        const files = toFiles(fileSystem.rootNode);
+        const files = workspaceFiles(fileSystem.rootNode);
         await runServerOperation(async () => {
             try {
                 const result = await codeGrinder.grade(
@@ -343,7 +432,7 @@ function setupCodegrinder() {
                 if (currentAssignment?.lockedForLms) {
                     writeTerminal("Grade was not posted to the LMS because the assignment is locked\n", "red");
                 }
-                loadAssignment(currentAssignment, problemId);
+                await loadAssignment(currentAssignment, problemId);
             } catch (error) {
                 reportError(error);
             } finally {
@@ -351,13 +440,13 @@ function setupCodegrinder() {
             }
         });
     });
-    codeGrinderUI.actionHandler = async (action) => {
+    async function runAction(action) {
         if (!currentProblem) {
             return;
         }
         const problem = currentProblem;
         tabs.saveAllTabs();
-        const files = toFiles(fileSystem.rootNode);
+        const files = workspaceFiles(fileSystem.rootNode);
         await runServerOperation(async () => {
             const result = await codeGrinder.action(
                 problem,
@@ -369,8 +458,28 @@ function setupCodegrinder() {
             if (result.message !== "") {
                 writeTerminal(`${result.message}\n`, "red");
             }
-            loadProblem(problem);
+            await loadProblem(problem);
         });
+    }
+
+    codeGrinderUI.actionHandler = runAction;
+    codeGrinderUI.testHandler = async () => {
+        if (!currentProblem) {
+            return;
+        }
+        codeGrinderUI.buttonTest.disabled = true;
+        try {
+            tabs.saveAllTabs();
+            if (localRuntime.supportsLocalTests) {
+                writeTerminal("Running tests\n", "orange");
+                await executeLocally(() => localRuntime.runTests(fileSystem));
+                return;
+            }
+            await runAction("test");
+        } finally {
+            codeGrinderUI.buttonTest.disabled = !codeGrinder.getMe()
+                || !currentProblem?.actions.includes("test");
+        }
     };
 
     async function initialize() {
@@ -389,7 +498,11 @@ function setupCodegrinder() {
             codeGrinderUI.updateAuthenticationStatus();
             if (assignmentKey && codeGrinder.getMe()) {
                 await loadAssignment(await codeGrinder.loadAssignment(assignmentKey));
+                saveCurrent.hidden = true;
+                saveAll.hidden = true;
                 codeGrinderUI.buttonAssignments.hidden = true;
+                codeGrinderUI.buttonSync.hidden = true;
+                codeGrinderUI.buttonAuthenticator.hidden = true;
             }
         } catch (error) {
             window.localStorage.removeItem(sessionStorageKey);
@@ -418,10 +531,6 @@ if (urlDummy) {
     filesButton.style.display = "none";
     embed.style.display = "none";
     document.getElementById("instructions_container").style.display = "none";
-    if (Object.keys(fileSystem.rootNode.children).length === 0) {
-        document.getElementsByClassName("tabs-container")[0].style.display = "none";
-        tabs.addSwitchTab("/main.js", "")
-    }
     document.getElementsByClassName("path-input")[0].style.display = "none";
     run.style.position = "absolute";
     run.style.right = 0;
@@ -431,6 +540,31 @@ if (urlDummy) {
     run.style.backgroundColor = "green";
     run.style.margin = "20px";
     tabs.autoSave = true;
+    try {
+        const problemType = standaloneProblemType(urlParams, localRuntimeConfig);
+        if (Object.keys(fileSystem.rootNode.children).length === 0) {
+            document.getElementsByClassName("tabs-container")[0].style.display = "none";
+            const mainPath = localRuntimeConfig.get(problemType) === "python" ? "/main.py" : "/main.js";
+            tabs.addSwitchTab(mainPath, "");
+        }
+        await activateLocalRuntime(problemType, workspaceFiles(fileSystem.rootNode));
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        run.disabled = true;
+        run.innerText = "Run unavailable";
+        writeTerminal(`${message}\n`, "red");
+    }
 } else {
     setupCodegrinder();
+    if (!urlParams.has("assignment")) {
+        try {
+            const problemType = standaloneProblemType(urlParams, localRuntimeConfig);
+            await activateLocalRuntime(problemType, workspaceFiles(fileSystem.rootNode));
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            run.disabled = true;
+            run.innerText = "Run unavailable";
+            writeTerminal(`${message}\n`, "red");
+        }
+    }
 }

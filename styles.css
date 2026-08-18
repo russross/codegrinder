@@ -341,3 +341,14 @@ body {
 .prompt-buttons {
   text-align: right;
 }
+
+.prompt-choices {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.prompt-choices>button {
+  padding: 8px 12px;
+  text-align: left;
+}

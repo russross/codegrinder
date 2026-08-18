@@ -94,6 +94,9 @@ class JavaScriptRunner {
     this.#worker = new JavaScriptWorker(this.#stdoutCallback, this.#stderrCallback);
     this.ready = this.#worker.ready;
   }
+  destroy() {
+    this.#worker.destroy();
+  }
   async runJavaScript(fileSystem, code, clearFiles = false) {
     if (this.#worker.runningJavaScript) {
       this.stopJavaScript();

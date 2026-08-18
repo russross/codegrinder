@@ -1,4 +1,4 @@
-function createPrompt(message) {
+function createPrompt(message, initialValue = "") {
   return new Promise((resolve) => {
     const overlay = document.createElement("div");
     overlay.className = "prompt-overlay";
@@ -15,6 +15,7 @@ function createPrompt(message) {
     const input = document.createElement("input");
     input.className = "prompt-input";
     input.type = "text";
+    input.value = initialValue;
     label.appendChild(input);
 
     const buttons = document.createElement("div");
@@ -52,4 +53,56 @@ function createPrompt(message) {
   });
 }
 
-export { createPrompt };
+function createChoicePrompt(message, choices, initialChoice = null) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "prompt-overlay";
+
+    const dialog = document.createElement("div");
+    dialog.className = "prompt-container";
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+
+    const heading = document.createElement("div");
+    heading.className = "prompt-label";
+    heading.textContent = message;
+
+    const choiceButtons = document.createElement("div");
+    choiceButtons.className = "prompt-choices";
+
+    function finish(value) {
+      overlay.remove();
+      resolve(value);
+    }
+
+    let initialButton = null;
+    for (const choice of choices) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = choice;
+      button.addEventListener("click", () => finish(choice));
+      choiceButtons.appendChild(button);
+      if (choice === initialChoice) {
+        initialButton = button;
+      }
+    }
+
+    const cancelButton = document.createElement("button");
+    cancelButton.type = "button";
+    cancelButton.textContent = "Cancel";
+    cancelButton.addEventListener("click", () => finish(null));
+
+    overlay.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        finish(null);
+      }
+    });
+
+    dialog.append(heading, choiceButtons, cancelButton);
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+    (initialButton ?? choiceButtons.firstElementChild ?? cancelButton).focus();
+  });
+}
+
+export { createChoicePrompt, createPrompt };

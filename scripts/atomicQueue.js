@@ -1,5 +1,5 @@
 // This would be a module but
-// the worker (jsWorker.js) is not a module and
+// the runtime workers are not modules and
 // you cannot mix modules and scripts in a worker
 
 // Only 1 instance of enqueue at a time

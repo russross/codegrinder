@@ -146,6 +146,46 @@ function saveStatusMessage(status, operation) {
   return `${operation} returned an unknown save status`;
 }
 
+function availableActionControls(actions) {
+  const actionSet = new Set(actions);
+  return {
+    actions: [...actionSet].filter((action) => action !== "grade" && action !== "test"),
+    grade: actionSet.has("grade"),
+    test: actionSet.has("test"),
+  };
+}
+
+function actionButtonLabel(action) {
+  return `${action.charAt(0).toUpperCase()}${action.slice(1)}`;
+}
+
+async function consumeDaycareResponses(responses, callbacks) {
+  for await (const response of responses) {
+    switch (response.response.oneofKind) {
+      case "error":
+        throw new Error(response.response.error);
+      case "bundle":
+        return response.response.bundle;
+      case "event": {
+        const event = response.response.event;
+        if (event.event === "stdout") {
+          callbacks.stdout(textDecoder.decode(event.streamData));
+        } else if (event.event === "stderr") {
+          callbacks.stderr(textDecoder.decode(event.streamData));
+        } else if (event.event === "error") {
+          callbacks.stderr(`${event.error}\n`);
+        } else if (event.event === "files") {
+          callbacks.files(decodeFileMap(event.files));
+        }
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  return null;
+}
+
 class CodeGrinder {
   constructor(sessionKey = "", baseUrl = window.location.origin) {
     this.sessionKey = sessionKey ?? "";
@@ -344,30 +384,11 @@ class CodeGrinder {
     }
     const daycare = this.#createClient(`${window.location.protocol}//${runtime.hostname}`, "omit");
     const call = daycare.daycare(DaycareRequest.create({ bundle: signedBundle, args: [] }), {});
-    for await (const response of call.responses) {
-      switch (response.response.oneofKind) {
-        case "error":
-          throw new Error(response.response.error);
-        case "bundle":
-          return response.response.bundle;
-        case "event": {
-          const event = response.response.event;
-          if (event.event === "stdout") {
-            stdoutCallback(textDecoder.decode(event.streamData));
-          } else if (event.event === "stderr") {
-            stderrCallback(textDecoder.decode(event.streamData));
-          } else if (event.event === "error") {
-            stderrCallback(`${event.error}\n`);
-          } else if (event.event === "files") {
-            fileCallback(decodeFileMap(event.files));
-          }
-          break;
-        }
-        default:
-          break;
-      }
-    }
-    throw new Error("Daycare ended without returning a signed runtime bundle");
+    return consumeDaycareResponses(call.responses, {
+      files: fileCallback,
+      stderr: stderrCallback,
+      stdout: stdoutCallback,
+    });
   }
 
   #applyReturnedFiles(problem, files) {
@@ -388,6 +409,9 @@ class CodeGrinder {
       stderrCallback,
       (files) => this.#applyReturnedFiles(problem, files),
     );
+    if (finalBundle === null) {
+      throw new Error("Daycare ended without returning a signed graded runtime bundle");
+    }
     const runtime = RuntimeBundle.fromBinary(finalBundle.bundle);
     if (!runtime.commit) {
       throw new Error("Daycare returned no graded commit");
@@ -445,14 +469,17 @@ class CodeGrinderUI {
     this.assignmentHandler = assignmentHandler;
     this.errorHandler = errorHandler;
     this.actionHandler = () => {};
+    this.testHandler = () => {};
+    this.actionButtons = new Map();
+    this.navBar = navBar;
 
     const controls = [
       ["Assignments", "buttonAssignments"],
       ["Problems", "buttonProblems"],
+      ["Test", "buttonTest"],
       ["Grade", "buttonGrade"],
       ["Sync", "buttonSync"],
       ["Reset", "buttonReset"],
-      ["Action", "buttonAction"],
       ["Login", "buttonAuthenticator"],
     ];
     for (const [label, property] of controls) {
@@ -476,14 +503,9 @@ class CodeGrinderUI {
     this.buttonProblems.addEventListener("click", () => {
       this.problemsList.style.display = "block";
     });
-    this.buttonAction.addEventListener("click", async () => {
+    this.buttonTest.addEventListener("click", async () => {
       try {
-        const actions = this.actions.filter((action) => action !== "grade");
-        const response = await createPrompt(`Available actions: ${actions.join(", ")}`);
-        const action = response?.trim() ?? "";
-        if (action !== "") {
-          await this.actionHandler(action);
-        }
+        await this.testHandler();
       } catch (error) {
         this.errorHandler(error);
       }
@@ -497,6 +519,7 @@ class CodeGrinderUI {
       }
     });
     this.actions = [];
+    this.setActions([]);
     this.updateAuthenticationStatus();
   }
 
@@ -562,10 +585,33 @@ class CodeGrinderUI {
 
   setActions(actions) {
     this.actions = [...actions];
-    const hasInteractiveAction = actions.some((action) => action !== "grade");
-    this.buttonAction.parentElement.hidden = !hasInteractiveAction;
-    this.buttonAction.disabled = !hasInteractiveAction;
-    this.buttonGrade.parentElement.hidden = !actions.includes("grade");
+    const controls = availableActionControls(actions);
+    this.buttonTest.parentElement.hidden = !controls.test;
+    this.buttonTest.disabled = !controls.test || !this.codeGrinder.getMe();
+    this.buttonGrade.parentElement.hidden = !controls.grade;
+    for (const button of this.actionButtons.values()) {
+      button.parentElement.remove();
+    }
+    this.actionButtons.clear();
+    for (const action of controls.actions) {
+      const item = document.createElement("li");
+      const button = document.createElement("button");
+      button.innerText = actionButtonLabel(action);
+      button.disabled = !this.codeGrinder.getMe();
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        try {
+          await this.actionHandler(action);
+        } catch (error) {
+          this.errorHandler(error);
+        } finally {
+          button.disabled = !this.codeGrinder.getMe();
+        }
+      });
+      item.appendChild(button);
+      this.navBar.appendChild(item);
+      this.actionButtons.set(action, button);
+    }
   }
 
   updateAuthenticationStatus() {
@@ -573,17 +619,23 @@ class CodeGrinderUI {
     this.buttonAuthenticator.innerText = authenticated ? "Logout" : "Login";
     this.buttonAssignments.disabled = !authenticated;
     this.buttonProblems.disabled = !authenticated;
+    this.buttonTest.disabled = !authenticated || !this.actions.includes("test");
     this.buttonGrade.disabled = !authenticated;
     this.buttonSync.disabled = !authenticated;
     this.buttonReset.disabled = !authenticated;
-    this.buttonAction.disabled = !authenticated || !this.actions.some((action) => action !== "grade");
+    for (const button of this.actionButtons.values()) {
+      button.disabled = !authenticated;
+    }
   }
 }
 
 export {
+  actionButtonLabel,
+  availableActionControls,
   CodeGrinder,
   CodeGrinderUI,
   CommitSaveStatus,
+  consumeDaycareResponses,
   formatAssignmentKey,
   normalizeRelativePath,
   parseAssignmentKey,
