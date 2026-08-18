@@ -47,7 +47,7 @@ use crate::sessions::{LoginTokens, delete_expired_sessions};
 use crate::signatures::compute_daycare_registration_signature;
 use crate::timeutil::now_utc;
 
-const VERSION: &str = "2.8.0";
+const VERSION: &str = "3.0.0";
 const DAYCARE_REGISTRATION_INTERVAL: Duration = Duration::from_secs(10);
 const DEFAULT_BIND_PORT: u16 = 1400;
 
@@ -87,8 +87,8 @@ async fn main() -> AppResult<()> {
     }
     let version = VersionPayload {
         version: VERSION.to_owned(),
-        grind_version_required: "2.7.0".to_owned(),
-        grind_version_recommended: "2.7.0".to_owned(),
+        grind_version_required: "3.0.0".to_owned(),
+        grind_version_recommended: "3.0.0".to_owned(),
     };
     let service = CodeGrinderServer::new(CodeGrinderServerParts {
         db: db.clone(),

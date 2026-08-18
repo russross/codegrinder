@@ -153,14 +153,14 @@ mod tests {
 
     #[test]
     fn rejects_unsigned_stale_or_wrong_version_remote_registrations() {
-        let registry = DaycareRegistry::new("secret".to_owned(), "2.8.0".to_owned());
+        let registry = DaycareRegistry::new("secret".to_owned(), "3.0.0".to_owned());
         let now = Utc::now();
         let mut reg = DaycareRegistration {
             hostname: "dc-1".to_owned(),
             problem_types: vec!["python".to_owned()],
             capacity: 1,
             time: now,
-            version: "2.8.0".to_owned(),
+            version: "3.0.0".to_owned(),
             signature: "bad".to_owned(),
         };
         assert!(registry.insert(reg.clone()).is_err());
@@ -176,7 +176,7 @@ mod tests {
         .unwrap();
         assert!(registry.insert(reg.clone()).is_ok());
 
-        reg.version = "2.7.0".to_owned();
+        reg.version = "2.8.0".to_owned();
         reg.signature = compute_daycare_registration_signature(
             &reg.hostname,
             &reg.problem_types,
@@ -188,7 +188,7 @@ mod tests {
         .unwrap();
         assert!(registry.insert(reg.clone()).is_err());
 
-        reg.version = "2.8.0".to_owned();
+        reg.version = "3.0.0".to_owned();
         reg.time = now - Duration::minutes(2);
         reg.signature = compute_daycare_registration_signature(
             &reg.hostname,
@@ -204,7 +204,7 @@ mod tests {
 
     #[test]
     fn assign_requires_eligible_problem_types() {
-        let registry = DaycareRegistry::new("secret".to_owned(), "2.8.0".to_owned()).with_local(
+        let registry = DaycareRegistry::new("secret".to_owned(), "3.0.0".to_owned()).with_local(
             "local",
             &["python".to_owned()],
             1,
