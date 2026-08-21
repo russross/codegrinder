@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width">
+  <link rel="stylesheet" href="styles.css">
+  <title>CodeGrinder Web Editor</title>
+  <meta name="description" content="A browser editor for CodeGrinder JavaScript and Python problems.">
+  <script>
+    window.codeGrinderServiceWorkerReady = Promise.resolve();
+    if ('serviceWorker' in navigator) {
+      window.codeGrinderServiceWorkerReady = navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' })
+        .then(async function () {
+          await navigator.serviceWorker.ready;
+          if (!navigator.serviceWorker.controller) {
+            await new Promise(function (resolve) {
+              navigator.serviceWorker.addEventListener('controllerchange', resolve, { once: true });
+            });
+          }
+        });
+    }
+  </script>
+</head>
+
+<body>
+  <ol id="nav_bar">
+    <li><button id="files_button">Files</button>
+      <div id="files_list">
+        <ul id="directory_tree">
+
+        </ul>
+      </div>
+    </li>
+    <li><button id="run">Loading</button></li>
+    <li><button id="new_tab">New</button></li>
+    <li><button id="save_current">Save</button></li>
+    <li><button id="save_all">Save All</button></li>
+    <li><button id="embed">Embed Files</button></li>
+  </ol>
+
+  <div id="instructions_container">
+    <div class="resize-handle"></div>
+    <div class="bar-content">
+      <div id="instructions"></div>
+    </div>
+  </div>
+
+  <div id="tabs">
+  </div>
+  <div id="terminal_container">
+    <div class="resize-handle"></div>
+    <div class="bar-content">
+      <label id="output_terminal">
+        <pre><textarea name="stdin" wrap="off" rows="1"></textarea></pre>
+      </label>
+      <div id="turtle"></div>
+    </div>
+  </div>
+
+  <!-- Editor only used in editorTabs.js -->
+  <script crossorigin="anonymous" integrity="sha384-TXnThML+D1RgOV/BSVaVCzVdDfkH2RzoBHmq1ZVRVSaawWSLpMEIg4cpK8ycff/L" src="https://cdn.jsdelivr.net/npm/ace-builds@1.4.14/src/ace.js"></script>
+  <script crossorigin="anonymous" integrity="sha384-rqj0n601Y6jjms5a6VrwXF4K0P5DUkYzngCfgkFfqDtkCcnMyCnSMK37dWAP6IPL" src="https://cdn.jsdelivr.net/npm/ace-builds@1.4.14/src/ext-modelist.js"></script>
+  <script crossorigin="anonymous" integrity="sha384-0BUOtnUS08CZakxddXM3URPJ7XND//bbBKdInJDQ1iM7F9C385TNatYumNsRYy44" src="https://cdn.jsdelivr.net/npm/ace-builds@1.4.14/src/ext-language_tools.js"></script>
+  <!-- In an iframe SharedArrayBuffer doesn't work. Use slow fallback -->
+  <script src="scripts/iframeSharedArrayBufferWorkaround.js" type="module"></script>
+  <!-- Firefox polyfill... Even Safari supports Atomics.waitAsync... Just sad :( -->
+  <!-- Remove when firefox gets support eventually. hopefully??? -->
+  <script src="scripts/firefoxPolyfillAtomicsWaitAsync.js" type="module"></script>
+  <!-- AtomicQueue is shared by the lazily loaded JavaScript and Python workers. -->
+  <script src="scripts/atomicQueue.js"></script>
+  <!-- app.js contains all glue code between different modules -->
+  <script src="scripts/app.js" type="module"></script>
+  <!-- These are simply here to allow resizing the terminal and instructions -->
+  <script src="scripts/resizeInstructions.js" type="module"></script>
+  <script src="scripts/resizeTerminal.js" type="module"></script>
+  <!-- This is a safe markdown viewer. It doesn't evaluate html in the markdown. Only used in app.js -->
+  <script crossorigin="anonymous" integrity="sha384-tzkLtoItq5nn9rQVHE/dKGZmMnvCdc62hJPgq7WotRHBFtSXJeRB6DU3zKSV6bDy" src="https://cdn.jsdelivr.net/npm/markdown-it@13.0.1/dist/markdown-it.min.js"></script>
+</body>
+
+</html>

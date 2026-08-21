@@ -1,0 +1,13 @@
+{
+    "hostname": "codegrinder.example.edu",
+    "taHostname": "https://codegrinder.example.edu",
+    "daycareSecret": "",
+    "ltiSecret": "",
+    "sessionSecret": "",
+    "capacity": 1,
+    "problemTypes": [
+        "python3unittest"
+    ],
+    "sqlite3Path": "/var/lib/codegrinder/codegrinder.db",
+    "wwwRoot": "/usr/share/codegrinder/www"
+}

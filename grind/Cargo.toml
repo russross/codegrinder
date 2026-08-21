@@ -1,0 +1,22 @@
+[package]
+name = "grind"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+http.workspace = true
+ignore.workspace = true
+prost.workspace = true
+prost-types.workspace = true
+semver.workspace = true
+serde = { workspace = true, features = ["derive"] }
+tempfile.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "process"] }
+toml.workspace = true
+tonic = { workspace = true, features = ["transport", "codegen", "tls-ring", "tls-webpki-roots", "gzip"] }
+tonic-prost.workspace = true
+
+[build-dependencies]
+tonic-prost-build.workspace = true

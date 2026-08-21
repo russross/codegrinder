@@ -9,11 +9,15 @@ start_pre() {
     ewaitfile 30 /var/run/docker.sock
 }
 
-command="/home/russ/go/bin/server"
-command_args="-daycare"
-command_user="russ:russ"
+supervisor="supervise-daemon"
+respawn_delay=2
+respawn_max=10
+respawn_period=300
+
+command="/usr/local/bin/codegrinder"
+command_args="${codegrinder_roles:--ta -daycare} --config ${codegrinder_config:-/etc/codegrinder/config.json}"
+command_user="${codegrinder_user:-codegrinder}:${codegrinder_group:-codegrinder}"
 command_background="true"
 pidfile="/run/${RC_SVCNAME}.pid"
-capabilities="^cap_net_bind_service"
-output_logger="logger -t codegrinder"
-error_logger="logger -t codegrinder"
+output_logger="logger -t ${RC_SVCNAME}"
+error_logger="logger -t ${RC_SVCNAME}"

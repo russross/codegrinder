@@ -1,5 +1,13 @@
 backup
 db
 acme
+github.com
 config.json
+rpc/*.pb.go
 *.swp
+certs
+daycare-mounts
+problemtypes
+.ruff_cache
+TODO.md
+/target/

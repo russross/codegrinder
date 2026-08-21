@@ -1,0 +1,22 @@
+codegrinder.example.edu {
+	tls {
+		protocols tls1.3
+	}
+
+	encode zstd gzip
+
+	log {
+		output file /var/log/caddy/codegrinder-access.log
+		format console
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "geolocation=(), microphone=(), camera=()"
+		-Server
+	}
+
+	reverse_proxy h2c://localhost:1400
+}

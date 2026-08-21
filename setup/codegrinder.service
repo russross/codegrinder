@@ -5,11 +5,10 @@ After=docker.service
 
 [Service]
 Type=simple
-User=russ
-ExecStart=/usr/local/bin/codegrinder -ta -daycare
+User=codegrinder
+ExecStart=/usr/local/bin/codegrinder -ta -daycare --config /etc/codegrinder/config.json
 Restart=always
 RestartSec=5
-AmbientCapabilities=CAP_NET_BIND_SERVICE
 
 [Install]
 WantedBy=multi-user.target
