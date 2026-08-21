@@ -22,6 +22,7 @@ pub const PASSBACK_PENDING: &str = "post_pending";
 pub const PASSBACK_FAILED: &str = "post_failed";
 pub const PASSBACK_NO_TARGET: &str = "not_posted_no_target";
 pub const PASSBACK_LOCKED: &str = "not_posted_locked";
+pub const PASSBACK_USER_NOT_IN_COURSE: &str = "not_posted_user_not_in_course";
 const USER_AGENT_VALUE: &str = concat!("CodeGrinder/", env!("CARGO_PKG_VERSION"));
 const STARTUP_RECOVERY_JITTER: Duration = Duration::from_secs(10 * 60);
 
@@ -45,6 +46,25 @@ impl GradePassbackError {
             Self::Transport(_) => true,
             Self::Http { status, .. } => is_transient_http_status(*status),
         }
+    }
+
+    fn is_user_not_in_course(&self) -> bool {
+        let Self::Http { status, body } = self else {
+            return false;
+        };
+        if *status != http::StatusCode::UNPROCESSABLE_ENTITY {
+            return false;
+        }
+        let Ok(document) = roxmltree::Document::parse(body) else {
+            return false;
+        };
+        document.descendants().any(|node| {
+            node.is_element()
+                && node.tag_name().name() == "ext_canvas_error_code"
+                && node
+                    .text()
+                    .is_some_and(|text| text.trim() == "user_not_in_course")
+        })
     }
 }
 
@@ -349,11 +369,19 @@ pub fn spawn_grade_passback(
                     delay = (delay * 2).min(Duration::from_secs(300));
                 }
                 Err(err) => {
-                    update_passback_status(&db, &target, PASSBACK_FAILED).await;
-                    eprintln!(
-                        "giving up posting LMS grade for assignment {}/{}/{}: {err}",
-                        target.user_id, target.course_id, target.problem_set_id
-                    );
+                    if err.is_user_not_in_course() {
+                        update_passback_status(&db, &target, PASSBACK_USER_NOT_IN_COURSE).await;
+                        eprintln!(
+                            "LMS grade passback permanently failed because the user is no longer in the course for assignment {}/{}/{}: {err}",
+                            target.user_id, target.course_id, target.problem_set_id
+                        );
+                    } else {
+                        update_passback_status(&db, &target, PASSBACK_FAILED).await;
+                        eprintln!(
+                            "giving up posting LMS grade for assignment {}/{}/{}: {err}",
+                            target.user_id, target.course_id, target.problem_set_id
+                        );
+                    }
                     return;
                 }
             }
@@ -981,6 +1009,31 @@ mod tests {
         ] {
             assert!(!is_transient_http_status(status), "{status}");
         }
+    }
+
+    #[test]
+    fn canvas_user_not_in_course_response_is_a_resolved_failure() {
+        let response = GradePassbackError::Http {
+            status: http::StatusCode::UNPROCESSABLE_ENTITY,
+            body: r#"<?xml version="1.0" encoding="UTF-8"?>
+                <imsx_POXEnvelopeResponse xmlns="http://www.imsglobal.org/services/ltiv1p1/xsd/imsoms_v1p0">
+                    <imsx_POXHeader><imsx_POXResponseHeaderInfo><imsx_statusInfo>
+                        <imsx_description>User is no longer in course</imsx_description>
+                        <ext_canvas_error_code>
+                            user_not_in_course
+                        </ext_canvas_error_code>
+                    </imsx_statusInfo></imsx_POXResponseHeaderInfo></imsx_POXHeader>
+                </imsx_POXEnvelopeResponse>"#
+                .to_owned(),
+        };
+
+        assert!(response.is_user_not_in_course());
+
+        let unrelated_response = GradePassbackError::Http {
+            status: http::StatusCode::UNPROCESSABLE_ENTITY,
+            body: "<error>User is no longer in course</error>".to_owned(),
+        };
+        assert!(!unrelated_response.is_user_not_in_course());
     }
 
     #[test]
