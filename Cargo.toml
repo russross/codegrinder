@@ -15,8 +15,8 @@ incremental = false
 codegen-units = 16
 
 [workspace.dependencies]
-axum = "=0.8.9"
-base64 = "=0.23.1"
+axum = { version = "=0.8.9", default-features = false }
+base64 = "=0.22.1"
 bytes = "=1.12.1"
 chrono = { version = "=0.4.45", default-features = false }
 clap = "=4.6.6"
@@ -47,6 +47,6 @@ tonic-prost = "=0.14.6"
 tonic-prost-build = "=0.14.6"
 tonic-web = "=0.14.6"
 tower = "=0.5.3"
-tower-http = "=0.7.0"
+tower-http = { version = "=0.7.0", default-features = false }
 url = "=2.5.8"
 urlencoding = "=2.1.3"

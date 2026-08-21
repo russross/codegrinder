@@ -4,7 +4,6 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-bytes.workspace = true
 clap = { workspace = true, features = ["derive"] }
 http.workspace = true
 ignore.workspace = true

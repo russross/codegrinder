@@ -425,6 +425,8 @@ async fn save_grade(
         &config.hostname,
         &config.lti_secret,
     )?;
+    // Canvas grade passback intentionally uses HTTP/1.1. Enable Reqwest's HTTP/2 feature if a
+    // future Canvas update requires HTTP/2 for outcome service requests.
     let client = reqwest::Client::new();
     let response = client
         .post(&target.outcome_url)
