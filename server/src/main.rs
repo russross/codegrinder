@@ -41,6 +41,7 @@ use crate::db::Db;
 use crate::error::{AppError, AppResult};
 use crate::ipfilter::IpFilter;
 use crate::lti::{LtiState, VersionPayload};
+use crate::passback::spawn_startup_grade_passbacks;
 use crate::registry::DaycareRegistry;
 use crate::service::{CodeGrinderServer, CodeGrinderServerParts};
 use crate::sessions::{LoginTokens, delete_expired_sessions};
@@ -68,6 +69,12 @@ async fn main() -> AppResult<()> {
     if args.ta {
         db.transaction(|conn| delete_expired_sessions(conn, now_utc()))
             .await?;
+        let recovery_count = spawn_startup_grade_passbacks(db.clone(), config.clone()).await?;
+        if recovery_count > 0 {
+            eprintln!(
+                "scheduled {recovery_count} unfinished LMS grade passbacks over the next 10 minutes"
+            );
+        }
     }
     let login_tokens = Arc::new(LoginTokens::default());
     let registry = DaycareRegistry::new(config.daycare_secret.clone(), VERSION.to_owned());

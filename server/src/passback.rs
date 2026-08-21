@@ -5,14 +5,16 @@ use std::time::Duration;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use chrono::Utc;
-use http::header::{AUTHORIZATION, CONTENT_TYPE};
-use rusqlite::params;
+use http::header::{AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
+use rand::RngExt;
+use rusqlite::{Connection, OptionalExtension, params};
+use serde::Deserialize;
 use sha1::{Digest, Sha1};
 
 use crate::config::ServerConfig;
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
-use crate::proto::{Commit, EventMessage};
+use crate::proto::{AssignmentKey, Commit, EventMessage};
 use crate::signatures::{encode_params, escape, hmac_sha1_base64};
 
 pub const PASSBACK_POSTED: &str = "posted";
@@ -20,6 +22,44 @@ pub const PASSBACK_PENDING: &str = "post_pending";
 pub const PASSBACK_FAILED: &str = "post_failed";
 pub const PASSBACK_NO_TARGET: &str = "not_posted_no_target";
 pub const PASSBACK_LOCKED: &str = "not_posted_locked";
+const USER_AGENT_VALUE: &str = concat!("CodeGrinder/", env!("CARGO_PKG_VERSION"));
+const STARTUP_RECOVERY_JITTER: Duration = Duration::from_secs(10 * 60);
+
+#[derive(Debug, thiserror::Error)]
+enum GradePassbackError {
+    #[error("{0}")]
+    Permanent(#[from] AppError),
+    #[error("grade passback failed: {0}")]
+    Transport(#[from] reqwest::Error),
+    #[error("grade passback status {status}: {body}")]
+    Http {
+        status: http::StatusCode,
+        body: String,
+    },
+}
+
+impl GradePassbackError {
+    fn is_transient(&self) -> bool {
+        match self {
+            Self::Permanent(_) => false,
+            Self::Transport(_) => true,
+            Self::Http { status, .. } => is_transient_http_status(*status),
+        }
+    }
+}
+
+fn is_transient_http_status(status: http::StatusCode) -> bool {
+    matches!(
+        status,
+        http::StatusCode::REQUEST_TIMEOUT
+            | http::StatusCode::TOO_EARLY
+            | http::StatusCode::TOO_MANY_REQUESTS
+            | http::StatusCode::INTERNAL_SERVER_ERROR
+            | http::StatusCode::BAD_GATEWAY
+            | http::StatusCode::SERVICE_UNAVAILABLE
+            | http::StatusCode::GATEWAY_TIMEOUT
+    )
+}
 
 #[derive(Clone, Debug)]
 pub struct GradePassbackTarget {
@@ -31,6 +71,224 @@ pub struct GradePassbackTarget {
     pub outcome_ext_accepted: String,
     pub consumer_key: String,
     pub score: f64,
+}
+
+#[derive(Deserialize)]
+struct StoredTranscriptEvent {
+    #[serde(default)]
+    event: String,
+    #[serde(default)]
+    exec_command: Vec<String>,
+    #[serde(default)]
+    exit_status: i32,
+    #[serde(default)]
+    stream_data: String,
+    #[serde(default)]
+    error: String,
+}
+
+pub async fn spawn_startup_grade_passbacks(db: Db, config: Arc<ServerConfig>) -> AppResult<usize> {
+    let assignments = db
+        .transaction(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT user_id, course_id, problem_set_id
+                 FROM assignments
+                 WHERE grade_passback_status IN (?, ?)
+                 ORDER BY user_id, course_id, problem_set_id",
+            )?;
+            let rows = statement.query_map(params![PASSBACK_FAILED, PASSBACK_PENDING], |row| {
+                Ok(AssignmentKey {
+                    user_id: row.get(0)?,
+                    course_id: row.get(1)?,
+                    problem_set_id: row.get(2)?,
+                })
+            })?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+        })
+        .await?;
+    let count = assignments.len();
+    for key in assignments {
+        let db = db.clone();
+        let config = config.clone();
+        let max_jitter_millis = STARTUP_RECOVERY_JITTER.as_millis() as u64;
+        let jitter = Duration::from_millis(rand::rng().random_range(0..=max_jitter_millis));
+        tokio::spawn(async move {
+            tokio::time::sleep(jitter).await;
+            match prepare_startup_grade_passback(&db, &key).await {
+                Ok(Some((target, html))) => spawn_grade_passback(db, config, target, html),
+                Ok(None) => {}
+                Err(err) => eprintln!(
+                    "error preparing startup LMS grade passback for assignment {}/{}/{}: {err}",
+                    key.user_id, key.course_id, key.problem_set_id
+                ),
+            }
+        });
+    }
+    Ok(count)
+}
+
+async fn prepare_startup_grade_passback(
+    db: &Db,
+    key: &AssignmentKey,
+) -> AppResult<Option<(GradePassbackTarget, String)>> {
+    let key = key.clone();
+    db.transaction(move |conn| prepare_startup_grade_passback_tx(conn, &key, Utc::now()))
+        .await
+}
+
+fn prepare_startup_grade_passback_tx(
+    conn: &Connection,
+    key: &AssignmentKey,
+    now: chrono::DateTime<Utc>,
+) -> AppResult<Option<(GradePassbackTarget, String)>> {
+    let assignment = conn
+        .query_row(
+            "SELECT assignments.grade_passback_status,
+                    assignments.grade_id,
+                    assignments.outcome_url,
+                    assignments.outcome_ext_accepted,
+                    assignments.consumer_key,
+                    COALESCE(assignment_scores.assignment_score, 0.0),
+                    assignments.lock_at IS NOT NULL
+                        AND datetime(assignments.lock_at) <= datetime(?)
+                        AND NOT user_courses.is_instructor
+             FROM assignments
+             NATURAL JOIN user_courses
+             NATURAL LEFT JOIN assignment_scores
+             WHERE assignments.user_id = ?
+               AND assignments.course_id = ?
+               AND assignments.problem_set_id = ?",
+            params![
+                crate::timeutil::db_time(now),
+                key.user_id,
+                key.course_id,
+                key.problem_set_id
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, f64>(5)?,
+                    row.get::<_, bool>(6)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((status, grade_id, outcome_url, outcome_ext_accepted, consumer_key, score, locked)) =
+        assignment
+    else {
+        return Ok(None);
+    };
+    if status != PASSBACK_FAILED && status != PASSBACK_PENDING {
+        return Ok(None);
+    }
+    if locked {
+        set_passback_status(conn, key, PASSBACK_LOCKED)?;
+        return Ok(None);
+    }
+    if grade_id.is_empty() || outcome_url.is_empty() {
+        set_passback_status(conn, key, PASSBACK_NO_TARGET)?;
+        return Ok(None);
+    }
+    let commit_row = conn
+        .query_row(
+            "SELECT problem_id, step_number, transcript
+             FROM commits
+             WHERE user_id = ? AND course_id = ? AND problem_set_id = ?
+               AND report_card <> 'null'
+             ORDER BY commit_updated_at DESC, problem_id, step_number DESC
+             LIMIT 1",
+            params![key.user_id, key.course_id, key.problem_set_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or_else(|| AppError::Internal("failed passback has no graded commit".to_owned()))?;
+    let transcript = serde_json::from_str::<Vec<StoredTranscriptEvent>>(&commit_row.2)?
+        .into_iter()
+        .map(|event| EventMessage {
+            event: event.event,
+            exec_command: event.exec_command,
+            exit_status: event.exit_status,
+            stream_data: event.stream_data.into_bytes(),
+            error: event.error,
+            ..EventMessage::default()
+        })
+        .collect();
+    let mut file_statement = conn.prepare(
+        "SELECT path, content FROM commit_files
+         WHERE user_id = ? AND course_id = ? AND problem_set_id = ?
+           AND problem_id = ? AND step_number = ?
+         ORDER BY path",
+    )?;
+    let files = file_statement
+        .query_map(
+            params![
+                key.user_id,
+                key.course_id,
+                key.problem_set_id,
+                commit_row.0,
+                commit_row.1
+            ],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?)),
+        )?
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
+    let total_steps = conn.query_row(
+        "SELECT total_steps FROM grading_step_context
+         WHERE problem_set_id = ? AND problem_id = ? AND step_number = ?",
+        params![key.problem_set_id, commit_row.0, commit_row.1],
+        |row| row.get::<_, i64>(0),
+    )?;
+    let total_problems = conn.query_row(
+        "SELECT COUNT(1) FROM problem_set_problems WHERE problem_set_id = ?",
+        params![key.problem_set_id],
+        |row| row.get::<_, i64>(0),
+    )?;
+    let commit = Commit {
+        assignment: Some(key.clone()),
+        problem_id: commit_row.0,
+        step: commit_row.1,
+        files,
+        transcript,
+        ..Commit::default()
+    };
+    let html = build_grade_report_html(
+        &commit,
+        &commit.problem_id,
+        total_steps,
+        total_problems.max(1),
+    );
+    set_passback_status(conn, key, PASSBACK_PENDING)?;
+    Ok(Some((
+        GradePassbackTarget {
+            user_id: key.user_id.clone(),
+            course_id: key.course_id.clone(),
+            problem_set_id: key.problem_set_id.clone(),
+            grade_id,
+            outcome_url,
+            outcome_ext_accepted,
+            consumer_key,
+            score,
+        },
+        html,
+    )))
+}
+
+fn set_passback_status(conn: &Connection, key: &AssignmentKey, status: &str) -> AppResult<()> {
+    conn.execute(
+        "UPDATE assignments SET grade_passback_status = ?
+         WHERE user_id = ? AND course_id = ? AND problem_set_id = ?",
+        params![status, key.user_id, key.course_id, key.problem_set_id],
+    )?;
+    Ok(())
 }
 
 pub fn build_grade_report_html(
@@ -85,7 +343,7 @@ pub fn spawn_grade_passback(
                     update_passback_status(&db, &target, PASSBACK_POSTED).await;
                     return;
                 }
-                Err(err) if attempt < 10 => {
+                Err(err) if err.is_transient() && attempt < 10 => {
                     eprintln!("error posting grade back to LMS (attempt {attempt}/10): {err}");
                     tokio::time::sleep(delay).await;
                     delay = (delay * 2).min(Duration::from_secs(300));
@@ -126,7 +384,7 @@ async fn save_grade(
     config: &ServerConfig,
     target: &GradePassbackTarget,
     report_html: &str,
-) -> AppResult<()> {
+) -> Result<(), GradePassbackError> {
     if target.grade_id.is_empty() || target.outcome_url.is_empty() {
         return Ok(());
     }
@@ -144,15 +402,14 @@ async fn save_grade(
         .post(&target.outcome_url)
         .header(AUTHORIZATION, auth)
         .header(CONTENT_TYPE, "application/xml")
+        .header(USER_AGENT, USER_AGENT_VALUE)
         .body(payload)
         .send()
-        .await
-        .map_err(|err| AppError::Internal(format!("grade passback failed: {err}")))?;
-    if response.status() != http::StatusCode::OK {
-        return Err(AppError::Internal(format!(
-            "grade passback status {}",
-            response.status()
-        )));
+        .await?;
+    let status = response.status();
+    if status != http::StatusCode::OK {
+        let body = response.text().await?;
+        return Err(GradePassbackError::Http { status, body });
     }
     Ok(())
 }
@@ -628,6 +885,7 @@ fn html_escape(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::open_test_connection;
     use crate::proto::EventMessage;
 
     #[test]
@@ -696,6 +954,96 @@ mod tests {
         assert_eq!(
             normalize_oauth_url("HTTPS://LMS.EXAMPLE:443/path/to?x=1#frag").unwrap(),
             "https://lms.example:443/path/to"
+        );
+    }
+
+    #[test]
+    fn passback_retries_only_statuses_that_can_succeed_later() {
+        for status in [
+            http::StatusCode::REQUEST_TIMEOUT,
+            http::StatusCode::TOO_EARLY,
+            http::StatusCode::TOO_MANY_REQUESTS,
+            http::StatusCode::INTERNAL_SERVER_ERROR,
+            http::StatusCode::BAD_GATEWAY,
+            http::StatusCode::SERVICE_UNAVAILABLE,
+            http::StatusCode::GATEWAY_TIMEOUT,
+        ] {
+            assert!(is_transient_http_status(status), "{status}");
+        }
+        for status in [
+            http::StatusCode::BAD_REQUEST,
+            http::StatusCode::UNAUTHORIZED,
+            http::StatusCode::FORBIDDEN,
+            http::StatusCode::NOT_FOUND,
+            http::StatusCode::METHOD_NOT_ALLOWED,
+            http::StatusCode::UNPROCESSABLE_ENTITY,
+            http::StatusCode::NOT_IMPLEMENTED,
+        ] {
+            assert!(!is_transient_http_status(status), "{status}");
+        }
+    }
+
+    #[test]
+    fn startup_recovery_reloads_current_grade_and_latest_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_test_connection(&dir.path().join("db.sqlite")).unwrap();
+        conn.execute_batch(
+            r#"
+            INSERT INTO problem_types(problem_type, container) VALUES ('python', 'python');
+            INSERT INTO problems(problem_id, problem_note, problem_tags, problem_options, problem_created_at, problem_updated_at)
+                VALUES ('p1', '', '[]', '[]', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+            INSERT INTO problem_steps(problem_id, step_number, problem_type, step_note, step_weight)
+                VALUES ('p1', 1, 'python', '', 1), ('p1', 2, 'python', '', 1);
+            INSERT INTO problem_sets(problem_set_id, problem_set_note, problem_set_tags, problem_set_created_at, problem_set_updated_at)
+                VALUES ('ps1', '', '[]', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+            INSERT INTO problem_set_problems(problem_set_id, problem_id, problem_weight)
+                VALUES ('ps1', 'p1', 1);
+            INSERT INTO users(user_id, user_name, user_login) VALUES ('u1', 'User', 'user');
+            INSERT INTO courses(course_id, course_name) VALUES ('c1', 'Course');
+            INSERT INTO user_courses(user_id, course_id, course_roles) VALUES ('u1', 'c1', 'Learner');
+            INSERT INTO assignments(user_id, course_id, problem_set_id, assignment_title, restricted, grade_id, outcome_url, outcome_ext_accepted, consumer_key, grade_passback_status)
+                VALUES ('u1', 'c1', 'ps1', 'Assignment', 0, 'grade1', 'https://lms.example/outcome', 'text', 'consumer', 'post_failed');
+            INSERT INTO commits(user_id, course_id, problem_set_id, problem_id, step_number, action, note, transcript, report_card, score, commit_created_at, commit_updated_at)
+                VALUES
+                    ('u1', 'c1', 'ps1', 'p1', 1, 'grade', '', '[{"event":"stdout","stream_data":"older"}]', '{"passed":false}', 0.5, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+                    ('u1', 'c1', 'ps1', 'p1', 2, 'grade', '', '[{"event":"stdout","stream_data":"latest"}]', '{"passed":true}', 1.0, '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z');
+            INSERT INTO commit_files(user_id, course_id, problem_set_id, problem_id, step_number, path, content)
+                VALUES ('u1', 'c1', 'ps1', 'p1', 2, 'answer.txt', x'63757272656e7420616e73776572');
+            "#,
+        )
+        .unwrap();
+        let key = AssignmentKey {
+            user_id: "u1".to_owned(),
+            course_id: "c1".to_owned(),
+            problem_set_id: "ps1".to_owned(),
+        };
+
+        let (target, html) = prepare_startup_grade_passback_tx(&conn, &key, Utc::now())
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(target.score, 0.75);
+        assert!(html.contains("latest"));
+        assert!(!html.contains("older"));
+        assert!(html.contains("current answer"));
+        assert!(html.contains("Grading transcript for step 2"));
+        assert_eq!(
+            conn.query_row("SELECT grade_passback_status FROM assignments", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .unwrap(),
+            PASSBACK_PENDING
+        );
+
+        conn.execute(
+            "UPDATE assignments SET grade_passback_status = ?",
+            params![PASSBACK_POSTED],
+        )
+        .unwrap();
+        assert!(
+            prepare_startup_grade_passback_tx(&conn, &key, Utc::now())
+                .unwrap()
+                .is_none()
         );
     }
 }
