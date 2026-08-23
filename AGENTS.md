@@ -61,9 +61,9 @@ For protocol changes:
 - Client does not know/care about database layout—protocol should minimize leaking relational database structure
 - Session authentication uses explicit raw session keys in gRPC metadata. Do not use HTTP cookies or `session_cookie` request fields for session auth.
 
-For the exam interface under `www/exam`:
+For the web interfaces under `www/exam` and `www/web`:
 
-- Use the project-local Node toolchain under `www/exam/.toolchain/node/bin` for npm/proto-generation/build commands when the system `node` is unavailable or mismatched.
+- Use the Alpine system `node` and `npm` packages for dependency installation, proto generation, tests, and builds. Node 24 is the supported runtime; do not add a project-local Node toolchain.
 
 
 # `grind` Config

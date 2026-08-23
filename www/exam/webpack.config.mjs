@@ -1,15 +1,14 @@
-import * as path from 'path';
-import { fileURLToPath } from 'url';
-import { Configuration } from 'webpack';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const filename = fileURLToPath(import.meta.url);
+const dirname = path.dirname(filename);
 
-const config: Configuration = {
+const config = {
   mode: 'development',
   entry: './index.ts',
   output: {
-    path: path.resolve(__dirname, 'dist'),
+    path: path.resolve(dirname, 'dist'),
     filename: 'bundle.js',
     library: 'codegrinder',
     libraryTarget: 'window',
@@ -29,8 +28,8 @@ const config: Configuration = {
   },
   resolve: {
     extensions: ['.ts', '.js'],
-    modules: [path.resolve(__dirname, 'node_modules'), 'node_modules']
-  }
+    modules: [path.resolve(dirname, 'node_modules'), 'node_modules'],
+  },
 };
 
 export default config;
