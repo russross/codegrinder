@@ -1,4 +1,7 @@
+import { releaseSharedBuffers } from "./sharedBufferFallback.js";
+
 class JavaScriptWorker {
+  #bufferIdentifiers = [];
   #loaded;
   #javaScriptFinished;
   #destroy;
@@ -6,9 +9,10 @@ class JavaScriptWorker {
   #stdin = new AtomicQueue;
   #stdout = new AtomicQueue;
   #stderr = new AtomicQueue;
-  constructor(stdoutCallback = (str) => { }, stderrCallback = (str) => { }) {
+  constructor(stdoutCallback = (str) => { }, stderrCallback = (str) => { }, loadingStatusCallback = () => {}) {
     this.stdoutCallback = stdoutCallback;
     this.stderrCallback = stderrCallback;
+    this.loadingStatusCallback = loadingStatusCallback;
     this.#worker = new Worker(new URL('./jsWorker.js', import.meta.url));
     this.runningJavaScript = false;
     this.destroyed = new Promise((accept) => {
@@ -17,11 +21,17 @@ class JavaScriptWorker {
     this.destroyed.then(() => {
       this.#worker.terminate();
     })
-    this.ready = new Promise((accept) => {
+    this.ready = new Promise((accept, reject) => {
       this.#loaded = accept;
+      this.#worker.addEventListener("error", reject, { once: true });
     });
     this.#worker.addEventListener("message", (e) => {
+      if (typeof e.data.loadingStatus === "string") {
+        console.info(`CodeGrinder JavaScript worker: ${e.data.loadingStatus}`);
+        this.loadingStatusCallback(e.data.loadingStatus);
+      }
       if (e.data.loaded) {
+        this.#bufferIdentifiers = [e.data.stdinid, e.data.stdoutid, e.data.stderrid];
         e.data.stdin.identifier = e.data.stdinid;
         e.data.stdout.identifier = e.data.stdoutid;
         e.data.stderr.identifier = e.data.stderrid;
@@ -34,17 +44,21 @@ class JavaScriptWorker {
         this.#javaScriptFinished();
       }
     })
-    this.ready.then(async () => {
-      this.#registerStream(this.#stdout, (str) => {
-        this.stdoutCallback(str);
-      })
-      this.#registerStream(this.#stderr, (str) => {
-        this.stderrCallback(str);
-      })
-    })
+    this.ready.then(
+      () => {
+        this.#registerStream(this.#stdout, (str) => {
+          this.stdoutCallback(str);
+        })
+        this.#registerStream(this.#stderr, (str) => {
+          this.stderrCallback(str);
+        })
+      },
+      () => {},
+    )
   }
   destroy() {
     this.#destroy();
+    releaseSharedBuffers(this.#bufferIdentifiers);
   }
   async runJavaScript(fileSystem, code, clearFiles = false) {
     await this.ready;
@@ -83,15 +97,16 @@ class JavaScriptRunner {
   #worker;
   #stdoutCallback;
   #stderrCallback;
-  constructor(stdoutCallback = (str) => { }, stderrCallback = (str) => { }) {
+  constructor(stdoutCallback = (str) => { }, stderrCallback = (str) => { }, loadingStatusCallback = () => {}) {
     this.#stdoutCallback = stdoutCallback;
     this.#stderrCallback = stderrCallback;
-    this.#worker = new JavaScriptWorker(this.#stdoutCallback, this.#stderrCallback);
+    this.loadingStatusCallback = loadingStatusCallback;
+    this.#worker = new JavaScriptWorker(this.#stdoutCallback, this.#stderrCallback, this.loadingStatusCallback);
     this.ready = this.#worker.ready;
   }
   stopJavaScript() {
     this.#worker.destroy();
-    this.#worker = new JavaScriptWorker(this.#stdoutCallback, this.#stderrCallback);
+    this.#worker = new JavaScriptWorker(this.#stdoutCallback, this.#stderrCallback, this.loadingStatusCallback);
     this.ready = this.#worker.ready;
   }
   destroy() {

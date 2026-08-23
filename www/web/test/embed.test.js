@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   createEmbedHtml,
+  problemTypeFromFilePaths,
   standaloneProblemType,
 } from "../scripts/embed.js";
 
@@ -36,6 +37,25 @@ test("legacy web embeds retain their former Python runtime", () => {
   assert.equal(
     standaloneProblemType(new URLSearchParams("dummy=true"), supportedProblemTypes),
     "python3unittest",
+  );
+});
+
+test("embed problem type follows an unambiguous source-file extension", () => {
+  assert.equal(
+    problemTypeFromFilePaths(["src/index.js", "README.md"], supportedProblemTypes),
+    "javascriptunittest",
+  );
+  assert.equal(
+    problemTypeFromFilePaths(["package/main.py", "package/helpers.py"], supportedProblemTypes),
+    "python3unittest",
+  );
+});
+
+test("embed problem type remains a choice for absent or contradictory extensions", () => {
+  assert.equal(problemTypeFromFilePaths(["README.md"], supportedProblemTypes), null);
+  assert.equal(
+    problemTypeFromFilePaths(["frontend/main.js", "backend/main.py"], supportedProblemTypes),
+    null,
   );
 });
 

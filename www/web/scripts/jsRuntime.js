@@ -3,8 +3,8 @@ import { JavaScriptRunner } from "./jsHandler.js";
 class JavaScriptRuntime {
   #runner;
 
-  constructor({ stderr, stdout }) {
-    this.#runner = new JavaScriptRunner(stdout, stderr);
+  constructor({ loadingStatus, stderr, stdout }) {
+    this.#runner = new JavaScriptRunner(stdout, stderr, loadingStatus);
     this.ready = this.#runner.ready;
   }
 

@@ -21,6 +21,17 @@ self.addEventListener('activate', function (event) {
 const sabs = [];
 const waits = [];
 async function handlePonyfill(request, resource) {
+  if (resource === "release") {
+    const identifiers = await request.json();
+    for (const identifier of identifiers) {
+      for (const wait of Object.values(waits[identifier] ?? {})) {
+        wait.accept();
+      }
+      sabs[identifier] = null;
+      waits[identifier] = null;
+    }
+    return new Response();
+  }
   if (resource.startsWith("SharedArrayBuffer/")) {
     const size = resource.split("/")[1] | 0;
     sabs.push(new Int8Array(size));
@@ -29,7 +40,14 @@ async function handlePonyfill(request, resource) {
   }
   if (resource.startsWith("Atomics.wait/")) {
     const [_, identifier, index, value, timeout] = resource.split("/");
+    const requestedTimeoutMilliseconds = Number(timeout);
+    const timeoutMilliseconds = Number.isFinite(requestedTimeoutMilliseconds)
+      ? Math.min(requestedTimeoutMilliseconds, 30000)
+      : 30000;
     const json = await request.json();
+    if (sabs[identifier] === null) {
+      return new Response(JSON.stringify({ value: "timed-out", buffer: [] }));
+    }
     for (let i = 0; i < json.curr.length; i++) {
       if (json.curr[i] != json.prev[i]) {
         sabs[identifier][i] = json.curr[i];
@@ -40,13 +58,26 @@ async function handlePonyfill(request, resource) {
         waits[identifier][index] = {};
         waits[identifier][index].promise = new Promise(accept => { waits[identifier][index].accept = accept });
       }
-      await waits[identifier][index].promise;
+      const notified = await Promise.race([
+        waits[identifier][index].promise.then(() => true),
+        new Promise(resolve => setTimeout(() => resolve(false), timeoutMilliseconds)),
+      ]);
+      if (!notified) {
+        delete waits[identifier][index];
+        return new Response(JSON.stringify({ value: "timed-out", buffer: Array.from(sabs[identifier]) }));
+      }
+      if (sabs[identifier] === null) {
+        return new Response(JSON.stringify({ value: "timed-out", buffer: [] }));
+      }
     }
     return new Response(JSON.stringify({ value: "ok", buffer: Array.from(sabs[identifier]) }));
   }
   if (resource.startsWith("Atomics.notify/")) {
     const [_, identifier, index, count] = resource.split("/");
     const json = await request.json();
+    if (sabs[identifier] === null) {
+      return new Response();
+    }
     for (let i = 0; i < json.curr.length; i++) {
       if (json.curr[i] != json.prev[i]) {
         sabs[identifier][i] = json.curr[i];

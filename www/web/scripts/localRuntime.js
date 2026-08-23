@@ -4,6 +4,17 @@ const runtimeLoaders = Object.freeze({
 });
 
 const runtimeNames = new Set(Object.keys(runtimeLoaders));
+const runtimeReadyTimeoutMilliseconds = 90000;
+
+function withTimeout(promise, timeoutMilliseconds, description) {
+  let timeout;
+  const timedOut = new Promise((_, reject) => {
+    timeout = setTimeout(() => {
+      reject(new Error(`Timed out ${description} after ${timeoutMilliseconds / 1000} seconds`));
+    }, timeoutMilliseconds);
+  });
+  return Promise.race([promise, timedOut]).finally(() => clearTimeout(timeout));
+}
 
 function parseLocalRuntimeConfig(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -57,6 +68,7 @@ class LocalRuntimeController {
 
   async select(problemType) {
     const runtimeName = this.#problemTypes.get(problemType) ?? null;
+    console.info(`CodeGrinder: selected problem type ${problemType}; runtime is ${runtimeName ?? "unavailable"}`);
     if (runtimeName === this.#runtimeName && this.#runtime !== null) {
       return runtimeName;
     }
@@ -73,7 +85,12 @@ class LocalRuntimeController {
     if (!loadRuntime) {
       throw new Error(`No local runtime loader exists for ${JSON.stringify(runtimeName)}`);
     }
-    const runtimeModule = await loadRuntime();
+    console.info(`CodeGrinder: loading the ${runtimeName} runtime module`);
+    const runtimeModule = await withTimeout(
+      loadRuntime(),
+      15000,
+      `loading the ${runtimeName} runtime module`,
+    );
     const runtime = runtimeModule.createRuntime(this.#callbacks);
     if (selection !== this.#selection) {
       runtime.destroy();
@@ -81,7 +98,11 @@ class LocalRuntimeController {
     }
     this.#runtime = runtime;
     try {
-      await runtime.ready;
+      await withTimeout(
+        runtime.ready,
+        runtimeReadyTimeoutMilliseconds,
+        `starting the ${runtimeName} runtime worker`,
+      );
     } catch (error) {
       if (selection === this.#selection) {
         runtime.destroy();
@@ -94,6 +115,7 @@ class LocalRuntimeController {
       runtime.destroy();
       return this.#runtimeName;
     }
+    console.info(`CodeGrinder: ${runtimeName} runtime worker is ready`);
     return runtimeName;
   }
 
@@ -148,4 +170,5 @@ export {
   LocalRuntimeController,
   loadLocalRuntimeConfig,
   parseLocalRuntimeConfig,
+  withTimeout,
 };

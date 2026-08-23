@@ -1,13 +1,16 @@
 import { Tabs } from './editorTabs.js';
 import { FileSystem, FileSystemUI, extension } from './directoryTree.js';
 import { CodeGrinder, CodeGrinderUI } from './codeGrinderApi.js';
-import { createEmbedHtml, legacyWebProblemType, standaloneProblemType } from './embed.js';
-import { LocalRuntimeController, loadLocalRuntimeConfig } from './localRuntime.js';
+import {
+    createEmbedHtml,
+    legacyWebProblemType,
+    problemTypeFromFilePaths,
+    standaloneProblemType,
+} from './embed.js';
+import { LocalRuntimeController, loadLocalRuntimeConfig, withTimeout } from './localRuntime.js';
 import { createChoicePrompt } from './prompt.js';
 
 await window.codeGrinderServiceWorkerReady;
-
-const localRuntimeConfig = await loadLocalRuntimeConfig(new URL('../local-runtimes.json', import.meta.url));
 
 const output_terminal_label = document.getElementById("output_terminal")
 const output_terminal = output_terminal_label.getElementsByTagName("pre")[0];
@@ -21,6 +24,24 @@ const saveAll = document.getElementById("save_all");
 const embed = document.getElementById("embed");
 const mdElement = document.getElementById("instructions");
 const navBar = document.getElementById("nav_bar");
+run.dataset.loadingStage = "runtime-config";
+console.info("CodeGrinder: loading local runtime configuration");
+let localRuntimeConfig;
+try {
+    localRuntimeConfig = await withTimeout(
+        loadLocalRuntimeConfig(new URL('../local-runtimes.json', import.meta.url)),
+        10000,
+        "loading local runtime configuration",
+    );
+} catch (error) {
+    console.error("CodeGrinder: local runtime configuration failed", error);
+    run.classList.remove("loading-spinner");
+    run.removeAttribute("aria-label");
+    run.innerText = "Run unavailable";
+    run.title = error instanceof Error ? error.message : String(error);
+    throw error;
+}
+console.info(`CodeGrinder: loaded ${localRuntimeConfig.size} local runtime choices`);
 const md = window.markdownit();
 const fileSystem = new FileSystem();
 const fileSystemUI = new FileSystemUI(fileSystem, document.getElementById("directory_tree"));
@@ -78,15 +99,23 @@ saveAll.addEventListener("click", () => {
     tabs.saveAllTabs();
 })
 embed.addEventListener("click", async () => {
-    const problemType = await createChoicePrompt(
+    const files = workspaceFiles(fileSystem.rootNode);
+    const inferredProblemType = problemTypeFromFilePaths(Object.keys(files), localRuntimeConfig);
+    const problemType = inferredProblemType ?? await createChoicePrompt(
         "Choose a problem type",
         [...localRuntimeConfig.keys()],
         activeLocalProblemType ?? legacyWebProblemType,
     );
     if (problemType === null) {
+        console.info("CodeGrinder: embed problem type selection was cancelled");
         return;
     }
-    await activateLocalRuntime(problemType, workspaceFiles(fileSystem.rootNode));
+    console.info(
+        inferredProblemType === null
+            ? `CodeGrinder: embed problem type chosen as ${problemType}`
+            : `CodeGrinder: inferred embed problem type ${problemType} from file extensions`,
+    );
+    await activateLocalRuntime(problemType, files);
     const html = createEmbedHtml(location, fileSystem.rootNode, problemType);
     await navigator.clipboard.writeText(html);
     console.log(html);
@@ -131,6 +160,7 @@ const localRuntime = new LocalRuntimeController(localRuntimeConfig, {
         element.src = `data:image/png;base64,${image}`;
         display.replaceChildren(element);
     },
+    loadingStatus: status => setLocalRuntimeLoading("runtime-worker", status),
     stderr: value => writeTerminal(value, "red"),
     stdout: value => writeTerminal(value, "black"),
 });
@@ -142,9 +172,21 @@ input_terminal.disabled = true;
 function setLocalRuntimeReady() {
     localRuntimeAvailable = true;
     input_terminal.disabled = false;
+    run.classList.remove("loading-spinner");
+    delete run.dataset.loadingStage;
+    run.removeAttribute("aria-label");
     run.disabled = false;
     run.innerText = "Run";
     run.title = "";
+}
+
+function setLocalRuntimeLoading(stage, status) {
+    console.info(`CodeGrinder: ${status}`);
+    run.classList.add("loading-spinner");
+    run.dataset.loadingStage = stage;
+    run.disabled = true;
+    run.innerText = "";
+    run.setAttribute("aria-label", status);
 }
 
 async function activateLocalRuntime(problemType, files) {
@@ -156,11 +198,13 @@ async function activateLocalRuntime(problemType, files) {
     }
     localRuntimeAvailable = false;
     input_terminal.disabled = true;
-    run.disabled = true;
-    run.innerText = "Loading";
+    setLocalRuntimeLoading("runtime-module", `loading runtime for ${problemType}`);
     run.title = "";
     display.replaceChildren();
     try {
+        if (globalThis.codeGrinderSharedArrayBufferFallback && !navigator.serviceWorker?.controller) {
+            throw new Error("The local runtime service worker is unavailable; reload the page to try again");
+        }
         const runtimeName = await localRuntime.select(problemType);
         if (operation !== localRuntimeOperation) {
             return;
@@ -172,7 +216,12 @@ async function activateLocalRuntime(problemType, files) {
             return;
         }
         tabs.setDefaultMode(runtimeName === "python" ? "ace/mode/python" : "ace/mode/javascript");
-        await localRuntime.configure(files);
+        setLocalRuntimeLoading("dependencies", `configuring dependencies for ${problemType}`);
+        await withTimeout(
+            localRuntime.configure(files),
+            120000,
+            `configuring dependencies for ${problemType}`,
+        );
         if (operation !== localRuntimeOperation) {
             return;
         }
@@ -182,6 +231,9 @@ async function activateLocalRuntime(problemType, files) {
     } catch (error) {
         if (operation === localRuntimeOperation) {
             localRuntime.destroy();
+            run.classList.remove("loading-spinner");
+            delete run.dataset.loadingStage;
+            run.removeAttribute("aria-label");
             run.innerText = "Run unavailable";
             run.title = `The local runtime for ${problemType} could not start`;
         }
@@ -217,17 +269,25 @@ async function stopLocalRuntime() {
     }
     const operation = ++localRuntimeOperation;
     localRuntimeRunning = false;
-    run.disabled = true;
-    run.innerText = "Stopping";
-    await localRuntime.stop();
+    setLocalRuntimeLoading("runtime-worker", "restarting local runtime");
+    try {
+        await withTimeout(localRuntime.stop(), 90000, "restarting the local runtime");
+    } catch (error) {
+        localRuntime.destroy();
+        run.classList.remove("loading-spinner");
+        delete run.dataset.loadingStage;
+        run.removeAttribute("aria-label");
+        run.innerText = "Run unavailable";
+        const message = error instanceof Error ? error.message : String(error);
+        run.title = message;
+        writeTerminal(`${message}\n`, "red");
+        console.error("CodeGrinder: local runtime restart failed", error);
+        return;
+    }
     if (operation === localRuntimeOperation) {
         setLocalRuntimeReady();
         writeTerminal(">> ", "orange");
     }
-}
-
-window.iframeSharedArrayBufferWorkaroundServiceWorkerLoss = function () {
-    stopLocalRuntime().catch(error => console.error(error));
 }
 
 run.disabled = true;
@@ -485,19 +545,33 @@ function setupCodegrinder() {
     async function initialize() {
         const loginToken = urlParams.get("token") ?? "";
         const assignmentKey = urlParams.get("assignment");
+        if (assignmentKey) {
+            setLocalRuntimeLoading("server", "loading assignment session");
+        }
         try {
             if (loginToken !== "") {
-                await codeGrinder.login(loginToken);
+                console.info("CodeGrinder: exchanging login token for a session");
+                await withTimeout(codeGrinder.login(loginToken), 30000, "logging in to CodeGrinder");
                 window.localStorage.setItem(sessionStorageKey, codeGrinder.sessionKey);
                 const cleanUrl = new URL(window.location.href);
                 cleanUrl.searchParams.delete("token");
                 window.history.replaceState(null, "", cleanUrl);
             } else if (savedSessionKey !== "") {
-                await codeGrinder.restoreSession();
+                console.info("CodeGrinder: restoring the saved session");
+                await withTimeout(codeGrinder.restoreSession(), 30000, "restoring the CodeGrinder session");
             }
             codeGrinderUI.updateAuthenticationStatus();
+            if (assignmentKey && !codeGrinder.getMe()) {
+                throw new Error("Log in again from the course site to load this assignment");
+            }
             if (assignmentKey && codeGrinder.getMe()) {
-                await loadAssignment(await codeGrinder.loadAssignment(assignmentKey));
+                console.info(`CodeGrinder: loading assignment ${assignmentKey}`);
+                const assignment = await withTimeout(
+                    codeGrinder.loadAssignment(assignmentKey),
+                    30000,
+                    "loading the assignment",
+                );
+                await loadAssignment(assignment);
                 saveCurrent.hidden = true;
                 saveAll.hidden = true;
                 codeGrinderUI.buttonAssignments.hidden = true;
@@ -509,6 +583,13 @@ function setupCodegrinder() {
             codeGrinder.logout();
             codeGrinderUI.updateAuthenticationStatus();
             reportError(error);
+            if (assignmentKey) {
+                run.classList.remove("loading-spinner");
+                delete run.dataset.loadingStage;
+                run.removeAttribute("aria-label");
+                run.innerText = "Run unavailable";
+                run.title = error instanceof Error ? error.message : String(error);
+            }
         }
     }
 

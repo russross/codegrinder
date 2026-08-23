@@ -10,15 +10,29 @@
   <script>
     window.codeGrinderServiceWorkerReady = Promise.resolve();
     if ('serviceWorker' in navigator) {
+      console.info("CodeGrinder: registering the runtime service worker");
       window.codeGrinderServiceWorkerReady = navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' })
         .then(async function () {
           await navigator.serviceWorker.ready;
           if (!navigator.serviceWorker.controller) {
-            await new Promise(function (resolve) {
-              navigator.serviceWorker.addEventListener('controllerchange', resolve, { once: true });
+            console.info("CodeGrinder: waiting for the runtime service worker to control the page");
+            await new Promise(function (resolve, reject) {
+              const timeout = setTimeout(function () {
+                reject(new Error("Timed out waiting for the runtime service worker"));
+              }, 10000);
+              navigator.serviceWorker.addEventListener('controllerchange', function () {
+                clearTimeout(timeout);
+                resolve();
+              }, { once: true });
             });
           }
+          console.info("CodeGrinder: runtime service worker is ready");
+        })
+        .catch(function (error) {
+          console.warn("CodeGrinder: runtime service worker is unavailable; continuing without it", error);
         });
+    } else {
+      console.warn("CodeGrinder: this browser does not support service workers");
     }
   </script>
 </head>
@@ -32,7 +46,7 @@
         </ul>
       </div>
     </li>
-    <li><button id="run">Loading</button></li>
+    <li><button id="run" class="loading-spinner" data-loading-stage="service-worker" disabled aria-label="Loading"></button></li>
     <li><button id="new_tab">New</button></li>
     <li><button id="save_current">Save</button></li>
     <li><button id="save_all">Save All</button></li>

@@ -24,8 +24,8 @@ function requiredModules(files) {
 class PythonRuntime {
   #runner;
 
-  constructor({ displayImage, stderr, stdout }) {
-    this.#runner = new PythonRunner(stdout, stderr, displayImage);
+  constructor({ displayImage, loadingStatus, stderr, stdout }) {
+    this.#runner = new PythonRunner(stdout, stderr, displayImage, loadingStatus);
     this.ready = this.#runner.ready;
   }
 

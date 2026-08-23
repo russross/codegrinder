@@ -3,6 +3,7 @@
 // native SharedArrayBuffer by 10000 times. It is the only way to fit the usecase without
 // rearchitecting the entire codebase to use some slower method rather than SharedArrayBuffer.
 if (!globalThis.SharedArrayBuffer) {
+  globalThis.codeGrinderSharedArrayBufferFallback = true;
   const localSabs = {};
   globalThis.SharedArrayBuffer = class {
     constructor(bytes) {
@@ -54,9 +55,8 @@ if (!globalThis.SharedArrayBuffer) {
           resolve(json.value);
         };
         xhr.onerror = async function () {
-          // The service worker reset due to inactivity
-          // Call handling of sharedArrayBuffer loss
-          window.iframeSharedArrayBufferWorkaroundServiceWorkerLoss();
+          console.warn("CodeGrinder worker: emulated Atomics.wait failed because the service worker was lost");
+          resolve("timed-out");
         }
         send(xhr, int32arr);
       })

@@ -1,3 +1,4 @@
+postMessage({ loadingStatus: "initializing JavaScript runtime" });
 importScripts("iframeSharedArrayBufferWorkaround.js", "./atomicQueue.js");
 
 (async () => {
@@ -188,6 +189,7 @@ importScripts("iframeSharedArrayBufferWorkaround.js", "./atomicQueue.js");
     }
   });
 
+  postMessage({ loadingStatus: "JavaScript runtime ready" });
   // Send initialization message
   postMessage({
     loaded: true,

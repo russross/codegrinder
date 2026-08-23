@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   LocalRuntimeController,
   parseLocalRuntimeConfig,
+  withTimeout,
 } from "../scripts/localRuntime.js";
 import { requiredModules } from "../scripts/pythonRuntime.js";
 
@@ -26,6 +27,13 @@ test("invalid runtime configuration fails before a workspace is loaded", () => {
   assert.throws(
     () => parseLocalRuntimeConfig({ python3unittest: "pyodide" }),
     /Invalid local runtime/,
+  );
+});
+
+test("a stalled runtime operation fails with its loading stage", async () => {
+  await assert.rejects(
+    withTimeout(new Promise(() => {}), 10, "starting the test runtime"),
+    /Timed out starting the test runtime after 0.01 seconds/,
   );
 });
 

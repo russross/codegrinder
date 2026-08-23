@@ -1,4 +1,7 @@
+import { releaseSharedBuffers } from "./sharedBufferFallback.js";
+
 class PythonWorker {
+  #bufferIdentifiers = [];
   #destroy;
   #loaded;
   #moduleRequest = 0;
@@ -10,10 +13,11 @@ class PythonWorker {
   #toMainThread = new AtomicJSONQueue();
   #worker;
 
-  constructor(stdoutCallback, stderrCallback, displayImageCallback) {
+  constructor(stdoutCallback, stderrCallback, displayImageCallback, loadingStatusCallback) {
     this.stdoutCallback = stdoutCallback;
     this.stderrCallback = stderrCallback;
     this.displayImageCallback = displayImageCallback;
+    this.loadingStatusCallback = loadingStatusCallback;
     this.#worker = new Worker(new URL("./pythonWorker.js", import.meta.url));
     this.runningPython = false;
     this.destroyed = new Promise((resolve) => {
@@ -25,15 +29,23 @@ class PythonWorker {
       this.#worker.addEventListener("error", reject, { once: true });
     });
     this.#worker.addEventListener("message", (event) => this.#handleMessage(event.data));
-    this.ready.then(() => {
-      this.#registerStream(this.#stdout, (value) => this.stdoutCallback(value));
-      this.#registerStream(this.#stderr, (value) => this.stderrCallback(value));
-      this.#registerDisplayImages();
-    });
+    this.ready.then(
+      () => {
+        this.#registerStream(this.#stdout, (value) => this.stdoutCallback(value));
+        this.#registerStream(this.#stderr, (value) => this.stderrCallback(value));
+        this.#registerDisplayImages();
+      },
+      () => {},
+    );
   }
 
   #handleMessage(data) {
+    if (typeof data.loadingStatus === "string") {
+      console.info(`CodeGrinder Python worker: ${data.loadingStatus}`);
+      this.loadingStatusCallback(data.loadingStatus);
+    }
     if (data.loaded) {
+      this.#bufferIdentifiers = [data.stdinId, data.stdoutId, data.stderrId, data.toMainThreadId];
       data.stdin.identifier = data.stdinId;
       data.stdout.identifier = data.stdoutId;
       data.stderr.identifier = data.stderrId;
@@ -59,6 +71,7 @@ class PythonWorker {
 
   destroy() {
     this.#destroy();
+    releaseSharedBuffers(this.#bufferIdentifiers);
     for (const { reject } of this.#moduleResolvers.values()) {
       reject(new Error("Python runtime stopped while loading modules"));
     }
@@ -135,10 +148,11 @@ class PythonRunner {
   #stdoutCallback;
   #worker;
 
-  constructor(stdoutCallback, stderrCallback, displayImageCallback) {
+  constructor(stdoutCallback, stderrCallback, displayImageCallback, loadingStatusCallback) {
     this.#stdoutCallback = stdoutCallback;
     this.#stderrCallback = stderrCallback;
     this.#displayImageCallback = displayImageCallback;
+    this.loadingStatusCallback = loadingStatusCallback;
     this.#worker = this.#createWorker();
     this.ready = this.#worker.ready;
   }
@@ -148,6 +162,7 @@ class PythonRunner {
       this.#stdoutCallback,
       this.#stderrCallback,
       this.#displayImageCallback,
+      this.loadingStatusCallback,
     );
   }
 

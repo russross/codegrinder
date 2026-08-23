@@ -1,3 +1,4 @@
+postMessage({ loadingStatus: "downloading Python runtime" });
 importScripts(
   "https://cdn.jsdelivr.net/pyodide/v0.29.1/full/pyodide.js",
   "iframeSharedArrayBufferWorkaround.js",
@@ -5,6 +6,7 @@ importScripts(
 );
 
 (async () => {
+  postMessage({ loadingStatus: "initializing Python runtime" });
   const pyodide = await loadPyodide({
     indexURL: "https://cdn.jsdelivr.net/pyodide/v0.29.1/full/",
   });
@@ -30,6 +32,7 @@ importScripts(
     raw: (byte) => stderrQueue.enqueueMultipleSync([byte]),
   });
 
+  postMessage({ loadingStatus: "loading Python packages" });
   await pyodide.loadPackage("micropip");
   await pyodide.runPythonAsync(`
 import micropip
@@ -165,6 +168,7 @@ matplotlib.pyplot.show = show_image
     }
   });
 
+  postMessage({ loadingStatus: "Python runtime ready" });
   postMessage({
     loaded: true,
     stdin,
