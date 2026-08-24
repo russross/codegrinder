@@ -2532,7 +2532,6 @@ mod tests {
             sqlite3_path: std::path::PathBuf::new(),
             sessions_expire: Vec::new(),
             ip_filter: IpFilterConfig::default(),
-            www_root: std::path::PathBuf::new(),
         }
     }
 

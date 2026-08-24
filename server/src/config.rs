@@ -30,7 +30,6 @@ pub struct ServerConfig {
     pub sqlite3_path: PathBuf,
     pub sessions_expire: Vec<DateTime<Utc>>,
     pub ip_filter: IpFilterConfig,
-    pub www_root: PathBuf,
 }
 
 #[derive(Debug, Deserialize)]
@@ -69,7 +68,6 @@ struct RawConfig {
     sqlite3_path: PathBuf,
     sessions_expire: Option<Vec<String>>,
     ip_filter: Option<RawIpFilter>,
-    www_root: Option<PathBuf>,
 }
 
 fn default_tool_name() -> String {
@@ -119,11 +117,6 @@ pub fn load_config(path: &Path) -> AppResult<ServerConfig> {
         ip_filter: IpFilterConfig {
             whitelist: raw.ip_filter.map(|ip| ip.whitelist).unwrap_or_default(),
         },
-        www_root: resolve_config_path(
-            config_dir,
-            raw.www_root.unwrap_or_default(),
-            Path::new("www"),
-        ),
     })
 }
 
@@ -213,8 +206,7 @@ mod tests {
             &config_path,
             r#"{
                 "hostname": "example.test",
-                "sqlite3Path": "state/server.db",
-                "wwwRoot": "public"
+                "sqlite3Path": "state/server.db"
             }"#,
         )
         .unwrap();
@@ -222,6 +214,5 @@ mod tests {
         let config = load_config(&config_path).unwrap();
 
         assert_eq!(config.sqlite3_path, dir.path().join("state/server.db"));
-        assert_eq!(config.www_root, dir.path().join("public"));
     }
 }

@@ -47,9 +47,10 @@ The server requires an explicit configuration path:
 
 `CODEGRINDER_CONFIG` may select the path instead. The server never
 searches a user's home directory for configuration or data. Relative
-`sqlite3Path` and `wwwRoot` values are resolved from the directory
-containing the config file. Absolute paths are appropriate for system
-installations. Start from `setup/config.example.json`, generate each
+`sqlite3Path` values are resolved from the directory containing the config
+file. Absolute paths are appropriate for system installations. Caddy serves
+the installed web files from `/usr/share/codegrinder/www`. Start from
+`setup/config.example.json`, generate each
 secret independently with `head -c 32 /dev/urandom | base64`, and keep
 the populated config outside the repository.
 
@@ -64,7 +65,10 @@ can be overridden in `/etc/conf.d/codegrinder`:
     codegrinder_roles="-ta -daycare"
 
 Caddy owns public TLS and reverse-proxies to the server's default
-`localhost:1400` cleartext listener.
+`localhost:1400` cleartext listener. It also serves static files from
+`/usr/share/codegrinder/www`. The server requires `curl` for standalone
+daycare registration and Canvas grade passback, and verifies that it is
+available during startup.
 
 
 Database setup and backup

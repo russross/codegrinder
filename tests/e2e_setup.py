@@ -266,7 +266,6 @@ def write_server_config() -> None:
                 ],
                 "containerEngine": "docker",
                 "sqlite3Path": str(DB_PATH),
-                "wwwRoot": str(ROOT / "www"),
                 "sessionsExpire": ["2099-01-01 00:00:00"],
                 "ipFilter": {"whitelist": ["127.0.0.1", "::1"]},
             },

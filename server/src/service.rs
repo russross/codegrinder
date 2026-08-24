@@ -601,7 +601,6 @@ fn request_client_ip<T>(request: &Request<T>) -> Option<String> {
                 .filter(|value| !value.trim().is_empty())
                 .map(|value| value.trim().to_owned())
         })
-        .or_else(|| request.remote_addr().map(|addr| addr.ip().to_string()))
         .or_else(|| {
             request
                 .extensions()
@@ -1031,7 +1030,6 @@ mod tests {
             sqlite3_path: dir.join("db.sqlite"),
             sessions_expire: Vec::new(),
             ip_filter: IpFilterConfig::default(),
-            www_root: dir.join("www"),
         });
         open_test_connection(&config.sqlite3_path).unwrap();
         let db = Db::open(&config.sqlite3_path).unwrap();

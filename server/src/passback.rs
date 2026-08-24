@@ -6,12 +6,14 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use chrono::Utc;
 use http::header::{AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
+use http::{HeaderMap, HeaderValue};
 use rand::RngExt;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Deserialize;
 use sha1::{Digest, Sha1};
 
 use crate::config::ServerConfig;
+use crate::curl::{CurlError, CurlHttpVersion, CurlPostRequest};
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
 use crate::proto::{AssignmentKey, Commit, EventMessage};
@@ -25,13 +27,14 @@ pub const PASSBACK_LOCKED: &str = "not_posted_locked";
 pub const PASSBACK_USER_NOT_IN_COURSE: &str = "not_posted_user_not_in_course";
 const USER_AGENT_VALUE: &str = concat!("CodeGrinder/", env!("CARGO_PKG_VERSION"));
 const STARTUP_RECOVERY_JITTER: Duration = Duration::from_secs(10 * 60);
+const GRADE_PASSBACK_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, thiserror::Error)]
 enum GradePassbackError {
     #[error("{0}")]
     Permanent(#[from] AppError),
     #[error("grade passback failed: {0}")]
-    Transport(#[from] reqwest::Error),
+    Transport(#[from] CurlError),
     #[error("grade passback status {status}: {body}")]
     Http {
         status: http::StatusCode,
@@ -425,20 +428,25 @@ async fn save_grade(
         &config.hostname,
         &config.lti_secret,
     )?;
-    // Canvas grade passback intentionally uses HTTP/1.1. Enable Reqwest's HTTP/2 feature if a
-    // future Canvas update requires HTTP/2 for outcome service requests.
-    let client = reqwest::Client::new();
-    let response = client
-        .post(&target.outcome_url)
-        .header(AUTHORIZATION, auth)
-        .header(CONTENT_TYPE, "application/xml")
-        .header(USER_AGENT, USER_AGENT_VALUE)
-        .body(payload)
-        .send()
-        .await?;
-    let status = response.status();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&auth)
+            .map_err(|err| AppError::Internal(format!("invalid OAuth header: {err}")))?,
+    );
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/xml"));
+    headers.insert(USER_AGENT, HeaderValue::from_static(USER_AGENT_VALUE));
+    let response = crate::curl::post(CurlPostRequest {
+        url: &target.outcome_url,
+        headers: &headers,
+        body: &payload,
+        timeout: GRADE_PASSBACK_TIMEOUT,
+        http_version: CurlHttpVersion::Http1_1,
+    })
+    .await?;
+    let status = response.status;
     if status != http::StatusCode::OK {
-        let body = response.text().await?;
+        let body = String::from_utf8_lossy(&response.body).into_owned();
         return Err(GradePassbackError::Http { status, body });
     }
     Ok(())

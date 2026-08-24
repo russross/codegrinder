@@ -32,7 +32,7 @@ For Rust server startup and checks:
 - The Rust server binds to `localhost:1400` by default. System startup should rely on that default unless an explicit local override is required.
 - The Rust server does not load TLS certificates or manage public HTTPS. Public hostnames and certificates belong to Caddy.
 - The server supports `-ta` and `-daycare` roles. Either role may be enabled alone, both may be enabled together, and omitting both role flags means both roles are enabled.
-- TA role serves LTI, version/daycare-registration routes, static files, and TA gRPC methods. Daycare role serves the `Daycare` gRPC runtime path and registers the local daycare capacity when configured.
+- TA role serves LTI, version/daycare-registration routes, and TA gRPC methods. Caddy serves static files. Daycare role serves the `Daycare` gRPC runtime path and registers the local daycare capacity when configured.
 - The secondary test/dev combined TA+daycare instance is reached through Caddy at `https://dev.russross.com`.
 - The end-to-end test script expects Caddy to already be running and uses `https://dev.russross.com` for all server traffic; it starts and stops only its own temporary CodeGrinder process.
 - Build and check the Rust server with `cargo build --release -p codegrinder`, `cargo test --release -p codegrinder`, `cargo clippy --release -p codegrinder -- -D warnings`, and `cargo fmt --all --check`.

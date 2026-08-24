@@ -8,6 +8,5 @@
     "problemTypes": [
         "python3unittest"
     ],
-    "sqlite3Path": "/var/lib/codegrinder/codegrinder.db",
-    "wwwRoot": "/usr/share/codegrinder/www"
+    "sqlite3Path": "/var/lib/codegrinder/codegrinder.db"
 }

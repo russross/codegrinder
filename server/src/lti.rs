@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::io::Read;
 use std::sync::Arc;
 
 use axum::body::Bytes;
@@ -9,9 +10,8 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::Utc;
 use flate2::read::GzDecoder;
+use form_urlencoded::parse as parse_form;
 use rusqlite::{Connection, OptionalExtension, params};
-use std::io::Read;
-use url::form_urlencoded;
 
 use crate::config::ServerConfig;
 use crate::db::Db;
@@ -20,6 +20,7 @@ use crate::ipfilter::{IpFilter, extract_ip};
 use crate::passback::compute_oauth_signature;
 use crate::registry::{DaycareRegistration, DaycareRegistry};
 use crate::sessions::LoginTokens;
+use crate::signatures::escape;
 use crate::timeutil::{db_time, parse_canvas_time};
 
 const BOOTSTRAP_ASSIGNMENT_NAME: &str = "bootstrap-codegrinder";
@@ -162,7 +163,7 @@ async fn launch_inner(
     } else {
         body.to_vec()
     };
-    let form = form_urlencoded::parse(&raw).into_owned().fold(
+    let form = parse_form(&raw).into_owned().fold(
         BTreeMap::<String, Vec<String>>::new(),
         |mut acc, (key, value)| {
             acc.entry(key).or_default().push(value);
@@ -211,9 +212,9 @@ fn launch_location(ui: LaunchUi, assignment_key: &str, token: &str, course_label
     format!(
         "/{}/?assignment={}&token={}&course={}",
         ui.as_str(),
-        urlencoding::encode(assignment_key),
-        urlencoding::encode(token),
-        urlencoding::encode(course_label)
+        escape(assignment_key),
+        escape(token),
+        escape(course_label)
     )
 }
 
@@ -447,6 +448,16 @@ mod tests {
     }
 
     #[test]
+    fn launch_location_uses_oauth_percent_encoding() {
+        let location = launch_location(LaunchUi::Web, "a+b &/é~", "t=1", "CS+101");
+
+        assert_eq!(
+            location,
+            "/web/?assignment=a%2Bb%20%26%2F%C3%A9~&token=t%3D1&course=CS%2B101"
+        );
+    }
+
+    #[test]
     fn launch_update_stores_assignment_time_fields() {
         let dir = tempfile::tempdir().unwrap();
         let conn = open_test_connection(&dir.path().join("db.sqlite")).unwrap();
@@ -518,7 +529,6 @@ mod tests {
             sqlite3_path: PathBuf::new(),
             sessions_expire: Vec::new(),
             ip_filter: IpFilterConfig::default(),
-            www_root: PathBuf::new(),
         }
     }
 }

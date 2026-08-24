@@ -1745,7 +1745,6 @@ mod tests {
             sqlite3_path: base.join("db.sqlite"),
             sessions_expire: Vec::new(),
             ip_filter: IpFilterConfig::default(),
-            www_root: base.join("www"),
         }
     }
 }

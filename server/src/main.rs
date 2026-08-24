@@ -1,4 +1,5 @@
 mod config;
+mod curl;
 mod daycare;
 mod db;
 mod error;
@@ -21,21 +22,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::Request;
-use axum::middleware::{self, Next};
-use axum::response::Response;
-use axum::{
-    Router,
-    http::{HeaderValue, StatusCode},
-};
+use axum::Router;
 use chrono::Utc;
+use http::header::CONTENT_TYPE;
+use http::{HeaderMap, HeaderValue};
 use proto::code_grinder_service_server::CodeGrinderServiceServer;
 use tonic::codec::CompressionEncoding;
 use tower::Layer;
-use tower_http::compression::CompressionLayer;
-use tower_http::services::ServeDir;
 
 use crate::config::{load_config, validate_config};
+use crate::curl::{CurlHttpVersion, CurlPostRequest};
 use crate::daycare::DaycareRuntime;
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
@@ -65,6 +61,9 @@ async fn main() -> AppResult<()> {
         })?;
     let config = Arc::new(load_config(&config_path)?);
     validate_config(&config, args.ta, args.daycare)?;
+    curl::require_available()
+        .await
+        .map_err(|err| AppError::Internal(format!("curl is required: {err}")))?;
     let db = Db::open(&config.sqlite3_path)?;
     if args.ta {
         db.transaction(|conn| delete_expired_sessions(conn, now_utc()))
@@ -123,37 +122,14 @@ async fn main() -> AppResult<()> {
             registry,
             version,
         };
-        lti::router(lti_state).merge(grpc_router).fallback_service(
-            ServeDir::new(&config.www_root).append_index_html_on_directories(true),
-        )
+        lti::router(lti_state).merge(grpc_router)
     } else {
-        grpc_router.fallback(|| async { (StatusCode::NOT_FOUND, "not found") })
-    }
-    .layer(CompressionLayer::new())
-    .layer(middleware::from_fn(add_web_runtime_isolation_headers));
+        grpc_router
+    };
     serve(app, args.bind).await
 }
 
-async fn add_web_runtime_isolation_headers(request: Request, next: Next) -> Response {
-    let path = request.uri().path();
-    let web_runtime_path = path.starts_with("/web/") || path.starts_with("/js/");
-    let mut response = next.run(request).await;
-    if !web_runtime_path {
-        return response;
-    }
-    response.headers_mut().insert(
-        "cross-origin-opener-policy",
-        HeaderValue::from_static("same-origin"),
-    );
-    response.headers_mut().insert(
-        "cross-origin-embedder-policy",
-        HeaderValue::from_static("require-corp"),
-    );
-    response
-}
-
 async fn register_daycare(config: Arc<config::ServerConfig>, version: String) {
-    let client = reqwest::Client::new();
     let url = if config.ta_hostname.starts_with("http://")
         || config.ta_hostname.starts_with("https://")
     {
@@ -164,6 +140,8 @@ async fn register_daycare(config: Arc<config::ServerConfig>, version: String) {
     } else {
         format!("https://{}/daycare_registrations", config.ta_hostname)
     };
+    let headers =
+        HeaderMap::from_iter([(CONTENT_TYPE, HeaderValue::from_static("application/json"))]);
     let mut last_status = String::new();
     loop {
         let started = std::time::Instant::now();
@@ -176,17 +154,28 @@ async fn register_daycare(config: Arc<config::ServerConfig>, version: String) {
             &version,
             &config.daycare_secret,
         );
-        let request = signature.map(|signature| registry::DaycareRegistration {
-            hostname: config.hostname.clone(),
-            problem_types: config.problem_types.clone(),
-            capacity: config.capacity,
-            time: now,
-            version: version.clone(),
-            signature,
+        let request = signature.and_then(|signature| {
+            serde_json::to_vec(&registry::DaycareRegistration {
+                hostname: config.hostname.clone(),
+                problem_types: config.problem_types.clone(),
+                capacity: config.capacity,
+                time: now,
+                version: version.clone(),
+                signature,
+            })
+            .map_err(Into::into)
         });
         match request {
-            Ok(registration) => match client.post(&url).json(&registration).send().await {
-                Ok(response) if response.status().is_success() => {
+            Ok(body) => match curl::post(CurlPostRequest {
+                url: &url,
+                headers: &headers,
+                body: &body,
+                timeout: DAYCARE_REGISTRATION_INTERVAL,
+                http_version: CurlHttpVersion::Any,
+            })
+            .await
+            {
+                Ok(response) if response.status.is_success() => {
                     if last_status != "succeeded" {
                         eprintln!(
                             "registered daycare with {url}; attempt took {:?}",
@@ -196,8 +185,8 @@ async fn register_daycare(config: Arc<config::ServerConfig>, version: String) {
                     last_status = "succeeded".to_owned();
                 }
                 Ok(response) => {
-                    let status = response.status();
-                    let body = response.text().await.unwrap_or_default();
+                    let status = response.status;
+                    let body = String::from_utf8_lossy(&response.body);
                     if last_status != "failed" {
                         eprintln!("unexpected status from {url}: {status}");
                         for line in body.lines().filter(|line| !line.is_empty()) {

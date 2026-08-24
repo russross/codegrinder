@@ -3,7 +3,10 @@ codegrinder.example.edu {
 		protocols tls1.3
 	}
 
-	encode zstd gzip
+	root * /usr/share/codegrinder/www
+
+	@not_grpc not path /codegrinder.CodeGrinderService/*
+	encode @not_grpc zstd gzip
 
 	log {
 		output file /var/log/caddy/codegrinder-access.log
@@ -18,5 +21,14 @@ codegrinder.example.edu {
 		-Server
 	}
 
-	reverse_proxy h2c://localhost:1400
+	@web_runtime path /web/* /js/*
+	header @web_runtime {
+		Cross-Origin-Opener-Policy same-origin
+		Cross-Origin-Embedder-Policy require-corp
+	}
+
+	@dynamic path /codegrinder.CodeGrinderService/* /daycare_registrations /lti/* /v2/version /version
+	reverse_proxy @dynamic h2c://localhost:1400
+
+	file_server
 }
