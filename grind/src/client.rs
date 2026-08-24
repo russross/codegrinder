@@ -1,5 +1,5 @@
 use crate::config::{ApiTrace, AuthenticatedUser, Config, Roles, write_login_config};
-use crate::error::{CliError, Result, fail};
+use crate::error::{CliError, Result, fail, rpc_error, transport_error};
 use crate::proto::codegrinder::code_grinder_service_client::CodeGrinderServiceClient;
 use crate::proto::codegrinder::{
     AssignmentKey, AuthorProblemDraft, Commit, GetAssignmentRequest, GetAssignmentResponse,
@@ -38,7 +38,12 @@ macro_rules! call_rpc {
             timed_request(request, $session.config.rpc_timeout),
             &$session.config.session_key,
         )?;
-        let response = $session.client.$method(request).await?.into_inner();
+        let response = $session
+            .client
+            .$method(request)
+            .await
+            .map_err(|status| rpc_error($name, &$session.config.host, status))?
+            .into_inner();
         dump(&$session.config.trace, $name, false, &response);
         Ok::<_, CliError>(response)
     }};
@@ -66,7 +71,11 @@ impl Session {
             &config.session_key,
         )?;
         dump(&config.trace, "Hello", true, &request.get_ref());
-        let response = client.hello(request).await?.into_inner();
+        let response = client
+            .hello(request)
+            .await
+            .map_err(|status| rpc_error("Hello", &config.host, status))?
+            .into_inner();
         dump(&config.trace, "Hello", false, &response);
         check_version(&response, &config.host).await?;
         let user = user_from_hello(&response)?;
@@ -302,7 +311,12 @@ impl Session {
         dump(&self.config.trace, "Daycare", true, &request);
         let timeout = daycare_timeout(&request, self.config.rpc_timeout);
         let request = authorize(timed_request(request, timeout), &self.config.session_key)?;
-        let response = self.client.daycare(request).await?.into_inner();
+        let response = self
+            .client
+            .daycare(request)
+            .await
+            .map_err(|status| rpc_error("Daycare", &self.config.host, status))?
+            .into_inner();
         dump(&self.config.trace, "Daycare", false, &"stream");
         Ok(response)
     }
@@ -324,7 +338,8 @@ pub async fn login(host: &str, token: &str, trace: ApiTrace) -> Result<HelloResp
     dump(&trace, "Hello", true, &request);
     let response = client
         .hello(timed_request(request, config.rpc_timeout))
-        .await?
+        .await
+        .map_err(|status| rpc_error("Hello", &config.host, status))?
         .into_inner();
     dump(&trace, "Hello", false, &response);
     check_version(&response, &config.host).await?;
@@ -441,14 +456,23 @@ pub fn decode_runtime(
 
 async fn new_grpc_client(config: &Config) -> Result<CodeGrinderServiceClient<Channel>> {
     let uri = endpoint_uri(&config.host)?;
-    let endpoint = Endpoint::from_shared(uri.clone())?;
+    let endpoint = Endpoint::from_shared(uri.clone())
+        .map_err(|error| CliError::Message(format!("invalid server address {uri:?}: {error}")))?;
     let channel = if uri.starts_with("http://") {
-        endpoint.connect().await?
+        endpoint
+            .connect()
+            .await
+            .map_err(|error| transport_error(&uri, error))?
     } else {
         let tls = ClientTlsConfig::new()
             .with_webpki_roots()
             .domain_name(tls_domain_name(&uri)?);
-        endpoint.tls_config(tls)?.connect().await?
+        endpoint
+            .tls_config(tls)
+            .map_err(|error| CliError::Message(format!("invalid TLS settings for {uri}: {error}")))?
+            .connect()
+            .await
+            .map_err(|error| transport_error(&uri, error))?
     };
     Ok(CodeGrinderServiceClient::new(channel)
         .send_compressed(tonic::codec::CompressionEncoding::Gzip)

@@ -1,4 +1,4 @@
-use crate::error::{Result, fail};
+use crate::error::{CliError, Result, fail};
 use crate::proto::codegrinder::AssignmentKey;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -137,7 +137,11 @@ pub fn load_config_or_default() -> Result<Config> {
 }
 
 pub fn load_config_from_path(path: &Path, trace: ApiTrace) -> Result<Config> {
-    let raw: RawConfig = toml::from_str(&fs::read_to_string(path)?)?;
+    let contents = fs::read_to_string(path).map_err(|error| {
+        CliError::Io(format!("unable to read config {}: {error}", path.display()))
+    })?;
+    let raw: RawConfig = toml::from_str(&contents)
+        .map_err(|error| CliError::Toml(format!("invalid config {}: {error}", path.display())))?;
     Ok(Config {
         host: raw.host,
         session_key: raw.session_key,
@@ -160,8 +164,19 @@ pub fn write_login_config(config: &Config) -> Result<()> {
     let parent = path.parent().ok_or_else(|| {
         crate::error::CliError::Message(format!("invalid config path {}", path.display()))
     })?;
-    fs::create_dir_all(parent)?;
-    fs::write(path, toml::to_string(&raw)?)?;
+    fs::create_dir_all(parent).map_err(|error| {
+        CliError::Io(format!(
+            "unable to create config directory {}: {error}",
+            parent.display()
+        ))
+    })?;
+    let contents = toml::to_string(&raw)?;
+    fs::write(&path, contents).map_err(|error| {
+        CliError::Io(format!(
+            "unable to write config {}: {error}",
+            path.display()
+        ))
+    })?;
     Ok(())
 }
 
@@ -193,7 +208,10 @@ pub fn find_dotfile(start_dir: &Path) -> Result<(DotFile, PathBuf, Option<PathBu
 }
 
 pub fn load_dotfile(path: &Path) -> Result<DotFile> {
-    let raw: RawDotFile = toml::from_str(&fs::read_to_string(path)?)?;
+    let contents = fs::read_to_string(path)
+        .map_err(|error| CliError::Io(format!("unable to read {}: {error}", path.display())))?;
+    let raw: RawDotFile = toml::from_str(&contents)
+        .map_err(|error| CliError::Toml(format!("invalid {}: {error}", path.display())))?;
     Ok(DotFile {
         assignment: raw.assignment,
         problems: raw.problems,
@@ -206,7 +224,13 @@ pub fn save_dotfile(dotfile: &DotFile) -> Result<()> {
         assignment: dotfile.assignment.clone(),
         problems: dotfile.problems.clone(),
     };
-    fs::write(&dotfile.path, toml::to_string(&raw)?)?;
+    let contents = toml::to_string(&raw)?;
+    fs::write(&dotfile.path, contents).map_err(|error| {
+        CliError::Io(format!(
+            "unable to write {}: {error}",
+            dotfile.path.display()
+        ))
+    })?;
     Ok(())
 }
 
