@@ -248,7 +248,7 @@ CREATE TABLE assignments (
     CHECK (trim(outcome_url) = outcome_url AND length(outcome_url) > 0),
     CHECK (trim(outcome_ext_accepted) = outcome_ext_accepted AND length(outcome_ext_accepted) > 0),
     CHECK (trim(consumer_key) = consumer_key AND length(consumer_key) > 0),
-    CHECK (grade_passback_status IN ('posted', 'post_pending', 'post_failed', 'not_posted_no_target', 'not_posted_locked')),
+    CHECK (grade_passback_status IN ('posted', 'post_pending', 'post_failed', 'not_posted_no_target', 'not_posted_locked', 'not_posted_user_not_in_course')),
     CHECK (unlock_at IS NULL OR due_at IS NULL OR unlock_at <= due_at),
     CHECK (due_at IS NULL OR lock_at IS NULL OR due_at <= lock_at)
 ) WITHOUT ROWID;
