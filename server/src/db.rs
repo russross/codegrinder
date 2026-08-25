@@ -57,11 +57,7 @@ impl Db {
             f(conn).map(|value| DbResponse::Value(Box::new(value)))
         });
         self.sender
-            .send(DbMessage {
-                job,
-                deadline,
-                reply,
-            })
+            .send(DbMessage { job, deadline, reply })
             .map_err(|_| AppError::Internal("database worker stopped".to_owned()))?;
         let response = match deadline {
             Some(deadline) => {
@@ -134,14 +130,10 @@ fn set_job_deadline(conn: &Connection, deadline: Option<Instant>) -> AppResult<(
         conn.progress_handler(0, None::<fn() -> bool>)?;
         return Ok(());
     };
-    let remaining = deadline
-        .checked_duration_since(Instant::now())
-        .ok_or_else(deadline_exceeded)?;
+    let remaining =
+        deadline.checked_duration_since(Instant::now()).ok_or_else(deadline_exceeded)?;
     conn.busy_timeout(remaining.min(DEFAULT_BUSY_TIMEOUT))?;
-    conn.progress_handler(
-        SQLITE_PROGRESS_OPS,
-        Some(move || Instant::now() >= deadline),
-    )?;
+    conn.progress_handler(SQLITE_PROGRESS_OPS, Some(move || Instant::now() >= deadline))?;
     Ok(())
 }
 
@@ -204,11 +196,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let conn = open_test_connection(&dir.path().join("db.sqlite")).unwrap();
         let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(1) FROM sqlite_master WHERE name = 'users'",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT COUNT(1) FROM sqlite_master WHERE name = 'users'", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(count, 1);
     }

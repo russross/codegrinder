@@ -90,10 +90,9 @@ pub fn load_config(path: &Path) -> AppResult<ServerConfig> {
     let raw: RawConfig = serde_json::from_slice(&fs::read(path)?)?;
     let config_dir = path.parent().unwrap_or_else(|| Path::new("."));
     let sessions_expire = match raw.sessions_expire {
-        Some(values) => values
-            .iter()
-            .map(|value| parse_db_time(value))
-            .collect::<AppResult<Vec<_>>>()?,
+        Some(values) => {
+            values.iter().map(|value| parse_db_time(value)).collect::<AppResult<Vec<_>>>()?
+        }
         None => local_session_defaults(),
     };
     Ok(ServerConfig {
@@ -121,16 +120,8 @@ pub fn load_config(path: &Path) -> AppResult<ServerConfig> {
 }
 
 fn resolve_config_path(config_dir: &Path, configured: PathBuf, default: &Path) -> PathBuf {
-    let path = if configured.as_os_str().is_empty() {
-        default
-    } else {
-        &configured
-    };
-    if path.is_absolute() {
-        path.to_owned()
-    } else {
-        config_dir.join(path)
-    }
+    let path = if configured.as_os_str().is_empty() { default } else { &configured };
+    if path.is_absolute() { path.to_owned() } else { config_dir.join(path) }
 }
 
 pub fn validate_config(
@@ -164,9 +155,7 @@ pub fn validate_config(
         ));
     }
     if daycare_enabled && config.capacity == 0 {
-        return Err(AppError::Internal(
-            "Daycare capacity must be greater than zero".to_owned(),
-        ));
+        return Err(AppError::Internal("Daycare capacity must be greater than zero".to_owned()));
     }
     if daycare_enabled && !ta_enabled && config.ta_hostname.trim().is_empty() {
         return Err(AppError::Internal(

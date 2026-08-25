@@ -12,9 +12,7 @@ pub fn db_time(value: DateTime<Utc>) -> String {
 }
 
 pub fn parse_db_time(raw: &str) -> AppResult<DateTime<Utc>> {
-    let text = raw
-        .strip_suffix('Z')
-        .map_or_else(|| raw.to_owned(), |s| format!("{s}+00:00"));
+    let text = raw.strip_suffix('Z').map_or_else(|| raw.to_owned(), |s| format!("{s}+00:00"));
     DateTime::parse_from_rfc3339(&text)
         .map(|dt| dt.with_timezone(&Utc))
         .or_else(|_| {
@@ -29,10 +27,7 @@ pub fn parse_optional_db_time(raw: Option<String>) -> AppResult<Option<DateTime<
 }
 
 pub fn timestamp(value: DateTime<Utc>) -> Timestamp {
-    Timestamp {
-        seconds: value.timestamp(),
-        nanos: value.timestamp_subsec_nanos() as i32,
-    }
+    Timestamp { seconds: value.timestamp(), nanos: value.timestamp_subsec_nanos() as i32 }
 }
 
 pub fn timestamp_opt(raw: Option<String>) -> AppResult<Option<Timestamp>> {
@@ -49,9 +44,7 @@ pub fn parse_canvas_time(raw: &str) -> Option<DateTime<Utc>> {
     if trimmed.is_empty() {
         return None;
     }
-    DateTime::parse_from_rfc3339(trimmed)
-        .map(|dt| dt.with_timezone(&Utc))
-        .ok()
+    DateTime::parse_from_rfc3339(trimmed).map(|dt| dt.with_timezone(&Utc)).ok()
 }
 
 pub fn local_session_defaults() -> Vec<DateTime<Utc>> {

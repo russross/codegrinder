@@ -124,9 +124,7 @@ impl CodeGrinderServer {
         if user.admin || user.author || user.instructor {
             Ok(())
         } else {
-            Err(AppError::Forbidden(
-                "user is not an instructor or author".to_owned(),
-            ))
+            Err(AppError::Forbidden("user is not an instructor or author".to_owned()))
         }
     }
 
@@ -164,10 +162,8 @@ impl CodeGrinderService for CodeGrinderServer {
         let deadline = request_deadline(&request);
         let token = request.get_ref().token.clone();
         if !token.is_empty() {
-            let user_id = self
-                .login_tokens
-                .take(&token, now_utc())
-                .map_err(AppError::grpc_status)?;
+            let user_id =
+                self.login_tokens.take(&token, now_utc()).map_err(AppError::grpc_status)?;
             let response = self
                 .db
                 .transaction_until(deadline, move |conn| {
@@ -185,10 +181,7 @@ impl CodeGrinderService for CodeGrinderServer {
                 .map_err(AppError::grpc_status)?;
             return Ok(Response::new(response));
         }
-        let user = self
-            .authenticated_user(&request)
-            .await
-            .map_err(AppError::grpc_status)?;
+        let user = self.authenticated_user(&request).await.map_err(AppError::grpc_status)?;
         Ok(Response::new(hello_response(user, version, String::new())))
     }
 
@@ -199,10 +192,8 @@ impl CodeGrinderService for CodeGrinderServer {
         self.require_ta_role().map_err(AppError::grpc_status)?;
         let deadline = request_deadline(&request);
         let ip_allowed = self.ip_allowed(&request);
-        let current_user = self
-            .authenticated_user(&request)
-            .await
-            .map_err(AppError::grpc_status)?;
+        let current_user =
+            self.authenticated_user(&request).await.map_err(AppError::grpc_status)?;
         let req = request.into_inner();
         let items = self
             .db
@@ -226,10 +217,8 @@ impl CodeGrinderService for CodeGrinderServer {
     ) -> Result<Response<SearchProblemCatalogResponse>, Status> {
         self.require_ta_role().map_err(AppError::grpc_status)?;
         let deadline = request_deadline(&request);
-        let current_user = self
-            .authenticated_user(&request)
-            .await
-            .map_err(AppError::grpc_status)?;
+        let current_user =
+            self.authenticated_user(&request).await.map_err(AppError::grpc_status)?;
         Self::require_catalog_search(&current_user).map_err(AppError::grpc_status)?;
         let req = request.into_inner();
         let problem_sets = self
@@ -270,9 +259,7 @@ impl CodeGrinderService for CodeGrinderServer {
             })
             .await
             .map_err(AppError::grpc_status)?;
-        Ok(Response::new(GetProblemTypeResponse {
-            problem_type: Some(problem_type),
-        }))
+        Ok(Response::new(GetProblemTypeResponse { problem_type: Some(problem_type) }))
     }
 
     async fn save_problem_type_files(
@@ -281,10 +268,8 @@ impl CodeGrinderService for CodeGrinderServer {
     ) -> Result<Response<SaveProblemTypeFilesResponse>, Status> {
         self.require_ta_role().map_err(AppError::grpc_status)?;
         let deadline = request_deadline(&request);
-        let current_user = self
-            .authenticated_user(&request)
-            .await
-            .map_err(AppError::grpc_status)?;
+        let current_user =
+            self.authenticated_user(&request).await.map_err(AppError::grpc_status)?;
         Self::require_admin(&current_user).map_err(AppError::grpc_status)?;
         let req = request.into_inner();
         let problem_type = self
@@ -294,9 +279,7 @@ impl CodeGrinderService for CodeGrinderServer {
             })
             .await
             .map_err(AppError::grpc_status)?;
-        Ok(Response::new(SaveProblemTypeFilesResponse {
-            problem_type: Some(problem_type),
-        }))
+        Ok(Response::new(SaveProblemTypeFilesResponse { problem_type: Some(problem_type) }))
     }
 
     async fn save_problem_type(
@@ -305,10 +288,8 @@ impl CodeGrinderService for CodeGrinderServer {
     ) -> Result<Response<SaveProblemTypeResponse>, Status> {
         self.require_ta_role().map_err(AppError::grpc_status)?;
         let deadline = request_deadline(&request);
-        let current_user = self
-            .authenticated_user(&request)
-            .await
-            .map_err(AppError::grpc_status)?;
+        let current_user =
+            self.authenticated_user(&request).await.map_err(AppError::grpc_status)?;
         Self::require_admin(&current_user).map_err(AppError::grpc_status)?;
         let req = request.into_inner();
         let problem_types = self
@@ -328,10 +309,8 @@ impl CodeGrinderService for CodeGrinderServer {
         self.require_ta_role().map_err(AppError::grpc_status)?;
         let deadline = request_deadline(&request);
         let ip_allowed = self.ip_allowed(&request);
-        let current_user = self
-            .authenticated_user(&request)
-            .await
-            .map_err(AppError::grpc_status)?;
+        let current_user =
+            self.authenticated_user(&request).await.map_err(AppError::grpc_status)?;
         let key = request
             .into_inner()
             .assignment
@@ -353,14 +332,11 @@ impl CodeGrinderService for CodeGrinderServer {
         self.require_ta_role().map_err(AppError::grpc_status)?;
         let deadline = request_deadline(&request);
         let ip_allowed = self.ip_allowed(&request);
-        let current_user = self
-            .authenticated_user(&request)
-            .await
-            .map_err(AppError::grpc_status)?;
+        let current_user =
+            self.authenticated_user(&request).await.map_err(AppError::grpc_status)?;
         let req = request.into_inner();
-        let key = req
-            .assignment
-            .ok_or_else(|| Status::invalid_argument("assignment is required"))?;
+        let key =
+            req.assignment.ok_or_else(|| Status::invalid_argument("assignment is required"))?;
         let response = self
             .db
             .transaction_until(deadline, move |conn| {
@@ -389,15 +365,11 @@ impl CodeGrinderService for CodeGrinderServer {
     ) -> Result<Response<PrepareProblemResponse>, Status> {
         self.require_ta_role().map_err(AppError::grpc_status)?;
         let deadline = request_deadline(&request);
-        let current_user = self
-            .authenticated_user(&request)
-            .await
-            .map_err(AppError::grpc_status)?;
+        let current_user =
+            self.authenticated_user(&request).await.map_err(AppError::grpc_status)?;
         Self::require_author(&current_user).map_err(AppError::grpc_status)?;
         let req = request.into_inner();
-        let draft = req
-            .draft
-            .ok_or_else(|| Status::invalid_argument("draft is required"))?;
+        let draft = req.draft.ok_or_else(|| Status::invalid_argument("draft is required"))?;
         let config = self.config.clone();
         let this = self.clone();
         let bundle = self
@@ -414,9 +386,7 @@ impl CodeGrinderService for CodeGrinderServer {
             })
             .await
             .map_err(AppError::grpc_status)?;
-        Ok(Response::new(PrepareProblemResponse {
-            bundle: Some(bundle),
-        }))
+        Ok(Response::new(PrepareProblemResponse { bundle: Some(bundle) }))
     }
 
     async fn save_problem(
@@ -425,15 +395,11 @@ impl CodeGrinderService for CodeGrinderServer {
     ) -> Result<Response<SaveProblemResponse>, Status> {
         self.require_ta_role().map_err(AppError::grpc_status)?;
         let deadline = request_deadline(&request);
-        let current_user = self
-            .authenticated_user(&request)
-            .await
-            .map_err(AppError::grpc_status)?;
+        let current_user =
+            self.authenticated_user(&request).await.map_err(AppError::grpc_status)?;
         Self::require_author(&current_user).map_err(AppError::grpc_status)?;
         let req = request.into_inner();
-        let bundle = req
-            .bundle
-            .ok_or_else(|| Status::invalid_argument("bundle is required"))?;
+        let bundle = req.bundle.ok_or_else(|| Status::invalid_argument("bundle is required"))?;
         let config = self.config.clone();
         let saved = self
             .db
@@ -442,9 +408,7 @@ impl CodeGrinderService for CodeGrinderServer {
             })
             .await
             .map_err(AppError::grpc_status)?;
-        Ok(Response::new(SaveProblemResponse {
-            bundle: Some(saved),
-        }))
+        Ok(Response::new(SaveProblemResponse { bundle: Some(saved) }))
     }
 
     async fn save_problem_set(
@@ -453,15 +417,11 @@ impl CodeGrinderService for CodeGrinderServer {
     ) -> Result<Response<SaveProblemSetResponse>, Status> {
         self.require_ta_role().map_err(AppError::grpc_status)?;
         let deadline = request_deadline(&request);
-        let current_user = self
-            .authenticated_user(&request)
-            .await
-            .map_err(AppError::grpc_status)?;
+        let current_user =
+            self.authenticated_user(&request).await.map_err(AppError::grpc_status)?;
         Self::require_author(&current_user).map_err(AppError::grpc_status)?;
         let req = request.into_inner();
-        let bundle = req
-            .bundle
-            .ok_or_else(|| Status::invalid_argument("bundle is required"))?;
+        let bundle = req.bundle.ok_or_else(|| Status::invalid_argument("bundle is required"))?;
         let saved = self
             .db
             .transaction_until(deadline, move |conn| {
@@ -469,9 +429,7 @@ impl CodeGrinderService for CodeGrinderServer {
             })
             .await
             .map_err(AppError::grpc_status)?;
-        Ok(Response::new(SaveProblemSetResponse {
-            bundle: Some(saved),
-        }))
+        Ok(Response::new(SaveProblemSetResponse { bundle: Some(saved) }))
     }
 
     async fn save_workspace_commit(
@@ -481,10 +439,8 @@ impl CodeGrinderService for CodeGrinderServer {
         self.require_ta_role().map_err(AppError::grpc_status)?;
         let deadline = request_deadline(&request);
         let ip_allowed = self.ip_allowed(&request);
-        let current_user = self
-            .authenticated_user(&request)
-            .await
-            .map_err(AppError::grpc_status)?;
+        let current_user =
+            self.authenticated_user(&request).await.map_err(AppError::grpc_status)?;
         let commit = request
             .into_inner()
             .commit
@@ -506,14 +462,10 @@ impl CodeGrinderService for CodeGrinderServer {
         self.require_ta_role().map_err(AppError::grpc_status)?;
         let deadline = request_deadline(&request);
         let ip_allowed = self.ip_allowed(&request);
-        let current_user = self
-            .authenticated_user(&request)
-            .await
-            .map_err(AppError::grpc_status)?;
+        let current_user =
+            self.authenticated_user(&request).await.map_err(AppError::grpc_status)?;
         let req = request.into_inner();
-        let commit = req
-            .commit
-            .ok_or_else(|| Status::invalid_argument("commit is required"))?;
+        let commit = req.commit.ok_or_else(|| Status::invalid_argument("commit is required"))?;
         let config = self.config.clone();
         let this = self.clone();
         let result = self
@@ -541,10 +493,8 @@ impl CodeGrinderService for CodeGrinderServer {
         self.require_ta_role().map_err(AppError::grpc_status)?;
         let deadline = request_deadline(&request);
         let ip_allowed = self.ip_allowed(&request);
-        let current_user = self
-            .authenticated_user(&request)
-            .await
-            .map_err(AppError::grpc_status)?;
+        let current_user =
+            self.authenticated_user(&request).await.map_err(AppError::grpc_status)?;
         let signed = request
             .into_inner()
             .bundle
@@ -565,9 +515,7 @@ impl CodeGrinderService for CodeGrinderServer {
         {
             spawn_grade_passback(self.db.clone(), self.config.clone(), target, html);
         }
-        Ok(Response::new(SaveGradedCommitResponse {
-            save_status: result.save_status,
-        }))
+        Ok(Response::new(SaveGradedCommitResponse { save_status: result.save_status }))
     }
 
     async fn daycare(
@@ -768,10 +716,7 @@ mod tests {
     fn parses_grpc_timeout_metadata_units() {
         assert_eq!(parse_grpc_timeout("10S"), Some(Duration::from_secs(10)));
         assert_eq!(parse_grpc_timeout("250m"), Some(Duration::from_millis(250)));
-        assert_eq!(
-            parse_grpc_timeout("500000u"),
-            Some(Duration::from_millis(500))
-        );
+        assert_eq!(parse_grpc_timeout("500000u"), Some(Duration::from_millis(500)));
         assert_eq!(parse_grpc_timeout("123456789S"), None);
         assert_eq!(parse_grpc_timeout("10x"), None);
     }
@@ -782,10 +727,7 @@ mod tests {
         let student_session = seed_service_users(&service.db, false, false).await.student;
         let admin_session = seed_service_users(&service.db, true, false).await.admin;
 
-        service
-            .get_problem_types(Request::new(GetProblemTypesRequest::default()))
-            .await
-            .unwrap();
+        service.get_problem_types(Request::new(GetProblemTypesRequest::default())).await.unwrap();
 
         let err = service
             .save_problem_type(auth_request(
@@ -835,10 +777,7 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.code(), Code::PermissionDenied);
 
-        service
-            .prepare_problem(auth_request(prepare_request(), &sessions.admin))
-            .await
-            .unwrap();
+        service.prepare_problem(auth_request(prepare_request(), &sessions.admin)).await.unwrap();
     }
 
     #[tokio::test]
@@ -860,10 +799,7 @@ mod tests {
             .into_inner()
             .items;
         assert_eq!(student_items.len(), 1);
-        assert_eq!(
-            student_items[0].assignment.as_ref().unwrap().user_id,
-            "student"
-        );
+        assert_eq!(student_items[0].assignment.as_ref().unwrap().user_id, "student");
 
         let instructor_items = service
             .list_assignments(auth_request(
@@ -929,43 +865,27 @@ mod tests {
             .unwrap();
 
         let mut direct = auth_request(ListAssignmentsRequest::default(), &sessions.student);
-        direct.extensions_mut().insert(ConnectInfo(
-            "203.0.113.9:12345".parse::<SocketAddr>().unwrap(),
-        ));
-        let direct_items = service
-            .list_assignments(direct)
-            .await
-            .unwrap()
-            .into_inner()
-            .items;
+        direct
+            .extensions_mut()
+            .insert(ConnectInfo("203.0.113.9:12345".parse::<SocketAddr>().unwrap()));
+        let direct_items = service.list_assignments(direct).await.unwrap().into_inner().items;
         assert_eq!(direct_items.len(), 1);
 
         let mut proxied = auth_request(ListAssignmentsRequest::default(), &sessions.student);
-        proxied.metadata_mut().insert(
-            "x-forwarded-for",
-            "203.0.113.10, 198.51.100.7".parse().unwrap(),
-        );
-        proxied.extensions_mut().insert(ConnectInfo(
-            "198.51.100.7:12345".parse::<SocketAddr>().unwrap(),
-        ));
-        let proxied_items = service
-            .list_assignments(proxied)
-            .await
-            .unwrap()
-            .into_inner()
-            .items;
+        proxied
+            .metadata_mut()
+            .insert("x-forwarded-for", "203.0.113.10, 198.51.100.7".parse().unwrap());
+        proxied
+            .extensions_mut()
+            .insert(ConnectInfo("198.51.100.7:12345".parse::<SocketAddr>().unwrap()));
+        let proxied_items = service.list_assignments(proxied).await.unwrap().into_inner().items;
         assert_eq!(proxied_items.len(), 1);
 
         let mut denied = auth_request(ListAssignmentsRequest::default(), &sessions.student);
-        denied.extensions_mut().insert(ConnectInfo(
-            "198.51.100.7:12345".parse::<SocketAddr>().unwrap(),
-        ));
-        let denied_items = service
-            .list_assignments(denied)
-            .await
-            .unwrap()
-            .into_inner()
-            .items;
+        denied
+            .extensions_mut()
+            .insert(ConnectInfo("198.51.100.7:12345".parse::<SocketAddr>().unwrap()));
+        let denied_items = service.list_assignments(denied).await.unwrap().into_inner().items;
         assert!(denied_items.is_empty());
     }
 
@@ -977,16 +897,10 @@ mod tests {
         seed_second_step_and_scores(&service.db).await;
         let bundle = runtime_bundle_for_passback(2);
 
-        let (target, _) = passback_work(&service.db, &bundle, false, None)
-            .await
-            .unwrap()
-            .unwrap();
+        let (target, _) = passback_work(&service.db, &bundle, false, None).await.unwrap().unwrap();
 
         assert_eq!(target.score, 0.5);
-        assert_eq!(
-            assignment_passback_status(&service.db).await,
-            PASSBACK_PENDING
-        );
+        assert_eq!(assignment_passback_status(&service.db).await, PASSBACK_PENDING);
     }
 
     #[tokio::test]
@@ -996,15 +910,10 @@ mod tests {
         seed_service_assignments(&service.db).await;
         let bundle = runtime_bundle_for_passback(1);
 
-        let work = passback_work(&service.db, &bundle, true, None)
-            .await
-            .unwrap();
+        let work = passback_work(&service.db, &bundle, true, None).await.unwrap();
 
         assert!(work.is_none());
-        assert_eq!(
-            assignment_passback_status(&service.db).await,
-            PASSBACK_LOCKED
-        );
+        assert_eq!(assignment_passback_status(&service.db).await, PASSBACK_LOCKED);
     }
 
     struct Sessions {
@@ -1223,10 +1132,9 @@ mod tests {
 
     fn auth_request<T>(message: T, session: &str) -> Request<T> {
         let mut request = Request::new(message);
-        request.metadata_mut().insert(
-            "authorization",
-            format!("Bearer {session}").parse().unwrap(),
-        );
+        request
+            .metadata_mut()
+            .insert("authorization", format!("Bearer {session}").parse().unwrap());
         request
     }
 

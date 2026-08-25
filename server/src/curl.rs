@@ -53,10 +53,7 @@ pub async fn require_available() -> Result<(), CurlError> {
     if status.success() {
         return Ok(());
     }
-    Err(CurlError::Process {
-        status,
-        stderr: String::new(),
-    })
+    Err(CurlError::Process { status, stderr: String::new() })
 }
 
 pub async fn post(request: CurlPostRequest<'_>) -> Result<CurlResponse, CurlError> {
@@ -88,9 +85,7 @@ async fn post_with_program(
         command.arg("--http1.1");
     }
     for (name, value) in request.headers {
-        command
-            .arg("--header")
-            .arg(format!("{name}: {}", value.to_str()?));
+        command.arg("--header").arg(format!("{name}: {}", value.to_str()?));
     }
     let mut child = command
         .arg("--url")
@@ -122,18 +117,13 @@ async fn post_with_program(
 
 fn parse_response(mut output: Vec<u8>) -> Result<CurlResponse, CurlError> {
     if output.len() < 4 || output[output.len() - 4] != b'\n' {
-        return Err(CurlError::Response(
-            "curl output did not end with an HTTP status".to_owned(),
-        ));
+        return Err(CurlError::Response("curl output did not end with an HTTP status".to_owned()));
     }
     let status_start = output.len() - 3;
     let status = StatusCode::from_bytes(&output[status_start..])
         .map_err(|err| CurlError::Response(format!("invalid HTTP status: {err}")))?;
     output.truncate(output.len() - 4);
-    Ok(CurlResponse {
-        status,
-        body: output,
-    })
+    Ok(CurlResponse { status, body: output })
 }
 
 #[cfg(test)]

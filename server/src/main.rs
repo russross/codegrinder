@@ -66,8 +66,7 @@ async fn main() -> AppResult<()> {
         .map_err(|err| AppError::Internal(format!("curl is required: {err}")))?;
     let db = Db::open(&config.sqlite3_path)?;
     if args.ta {
-        db.transaction(|conn| delete_expired_sessions(conn, now_utc()))
-            .await?;
+        db.transaction(|conn| delete_expired_sessions(conn, now_utc())).await?;
         let recovery_count = spawn_startup_grade_passbacks(db.clone(), config.clone()).await?;
         if recovery_count > 0 {
             eprintln!(
@@ -84,10 +83,7 @@ async fn main() -> AppResult<()> {
     };
     let registry = Arc::new(registry);
     let ip_filter = IpFilter::from_entries(&config.ip_filter.whitelist);
-    let daycare = args
-        .daycare
-        .then(|| DaycareRuntime::new(config.clone()))
-        .transpose()?;
+    let daycare = args.daycare.then(|| DaycareRuntime::new(config.clone())).transpose()?;
     if args.daycare && !args.ta {
         tokio::spawn(register_daycare(config.clone(), VERSION.to_owned()));
     }
@@ -114,14 +110,8 @@ async fn main() -> AppResult<()> {
     let grpc_router =
         Router::new().route_service("/codegrinder.CodeGrinderService/{*grpc}", grpc_web);
     let app = if args.ta {
-        let lti_state = LtiState {
-            db,
-            config: config.clone(),
-            login_tokens,
-            ip_filter,
-            registry,
-            version,
-        };
+        let lti_state =
+            LtiState { db, config: config.clone(), login_tokens, ip_filter, registry, version };
         lti::router(lti_state).merge(grpc_router)
     } else {
         grpc_router
@@ -133,10 +123,7 @@ async fn register_daycare(config: Arc<config::ServerConfig>, version: String) {
     let url = if config.ta_hostname.starts_with("http://")
         || config.ta_hostname.starts_with("https://")
     {
-        format!(
-            "{}/daycare_registrations",
-            config.ta_hostname.trim_end_matches('/')
-        )
+        format!("{}/daycare_registrations", config.ta_hostname.trim_end_matches('/'))
     } else {
         format!("https://{}/daycare_registrations", config.ta_hostname)
     };
@@ -218,12 +205,9 @@ async fn register_daycare(config: Arc<config::ServerConfig>, version: String) {
 
 async fn serve(app: Router, bind: SocketAddr) -> AppResult<()> {
     let listener = tokio::net::TcpListener::bind(bind).await?;
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .await
-    .map_err(|err| AppError::Internal(format!("server error: {err}")))
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+        .await
+        .map_err(|err| AppError::Internal(format!("server error: {err}")))
 }
 
 struct Args {
@@ -274,12 +258,7 @@ impl Args {
             ta = true;
             daycare = true;
         }
-        Ok(Self {
-            config,
-            bind,
-            ta,
-            daycare,
-        })
+        Ok(Self { config, bind, ta, daycare })
     }
 }
 
@@ -290,9 +269,7 @@ fn default_bind() -> AppResult<SocketAddr> {
 fn parse_bind(raw: &str, default: SocketAddr) -> AppResult<SocketAddr> {
     let value = raw.trim();
     if value.is_empty() {
-        return Err(AppError::BadRequest(
-            "invalid --bind: empty address".to_owned(),
-        ));
+        return Err(AppError::BadRequest("invalid --bind: empty address".to_owned()));
     }
     if let Some(port) = value.strip_prefix(':') {
         let port = parse_port(port)?;
@@ -311,8 +288,7 @@ fn parse_bind(raw: &str, default: SocketAddr) -> AppResult<SocketAddr> {
 }
 
 fn parse_port(raw: &str) -> AppResult<u16> {
-    raw.parse::<u16>()
-        .map_err(|err| AppError::BadRequest(format!("invalid --bind port: {err}")))
+    raw.parse::<u16>().map_err(|err| AppError::BadRequest(format!("invalid --bind port: {err}")))
 }
 
 fn resolve_bind_host(host: &str, port: u16) -> AppResult<SocketAddr> {
@@ -325,9 +301,7 @@ fn resolve_bind_authority(authority: &str) -> AppResult<SocketAddr> {
         .map_err(|err| AppError::BadRequest(format!("invalid --bind: {err}")))?
         .next()
         .ok_or_else(|| {
-            AppError::BadRequest(format!(
-                "invalid --bind: {authority} resolved to no addresses"
-            ))
+            AppError::BadRequest(format!("invalid --bind: {authority} resolved to no addresses"))
         })
 }
 
@@ -340,10 +314,7 @@ mod tests {
     fn parse_bind_defaults_to_localhost_port_1400() {
         let bind = default_bind().unwrap();
         assert_eq!(bind.port(), 1400);
-        assert!(matches!(
-            bind.ip(),
-            IpAddr::V4(Ipv4Addr::LOCALHOST) | IpAddr::V6(_)
-        ));
+        assert!(matches!(bind.ip(), IpAddr::V4(Ipv4Addr::LOCALHOST) | IpAddr::V6(_)));
     }
 
     #[test]

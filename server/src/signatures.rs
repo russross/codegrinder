@@ -120,9 +120,7 @@ pub fn decode_signed_runtime_bundle(
     }
     let expected = sign_runtime_bundle_blob(secret, &envelope.bundle)?;
     if expected != envelope.signature {
-        return Err(AppError::BadRequest(
-            "runtime bundle signature mismatch".to_owned(),
-        ));
+        return Err(AppError::BadRequest("runtime bundle signature mismatch".to_owned()));
     }
     RuntimeBundle::decode(envelope.bundle.as_slice())
         .map_err(|err| AppError::BadRequest(format!("invalid runtime bundle: {err}")))
@@ -140,9 +138,6 @@ mod tests {
             ("b".to_owned(), vec!["two words".to_owned()]),
             ("a".to_owned(), vec!["~ok".to_owned()]),
         ]);
-        assert_eq!(
-            String::from_utf8(encode_params(&values)).unwrap(),
-            "a=~ok&b=two%20words"
-        );
+        assert_eq!(String::from_utf8(encode_params(&values)).unwrap(), "a=~ok&b=two%20words");
     }
 }

@@ -54,29 +54,11 @@ pub fn split_system_and_student(
     let system = regular_files
         .into_iter()
         .filter(|(path, _)| !student_paths.contains(path))
-        .map(|(path, content)| {
-            (
-                path,
-                if include_contents {
-                    content
-                } else {
-                    Vec::new()
-                },
-            )
-        })
+        .map(|(path, content)| (path, if include_contents { content } else { Vec::new() }))
         .collect();
     let student = starter_files
         .into_iter()
-        .map(|(path, content)| {
-            (
-                path,
-                if include_contents {
-                    content
-                } else {
-                    Vec::new()
-                },
-            )
-        })
+        .map(|(path, content)| (path, if include_contents { content } else { Vec::new() }))
         .collect();
     (system, student)
 }

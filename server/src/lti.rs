@@ -170,27 +170,19 @@ async fn launch_inner(
             acc
         },
     );
-    let scheme = headers
-        .get("x-forwarded-proto")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("https");
+    let scheme = headers.get("x-forwarded-proto").and_then(|v| v.to_str().ok()).unwrap_or("https");
     let host = headers
         .get("x-forwarded-host")
         .or_else(|| headers.get(header::HOST))
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    let request_url = format!(
-        "{scheme}://{host}/lti/problem_sets/{}/{unique}",
-        ui.as_str()
-    );
+    let request_url = format!("{scheme}://{host}/lti/problem_sets/{}/{unique}", ui.as_str());
     validate_oauth_signature("POST", &request_url, &form, &state.config.lti_secret)?;
     let roles = form_first(&form, "roles");
     let client_ip = extract_ip(&headers, Some(peer));
     let restricted = ui.is_restricted();
     let ip_allowed = !state.ip_filter.enabled()
-        || client_ip
-            .as_deref()
-            .is_some_and(|ip| state.ip_filter.allows(ip));
+        || client_ip.as_deref().is_some_and(|ip| state.ip_filter.allows(ip));
     if restricted && !ip_allowed && !is_instructor_role(&roles) {
         return Err(AppError::Forbidden(
             "exam access is restricted to approved IP ranges".to_owned(),
@@ -259,11 +251,7 @@ fn update_launch(
     }
     let assignment_title = {
         let value = form_first(form, "resource_link_title");
-        if value.is_empty() {
-            problem_set_id.clone()
-        } else {
-            value
-        }
+        if value.is_empty() { problem_set_id.clone() } else { value }
     };
     let grade_id = form_first(form, "lis_result_sourcedid");
     let unlock_at =
@@ -303,9 +291,7 @@ fn validate_oauth_signature(
 ) -> AppResult<()> {
     let expected = form_first(form, "oauth_signature");
     if expected.is_empty() {
-        return Err(AppError::Unauthorized(
-            "Missing oauth_signature form field".to_owned(),
-        ));
+        return Err(AppError::Unauthorized("Missing oauth_signature form field".to_owned()));
     }
     let got = compute_oauth_signature(method, request_url, form, secret)?;
     if got != expected {
@@ -317,19 +303,13 @@ fn validate_oauth_signature(
 }
 
 fn form_first(form: &BTreeMap<String, Vec<String>>, key: &str) -> String {
-    form.get(key)
-        .and_then(|values| values.first())
-        .cloned()
-        .unwrap_or_default()
+    form.get(key).and_then(|values| values.first()).cloned().unwrap_or_default()
 }
 
 fn is_instructor_role(roles: &str) -> bool {
-    roles.split(',').any(|role| {
-        matches!(
-            role,
-            "Instructor" | "urn:lti:role:ims/lis/TeachingAssistant"
-        )
-    })
+    roles
+        .split(',')
+        .any(|role| matches!(role, "Instructor" | "urn:lti:role:ims/lis/TeachingAssistant"))
 }
 
 fn validate_url_friendly_unique_id(unique: &str) -> AppResult<()> {
@@ -399,10 +379,7 @@ fn error_response(err: AppError) -> Response {
 }
 
 fn escape_xml(raw: &str) -> String {
-    raw.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
+    raw.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
 #[cfg(test)]
@@ -451,10 +428,7 @@ mod tests {
     fn launch_location_uses_oauth_percent_encoding() {
         let location = launch_location(LaunchUi::Web, "a+b &/é~", "t=1", "CS+101");
 
-        assert_eq!(
-            location,
-            "/web/?assignment=a%2Bb%20%26%2F%C3%A9~&token=t%3D1&course=CS%2B101"
-        );
+        assert_eq!(location, "/web/?assignment=a%2Bb%20%26%2F%C3%A9~&token=t%3D1&course=CS%2B101");
     }
 
     #[test]

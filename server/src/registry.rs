@@ -34,12 +34,7 @@ pub struct DaycareRegistry {
 
 impl DaycareRegistry {
     pub fn new(secret: String, version: String) -> Self {
-        Self {
-            secret,
-            version,
-            local: None,
-            entries: Mutex::new(BTreeMap::new()),
-        }
+        Self { secret, version, local: None, entries: Mutex::new(BTreeMap::new()) }
     }
 
     pub fn with_local(mut self, hostname: &str, problem_types: &[String], capacity: usize) -> Self {
@@ -67,9 +62,7 @@ impl DaycareRegistry {
             &self.secret,
         )?;
         if expected != reg.signature {
-            return Err(AppError::BadRequest(
-                "daycare signature mismatch".to_owned(),
-            ));
+            return Err(AppError::BadRequest("daycare signature mismatch".to_owned()));
         }
         if reg.version != self.version {
             return Err(AppError::BadRequest(format!(
@@ -117,11 +110,7 @@ impl DaycareRegistry {
         let snapshot = self.snapshot()?;
         let eligible = snapshot
             .values()
-            .filter(|reg| {
-                problem_types
-                    .iter()
-                    .all(|name| reg.problem_types.contains(name))
-            })
+            .filter(|reg| problem_types.iter().all(|name| reg.problem_types.contains(name)))
             .collect::<Vec<_>>();
         let total_capacity = eligible.iter().map(|reg| reg.capacity).sum::<usize>();
         if total_capacity == 0 {
@@ -136,9 +125,7 @@ impl DaycareRegistry {
             }
             point -= reg.capacity;
         }
-        Err(AppError::Internal(
-            "failed to select daycare registration".to_owned(),
-        ))
+        Err(AppError::Internal("failed to select daycare registration".to_owned()))
     }
 }
 
@@ -210,16 +197,7 @@ mod tests {
             1,
         );
 
-        assert_eq!(
-            registry
-                .assign(&BTreeSet::from(["python".to_owned()]))
-                .unwrap(),
-            "local"
-        );
-        assert!(
-            registry
-                .assign(&BTreeSet::from(["rust".to_owned()]))
-                .is_err()
-        );
+        assert_eq!(registry.assign(&BTreeSet::from(["python".to_owned()])).unwrap(), "local");
+        assert!(registry.assign(&BTreeSet::from(["rust".to_owned()])).is_err());
     }
 }

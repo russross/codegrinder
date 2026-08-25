@@ -158,19 +158,16 @@ pub fn get_assignment(
         "SELECT problem_id, problem_note, current_step_number, first_step_number, last_step_number, completed FROM assignment_problem_progress WHERE user_id = ? AND course_id = ? AND problem_set_id = ? ORDER BY problem_id",
     )?;
     let problems = stmt
-        .query_map(
-            params![key.user_id, key.course_id, key.problem_set_id],
-            |row| {
-                Ok(AssignmentProblemProgress {
-                    problem_id: row.get(0)?,
-                    problem_note: row.get(1)?,
-                    current_step_number: row.get(2)?,
-                    first_step_number: row.get(3)?,
-                    last_step_number: row.get(4)?,
-                    completed: row.get(5)?,
-                })
-            },
-        )?
+        .query_map(params![key.user_id, key.course_id, key.problem_set_id], |row| {
+            Ok(AssignmentProblemProgress {
+                problem_id: row.get(0)?,
+                problem_note: row.get(1)?,
+                current_step_number: row.get(2)?,
+                first_step_number: row.get(3)?,
+                last_step_number: row.get(4)?,
+                completed: row.get(5)?,
+            })
+        })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(GetAssignmentResponse {
         assignment: Some(key.clone()),
@@ -185,9 +182,7 @@ pub fn get_assignment(
 pub fn list_problem_types(conn: &Connection) -> AppResult<Vec<ProblemType>> {
     let rows = conn
         .prepare("SELECT problem_type, container FROM problem_types ORDER BY problem_type")?
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
         .collect::<Result<Vec<_>, _>>()?;
     rows.into_iter()
         .map(|(problem_type, container)| {
@@ -260,22 +255,16 @@ pub fn get_workspace(
     query: WorkspaceQuery,
 ) -> AppResult<GetWorkspaceResponse> {
     if query.file_state == proto::WorkspaceFileState::Unspecified as i32 {
-        return Err(AppError::BadRequest(
-            "workspace file state is required".to_owned(),
-        ));
+        return Err(AppError::BadRequest("workspace file state is required".to_owned()));
     }
     if query.file_state != proto::WorkspaceFileState::Current as i32
         && query.file_state != proto::WorkspaceFileState::StepStart as i32
     {
-        return Err(AppError::BadRequest(
-            "unknown workspace file state".to_owned(),
-        ));
+        return Err(AppError::BadRequest("unknown workspace file state".to_owned()));
     }
     let assignment = get_assignment(conn, current_user, &query.key, query.ip_allowed)?;
     if assignment.download_status != AssignmentDownloadStatus::Available as i32 {
-        return Err(AppError::Forbidden(
-            "assignment is not available for download".to_owned(),
-        ));
+        return Err(AppError::Forbidden("assignment is not available for download".to_owned()));
     }
     let step = if query.requested_step > 0 {
         query.requested_step
@@ -341,14 +330,7 @@ pub fn get_workspace(
     }
     let problem_type = load_problem_type(conn, &context.1)?;
     regular_files.extend(problem_type.files.iter().map(|(path, content)| {
-        (
-            path.clone(),
-            if query.include_contents {
-                content.clone()
-            } else {
-                Vec::new()
-            },
-        )
+        (path.clone(), if query.include_contents { content.clone() } else { Vec::new() })
     }));
     let (system_owned_files, student_owned_files) =
         split_system_and_student(regular_files, student_files, query.include_contents);
@@ -364,13 +346,7 @@ pub fn get_workspace(
         system_owned_files,
         student_owned_files,
         solution_files: if query.include_solution_files {
-            load_step_files(
-                conn,
-                &query.problem_id,
-                step,
-                "solution",
-                query.include_contents,
-            )?
+            load_step_files(conn, &query.problem_id, step, "solution", query.include_contents)?
         } else {
             BTreeMap::new()
         },
@@ -453,13 +429,7 @@ fn continuation_previous_commit(
                 course_id: key.course_id.clone(),
                 problem_set_id: previous_problem_set_id,
             };
-            current_commit_files(
-                conn,
-                &previous_key,
-                problem_id,
-                previous_step,
-                include_contents,
-            )
+            current_commit_files(conn, &previous_key, problem_id, previous_step, include_contents)
         })
         .transpose()
 }
@@ -504,13 +474,7 @@ fn current_commit_files(
     let files = load_file_map(
         conn,
         "SELECT path, content FROM commit_files WHERE user_id = ? AND course_id = ? AND problem_set_id = ? AND problem_id = ? AND step_number = ? ORDER BY path",
-        &[
-            &key.user_id,
-            &key.course_id,
-            &key.problem_set_id,
-            problem_id,
-            &step.to_string(),
-        ],
+        &[&key.user_id, &key.course_id, &key.problem_set_id, problem_id, &step.to_string()],
     )?;
     Ok(if include_contents {
         files
@@ -535,11 +499,8 @@ pub fn search_problem_catalog(
             "SELECT problem_set_id, problem_set_note, problem_set_tags FROM accessible_problem_catalog_sets WHERE viewer_user_id = ?",
         )
     };
-    let mut values = if can_search_full_catalog {
-        Vec::new()
-    } else {
-        vec![current_user.user_id.clone()]
-    };
+    let mut values =
+        if can_search_full_catalog { Vec::new() } else { vec![current_user.user_id.clone()] };
     for term in search {
         sql.push_str(" AND search_text LIKE ?");
         values.push(format!("%{term}%"));
@@ -548,11 +509,7 @@ pub fn search_problem_catalog(
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
         .query_map(rusqlite::params_from_iter(values), |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-            ))
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
         })?
         .collect::<Result<Vec<_>, _>>()?;
     rows.into_iter()
@@ -644,28 +601,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let conn = open_test_connection(&dir.path().join("db.sqlite")).unwrap();
         seed_store_fixture(&conn);
-        insert_assignment(
-            &conn,
-            "student",
-            "future",
-            Some(Utc::now() + Duration::days(1)),
-            None,
-        );
-        insert_assignment(
-            &conn,
-            "student",
-            "locked",
-            None,
-            Some(Utc::now() - Duration::days(1)),
-        );
+        insert_assignment(&conn, "student", "future", Some(Utc::now() + Duration::days(1)), None);
+        insert_assignment(&conn, "student", "locked", None, Some(Utc::now() - Duration::days(1)));
         insert_assignment(&conn, "student", "slice2", None, None);
-        insert_assignment(
-            &conn,
-            "teacher",
-            "future",
-            Some(Utc::now() + Duration::days(1)),
-            None,
-        );
+        insert_assignment(&conn, "teacher", "future", Some(Utc::now() + Duration::days(1)), None);
         let student = user(&conn, "student");
         let teacher = user(&conn, "teacher");
 
@@ -677,10 +616,7 @@ mod tests {
             "unlock_at, not lock_at, controls download availability"
         );
         assert_eq!(status["locked"], AssignmentDownloadStatus::Available as i32);
-        assert_eq!(
-            status["slice2"],
-            AssignmentDownloadStatus::PrereqNotReady as i32
-        );
+        assert_eq!(status["slice2"], AssignmentDownloadStatus::PrereqNotReady as i32);
         assert!(
             get_workspace(
                 &conn,
@@ -716,14 +652,8 @@ mod tests {
 
         let instructor_items = list_assignments(&conn, &teacher, &[], true, true).unwrap();
         let instructor_status = status_by_problem_set(&instructor_items);
-        assert_eq!(
-            instructor_status["future"],
-            AssignmentDownloadStatus::Available as i32
-        );
-        assert_eq!(
-            instructor_status["slice2"],
-            AssignmentDownloadStatus::Available as i32
-        );
+        assert_eq!(instructor_status["future"], AssignmentDownloadStatus::Available as i32);
+        assert_eq!(instructor_status["slice2"], AssignmentDownloadStatus::Available as i32);
     }
 
     #[test]
@@ -732,22 +662,8 @@ mod tests {
         let conn = open_test_connection(&dir.path().join("db.sqlite")).unwrap();
         seed_store_fixture(&conn);
         insert_assignment(&conn, "student", "base", None, None);
-        insert_commit(
-            &conn,
-            "student",
-            "base",
-            1,
-            true,
-            &[("answer.txt", b"passed")],
-        );
-        insert_commit(
-            &conn,
-            "student",
-            "base",
-            2,
-            false,
-            &[("answer.txt", b"commit")],
-        );
+        insert_commit(&conn, "student", "base", 1, true, &[("answer.txt", b"passed")]);
+        insert_commit(&conn, "student", "base", 2, false, &[("answer.txt", b"commit")]);
         let student = user(&conn, "student");
 
         let workspace = get_workspace(
@@ -766,19 +682,11 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            workspace
-                .system_owned_files
-                .keys()
-                .cloned()
-                .collect::<Vec<_>>(),
+            workspace.system_owned_files.keys().cloned().collect::<Vec<_>>(),
             vec!["helper.txt", "runner.py", "tests.py"]
         );
         assert_eq!(
-            workspace
-                .student_owned_files
-                .keys()
-                .cloned()
-                .collect::<Vec<_>>(),
+            workspace.student_owned_files.keys().cloned().collect::<Vec<_>>(),
             vec!["answer.txt"]
         );
         assert!(workspace.system_owned_files.values().all(Vec::is_empty));
@@ -846,17 +754,13 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(
-            list_assignments(&conn, &student, &["Base".to_owned()], false, true)
-                .unwrap()
-                .len(),
+            list_assignments(&conn, &student, &["Base".to_owned()], false, true).unwrap().len(),
             1
         );
 
         let teacher = user(&conn, "teacher");
         assert_eq!(
-            list_assignments(&conn, &teacher, &["Base".to_owned()], true, false)
-                .unwrap()
-                .len(),
+            list_assignments(&conn, &teacher, &["Base".to_owned()], true, false).unwrap().len(),
             1
         );
 
@@ -889,9 +793,7 @@ mod tests {
         let cross = user(&conn, "cross");
         assert!(cross.instructor);
         assert!(
-            list_assignments(&conn, &cross, &["Base".to_owned()], false, false)
-                .unwrap()
-                .is_empty()
+            list_assignments(&conn, &cross, &["Base".to_owned()], false, false).unwrap().is_empty()
         );
     }
 
@@ -919,14 +821,7 @@ mod tests {
         .unwrap();
         assert_eq!(from_solution.student_owned_files["answer.txt"], b"starter2");
 
-        insert_commit(
-            &conn,
-            "student",
-            "base",
-            1,
-            true,
-            &[("answer.txt", b"previous work")],
-        );
+        insert_commit(&conn, "student", "base", 1, true, &[("answer.txt", b"previous work")]);
         let from_commit = get_workspace(
             &conn,
             &student,
@@ -949,18 +844,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let conn = open_test_connection(&dir.path().join("db.sqlite")).unwrap();
         seed_store_fixture(&conn);
-        conn.execute("INSERT INTO authors(user_id) VALUES ('author')", [])
-            .unwrap();
+        conn.execute("INSERT INTO authors(user_id) VALUES ('author')", []).unwrap();
 
         for catalog_user in [user(&conn, "author"), user(&conn, "teacher")] {
             let results =
                 search_problem_catalog(&conn, &catalog_user, &["Slice".to_owned()]).unwrap();
 
             assert_eq!(
-                results
-                    .iter()
-                    .map(|item| item.problem_set_id.as_str())
-                    .collect::<Vec<_>>(),
+                results.iter().map(|item| item.problem_set_id.as_str()).collect::<Vec<_>>(),
                 vec!["slice1", "slice2"]
             );
         }
@@ -973,14 +864,7 @@ mod tests {
         seed_store_fixture(&conn);
         insert_assignment(&conn, "student", "slice1", None, None);
         insert_assignment(&conn, "student", "slice2", None, None);
-        insert_commit(
-            &conn,
-            "student",
-            "slice1",
-            1,
-            true,
-            &[("answer.txt", b"previous passed")],
-        );
+        insert_commit(&conn, "student", "slice1", 1, true, &[("answer.txt", b"previous passed")]);
         let student = user(&conn, "student");
 
         let start = get_workspace(
@@ -1023,30 +907,9 @@ mod tests {
         seed_store_fixture(&conn);
         insert_assignment(&conn, "student", "base", None, None);
         insert_assignment(&conn, "student", "slice1", None, None);
-        insert_commit(
-            &conn,
-            "student",
-            "base",
-            1,
-            true,
-            &[("answer.txt", b"passed")],
-        );
-        insert_commit(
-            &conn,
-            "student",
-            "base",
-            2,
-            false,
-            &[("answer.txt", b"partial")],
-        );
-        insert_commit(
-            &conn,
-            "student",
-            "slice1",
-            1,
-            true,
-            &[("answer.txt", b"passed")],
-        );
+        insert_commit(&conn, "student", "base", 1, true, &[("answer.txt", b"passed")]);
+        insert_commit(&conn, "student", "base", 2, false, &[("answer.txt", b"partial")]);
+        insert_commit(&conn, "student", "slice1", 1, true, &[("answer.txt", b"passed")]);
         let student = user(&conn, "student");
 
         let full = get_assignment(&conn, &student, &key("student", "base"), true).unwrap();
@@ -1077,10 +940,7 @@ mod tests {
         items
             .iter()
             .map(|item| {
-                (
-                    item.assignment.as_ref().unwrap().problem_set_id.clone(),
-                    item.download_status,
-                )
+                (item.assignment.as_ref().unwrap().problem_set_id.clone(), item.download_status)
             })
             .collect()
     }
@@ -1120,27 +980,9 @@ mod tests {
         )
         .unwrap();
         for (step, weight, regular, starter, solution) in [
-            (
-                1,
-                1,
-                b"tests1".as_slice(),
-                b"starter1".as_slice(),
-                b"solution1".as_slice(),
-            ),
-            (
-                2,
-                3,
-                b"tests2".as_slice(),
-                b"starter2".as_slice(),
-                b"solution2".as_slice(),
-            ),
-            (
-                3,
-                1,
-                b"tests3".as_slice(),
-                b"starter3".as_slice(),
-                b"solution3".as_slice(),
-            ),
+            (1, 1, b"tests1".as_slice(), b"starter1".as_slice(), b"solution1".as_slice()),
+            (2, 3, b"tests2".as_slice(), b"starter2".as_slice(), b"solution2".as_slice()),
+            (3, 1, b"tests3".as_slice(), b"starter3".as_slice(), b"solution3".as_slice()),
         ] {
             conn.execute(
                 "INSERT INTO problem_steps(problem_id, step_number, problem_type, step_note, step_weight)

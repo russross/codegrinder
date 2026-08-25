@@ -49,11 +49,7 @@ impl DaycareRuntime {
         let command = if config.container_engine.trim().is_empty() {
             vec!["docker".to_owned()]
         } else {
-            config
-                .container_engine
-                .split_whitespace()
-                .map(ToOwned::to_owned)
-                .collect::<Vec<_>>()
+            config.container_engine.split_whitespace().map(ToOwned::to_owned).collect::<Vec<_>>()
         };
         Ok(Self {
             container_slots: Arc::new(Semaphore::new(config.capacity)),
@@ -77,9 +73,7 @@ impl DaycareRuntime {
                     .await;
             }
         });
-        Ok(Response::new(
-            Box::pin(ReceiverStream::new(rx)) as DaycareStream
-        ))
+        Ok(Response::new(Box::pin(ReceiverStream::new(rx)) as DaycareStream))
     }
 
     async fn handle(
@@ -87,9 +81,8 @@ impl DaycareRuntime {
         request: DaycareRequest,
         tx: mpsc::Sender<Result<DaycareResponse, Status>>,
     ) -> AppResult<()> {
-        let signed = request
-            .bundle
-            .ok_or_else(|| AppError::BadRequest("bundle is required".to_owned()))?;
+        let signed =
+            request.bundle.ok_or_else(|| AppError::BadRequest("bundle is required".to_owned()))?;
         let mut bundle = validate_and_decode_action(
             &signed,
             &self.config.daycare_secret,
@@ -125,14 +118,8 @@ impl DaycareRuntime {
             let _ = container.shutdown().await;
             return Err(err);
         }
-        let result = run_action(
-            &container,
-            &mut bundle,
-            &self.config.daycare_secret,
-            deadline,
-            tx,
-        )
-        .await;
+        let result =
+            run_action(&container, &mut bundle, &self.config.daycare_secret, deadline, tx).await;
         let shutdown = container.shutdown().await;
         self.clear_active(&nanny_name, run_id).await;
         result?;
@@ -212,9 +199,7 @@ fn validate_and_decode_action(
         .transpose()?
         .ok_or_else(|| AppError::BadRequest("commit updated_at is required".to_owned()))?;
     if (Utc::now() - updated).abs() > SIGNED_REQUEST_MAX_AGE {
-        return Err(AppError::BadRequest(
-            "runtime bundle signature is too old".to_owned(),
-        ));
+        return Err(AppError::BadRequest("runtime bundle signature is too old".to_owned()));
     }
     Ok(bundle)
 }
@@ -227,10 +212,7 @@ fn effective_limits(bundle: &RuntimeBundle) -> AppResult<RuntimeLimits> {
         let Some((key, raw_value)) = option.split_once('=') else {
             continue;
         };
-        if !matches!(
-            key,
-            "maxCPU" | "maxFD" | "maxFileSize" | "maxMemory" | "maxThreads"
-        ) {
+        if !matches!(key, "maxCPU" | "maxFD" | "maxFileSize" | "maxMemory" | "maxThreads") {
             continue;
         }
         let value = raw_value.parse::<i64>().map_err(|_| {
@@ -256,9 +238,7 @@ fn validate_runtime_limits(limits: &RuntimeLimits) -> AppResult<()> {
         || limits.max_memory <= 0
         || limits.max_threads <= 0
     {
-        return Err(AppError::BadRequest(
-            "runtime limits must be positive".to_owned(),
-        ));
+        return Err(AppError::BadRequest("runtime limits must be positive".to_owned()));
     }
     Ok(())
 }
@@ -277,28 +257,13 @@ async fn run_action(
 ) -> AppResult<()> {
     container.put_files(&bundle.files, deadline).await?;
     let mut transcript = TranscriptCapture::default();
-    let command = bundle
-        .command
-        .split_whitespace()
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
-    let mut report = ReportCard {
-        passed: true,
-        note: String::new(),
-        duration: None,
-        results: Vec::new(),
-    };
+    let command = bundle.command.split_whitespace().map(ToOwned::to_owned).collect::<Vec<_>>();
+    let mut report =
+        ReportCard { passed: true, note: String::new(), duration: None, results: Vec::new() };
     emit_event(
         &tx,
         &mut transcript,
-        event(
-            "exec",
-            command.clone(),
-            0,
-            Vec::new(),
-            String::new(),
-            BTreeMap::new(),
-        ),
+        event("exec", command.clone(), 0, Vec::new(), String::new(), BTreeMap::new()),
     )
     .await?;
     let result = match container.exec(&command, deadline).await {
@@ -313,14 +278,7 @@ async fn run_action(
         emit_event(
             &tx,
             &mut transcript,
-            event(
-                "stdout",
-                Vec::new(),
-                0,
-                result.stdout.clone(),
-                String::new(),
-                BTreeMap::new(),
-            ),
+            event("stdout", Vec::new(), 0, result.stdout.clone(), String::new(), BTreeMap::new()),
         )
         .await?;
     }
@@ -328,46 +286,26 @@ async fn run_action(
         emit_event(
             &tx,
             &mut transcript,
-            event(
-                "stderr",
-                Vec::new(),
-                0,
-                result.stderr.clone(),
-                String::new(),
-                BTreeMap::new(),
-            ),
+            event("stderr", Vec::new(), 0, result.stderr.clone(), String::new(), BTreeMap::new()),
         )
         .await?;
     }
     emit_event(
         &tx,
         &mut transcript,
-        event(
-            "exit",
-            Vec::new(),
-            result.status,
-            Vec::new(),
-            String::new(),
-            BTreeMap::new(),
-        ),
+        event("exit", Vec::new(), result.status, Vec::new(), String::new(), BTreeMap::new()),
     )
     .await?;
     if bundle.parser == "xunit" {
         if result.status > 127 {
             fail_report(
                 &mut report,
-                format!(
-                    "Crashed with exit status {} while running unit tests",
-                    result.status
-                ),
+                format!("Crashed with exit status {} while running unit tests", result.status),
             );
         } else {
             parse_xunit(
                 &mut report,
-                &container
-                    .read_regular_file("test_detail.xml", deadline)
-                    .await
-                    .unwrap_or_default(),
+                &container.read_regular_file("test_detail.xml", deadline).await.unwrap_or_default(),
             );
             if result.status != 0 {
                 report.passed = false;
@@ -377,18 +315,12 @@ async fn run_action(
         if result.status > 127 {
             fail_report(
                 &mut report,
-                format!(
-                    "Crashed with exit status {} while running unit tests",
-                    result.status
-                ),
+                format!("Crashed with exit status {} while running unit tests", result.status),
             );
         } else {
             parse_check(
                 &mut report,
-                &container
-                    .read_regular_file("test_detail.xml", deadline)
-                    .await
-                    .unwrap_or_default(),
+                &container.read_regular_file("test_detail.xml", deadline).await.unwrap_or_default(),
             );
             if result.status != 0 {
                 report.passed = false;
@@ -397,19 +329,12 @@ async fn run_action(
     } else if !bundle.parser.is_empty() {
         fail_report(
             &mut report,
-            format!(
-                "unknown parser {:?} for action {}",
-                bundle.parser, bundle.action
-            ),
+            format!("unknown parser {:?} for action {}", bundle.parser, bundle.action),
         );
     } else if result.status != 0 {
         fail_report(
             &mut report,
-            format!(
-                "\"{}\" failed with exit status {}",
-                command.join(" "),
-                result.status
-            ),
+            format!("\"{}\" failed with exit status {}", command.join(" "), result.status),
         );
     }
     for option in &bundle.problem_options {
@@ -441,20 +366,14 @@ async fn finalize_action(
     if let Some(commit) = &mut bundle.commit {
         commit.transcript = transcript.events;
         commit.report_card = Some(report.clone());
-        commit.score = if report.passed {
-            1.0
-        } else {
-            score_from_report(&report)
-        };
+        commit.score = if report.passed { 1.0 } else { score_from_report(&report) };
         commit.updated_at = Some(timestamp(Utc::now()));
     }
     if bundle.action == "grade" {
         let signed = encode_signed_runtime_bundle(bundle, secret)?;
-        tx.send(Ok(DaycareResponse {
-            response: Some(daycare_response::Response::Bundle(signed)),
-        }))
-        .await
-        .map_err(|_| AppError::Internal("daycare stream closed".to_owned()))?;
+        tx.send(Ok(DaycareResponse { response: Some(daycare_response::Response::Bundle(signed)) }))
+            .await
+            .map_err(|_| AppError::Internal("daycare stream closed".to_owned()))?;
     }
     Ok(())
 }
@@ -508,11 +427,9 @@ async fn emit_event(
     event: EventMessage,
 ) -> AppResult<()> {
     transcript.record(&event);
-    tx.send(Ok(DaycareResponse {
-        response: Some(daycare_response::Response::Event(event)),
-    }))
-    .await
-    .map_err(|_| AppError::Internal("daycare stream closed".to_owned()))
+    tx.send(Ok(DaycareResponse { response: Some(daycare_response::Response::Event(event)) }))
+        .await
+        .map_err(|_| AppError::Internal("daycare stream closed".to_owned()))
 }
 
 fn event(
@@ -544,30 +461,21 @@ fn score_from_report(report: &ReportCard) -> f64 {
     if report.results.is_empty() {
         return 0.0;
     }
-    let passed = report
-        .results
-        .iter()
-        .filter(|result| result.outcome == "passed")
-        .count();
+    let passed = report.results.iter().filter(|result| result.outcome == "passed").count();
     passed as f64 / report.results.len() as f64
 }
 
 fn parse_xunit(report: &mut ReportCard, xml: &[u8]) {
     let Ok(text) = std::str::from_utf8(xml) else {
-        fail_report(
-            report,
-            "error parsing unit test results: not UTF-8".to_owned(),
-        );
+        fail_report(report, "error parsing unit test results: not UTF-8".to_owned());
         return;
     };
     let Ok(doc) = roxmltree::Document::parse(text) else {
         fail_report(report, "error parsing unit test results".to_owned());
         return;
     };
-    let cases = doc
-        .descendants()
-        .filter(|node| node.tag_name().name() == "testcase")
-        .collect::<Vec<_>>();
+    let cases =
+        doc.descendants().filter(|node| node.tag_name().name() == "testcase").collect::<Vec<_>>();
     if cases.is_empty() {
         fail_report(report, "No unit test results found".to_owned());
         return;
@@ -581,16 +489,10 @@ fn parse_xunit(report: &mut ReportCard, xml: &[u8]) {
             format!("{class_name} {case_name}")
         };
         let failure = case.children().find(|child| {
-            matches!(
-                child.tag_name().name(),
-                "failure" | "error" | "skipped" | "disabled"
-            )
+            matches!(child.tag_name().name(), "failure" | "error" | "skipped" | "disabled")
         });
         let failed = failure.is_some();
-        let details = failure
-            .and_then(|node| node.text())
-            .unwrap_or("")
-            .to_owned();
+        let details = failure.and_then(|node| node.text()).unwrap_or("").to_owned();
         let context = failure_context(&details);
         report.results.push(ReportCardResult {
             name,
@@ -599,31 +501,22 @@ fn parse_xunit(report: &mut ReportCard, xml: &[u8]) {
             context,
         });
     }
-    let passed = report
-        .results
-        .iter()
-        .filter(|result| result.outcome == "passed")
-        .count();
+    let passed = report.results.iter().filter(|result| result.outcome == "passed").count();
     report.passed = passed == report.results.len();
     report.note = format!("Passed {passed}/{} tests", report.results.len());
 }
 
 fn parse_check(report: &mut ReportCard, xml: &[u8]) {
     let Ok(text) = std::str::from_utf8(xml) else {
-        fail_report(
-            report,
-            "error parsing unit test results: not UTF-8".to_owned(),
-        );
+        fail_report(report, "error parsing unit test results: not UTF-8".to_owned());
         return;
     };
     let Ok(doc) = roxmltree::Document::parse(text) else {
         fail_report(report, "error parsing unit test results".to_owned());
         return;
     };
-    let cases = doc
-        .descendants()
-        .filter(|node| node.tag_name().name() == "test")
-        .collect::<Vec<_>>();
+    let cases =
+        doc.descendants().filter(|node| node.tag_name().name() == "test").collect::<Vec<_>>();
     if cases.is_empty() {
         fail_report(report, "No unit test results found".to_owned());
         return;
@@ -633,11 +526,7 @@ fn parse_check(report: &mut ReportCard, xml: &[u8]) {
         let name = child_text(case, "id").unwrap_or_default();
         let details = child_text(case, "message").unwrap_or_default();
         let function = child_text(case, "fn").unwrap_or_default();
-        let outcome = if result == "success" {
-            "passed"
-        } else {
-            "failed"
-        };
+        let outcome = if result == "success" { "passed" } else { "failed" };
         report.results.push(ReportCardResult {
             name,
             outcome: outcome.to_owned(),
@@ -645,11 +534,7 @@ fn parse_check(report: &mut ReportCard, xml: &[u8]) {
             context: function,
         });
     }
-    let passed = report
-        .results
-        .iter()
-        .filter(|result| result.outcome == "passed")
-        .count();
+    let passed = report.results.iter().filter(|result| result.outcome == "passed").count();
     report.passed = passed == report.results.len();
     report.note = format!("Passed {passed}/{} tests", report.results.len());
 }
@@ -666,10 +551,7 @@ fn failure_context(details: &str) -> String {
         && let Some((path, rest)) = rest.split_once('"')
         && let Some(line) = rest.split("line ").nth(1)
     {
-        let line = line
-            .chars()
-            .take_while(|ch| ch.is_ascii_digit())
-            .collect::<String>();
+        let line = line.chars().take_while(|ch| ch.is_ascii_digit()).collect::<String>();
         if !line.is_empty() {
             return format!("{}:{line}", path.rsplit('/').next().unwrap_or(path));
         }
@@ -705,9 +587,7 @@ fn select_download_files(
 }
 
 fn has_glob_meta(path: &str) -> bool {
-    path.as_bytes()
-        .iter()
-        .any(|byte| matches!(byte, b'*' | b'?' | b'['))
+    path.as_bytes().iter().any(|byte| matches!(byte, b'*' | b'?' | b'['))
 }
 
 fn glob_matches(pattern: &str, text: &str) -> bool {
@@ -811,9 +691,7 @@ fn read_output_tar(raw: &[u8]) -> AppResult<BTreeMap<String, Vec<u8>>> {
             .checked_add(size)
             .ok_or_else(|| AppError::BadRequest("downloaded file data exceeds limit".to_owned()))?;
         if total_bytes > WORKSPACE_FILE_READ_LIMIT {
-            return Err(AppError::BadRequest(
-                "downloaded file data exceeds limit".to_owned(),
-            ));
+            return Err(AppError::BadRequest("downloaded file data exceeds limit".to_owned()));
         }
         let mut content = Vec::with_capacity(size);
         entry.read_to_end(&mut content)?;
@@ -832,10 +710,7 @@ fn normalized_tar_path<R: std::io::Read>(entry: &tar::Entry<'_, R>) -> AppResult
             std::path::Component::ParentDir
             | std::path::Component::RootDir
             | std::path::Component::Prefix(_) => {
-                return Err(AppError::BadRequest(format!(
-                    "bad output path {:?}",
-                    path.display()
-                )));
+                return Err(AppError::BadRequest(format!("bad output path {:?}", path.display())));
             }
         }
     }
@@ -860,12 +735,9 @@ impl Container {
         deadline: Instant,
     ) -> AppResult<Self> {
         let memory = format!("{}m", limits.max_memory);
-        let disk_bytes = limits
-            .max_file_size
-            .checked_mul(1024 * 1024)
-            .ok_or_else(|| {
-                AppError::BadRequest("runtime file size limit is too large".to_owned())
-            })?;
+        let disk_bytes = limits.max_file_size.checked_mul(1024 * 1024).ok_or_else(|| {
+            AppError::BadRequest("runtime file size limit is too large".to_owned())
+        })?;
         let docker_args = vec![
             "run".to_owned(),
             "-d".to_owned(),
@@ -927,9 +799,7 @@ impl Container {
         }
         let id = String::from_utf8_lossy(&result.stdout).trim().to_owned();
         if id.is_empty() {
-            return Err(AppError::Internal(
-                "container run failed: empty container ID".to_owned(),
-            ));
+            return Err(AppError::Internal("container run failed: empty container ID".to_owned()));
         }
         if let Err(err) = ensure_active(active_runs, name, run_id).await {
             let _ = run_command(
@@ -940,10 +810,7 @@ impl Container {
             .await;
             return Err(err);
         }
-        Ok(Self {
-            command: command.clone(),
-            id,
-        })
+        Ok(Self { command: command.clone(), id })
     }
 
     async fn put_files(
@@ -975,9 +842,7 @@ impl Container {
     async fn read_regular_file(&self, path: &str, deadline: Instant) -> AppResult<Vec<u8>> {
         let files = self.copy_student_files(deadline).await?;
         files.get(path).cloned().ok_or_else(|| {
-            AppError::BadRequest(format!(
-                "output file {path} was not produced by the container"
-            ))
+            AppError::BadRequest(format!("output file {path} was not produced by the container"))
         })
     }
 
@@ -991,11 +856,7 @@ impl Container {
     }
 
     async fn copy_student_files(&self, deadline: Instant) -> AppResult<BTreeMap<String, Vec<u8>>> {
-        let args = vec![
-            "cp".to_owned(),
-            format!("{}:/home/student/.", self.id),
-            "-".to_owned(),
-        ];
+        let args = vec!["cp".to_owned(), format!("{}:/home/student/.", self.id), "-".to_owned()];
         let result = run_command_with_output_limit(
             &self.command,
             &args,
@@ -1014,12 +875,8 @@ impl Container {
     }
 
     async fn exec(&self, cmd: &[String], deadline: Instant) -> AppResult<CommandResult> {
-        let mut args = vec![
-            "exec".to_owned(),
-            "--user".to_owned(),
-            container_user(),
-            self.id.clone(),
-        ];
+        let mut args =
+            vec!["exec".to_owned(), "--user".to_owned(), container_user(), self.id.clone()];
         args.extend(cmd.iter().cloned());
         run_command(&self.command, &args, deadline).await
     }
@@ -1028,12 +885,7 @@ impl Container {
         let deadline = Instant::now() + Duration::from_secs(5);
         let _ = run_command(
             &self.command,
-            &[
-                "stop".to_owned(),
-                "--time".to_owned(),
-                "1".to_owned(),
-                self.id.clone(),
-            ],
+            &["stop".to_owned(), "--time".to_owned(), "1".to_owned(), self.id.clone()],
             deadline,
         )
         .await;
@@ -1056,9 +908,7 @@ async fn ensure_active(
     if active.get(name) == Some(&run_id) {
         Ok(())
     } else {
-        Err(AppError::BadRequest(
-            "daycare request was superseded by a newer request".to_owned(),
-        ))
+        Err(AppError::BadRequest("daycare request was superseded by a newer request".to_owned()))
     }
 }
 
@@ -1120,10 +970,7 @@ async fn run_command_inner(
     output_limit: usize,
 ) -> AppResult<CommandResult> {
     let mut cmd = Command::new(&command[0]);
-    cmd.args(command.iter().skip(1))
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    cmd.args(command.iter().skip(1)).args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
     if input.is_some() {
         cmd.stdin(Stdio::piped());
     }
@@ -1151,12 +998,8 @@ async fn run_command_inner(
     };
     Ok(CommandResult {
         status: status.code().unwrap_or(128),
-        stdout: stdout_task
-            .await
-            .map_err(|err| AppError::Internal(err.to_string()))??,
-        stderr: stderr_task
-            .await
-            .map_err(|err| AppError::Internal(err.to_string()))??,
+        stdout: stdout_task.await.map_err(|err| AppError::Internal(err.to_string()))??,
+        stderr: stderr_task.await.map_err(|err| AppError::Internal(err.to_string()))??,
     })
 }
 
@@ -1225,22 +1068,14 @@ mod tests {
 
     #[test]
     fn xunit_parser_fails_invalid_xml_and_counts_skipped_as_failed() {
-        let mut report = ReportCard {
-            passed: true,
-            note: String::new(),
-            duration: None,
-            results: Vec::new(),
-        };
+        let mut report =
+            ReportCard { passed: true, note: String::new(), duration: None, results: Vec::new() };
         parse_xunit(&mut report, b"<not-closed");
         assert!(!report.passed);
         assert_eq!(report.note, "error parsing unit test results");
 
-        let mut report = ReportCard {
-            passed: true,
-            note: String::new(),
-            duration: None,
-            results: Vec::new(),
-        };
+        let mut report =
+            ReportCard { passed: true, note: String::new(), duration: None, results: Vec::new() };
         parse_xunit(
             &mut report,
             br#"<testsuite><testcase name="ok"/><testcase name="skip"><skipped/></testcase></testsuite>"#,
@@ -1332,10 +1167,7 @@ mod tests {
     async fn workspace_archives_reject_escaping_paths_and_large_result_files() {
         assert!(build_input_tar(&BTreeMap::from([("../x".to_owned(), b"bad".to_vec())])).is_err());
 
-        let tar = output_tar(&[(
-            "test_detail.xml",
-            &vec![b'x'; WORKSPACE_FILE_READ_LIMIT + 1],
-        )]);
+        let tar = output_tar(&[("test_detail.xml", &vec![b'x'; WORKSPACE_FILE_READ_LIMIT + 1])]);
         assert!(read_output_tar(&tar).is_err());
     }
 
@@ -1367,19 +1199,13 @@ mod tests {
         let signed = signed_runtime(&config, |_| {});
 
         let mut stream = runtime
-            .run(DaycareRequest {
-                bundle: Some(signed),
-                args: Vec::new(),
-            })
+            .run(DaycareRequest { bundle: Some(signed), args: Vec::new() })
             .await
             .unwrap()
             .into_inner();
         let mut saw_bundle = false;
         while let Some(response) = stream.next().await {
-            if matches!(
-                response.unwrap().response,
-                Some(daycare_response::Response::Bundle(_))
-            ) {
+            if matches!(response.unwrap().response, Some(daycare_response::Response::Bundle(_))) {
                 saw_bundle = true;
             }
         }
@@ -1413,10 +1239,7 @@ mod tests {
         });
 
         let mut stream = runtime
-            .run(DaycareRequest {
-                bundle: Some(signed),
-                args: Vec::new(),
-            })
+            .run(DaycareRequest { bundle: Some(signed), args: Vec::new() })
             .await
             .unwrap()
             .into_inner();
@@ -1520,10 +1343,7 @@ mod tests {
         });
 
         let mut stream = runtime
-            .run(DaycareRequest {
-                bundle: Some(signed),
-                args: Vec::new(),
-            })
+            .run(DaycareRequest { bundle: Some(signed), args: Vec::new() })
             .await
             .unwrap()
             .into_inner();
@@ -1554,9 +1374,7 @@ mod tests {
             header.set_size(content.len() as u64);
             header.set_mtime(0);
             header.set_cksum();
-            archive
-                .append_data(&mut header, *path, Cursor::new(*content))
-                .unwrap();
+            archive.append_data(&mut header, *path, Cursor::new(*content)).unwrap();
         }
         archive.finish().unwrap();
         archive.into_inner().unwrap()
@@ -1577,9 +1395,7 @@ mod tests {
             header.set_size(content.len() as u64);
             header.set_mtime(0);
             header.set_cksum();
-            archive
-                .append_data(&mut header, *path, Cursor::new(*content))
-                .unwrap();
+            archive.append_data(&mut header, *path, Cursor::new(*content)).unwrap();
         }
         let mut header = tar::Header::new_gnu();
         header.set_entry_type(tar::EntryType::Symlink);
@@ -1590,9 +1406,7 @@ mod tests {
         header.set_mtime(0);
         header.set_link_name(link_target).unwrap();
         header.set_cksum();
-        archive
-            .append_data(&mut header, link_path, Cursor::new([]))
-            .unwrap();
+        archive.append_data(&mut header, link_path, Cursor::new([])).unwrap();
         archive.finish().unwrap();
         archive.into_inner().unwrap()
     }
@@ -1754,15 +1568,10 @@ fn safe_user_dir_name(user_id: &str) -> String {
     if !trimmed.is_empty()
         && trimmed != "."
         && trimmed != ".."
-        && trimmed
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-'))
+        && trimmed.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-'))
     {
         trimmed.to_owned()
     } else {
-        format!(
-            "user-{}",
-            hex::encode(sha2::Sha256::digest(user_id.as_bytes()))[..24].to_owned()
-        )
+        format!("user-{}", hex::encode(sha2::Sha256::digest(user_id.as_bytes()))[..24].to_owned())
     }
 }

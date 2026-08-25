@@ -7,12 +7,7 @@ pub struct IpFilter {
 
 impl IpFilter {
     pub fn from_entries(entries: &[String]) -> Self {
-        Self {
-            entries: entries
-                .iter()
-                .filter_map(|entry| Cidr::parse(entry))
-                .collect(),
-        }
+        Self { entries: entries.iter().filter_map(|entry| Cidr::parse(entry)).collect() }
     }
 
     pub fn enabled(&self) -> bool {
@@ -38,19 +33,13 @@ impl Cidr {
         let ip = ip_raw.parse::<IpAddr>().ok()?;
         match ip {
             IpAddr::V4(ip) => {
-                let prefix = if prefix_raw.is_empty() {
-                    32
-                } else {
-                    prefix_raw.parse::<u8>().ok()?
-                };
+                let prefix =
+                    if prefix_raw.is_empty() { 32 } else { prefix_raw.parse::<u8>().ok()? };
                 (prefix <= 32).then_some(Self::V4(u32::from(ip), prefix))
             }
             IpAddr::V6(ip) => {
-                let prefix = if prefix_raw.is_empty() {
-                    128
-                } else {
-                    prefix_raw.parse::<u8>().ok()?
-                };
+                let prefix =
+                    if prefix_raw.is_empty() { 128 } else { prefix_raw.parse::<u8>().ok()? };
                 (prefix <= 128).then_some(Self::V6(u128::from(ip), prefix))
             }
         }
@@ -66,20 +55,12 @@ impl Cidr {
 }
 
 fn masked_eq(base: u32, ip: u32, prefix: u8) -> bool {
-    let mask = if prefix == 0 {
-        0
-    } else {
-        u32::MAX << (32 - prefix)
-    };
+    let mask = if prefix == 0 { 0 } else { u32::MAX << (32 - prefix) };
     base & mask == ip & mask
 }
 
 fn masked_eq128(base: u128, ip: u128, prefix: u8) -> bool {
-    let mask = if prefix == 0 {
-        0
-    } else {
-        u128::MAX << (128 - prefix)
-    };
+    let mask = if prefix == 0 { 0 } else { u128::MAX << (128 - prefix) };
     base & mask == ip & mask
 }
 

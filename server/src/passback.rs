@@ -36,10 +36,7 @@ enum GradePassbackError {
     #[error("grade passback failed: {0}")]
     Transport(#[from] CurlError),
     #[error("grade passback status {status}: {body}")]
-    Http {
-        status: http::StatusCode,
-        body: String,
-    },
+    Http { status: http::StatusCode, body: String },
 }
 
 impl GradePassbackError {
@@ -64,9 +61,7 @@ impl GradePassbackError {
         document.descendants().any(|node| {
             node.is_element()
                 && node.tag_name().name() == "ext_canvas_error_code"
-                && node
-                    .text()
-                    .is_some_and(|text| text.trim() == "user_not_in_course")
+                && node.text().is_some_and(|text| text.trim() == "user_not_in_course")
         })
     }
 }
@@ -155,8 +150,7 @@ async fn prepare_startup_grade_passback(
     key: &AssignmentKey,
 ) -> AppResult<Option<(GradePassbackTarget, String)>> {
     let key = key.clone();
-    db.transaction(move |conn| prepare_startup_grade_passback_tx(conn, &key, Utc::now()))
-        .await
+    db.transaction(move |conn| prepare_startup_grade_passback_tx(conn, &key, Utc::now())).await
 }
 
 fn prepare_startup_grade_passback_tx(
@@ -181,12 +175,7 @@ fn prepare_startup_grade_passback_tx(
              WHERE assignments.user_id = ?
                AND assignments.course_id = ?
                AND assignments.problem_set_id = ?",
-            params![
-                crate::timeutil::db_time(now),
-                key.user_id,
-                key.course_id,
-                key.problem_set_id
-            ],
+            params![crate::timeutil::db_time(now), key.user_id, key.course_id, key.problem_set_id],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -225,13 +214,7 @@ fn prepare_startup_grade_passback_tx(
              ORDER BY commit_updated_at DESC, problem_id, step_number DESC
              LIMIT 1",
             params![key.user_id, key.course_id, key.problem_set_id],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            },
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?)),
         )
         .optional()?
         .ok_or_else(|| AppError::Internal("failed passback has no graded commit".to_owned()))?;
@@ -254,13 +237,7 @@ fn prepare_startup_grade_passback_tx(
     )?;
     let files = file_statement
         .query_map(
-            params![
-                key.user_id,
-                key.course_id,
-                key.problem_set_id,
-                commit_row.0,
-                commit_row.1
-            ],
+            params![key.user_id, key.course_id, key.problem_set_id, commit_row.0, commit_row.1],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?)),
         )?
         .collect::<Result<BTreeMap<_, _>, _>>()?;
@@ -283,12 +260,8 @@ fn prepare_startup_grade_passback_tx(
         transcript,
         ..Commit::default()
     };
-    let html = build_grade_report_html(
-        &commit,
-        &commit.problem_id,
-        total_steps,
-        total_problems.max(1),
-    );
+    let html =
+        build_grade_report_html(&commit, &commit.problem_id, total_steps, total_problems.max(1));
     set_passback_status(conn, key, PASSBACK_PENDING)?;
     Ok(Some((
         GradePassbackTarget {
@@ -321,10 +294,7 @@ pub fn build_grade_report_html(
     total_problems: i64,
 ) -> String {
     let heading = if total_problems > 1 && total_steps > 1 {
-        format!(
-            "Grading transcript for problem {problem_unique} step {}",
-            commit.step
-        )
+        format!("Grading transcript for problem {problem_unique} step {}", commit.step)
     } else if total_problems > 1 {
         format!("Grading transcript for problem {problem_unique}")
     } else if total_steps > 1 {
@@ -453,11 +423,7 @@ async fn save_grade(
 }
 
 fn build_grade_xml(target: &GradePassbackTarget, text: &str) -> Vec<u8> {
-    let grade_text = if target.outcome_ext_accepted.contains("text") {
-        text
-    } else {
-        ""
-    };
+    let grade_text = if target.outcome_ext_accepted.contains("text") { text } else { "" };
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?><imsx_POXEnvelopeRequest xmlns=\"http://www.imsglobal.org/services/ltiv1p1/xsd/imsoms_v1p0\"><imsx_POXHeader><imsx_POXRequestHeaderInfo><imsx_version>V1.0</imsx_version><imsx_messageIdentifier>Grade from CodeGrinder</imsx_messageIdentifier></imsx_POXRequestHeaderInfo></imsx_POXHeader><imsx_POXBody><replaceResultRequest><resultRecord><sourcedGUID><sourcedId>{}</sourcedId></sourcedGUID><result><resultScore><language>en</language><textString>{:0.5}</textString></resultScore><resultData><text>{}</text></resultData></result></resultRecord></replaceResultRequest></imsx_POXBody></imsx_POXEnvelopeRequest>",
         html_escape(&target.grade_id),
@@ -480,31 +446,16 @@ fn oauth_auth_header(
     let mut params = BTreeMap::from([
         ("oauth_body_hash".to_owned(), vec![body_hash]),
         ("oauth_token".to_owned(), vec![String::new()]),
-        (
-            "oauth_consumer_key".to_owned(),
-            vec![target.consumer_key.clone()],
-        ),
-        (
-            "oauth_signature_method".to_owned(),
-            vec!["HMAC-SHA1".to_owned()],
-        ),
-        (
-            "oauth_timestamp".to_owned(),
-            vec![now.timestamp().to_string()],
-        ),
+        ("oauth_consumer_key".to_owned(), vec![target.consumer_key.clone()]),
+        ("oauth_signature_method".to_owned(), vec!["HMAC-SHA1".to_owned()]),
+        ("oauth_timestamp".to_owned(), vec![now.timestamp().to_string()]),
         ("oauth_version".to_owned(), vec!["1.0".to_owned()]),
-        (
-            "oauth_nonce".to_owned(),
-            vec![now.timestamp_nanos_opt().unwrap_or_default().to_string()],
-        ),
+        ("oauth_nonce".to_owned(), vec![now.timestamp_nanos_opt().unwrap_or_default().to_string()]),
     ]);
     let sig = compute_oauth_signature(method, target_url, &params, secret)?;
     params.insert("oauth_signature".to_owned(), vec![sig]);
     let mut parts = Vec::with_capacity(params.len() + 1);
-    parts.push(format!(
-        "OAuth realm=\"{}\"",
-        escape(&format!("https://{hostname}"))
-    ));
+    parts.push(format!("OAuth realm=\"{}\"", escape(&format!("https://{hostname}"))));
     for (key, value) in params {
         let raw = value.first().cloned().unwrap_or_default();
         parts.push(format!("{key}=\"{}\"", escape(&raw)));
@@ -536,30 +487,16 @@ pub fn compute_oauth_signature(
 }
 
 fn normalize_oauth_url(request_url: &str) -> AppResult<String> {
-    let without_fragment = request_url
-        .split_once('#')
-        .map_or(request_url, |(head, _)| head);
-    let without_query = without_fragment
-        .split_once('?')
-        .map_or(without_fragment, |(head, _)| head);
+    let without_fragment = request_url.split_once('#').map_or(request_url, |(head, _)| head);
+    let without_query = without_fragment.split_once('?').map_or(without_fragment, |(head, _)| head);
     let Some((scheme, rest)) = without_query.split_once("://") else {
-        return Err(AppError::BadRequest(format!(
-            "invalid request url: {request_url}"
-        )));
+        return Err(AppError::BadRequest(format!("invalid request url: {request_url}")));
     };
-    let (host, path) = rest
-        .split_once('/')
-        .map_or((rest, ""), |(host, path)| (host, path));
+    let (host, path) = rest.split_once('/').map_or((rest, ""), |(host, path)| (host, path));
     if scheme.is_empty() || host.is_empty() {
-        return Err(AppError::BadRequest(format!(
-            "invalid request url: {request_url}"
-        )));
+        return Err(AppError::BadRequest(format!("invalid request url: {request_url}")));
     }
-    let mut normalized = format!(
-        "{}://{}",
-        scheme.to_ascii_lowercase(),
-        host.to_ascii_lowercase()
-    );
+    let mut normalized = format!("{}://{}", scheme.to_ascii_lowercase(), host.to_ascii_lowercase());
     if !path.is_empty() {
         normalized.push('/');
         normalized.push_str(path);
@@ -641,10 +578,7 @@ impl AnsiStyle {
             parts.push(format!("color:rgb({},{},{})", color.r, color.g, color.b));
         }
         if let Some(color) = bg {
-            parts.push(format!(
-                "background-color:rgb({},{},{})",
-                color.r, color.g, color.b
-            ));
+            parts.push(format!("background-color:rgb({},{},{})", color.r, color.g, color.b));
         }
         if self.bold {
             parts.push("font-weight:bold".to_owned());
@@ -708,11 +642,8 @@ impl AnsiStyle {
                                 i += 2;
                             }
                             2 if i + 4 < params.len() => {
-                                let color = Rgb {
-                                    r: params[i + 2],
-                                    g: params[i + 3],
-                                    b: params[i + 4],
-                                };
+                                let color =
+                                    Rgb { r: params[i + 2], g: params[i + 3], b: params[i + 4] };
                                 if is_fg {
                                     self.fg = Some(color);
                                 } else {
@@ -784,99 +715,33 @@ fn parse_sgr_params(raw: &str) -> Vec<i32> {
         return vec![0];
     }
     raw.split(';')
-        .filter_map(|part| {
-            if part.is_empty() {
-                Some(0)
-            } else {
-                part.parse::<i32>().ok()
-            }
-        })
+        .filter_map(|part| if part.is_empty() { Some(0) } else { part.parse::<i32>().ok() })
         .collect()
 }
 
 fn ansi_basic_color(n: i32) -> Rgb {
     match n {
         0 => Rgb { r: 0, g: 0, b: 0 },
-        1 => Rgb {
-            r: 205,
-            g: 49,
-            b: 49,
-        },
-        2 => Rgb {
-            r: 13,
-            g: 188,
-            b: 121,
-        },
-        3 => Rgb {
-            r: 229,
-            g: 229,
-            b: 16,
-        },
-        4 => Rgb {
-            r: 36,
-            g: 114,
-            b: 200,
-        },
-        5 => Rgb {
-            r: 188,
-            g: 63,
-            b: 188,
-        },
-        6 => Rgb {
-            r: 17,
-            g: 168,
-            b: 205,
-        },
-        _ => Rgb {
-            r: 229,
-            g: 229,
-            b: 229,
-        },
+        1 => Rgb { r: 205, g: 49, b: 49 },
+        2 => Rgb { r: 13, g: 188, b: 121 },
+        3 => Rgb { r: 229, g: 229, b: 16 },
+        4 => Rgb { r: 36, g: 114, b: 200 },
+        5 => Rgb { r: 188, g: 63, b: 188 },
+        6 => Rgb { r: 17, g: 168, b: 205 },
+        _ => Rgb { r: 229, g: 229, b: 229 },
     }
 }
 
 fn ansi_basic_bright_color(n: i32) -> Rgb {
     match n {
-        0 => Rgb {
-            r: 102,
-            g: 102,
-            b: 102,
-        },
-        1 => Rgb {
-            r: 241,
-            g: 76,
-            b: 76,
-        },
-        2 => Rgb {
-            r: 35,
-            g: 209,
-            b: 139,
-        },
-        3 => Rgb {
-            r: 245,
-            g: 245,
-            b: 67,
-        },
-        4 => Rgb {
-            r: 59,
-            g: 142,
-            b: 234,
-        },
-        5 => Rgb {
-            r: 214,
-            g: 112,
-            b: 214,
-        },
-        6 => Rgb {
-            r: 41,
-            g: 184,
-            b: 219,
-        },
-        _ => Rgb {
-            r: 255,
-            g: 255,
-            b: 255,
-        },
+        0 => Rgb { r: 102, g: 102, b: 102 },
+        1 => Rgb { r: 241, g: 76, b: 76 },
+        2 => Rgb { r: 35, g: 209, b: 139 },
+        3 => Rgb { r: 245, g: 245, b: 67 },
+        4 => Rgb { r: 59, g: 142, b: 234 },
+        5 => Rgb { r: 214, g: 112, b: 214 },
+        6 => Rgb { r: 41, g: 184, b: 219 },
+        _ => Rgb { r: 255, g: 255, b: 255 },
     }
 }
 
@@ -892,19 +757,11 @@ fn xterm256(n: i32) -> Rgb {
         }
         16..=231 => {
             let n = n - 16;
-            Rgb {
-                r: cube(n / 36),
-                g: cube((n % 36) / 6),
-                b: cube(n % 6),
-            }
+            Rgb { r: cube(n / 36), g: cube((n % 36) / 6), b: cube(n % 6) }
         }
         _ => {
             let gray = 8 + (n - 232) * 10;
-            Rgb {
-                r: gray,
-                g: gray,
-                b: gray,
-            }
+            Rgb { r: gray, g: gray, b: gray }
         }
     }
 }
@@ -914,10 +771,7 @@ fn cube(v: i32) -> i32 {
 }
 
 fn html_escape(raw: &str) -> String {
-    raw.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
+    raw.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
 #[cfg(test)]
@@ -1081,9 +935,8 @@ mod tests {
             problem_set_id: "ps1".to_owned(),
         };
 
-        let (target, html) = prepare_startup_grade_passback_tx(&conn, &key, Utc::now())
-            .unwrap()
-            .unwrap();
+        let (target, html) =
+            prepare_startup_grade_passback_tx(&conn, &key, Utc::now()).unwrap().unwrap();
 
         assert_eq!(target.score, 0.75);
         assert!(html.contains("latest"));
@@ -1098,15 +951,8 @@ mod tests {
             PASSBACK_PENDING
         );
 
-        conn.execute(
-            "UPDATE assignments SET grade_passback_status = ?",
-            params![PASSBACK_POSTED],
-        )
-        .unwrap();
-        assert!(
-            prepare_startup_grade_passback_tx(&conn, &key, Utc::now())
-                .unwrap()
-                .is_none()
-        );
+        conn.execute("UPDATE assignments SET grade_passback_status = ?", params![PASSBACK_POSTED])
+            .unwrap();
+        assert!(prepare_startup_grade_passback_tx(&conn, &key, Utc::now()).unwrap().is_none());
     }
 }

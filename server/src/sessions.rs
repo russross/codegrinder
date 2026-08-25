@@ -41,13 +41,7 @@ impl LoginTokens {
         loop {
             let token = make_login_token();
             if !tokens.contains_key(&token) {
-                tokens.insert(
-                    token.clone(),
-                    LoginToken {
-                        user_id: user_id.to_owned(),
-                        time: now,
-                    },
-                );
+                tokens.insert(token.clone(), LoginToken { user_id: user_id.to_owned(), time: now });
                 return Ok(token);
             }
         }
@@ -125,9 +119,7 @@ pub fn create_session(
             Err(err) => return Err(err.into()),
         }
     }
-    Err(AppError::Internal(
-        "could not create unique session key".to_owned(),
-    ))
+    Err(AppError::Internal("could not create unique session key".to_owned()))
 }
 
 pub fn load_session_user_id(

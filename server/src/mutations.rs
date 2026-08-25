@@ -45,10 +45,7 @@ pub fn save_problem_type_files(
     )
     .optional()?
     .ok_or_else(|| AppError::NotFound("problem type not found".to_owned()))?;
-    conn.execute(
-        "DELETE FROM problem_type_files WHERE problem_type = ?",
-        params![problem_type],
-    )?;
+    conn.execute("DELETE FROM problem_type_files WHERE problem_type = ?", params![problem_type])?;
     for (path, content) in files {
         conn.execute(
             "INSERT INTO problem_type_files(problem_type, path, content) VALUES (?, ?, ?)",
@@ -65,9 +62,7 @@ pub fn save_problem_type(
     actions: &BTreeMap<String, ProblemTypeAction>,
 ) -> AppResult<Vec<ProblemType>> {
     if problem_type.trim().is_empty() || container.trim().is_empty() {
-        return Err(AppError::BadRequest(
-            "problem type and container are required".to_owned(),
-        ));
+        return Err(AppError::BadRequest("problem type and container are required".to_owned()));
     }
     for (name, action) in actions {
         validate_action(name, action)?;
@@ -109,15 +104,11 @@ pub fn save_problem_type(
             params![problem_type],
         )?;
     } else {
-        let placeholders = std::iter::repeat_n("?", present.len())
-            .collect::<Vec<_>>()
-            .join(",");
+        let placeholders = std::iter::repeat_n("?", present.len()).collect::<Vec<_>>().join(",");
         let sql = format!(
             "DELETE FROM problem_type_actions WHERE problem_type = ? AND action NOT IN ({placeholders})"
         );
-        let values = std::iter::once(problem_type.to_owned())
-            .chain(present)
-            .collect::<Vec<_>>();
+        let values = std::iter::once(problem_type.to_owned()).chain(present).collect::<Vec<_>>();
         conn.execute(&sql, rusqlite::params_from_iter(values))?;
     }
     list_problem_types(conn)
@@ -125,29 +116,20 @@ pub fn save_problem_type(
 
 fn validate_action(name: &str, action: &ProblemTypeAction) -> AppResult<()> {
     if name.trim().is_empty() || action.command.trim().is_empty() {
-        return Err(AppError::BadRequest(
-            "action name and command are required".to_owned(),
-        ));
+        return Err(AppError::BadRequest("action name and command are required".to_owned()));
     }
     if !matches!(action.parser.as_str(), "" | "xunit" | "check") {
-        return Err(AppError::BadRequest(format!(
-            "unknown parser {:?}",
-            action.parser
-        )));
+        return Err(AppError::BadRequest(format!("unknown parser {:?}", action.parser)));
     }
     if action.max_cpu <= 0
         || action.max_fd <= 0
         || action.max_file_size <= 0
         || action.max_threads <= 0
     {
-        return Err(AppError::BadRequest(
-            "action limits must be positive".to_owned(),
-        ));
+        return Err(AppError::BadRequest("action limits must be positive".to_owned()));
     }
     if action.max_memory <= 0 {
-        return Err(AppError::BadRequest(
-            "max memory must be positive".to_owned(),
-        ));
+        return Err(AppError::BadRequest("max memory must be positive".to_owned()));
     }
     Ok(())
 }
@@ -158,9 +140,7 @@ fn require_positive_integer_weight(value: f64, label: &str) -> AppResult<i64> {
     }
     let out = value as i64;
     if out <= 0 {
-        return Err(AppError::BadRequest(format!(
-            "{label} must be greater than zero"
-        )));
+        return Err(AppError::BadRequest(format!("{label} must be greater than zero")));
     }
     Ok(out)
 }
@@ -180,9 +160,7 @@ pub fn prepare_problem(
         return Err(AppError::BadRequest("problem note is required".to_owned()));
     }
     if draft.steps.is_empty() {
-        return Err(AppError::BadRequest(
-            "problem must contain at least one step".to_owned(),
-        ));
+        return Err(AppError::BadRequest("problem must contain at least one step".to_owned()));
     }
     let now = now_utc();
     let mut problem_types = BTreeMap::new();
@@ -190,11 +168,8 @@ pub fn prepare_problem(
     let mut solution_commits = Vec::new();
     let mut signed_validation_bundles = Vec::new();
     let mut prior_solution_paths = BTreeSet::new();
-    let type_names = draft
-        .steps
-        .iter()
-        .map(|step| step.problem_type.clone())
-        .collect::<BTreeSet<_>>();
+    let type_names =
+        draft.steps.iter().map(|step| step.problem_type.clone()).collect::<BTreeSet<_>>();
     let hostname = select_daycare_host(&type_names)?;
     for (index, step) in draft.steps.iter().enumerate() {
         let step_number = (index + 1) as i64;
@@ -240,10 +215,7 @@ pub fn prepare_problem(
                 missing.join(", ")
             )));
         }
-        let whitelist = solution_files
-            .keys()
-            .map(|path| (path.clone(), true))
-            .collect();
+        let whitelist = solution_files.keys().map(|path| (path.clone(), true)).collect();
         problem_steps.push(ProblemStep {
             problem_id: draft.problem_id.clone(),
             step: step_number,
@@ -254,11 +226,7 @@ pub fn prepare_problem(
             whitelist,
             starter_files: starter_files.clone(),
         });
-        let commit_action = if action_filter.is_empty() {
-            "grade"
-        } else {
-            action_filter
-        };
+        let commit_action = if action_filter.is_empty() { "grade" } else { action_filter };
         let commit = Commit {
             id: 0,
             assignment: Some(AssignmentKey {
@@ -307,10 +275,8 @@ pub fn prepare_problem(
                 commit: Some(commit.clone()),
                 starter_files: starter_files.clone(),
             };
-            signed_validation_bundles.push(encode_signed_runtime_bundle(
-                &bundle,
-                &config.daycare_secret,
-            )?);
+            signed_validation_bundles
+                .push(encode_signed_runtime_bundle(&bundle, &config.daycare_secret)?);
         }
         prior_solution_paths = solution_files.keys().cloned().collect();
     }
@@ -362,27 +328,14 @@ fn filtered_author_files(
     let uploaded = file_vec_to_map(&step.files)?;
     let starter = file_vec_to_map(&step.starter_files)?;
     let mut effective = BTreeMap::<String, Vec<u8>>::new();
+    effective.extend(uploaded.iter().map(|(path, content)| (path.clone(), content.clone())));
     effective.extend(
-        uploaded
-            .iter()
-            .map(|(path, content)| (path.clone(), content.clone())),
+        starter.iter().map(|(path, content)| (format!("_starter/{path}"), content.clone())),
     );
-    effective.extend(
-        starter
-            .iter()
-            .map(|(path, content)| (format!("_starter/{path}"), content.clone())),
-    );
-    effective.extend(
-        problem_type
-            .files
-            .iter()
-            .map(|(path, content)| (path.clone(), content.clone())),
-    );
+    effective
+        .extend(problem_type.files.iter().map(|(path, content)| (path.clone(), content.clone())));
     let kept = filter_ignored_paths(&effective)?;
-    let filtered_uploaded = uploaded
-        .into_iter()
-        .filter(|(path, _)| kept.contains(path))
-        .collect();
+    let filtered_uploaded = uploaded.into_iter().filter(|(path, _)| kept.contains(path)).collect();
     let filtered_starter = starter
         .into_iter()
         .filter_map(|(path, content)| {
@@ -472,14 +425,10 @@ pub fn save_problem(
         .as_ref()
         .ok_or_else(|| AppError::BadRequest("problem is required".to_owned()))?;
     if bundle.user_id != current_user.user_id {
-        return Err(AppError::BadRequest(
-            "bundle must include user's ID".to_owned(),
-        ));
+        return Err(AppError::BadRequest("bundle must include user's ID".to_owned()));
     }
     if bundle.problem_steps.is_empty() {
-        return Err(AppError::BadRequest(
-            "problem must include at least one step".to_owned(),
-        ));
+        return Err(AppError::BadRequest("problem must include at least one step".to_owned()));
     }
     if bundle.solution_commits.len() != bundle.problem_steps.len() {
         return Err(AppError::BadRequest(
@@ -504,19 +453,10 @@ pub fn save_problem(
         None
     };
     let created = existing_created.unwrap_or(
-        problem
-            .created_at
-            .as_ref()
-            .map(timestamp_to_utc)
-            .transpose()?
-            .unwrap_or_else(now_utc),
+        problem.created_at.as_ref().map(timestamp_to_utc).transpose()?.unwrap_or_else(now_utc),
     );
-    let updated = problem
-        .updated_at
-        .as_ref()
-        .map(timestamp_to_utc)
-        .transpose()?
-        .unwrap_or_else(now_utc);
+    let updated =
+        problem.updated_at.as_ref().map(timestamp_to_utc).transpose()?.unwrap_or_else(now_utc);
     conn.execute(
         "INSERT INTO problems(problem_id, problem_note, problem_tags, problem_options, problem_created_at, problem_updated_at)
          VALUES (?, ?, ?, ?, ?, ?)
@@ -549,20 +489,8 @@ pub fn save_problem(
                 step_weight = excluded.step_weight",
             params![problem.problem_id, step_number, step.problem_type, step.note, step_weight],
         )?;
-        insert_step_files(
-            conn,
-            &problem.problem_id,
-            step_number,
-            "regular",
-            &step.files,
-        )?;
-        insert_step_files(
-            conn,
-            &problem.problem_id,
-            step_number,
-            "starter",
-            &step.starter_files,
-        )?;
+        insert_step_files(conn, &problem.problem_id, step_number, "regular", &step.files)?;
+        insert_step_files(conn, &problem.problem_id, step_number, "starter", &step.starter_files)?;
         insert_step_files(
             conn,
             &problem.problem_id,
@@ -594,9 +522,7 @@ fn verify_validation_bundles(
     current_user_id: &str,
 ) -> AppResult<Vec<Commit>> {
     if bundle.signed_validation_bundles.len() != bundle.problem_steps.len() {
-        return Err(AppError::BadRequest(
-            "missing validation bundles".to_owned(),
-        ));
+        return Err(AppError::BadRequest("missing validation bundles".to_owned()));
     }
     let mut validated = Vec::new();
     for (index, signed) in bundle.signed_validation_bundles.iter().enumerate() {
@@ -664,9 +590,7 @@ fn verify_validation_bundles(
             AppError::BadRequest("validation bundle report card is missing".to_owned())
         })?;
         if !report.passed || commit.score != 1.0 {
-            return Err(AppError::BadRequest(
-                "validation bundle did not pass".to_owned(),
-            ));
+            return Err(AppError::BadRequest("validation bundle did not pass".to_owned()));
         }
         validated.push(commit.clone());
     }
@@ -690,11 +614,7 @@ fn expected_validation_runtime(bundle: &ProblemBundle, index: usize) -> AppResul
         .problem_types
         .get(&step.problem_type)
         .ok_or_else(|| AppError::BadRequest("problem type is missing".to_owned()))?;
-    let action_name = if commit.action.is_empty() {
-        "grade"
-    } else {
-        commit.action.as_str()
-    };
+    let action_name = if commit.action.is_empty() { "grade" } else { commit.action.as_str() };
     let action = problem_type.actions.get(action_name).ok_or_else(|| {
         AppError::BadRequest(format!(
             "action {action_name:?} not defined for problem type {:?}",
@@ -742,11 +662,7 @@ fn validate_save_mode(
     id: &str,
 ) -> AppResult<()> {
     let exists = conn
-        .query_row(
-            &format!("SELECT 1 FROM {table} WHERE {column} = ?"),
-            params![id],
-            |_| Ok(()),
-        )
+        .query_row(&format!("SELECT 1 FROM {table} WHERE {column} = ?"), params![id], |_| Ok(()))
         .optional()?
         .is_some();
     if mode == SaveMode::Create as i32 && exists {
@@ -756,9 +672,7 @@ fn validate_save_mode(
         return Err(AppError::NotFound(format!("{id} does not exist")));
     }
     if mode != SaveMode::Create as i32 && mode != SaveMode::Update as i32 {
-        return Err(AppError::BadRequest(
-            "save mode must be create or update".to_owned(),
-        ));
+        return Err(AppError::BadRequest("save mode must be create or update".to_owned()));
     }
     Ok(())
 }
@@ -831,23 +745,13 @@ fn validate_assigned_problem_set_shape(
              ORDER BY problem_id",
         )?
         .query_map(params![problem_set_id], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, i64>(2)?,
-            ))
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?))
         })?
         .collect::<Result<Vec<_>, _>>()?;
     let mut new_shape = bundle
         .problem_set_problems
         .iter()
-        .map(|problem| {
-            (
-                problem.problem_id.clone(),
-                problem.first_step,
-                problem.last_step,
-            )
-        })
+        .map(|problem| (problem.problem_id.clone(), problem.first_step, problem.last_step))
         .collect::<Vec<_>>();
     new_shape.sort();
     if old_shape != new_shape {
@@ -881,18 +785,10 @@ fn insert_step_files(
 }
 
 fn create_default_problem_set(conn: &Connection, problem: &Problem) -> AppResult<()> {
-    let created = problem
-        .created_at
-        .as_ref()
-        .map(timestamp_to_utc)
-        .transpose()?
-        .unwrap_or_else(now_utc);
-    let updated = problem
-        .updated_at
-        .as_ref()
-        .map(timestamp_to_utc)
-        .transpose()?
-        .unwrap_or_else(now_utc);
+    let created =
+        problem.created_at.as_ref().map(timestamp_to_utc).transpose()?.unwrap_or_else(now_utc);
+    let updated =
+        problem.updated_at.as_ref().map(timestamp_to_utc).transpose()?.unwrap_or_else(now_utc);
     conn.execute(
         "INSERT INTO problem_sets(problem_set_id, problem_set_note, problem_set_tags, continues_problem_set_id, problem_set_created_at, problem_set_updated_at) VALUES (?, ?, ?, NULL, ?, ?)",
         params![problem.problem_id, problem.problem_note, serde_json::to_string(&problem.problem_tags)?, db_time(created), db_time(updated)],
@@ -913,29 +809,15 @@ pub fn save_problem_set(
         .problem_set
         .as_ref()
         .ok_or_else(|| AppError::BadRequest("problem set is required".to_owned()))?;
-    validate_save_mode(
-        conn,
-        mode,
-        "problem_sets",
-        "problem_set_id",
-        &problem_set.problem_set_id,
-    )?;
+    validate_save_mode(conn, mode, "problem_sets", "problem_set_id", &problem_set.problem_set_id)?;
     validate_problem_set_shape(conn, bundle)?;
     if mode == SaveMode::Update as i32 {
         validate_assigned_problem_set_shape(conn, &problem_set.problem_set_id, bundle)?;
     }
-    let created = problem_set
-        .created_at
-        .as_ref()
-        .map(timestamp_to_utc)
-        .transpose()?
-        .unwrap_or_else(now_utc);
-    let updated = problem_set
-        .updated_at
-        .as_ref()
-        .map(timestamp_to_utc)
-        .transpose()?
-        .unwrap_or_else(now_utc);
+    let created =
+        problem_set.created_at.as_ref().map(timestamp_to_utc).transpose()?.unwrap_or_else(now_utc);
+    let updated =
+        problem_set.updated_at.as_ref().map(timestamp_to_utc).transpose()?.unwrap_or_else(now_utc);
     conn.execute(
         "INSERT INTO problem_sets(problem_set_id, problem_set_note, problem_set_tags, continues_problem_set_id, problem_set_created_at, problem_set_updated_at)
          VALUES (?, ?, ?, NULLIF(?, ''), ?, ?)
@@ -971,11 +853,8 @@ fn validate_problem_set_shape(conn: &Connection, bundle: &ProblemSetBundle) -> A
         .problem_set
         .as_ref()
         .ok_or_else(|| AppError::BadRequest("problem set is required".to_owned()))?;
-    let sliced = bundle
-        .problem_set_problems
-        .iter()
-        .filter(|p| p.first_step > 0 || p.last_step > 0)
-        .count();
+    let sliced =
+        bundle.problem_set_problems.iter().filter(|p| p.first_step > 0 || p.last_step > 0).count();
     if !pset.continues_problem_set_id.is_empty() && sliced == 0 {
         return Err(AppError::BadRequest(
             "continues_problem_set_id requires a sliced problem set".to_owned(),
@@ -985,9 +864,7 @@ fn validate_problem_set_shape(conn: &Connection, bundle: &ProblemSetBundle) -> A
         return Ok(());
     }
     if sliced > 0 && (bundle.problem_set_problems.len() != 1 || sliced != 1) {
-        return Err(AppError::BadRequest(
-            "step slicing requires exactly one problem".to_owned(),
-        ));
+        return Err(AppError::BadRequest("step slicing requires exactly one problem".to_owned()));
     }
     let slice = bundle
         .problem_set_problems
@@ -1031,14 +908,10 @@ fn validate_problem_set_shape(conn: &Connection, bundle: &ProblemSetBundle) -> A
         ));
     }
     let Some(previous_last_step) = previous_last_step else {
-        return Err(AppError::BadRequest(
-            "continued problem set must be sliced".to_owned(),
-        ));
+        return Err(AppError::BadRequest("continued problem set must be sliced".to_owned()));
     };
     if previous_first_step.is_none() {
-        return Err(AppError::BadRequest(
-            "continued problem set must be sliced".to_owned(),
-        ));
+        return Err(AppError::BadRequest("continued problem set must be sliced".to_owned()));
     }
     if *previous_last_step != slice.first_step - 1 {
         return Err(AppError::BadRequest(
@@ -1067,10 +940,7 @@ fn validate_slice_bounds(conn: &Connection, slice: &ProblemSetProblem) -> AppRes
         )?
         .unwrap_or(0);
     if max_step == 0 {
-        return Err(AppError::BadRequest(format!(
-            "problem {:?} does not exist",
-            slice.problem_id
-        )));
+        return Err(AppError::BadRequest(format!("problem {:?} does not exist", slice.problem_id)));
     }
     if slice.last_step > max_step {
         return Err(AppError::BadRequest(format!(
@@ -1088,19 +958,10 @@ pub fn save_workspace_commit(
     ip_allowed: bool,
 ) -> AppResult<(i32, String)> {
     if !commit.action.is_empty() {
-        return Err(AppError::BadRequest(
-            "workspace commit action must be empty".to_owned(),
-        ));
+        return Err(AppError::BadRequest("workspace commit action must be empty".to_owned()));
     }
-    save_commit_core(
-        conn,
-        current_user,
-        commit,
-        ip_allowed,
-        false,
-        CommitPersistence::FilesOnly,
-    )
-    .map(|result| (result.save_status, result.problem_note))
+    save_commit_core(conn, current_user, commit, ip_allowed, false, CommitPersistence::FilesOnly)
+        .map(|result| (result.save_status, result.problem_note))
 }
 
 pub fn save_ungraded_commit(
@@ -1111,9 +972,7 @@ pub fn save_ungraded_commit(
     select_daycare_host: impl Fn(&BTreeSet<String>) -> AppResult<String>,
 ) -> AppResult<CommitResult> {
     if grading.user_id != current_user.user_id {
-        return Err(AppError::BadRequest(
-            "bundle must include user's ID".to_owned(),
-        ));
+        return Err(AppError::BadRequest("bundle must include user's ID".to_owned()));
     }
     let mut commit = grading
         .commit
@@ -1171,11 +1030,7 @@ pub fn save_ungraded_commit(
         commit: Some(commit),
         starter_files: context.starter_files,
     };
-    Ok(CommitResult {
-        bundle,
-        save_status: result.save_status,
-        locked: result.locked,
-    })
+    Ok(CommitResult { bundle, save_status: result.save_status, locked: result.locked })
 }
 
 pub fn save_graded_commit(
@@ -1187,27 +1042,15 @@ pub fn save_graded_commit(
 ) -> AppResult<CommitResult> {
     let runtime = decode_signed_runtime_bundle(signed, &config.daycare_secret)?;
     if runtime.user_id != current_user.user_id {
-        return Err(AppError::BadRequest(
-            "bundle must include user's ID".to_owned(),
-        ));
+        return Err(AppError::BadRequest("bundle must include user's ID".to_owned()));
     }
     let commit = runtime
         .commit
         .as_ref()
         .ok_or_else(|| AppError::BadRequest("commit is required".to_owned()))?;
-    let result = save_commit_core(
-        conn,
-        current_user,
-        commit,
-        ip_allowed,
-        true,
-        CommitPersistence::Full,
-    )?;
-    Ok(CommitResult {
-        bundle: runtime,
-        save_status: result.save_status,
-        locked: result.locked,
-    })
+    let result =
+        save_commit_core(conn, current_user, commit, ip_allowed, true, CommitPersistence::Full)?;
+    Ok(CommitResult { bundle: runtime, save_status: result.save_status, locked: result.locked })
 }
 
 struct SaveCoreResult {
@@ -1235,9 +1078,7 @@ fn save_commit_core(
         .as_ref()
         .ok_or_else(|| AppError::BadRequest("assignment is required".to_owned()))?;
     if !allow_action && !commit.action.is_empty() {
-        return Err(AppError::BadRequest(
-            "workspace commit action must be empty".to_owned(),
-        ));
+        return Err(AppError::BadRequest("workspace commit action must be empty".to_owned()));
     }
     let policy = conn
         .query_row(
@@ -1263,11 +1104,7 @@ fn save_commit_core(
     } else {
         CommitSaveStatus::NotSavedNotOwner as i32
     };
-    Ok(SaveCoreResult {
-        save_status,
-        locked: policy.1,
-        problem_note: context.problem_note,
-    })
+    Ok(SaveCoreResult { save_status, locked: policy.1, problem_note: context.problem_note })
 }
 
 fn validate_commit_step_sequence(
@@ -1289,13 +1126,7 @@ fn validate_commit_step_sequence(
             AND scope.problem_id = ?
             AND scope.step_number < ?
             AND passed.step_number IS NULL",
-        params![
-            key.user_id,
-            key.course_id,
-            key.problem_set_id,
-            problem_id,
-            step
-        ],
+        params![key.user_id, key.course_id, key.problem_set_id, problem_id, step],
         |row| row.get::<_, Option<i64>>(0),
     )?;
     if let Some(missing_step) = missing_prior_step {
@@ -1316,13 +1147,7 @@ fn validate_commit_step_sequence(
             AND commits.problem_set_id = ?
             AND commits.problem_id = ?
             AND commits.step_number > ?",
-        params![
-            key.user_id,
-            key.course_id,
-            key.problem_set_id,
-            problem_id,
-            step
-        ],
+        params![key.user_id, key.course_id, key.problem_set_id, problem_id, step],
         |row| row.get::<_, Option<i64>>(0),
     )?;
     if let Some(later_step) = later_started_step {
@@ -1336,11 +1161,7 @@ fn validate_commit_step_sequence(
 
 fn require_student_owned_files(files: &FileMap, whitelist: &BTreeSet<String>) -> AppResult<()> {
     validate_file_map(files)?;
-    let bad = files
-        .keys()
-        .filter(|path| !whitelist.contains(*path))
-        .cloned()
-        .collect::<Vec<_>>();
+    let bad = files.keys().filter(|path| !whitelist.contains(*path)).cloned().collect::<Vec<_>>();
     if !bad.is_empty() {
         return Err(AppError::BadRequest(format!(
             "submitted non-student-owned files: {}",
@@ -1602,20 +1423,12 @@ mod tests {
         )]);
         let types = save_problem_type(&conn, "python", "image:v2", &second).unwrap();
 
-        let python = types
-            .into_iter()
-            .find(|problem_type| problem_type.problem_type == "python")
-            .unwrap();
+        let python =
+            types.into_iter().find(|problem_type| problem_type.problem_type == "python").unwrap();
         assert_eq!(python.container, "image:v2");
-        assert_eq!(
-            python.actions.keys().cloned().collect::<Vec<_>>(),
-            vec!["grade"]
-        );
+        assert_eq!(python.actions.keys().cloned().collect::<Vec<_>>(), vec!["grade"]);
         assert_eq!(python.actions["grade"].command, "pytest");
-        assert_eq!(
-            python.files.keys().cloned().collect::<Vec<_>>(),
-            vec!["runner.py"]
-        );
+        assert_eq!(python.files.keys().cloned().collect::<Vec<_>>(), vec!["runner.py"]);
     }
 
     #[test]
@@ -1665,11 +1478,7 @@ mod tests {
                 commit: Some(commit),
             },
             true,
-            |_| {
-                Err(AppError::Internal(
-                    "registry should not be consulted".to_owned(),
-                ))
-            },
+            |_| Err(AppError::Internal("registry should not be consulted".to_owned())),
         )
         .unwrap();
 
@@ -1769,10 +1578,7 @@ mod tests {
         commit.report_card = Some(ReportCard {
             passed: false,
             note: "one failed".to_owned(),
-            duration: Some(prost_types::Duration {
-                seconds: 2,
-                nanos: 3,
-            }),
+            duration: Some(prost_types::Duration { seconds: 2, nanos: 3 }),
             results: vec![ReportCardResult {
                 name: "case".to_owned(),
                 outcome: "failed".to_owned(),
@@ -1794,9 +1600,8 @@ mod tests {
         let result = save_graded_commit(&conn, &current_user, &signed, &config, true).unwrap();
 
         assert_eq!(result.save_status, CommitSaveStatus::Saved as i32);
-        let report: String = conn
-            .query_row("SELECT report_card FROM commits", [], |row| row.get(0))
-            .unwrap();
+        let report: String =
+            conn.query_row("SELECT report_card FROM commits", [], |row| row.get(0)).unwrap();
         let report: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(report["passed"], false);
         assert_eq!(report["duration"], 2_000_000_003_i64);
@@ -1828,10 +1633,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            result.save_status,
-            CommitSaveStatus::NotSavedNotOwner as i32
-        );
+        assert_eq!(result.save_status, CommitSaveStatus::NotSavedNotOwner as i32);
         assert_eq!(result.bundle.user_id, "instructor");
         assert_no_saved_commit(&conn);
     }
@@ -1846,10 +1648,7 @@ mod tests {
         for path in ["tests.py", "../answer.txt", "sub\\answer.txt"] {
             let mut commit = commit_for_student("", "sync", b"new");
             commit.files = BTreeMap::from([(path.to_owned(), b"bad".to_vec())]);
-            assert!(
-                save_workspace_commit(&conn, &current_user, &commit, true).is_err(),
-                "{path}"
-            );
+            assert!(save_workspace_commit(&conn, &current_user, &commit, true).is_err(), "{path}");
         }
     }
 
@@ -1932,19 +1731,10 @@ mod tests {
         let config = test_config();
         let mut bundle = prepared_author_bundle(&conn, &current_user, &config);
         sign_passing_validations(&mut bundle, &config);
-        bundle.solution_commits[0]
-            .files
-            .insert("answer.txt".to_owned(), b"tampered".to_vec());
+        bundle.solution_commits[0].files.insert("answer.txt".to_owned(), b"tampered".to_vec());
 
         assert!(
-            save_problem(
-                &conn,
-                &current_user,
-                SaveMode::Create as i32,
-                &bundle,
-                &config
-            )
-            .is_err()
+            save_problem(&conn, &current_user, SaveMode::Create as i32, &bundle, &config).is_err()
         );
     }
 
@@ -1961,22 +1751,13 @@ mod tests {
             &config.daycare_secret,
         )
         .unwrap();
-        runtime
-            .files
-            .insert("extra.txt".to_owned(), b"extra".to_vec());
+        runtime.files.insert("extra.txt".to_owned(), b"extra".to_vec());
         mark_runtime_passed(&mut runtime);
         bundle.signed_validation_bundles[0] =
             encode_signed_runtime_bundle(&runtime, &config.daycare_secret).unwrap();
 
         assert!(
-            save_problem(
-                &conn,
-                &current_user,
-                SaveMode::Create as i32,
-                &bundle,
-                &config
-            )
-            .is_err()
+            save_problem(&conn, &current_user, SaveMode::Create as i32, &bundle, &config).is_err()
         );
     }
 
@@ -1989,18 +1770,9 @@ mod tests {
         let config = test_config();
         let mut bundle = prepared_author_bundle(&conn, &current_user, &config);
         sign_passing_validations(&mut bundle, &config);
-        bundle
-            .signed_validation_bundles
-            .push(bundle.signed_validation_bundles[0].clone());
+        bundle.signed_validation_bundles.push(bundle.signed_validation_bundles[0].clone());
         assert!(
-            save_problem(
-                &conn,
-                &current_user,
-                SaveMode::Create as i32,
-                &bundle,
-                &config
-            )
-            .is_err()
+            save_problem(&conn, &current_user, SaveMode::Create as i32, &bundle, &config).is_err()
         );
 
         let mut bundle = prepared_author_bundle(&conn, &current_user, &config);
@@ -2013,14 +1785,7 @@ mod tests {
         bundle.signed_validation_bundles[0] =
             encode_signed_runtime_bundle(&runtime, "wrong-secret").unwrap();
         assert!(
-            save_problem(
-                &conn,
-                &current_user,
-                SaveMode::Create as i32,
-                &bundle,
-                &config
-            )
-            .is_err()
+            save_problem(&conn, &current_user, SaveMode::Create as i32, &bundle, &config).is_err()
         );
     }
 
@@ -2043,14 +1808,7 @@ mod tests {
         bundle.signed_validation_bundles[0] =
             encode_signed_runtime_bundle(&runtime, &config.daycare_secret).unwrap();
         assert!(
-            save_problem(
-                &conn,
-                &current_user,
-                SaveMode::Create as i32,
-                &bundle,
-                &config
-            )
-            .is_err()
+            save_problem(&conn, &current_user, SaveMode::Create as i32, &bundle, &config).is_err()
         );
 
         let mut bundle = prepared_author_bundle(&conn, &current_user, &config);
@@ -2065,14 +1823,7 @@ mod tests {
         bundle.signed_validation_bundles[0] =
             encode_signed_runtime_bundle(&runtime, &config.daycare_secret).unwrap();
         assert!(
-            save_problem(
-                &conn,
-                &current_user,
-                SaveMode::Create as i32,
-                &bundle,
-                &config
-            )
-            .is_err()
+            save_problem(&conn, &current_user, SaveMode::Create as i32, &bundle, &config).is_err()
         );
     }
 
@@ -2103,14 +1854,7 @@ mod tests {
         let mut create =
             prepared_author_bundle_from_draft(&conn, &current_user, &config, create_draft);
         sign_passing_validations(&mut create, &config);
-        save_problem(
-            &conn,
-            &current_user,
-            SaveMode::Create as i32,
-            &create,
-            &config,
-        )
-        .unwrap();
+        save_problem(&conn, &current_user, SaveMode::Create as i32, &create, &config).unwrap();
         let original_created_at: String = conn
             .query_row(
                 "SELECT problem_created_at FROM problems WHERE problem_id = 'new-problem'",
@@ -2124,11 +1868,8 @@ mod tests {
             [],
         )
         .unwrap();
-        conn.execute(
-            "INSERT INTO courses(course_id, course_name) VALUES ('c1', 'Course')",
-            [],
-        )
-        .unwrap();
+        conn.execute("INSERT INTO courses(course_id, course_name) VALUES ('c1', 'Course')", [])
+            .unwrap();
         conn.execute(
             "INSERT INTO user_courses(user_id, course_id, course_roles) VALUES ('u1', 'c1', 'Learner')",
             [],
@@ -2171,14 +1912,8 @@ mod tests {
         let mut update =
             prepared_author_bundle_from_draft(&conn, &current_user, &config, update_draft);
         sign_passing_validations(&mut update, &config);
-        let saved = save_problem(
-            &conn,
-            &current_user,
-            SaveMode::Update as i32,
-            &update,
-            &config,
-        )
-        .unwrap();
+        let saved =
+            save_problem(&conn, &current_user, SaveMode::Update as i32, &update, &config).unwrap();
 
         assert_eq!(
             saved.problem.unwrap().created_at.unwrap(),
@@ -2371,10 +2106,16 @@ mod tests {
             ..AuthorProblemDraft::default()
         };
 
-        let bundle = prepare_problem(&conn, &current_user, &draft, "", &config, |_| {
-            Ok("daycare".to_owned())
-        })
-        .unwrap();
+        let bundle =
+            prepare_problem(
+                &conn,
+                &current_user,
+                &draft,
+                "",
+                &config,
+                |_| Ok("daycare".to_owned()),
+            )
+            .unwrap();
 
         let files = &bundle.problem_steps[0].files;
         assert!(!files.contains_key("src/drop.tmp"));
@@ -2405,10 +2146,16 @@ mod tests {
             ..AuthorProblemDraft::default()
         };
 
-        let bundle = prepare_problem(&conn, &current_user, &draft, "", &config, |_| {
-            Ok("daycare".to_owned())
-        })
-        .unwrap();
+        let bundle =
+            prepare_problem(
+                &conn,
+                &current_user,
+                &draft,
+                "",
+                &config,
+                |_| Ok("daycare".to_owned()),
+            )
+            .unwrap();
 
         assert!(bundle.problem_steps[0].starter_files.is_empty());
         assert!(bundle.problem_steps[0].files.contains_key("answer.txt"));
@@ -2607,11 +2354,8 @@ mod tests {
             [],
         )
         .unwrap();
-        conn.execute(
-            "INSERT INTO courses(course_id, course_name) VALUES ('c1', 'Course')",
-            [],
-        )
-        .unwrap();
+        conn.execute("INSERT INTO courses(course_id, course_name) VALUES ('c1', 'Course')", [])
+            .unwrap();
         conn.execute(
             "INSERT INTO user_courses(user_id, course_id, course_roles) VALUES ('u1', 'c1', 'Learner')",
             [],
@@ -2803,10 +2547,8 @@ mod tests {
         config: &ServerConfig,
         draft: AuthorProblemDraft,
     ) -> ProblemBundle {
-        prepare_problem(conn, current_user, &draft, "", config, |_| {
-            Ok("daycare".to_owned())
-        })
-        .unwrap()
+        prepare_problem(conn, current_user, &draft, "", config, |_| Ok("daycare".to_owned()))
+            .unwrap()
     }
 
     fn sign_passing_validations(bundle: &mut ProblemBundle, config: &ServerConfig) {
@@ -2829,10 +2571,7 @@ mod tests {
     }
 
     fn file(path: &str, content: &[u8]) -> AuthorFile {
-        AuthorFile {
-            path: path.to_owned(),
-            content: content.to_vec(),
-        }
+        AuthorFile { path: path.to_owned(), content: content.to_vec() }
     }
 
     fn problem_set_bundle(
