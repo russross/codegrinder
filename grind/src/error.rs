@@ -48,10 +48,7 @@ pub fn transport_error(server: &str, error: TonicTransportError) -> CliError {
         }
         source = cause.source();
     }
-    CliError::Rpc(format!(
-        "could not contact server {server}: {}",
-        details.join(": ")
-    ))
+    CliError::Rpc(format!("could not contact server {server}: {}", details.join(": ")))
 }
 
 impl From<io::Error> for CliError {

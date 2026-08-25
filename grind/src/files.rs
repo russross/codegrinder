@@ -38,9 +38,7 @@ pub fn clean_relative_path(raw: &str) -> Result<WorkspacePath> {
     if parts.is_empty() {
         fail(format!("invalid path from server: {raw:?}"))?;
     }
-    Ok(WorkspacePath {
-        path: parts.into_iter().collect(),
-    })
+    Ok(WorkspacePath { path: parts.into_iter().collect() })
 }
 
 pub fn workspace_file_map(
@@ -125,9 +123,7 @@ pub fn clean_workspace_tree(directory: &Path, official_paths: &BTreeSet<String>)
         let rel = path.strip_prefix(directory).map_err(|error| {
             crate::error::CliError::Io(format!("unable to inspect {}: {error}", path.display()))
         })?;
-        if rel
-            .components()
-            .any(|component| component.as_os_str() == ".git")
+        if rel.components().any(|component| component.as_os_str() == ".git")
             || rel.as_os_str() == ".grind"
         {
             continue;
@@ -171,14 +167,7 @@ mod tests {
 
     #[test]
     fn clean_relative_path_rejects_non_workspace_paths() {
-        for raw in [
-            "",
-            "/tmp/file.py",
-            "../file.py",
-            "src/../file.py",
-            "src\\file.py",
-            ".",
-        ] {
+        for raw in ["", "/tmp/file.py", "../file.py", "src/../file.py", "src\\file.py", "."] {
             assert!(clean_relative_path(raw).is_err());
         }
     }
@@ -208,18 +197,12 @@ mod tests {
                 ("src/main.py".to_string(), b"after\n".to_vec()),
                 ("new.txt".to_string(), b"new\n".to_vec()),
             ]),
-            Some(&BTreeSet::from([
-                "src/main.py".to_string(),
-                "src/old.py".to_string(),
-            ])),
+            Some(&BTreeSet::from(["src/main.py".to_string(), "src/old.py".to_string()])),
             false,
         )
         .expect("update");
 
-        assert_eq!(
-            fs::read_to_string(dir.path().join("src/main.py")).expect("read"),
-            "after\n"
-        );
+        assert_eq!(fs::read_to_string(dir.path().join("src/main.py")).expect("read"), "after\n");
         assert!(dir.path().join("new.txt").exists());
         assert!(!dir.path().join("src/old.py").exists());
     }

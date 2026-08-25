@@ -91,11 +91,7 @@ pub fn print_problem_catalog(problem_sets: &[ProblemCatalogSet], host: &str) {
             }
         }
         println!();
-        println!(
-            "  -> {}/lti/problem_sets/cli/{}",
-            server_base_url(host),
-            pset.problem_set_id
-        );
+        println!("  -> {}/lti/problem_sets/cli/{}", server_base_url(host), pset.problem_set_id);
     }
 }
 
@@ -113,8 +109,7 @@ pub fn assignment_label(course_name: &str, problem_set_id: &str) -> String {
 }
 
 pub fn assignment_directory(root: &Path, course_name: &str, problem_set_id: &str) -> PathBuf {
-    root.join(course_directory(course_name))
-        .join(problem_set_id)
+    root.join(course_directory(course_name)).join(problem_set_id)
 }
 
 fn assignment_title(item: &AssignmentListItem) -> String {

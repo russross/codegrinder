@@ -62,12 +62,7 @@ impl Session {
         config.rpc_timeout = trace.rpc_timeout;
         let mut client = new_grpc_client(&config).await?;
         let request = authorize(
-            timed_request(
-                HelloRequest {
-                    token: String::new(),
-                },
-                config.rpc_timeout,
-            ),
+            timed_request(HelloRequest { token: String::new() }, config.rpc_timeout),
             &config.session_key,
         )?;
         dump(&config.trace, "Hello", true, &request.get_ref());
@@ -83,11 +78,7 @@ impl Session {
             config.roles = user.roles;
             write_login_config(&config)?;
         }
-        Ok(Self {
-            client,
-            user,
-            config,
-        })
+        Ok(Self { client, user, config })
     }
 
     pub async fn list_assignments(
@@ -98,10 +89,7 @@ impl Session {
         call_rpc!(
             self,
             "ListAssignments",
-            ListAssignmentsRequest {
-                search,
-                include_student_context,
-            },
+            ListAssignmentsRequest { search, include_student_context },
             list_assignments
         )
     }
@@ -119,24 +107,14 @@ impl Session {
     }
 
     pub async fn get_problem_types(&mut self) -> Result<GetProblemTypesResponse> {
-        call_rpc!(
-            self,
-            "GetProblemTypes",
-            GetProblemTypesRequest {},
-            get_problem_types
-        )
+        call_rpc!(self, "GetProblemTypes", GetProblemTypesRequest {}, get_problem_types)
     }
 
     pub async fn get_problem_type(
         &mut self,
         problem_type: String,
     ) -> Result<GetProblemTypeResponse> {
-        call_rpc!(
-            self,
-            "GetProblemType",
-            GetProblemTypeRequest { problem_type },
-            get_problem_type
-        )
+        call_rpc!(self, "GetProblemType", GetProblemTypeRequest { problem_type }, get_problem_type)
     }
 
     pub async fn save_problem_type_files(
@@ -147,10 +125,7 @@ impl Session {
         call_rpc!(
             self,
             "SaveProblemTypeFiles",
-            SaveProblemTypeFilesRequest {
-                problem_type,
-                files
-            },
+            SaveProblemTypeFilesRequest { problem_type, files },
             save_problem_type_files
         )
     }
@@ -164,11 +139,7 @@ impl Session {
         call_rpc!(
             self,
             "SaveProblemType",
-            SaveProblemTypeRequest {
-                problem_type,
-                container,
-                actions,
-            },
+            SaveProblemTypeRequest { problem_type, container, actions },
             save_problem_type
         )
     }
@@ -180,9 +151,7 @@ impl Session {
         call_rpc!(
             self,
             "GetAssignment",
-            GetAssignmentRequest {
-                assignment: Some(assignment),
-            },
+            GetAssignmentRequest { assignment: Some(assignment) },
             get_assignment
         )
     }
@@ -219,10 +188,7 @@ impl Session {
         let response = call_rpc!(
             self,
             "PrepareProblem",
-            crate::proto::codegrinder::PrepareProblemRequest {
-                draft: Some(draft),
-                action,
-            },
+            crate::proto::codegrinder::PrepareProblemRequest { draft: Some(draft), action },
             prepare_problem
         )?;
         response
@@ -238,10 +204,7 @@ impl Session {
         call_rpc!(
             self,
             "SaveProblem",
-            SaveProblemRequest {
-                mode: mode as i32,
-                bundle: Some(bundle),
-            },
+            SaveProblemRequest { mode: mode as i32, bundle: Some(bundle) },
             save_problem
         )
     }
@@ -254,10 +217,7 @@ impl Session {
         call_rpc!(
             self,
             "SaveProblemSet",
-            SaveProblemSetRequest {
-                mode: mode as i32,
-                bundle: Some(bundle),
-            },
+            SaveProblemSetRequest { mode: mode as i32, bundle: Some(bundle) },
             save_problem_set
         )
     }
@@ -269,9 +229,7 @@ impl Session {
         call_rpc!(
             self,
             "SaveWorkspaceCommit",
-            SaveWorkspaceCommitRequest {
-                commit: Some(commit)
-            },
+            SaveWorkspaceCommitRequest { commit: Some(commit) },
             save_workspace_commit
         )
     }
@@ -283,9 +241,7 @@ impl Session {
         call_rpc!(
             self,
             "SaveUngradedCommit",
-            SaveUngradedCommitRequest {
-                commit: Some(commit)
-            },
+            SaveUngradedCommitRequest { commit: Some(commit) },
             save_ungraded_commit
         )
     }
@@ -297,9 +253,7 @@ impl Session {
         call_rpc!(
             self,
             "SaveGradedCommit",
-            SaveGradedCommitRequest {
-                bundle: Some(bundle)
-            },
+            SaveGradedCommitRequest { bundle: Some(bundle) },
             save_graded_commit
         )
     }
@@ -332,9 +286,7 @@ pub async fn login(host: &str, token: &str, trace: ApiTrace) -> Result<HelloResp
         rpc_timeout: trace.rpc_timeout,
     };
     let mut client = new_grpc_client(&config).await?;
-    let request = HelloRequest {
-        token: token.to_string(),
-    };
+    let request = HelloRequest { token: token.to_string() };
     dump(&trace, "Hello", true, &request);
     let response = client
         .hello(timed_request(request, config.rpc_timeout))
@@ -397,13 +349,11 @@ fn updater_in_path() -> Option<PathBuf> {
 }
 
 fn updater_in_paths(path: &OsStr) -> Option<PathBuf> {
-    env::split_paths(path)
-        .map(|directory| directory.join("update-grind"))
-        .find(|candidate| {
-            candidate.metadata().is_ok_and(|metadata| {
-                metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
-            })
-        })
+    env::split_paths(path).map(|directory| directory.join("update-grind")).find(|candidate| {
+        candidate
+            .metadata()
+            .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+    })
 }
 
 async fn upgrade_grind(updater: &Path, host: &str) -> bool {
@@ -422,12 +372,7 @@ async fn upgrade_grind(updater: &Path, host: &str) -> bool {
 }
 
 fn server_hostname(host: &str) -> Option<String> {
-    endpoint_uri(host)
-        .ok()?
-        .parse::<http::Uri>()
-        .ok()?
-        .host()
-        .map(str::to_owned)
+    endpoint_uri(host).ok()?.parse::<http::Uri>().ok()?.host().map(str::to_owned)
 }
 
 pub fn user_from_hello(response: &HelloResponse) -> Result<AuthenticatedUser> {
@@ -459,14 +404,9 @@ async fn new_grpc_client(config: &Config) -> Result<CodeGrinderServiceClient<Cha
     let endpoint = Endpoint::from_shared(uri.clone())
         .map_err(|error| CliError::Message(format!("invalid server address {uri:?}: {error}")))?;
     let channel = if uri.starts_with("http://") {
-        endpoint
-            .connect()
-            .await
-            .map_err(|error| transport_error(&uri, error))?
+        endpoint.connect().await.map_err(|error| transport_error(&uri, error))?
     } else {
-        let tls = ClientTlsConfig::new()
-            .with_webpki_roots()
-            .domain_name(tls_domain_name(&uri)?);
+        let tls = ClientTlsConfig::new().with_webpki_roots().domain_name(tls_domain_name(&uri)?);
         endpoint
             .tls_config(tls)
             .map_err(|error| CliError::Message(format!("invalid TLS settings for {uri}: {error}")))?
@@ -582,10 +522,7 @@ mod tests {
         let request = timed_request((), Duration::from_secs(10));
 
         assert_eq!(
-            request
-                .metadata()
-                .get("grpc-timeout")
-                .and_then(|value| value.to_str().ok()),
+            request.metadata().get("grpc-timeout").and_then(|value| value.to_str().ok()),
             Some("10000000u")
         );
     }
@@ -610,10 +547,7 @@ mod tests {
             args: Vec::new(),
         };
 
-        assert_eq!(
-            daycare_timeout(&request, Duration::from_secs(10)),
-            Duration::from_secs(35)
-        );
+        assert_eq!(daycare_timeout(&request, Duration::from_secs(10)), Duration::from_secs(35));
     }
 
     #[test]
@@ -636,11 +570,8 @@ mod tests {
         let directory = tempdir().expect("create updater directory");
         let updater = directory.path().join("update-grind");
         let arguments = directory.path().join("update-grind.args");
-        fs::write(
-            &updater,
-            "#!/bin/sh\nprintf '%s\\n%s\\n' \"$1\" \"$2\" >\"${0}.args\"\n",
-        )
-        .expect("write updater");
+        fs::write(&updater, "#!/bin/sh\nprintf '%s\\n%s\\n' \"$1\" \"$2\" >\"${0}.args\"\n")
+            .expect("write updater");
         fs::set_permissions(&updater, fs::Permissions::from_mode(0o755))
             .expect("make updater executable");
 

@@ -39,20 +39,9 @@ pub async fn command_sync(extra: Vec<String>, trace: ApiTrace) -> Result<()> {
     let mut session = connect(trace).await?;
     let student = gather_student_context_for_sync(&mut session, Path::new(".")).await?;
     save_current_student_files(&mut session, &student, "grind sync").await?;
-    update_files(
-        &student.problem_dir,
-        &student.missing_student_files,
-        None,
-        true,
-    )?;
-    clean_workspace_tree(
-        &student.problem_dir,
-        &workspace_official_paths(&student.workspace)?,
-    )?;
-    println!(
-        "problem {} step {} synced",
-        student.workspace.problem_id, student.commit.step
-    );
+    update_files(&student.problem_dir, &student.missing_student_files, None, true)?;
+    clean_workspace_tree(&student.problem_dir, &workspace_official_paths(&student.workspace)?)?;
+    println!("problem {} step {} synced", student.workspace.problem_id, student.commit.step);
     Ok(())
 }
 
@@ -105,12 +94,7 @@ pub async fn command_grade(extra: Vec<String>, trace: ApiTrace) -> Result<()> {
                 .await?;
             let mut files = workspace_file_map(&next_workspace.system_owned_files)?;
             files.extend(workspace_file_map(&next_workspace.student_owned_files)?);
-            update_files(
-                &PathBuf::from("."),
-                &files,
-                Some(&student.current_paths),
-                false,
-            )?;
+            update_files(&PathBuf::from("."), &files, Some(&student.current_paths), false)?;
             student.problem_info.step = next_step_number;
             update_dotfile_problem(&mut student.dotfile, &student.problem_info);
             save_dotfile(&student.dotfile)?;
@@ -158,9 +142,7 @@ pub async fn command_action(action_args: Vec<String>, trace: ApiTrace) -> Result
             println!("   {name}");
         }
         let program = crate::config::program_name();
-        fail(format!(
-            "use '{program} action [action]' to initiate an action"
-        ))?;
+        fail(format!("use '{program} action [action]' to initiate an action"))?;
     }
     let unsigned = build_grading_commit(
         &session.user.user_id,
@@ -379,11 +361,7 @@ pub fn build_commit_from_disk(
     }
     if !missing.is_empty() {
         let mut lines = vec!["did not find all the expected files".to_string()];
-        lines.extend(
-            missing
-                .into_iter()
-                .map(|name| format!("  {name} not found")),
-        );
+        lines.extend(missing.into_iter().map(|name| format!("  {name} not found")));
         lines.push("all expected files must be present".to_string());
         fail(lines.join("\n"))?;
     }
@@ -418,9 +396,7 @@ async fn save_current_student_files(
     student: &StudentCommandContext,
     note: &str,
 ) -> Result<crate::proto::codegrinder::SaveWorkspaceCommitResponse> {
-    session
-        .save_workspace_commit(commit_with_metadata(&student.commit, "", note))
-        .await
+    session.save_workspace_commit(commit_with_metadata(&student.commit, "", note)).await
 }
 
 fn commit_with_metadata(commit: &Commit, action: &str, note: &str) -> Commit {
@@ -436,10 +412,7 @@ fn reset_matches(
     basename_matches: &BTreeMap<String, BTreeSet<String>>,
 ) -> BTreeSet<String> {
     let clean = Path::new(requested).to_string_lossy().to_string();
-    if Path::new(&clean)
-        .file_name()
-        .is_some_and(|name| name == clean.as_str())
-    {
+    if Path::new(&clean).file_name().is_some_and(|name| name == clean.as_str()) {
         basename_matches
             .get(&clean)
             .or_else(|| exact_matches.get(&clean))
@@ -451,10 +424,8 @@ fn reset_matches(
 }
 
 fn update_dotfile_problem(dotfile: &mut DotFile, info: &ProblemInfo) {
-    if let Some(value) = dotfile
-        .problems
-        .values_mut()
-        .find(|value| value.problem_id == info.problem_id)
+    if let Some(value) =
+        dotfile.problems.values_mut().find(|value| value.problem_id == info.problem_id)
     {
         value.step = info.step;
     }
@@ -464,10 +435,7 @@ fn timestamp_now() -> Result<Timestamp> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| crate::error::CliError::Message(error.to_string()))?;
-    Ok(Timestamp {
-        seconds: now.as_secs() as i64,
-        nanos: now.subsec_nanos() as i32,
-    })
+    Ok(Timestamp { seconds: now.as_secs() as i64, nanos: now.subsec_nanos() as i32 })
 }
 
 async fn connect(trace: ApiTrace) -> Result<Session> {

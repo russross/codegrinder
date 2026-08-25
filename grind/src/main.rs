@@ -185,11 +185,7 @@ struct AdminActionSetArgs {
 
 #[derive(Debug, Args)]
 struct AdminFilesArgs {
-    #[arg(
-        long = "type",
-        default_value = "",
-        help = "problem type to compare or replace"
-    )]
+    #[arg(long = "type", default_value = "", help = "problem type to compare or replace")]
     problem_type: String,
     #[arg(long = "set", help = "replace the canonical server file set")]
     set_files: bool,
@@ -214,9 +210,7 @@ fn main() -> ExitCode {
 }
 
 async fn run(argv: impl IntoIterator<Item = OsString>) -> Result<()> {
-    let roles = load_config_or_default()
-        .map(|config| config.roles)
-        .unwrap_or_default();
+    let roles = load_config_or_default().map(|config| config.roles).unwrap_or_default();
     let matches = match command_for_roles(roles).try_get_matches_from(argv) {
         Ok(matches) => matches,
         Err(error) => {

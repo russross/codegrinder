@@ -103,12 +103,7 @@ pub async fn command_solve(extra: Vec<String>, trace: ApiTrace) -> Result<()> {
     if workspace.solution_files.is_empty() {
         fail("no solution files found")?;
     }
-    update_files(
-        &problem_dir,
-        &workspace_file_map(&workspace.solution_files)?,
-        None,
-        true,
-    )?;
+    update_files(&problem_dir, &workspace_file_map(&workspace.solution_files)?, None, true)?;
     Ok(())
 }
 
@@ -135,16 +130,8 @@ pub async fn command_type(
             .max()
             .unwrap_or(0);
         for problem_type in response.problem_types {
-            let actions = problem_type
-                .actions
-                .keys()
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(", ");
-            println!(
-                "    {:<width$}  actions: {actions}",
-                problem_type.problem_type
-            );
+            let actions = problem_type.actions.keys().cloned().collect::<Vec<_>>().join(", ");
+            println!("    {:<width$}  actions: {actions}", problem_type.problem_type);
         }
         return Ok(());
     }
@@ -170,12 +157,7 @@ pub async fn command_type(
         let old_files = problem_type.files.keys().cloned().collect::<BTreeSet<_>>();
         update_files(&directory, &BTreeMap::new(), Some(&old_files), true)?;
     } else {
-        update_files(
-            &directory,
-            &workspace_file_map(&problem_type.files)?,
-            None,
-            true,
-        )?;
+        update_files(&directory, &workspace_file_map(&problem_type.files)?, None, true)?;
     }
     Ok(())
 }
@@ -196,11 +178,7 @@ pub async fn command_student(search: Vec<String>, trace: ApiTrace) -> Result<()>
     validate_student_assignment_items(&items)?;
     let user_ids = items
         .iter()
-        .filter_map(|item| {
-            item.assignment
-                .as_ref()
-                .map(|assignment| assignment.user_id.clone())
-        })
+        .filter_map(|item| item.assignment.as_ref().map(|assignment| assignment.user_id.clone()))
         .collect::<BTreeSet<_>>();
     let longest_num = items.len().to_string().len();
     let mut prev_user_id = String::new();
@@ -214,10 +192,7 @@ pub async fn command_student(search: Vec<String>, trace: ApiTrace) -> Result<()>
             }
             prev_user_id = assignment.user_id.clone();
             println!("{} ({})", item.user_name, item.user_login);
-            println!(
-                "{}",
-                "-".repeat(item.user_name.len() + item.user_login.len() + 3)
-            );
+            println!("{}", "-".repeat(item.user_name.len() + item.user_login.len() + 3));
         }
         let when = item
             .due_at
@@ -283,34 +258,23 @@ pub async fn command_create(
             fail("to use --action, you must run from within a step directory")?;
         }
         println!("running interactive session for action {action:?} on step {step_num}");
-        let signed = bundle
-            .signed_validation_bundles
-            .get((step_num - 1) as usize)
-            .cloned()
-            .ok_or_else(|| {
-                CliError::Message(
-                    "server returned no validation bundle for the active step".to_string(),
-                )
-            })?;
+        let signed =
+            bundle.signed_validation_bundles.get((step_num - 1) as usize).cloned().ok_or_else(
+                || {
+                    CliError::Message(
+                        "server returned no validation bundle for the active step".to_string(),
+                    )
+                },
+            )?;
         handle_daycare_stream(&mut session, signed, Vec::new(), &step_dir, true).await?;
         return Ok(());
     }
     validate_author_solution_bundle(&mut session, &mut bundle).await?;
     let response = session
-        .save_problem(
-            if is_update {
-                SaveMode::Update
-            } else {
-                SaveMode::Create
-            },
-            bundle,
-        )
+        .save_problem(if is_update { SaveMode::Update } else { SaveMode::Create }, bundle)
         .await?;
     let final_bundle = response.bundle.unwrap_or_default();
-    let problem_id = final_bundle
-        .problem
-        .map(|problem| problem.problem_id)
-        .unwrap_or_default();
+    let problem_id = final_bundle.problem.map(|problem| problem.problem_id).unwrap_or_default();
     let verb = if is_update { "saved" } else { "created" };
     println!("problem {problem_id:?} {verb} and ready to use");
     Ok(())
@@ -362,10 +326,7 @@ pub async fn prepare_author_steps(
             layout.root_dir.join(step_number.to_string())
         };
         if !step_directory.is_dir() {
-            fail(format!(
-                "missing step directory {}",
-                step_directory.display()
-            ))?;
+            fail(format!("missing step directory {}", step_directory.display()))?;
         }
         println!("refreshing problem type files for step {step_number}");
         let response = session.get_problem_type(step.problem_type.clone()).await?;
@@ -374,20 +335,15 @@ pub async fn prepare_author_steps(
         update_files(&step_directory, &files, None, true)?;
 
         println!("running make clean for step {step_number}");
-        let status = Command::new("make")
-            .arg("clean")
-            .current_dir(&step_directory)
-            .status();
+        let status = Command::new("make").arg("clean").current_dir(&step_directory).status();
         match status {
             Ok(status) if status.success() => {}
-            Ok(status) => fail(format!(
-                "error running make clean in {}: {status}",
-                step_directory.display()
-            ))?,
-            Err(error) => fail(format!(
-                "error running make clean in {}: {error}",
-                step_directory.display()
-            ))?,
+            Ok(status) => {
+                fail(format!("error running make clean in {}: {status}", step_directory.display()))?
+            }
+            Err(error) => {
+                fail(format!("error running make clean in {}: {error}", step_directory.display()))?
+            }
         }
 
         prepared.insert(
@@ -443,15 +399,10 @@ pub fn gather_author(
             },
             |prepared| prepared.directory.clone(),
         );
-        let problem_type_files = prepared
-            .map(|prepared| prepared.problem_type_files.clone())
-            .unwrap_or_default();
-        let (files, starter_files) = gather_step_tree(
-            &layout.config,
-            &step_directory,
-            step_number,
-            &problem_type_files,
-        )?;
+        let problem_type_files =
+            prepared.map(|prepared| prepared.problem_type_files.clone()).unwrap_or_default();
+        let (files, starter_files) =
+            gather_step_tree(&layout.config, &step_directory, step_number, &problem_type_files)?;
         let step_draft = AuthorProblemStepDraft {
             step_number,
             problem_type: step.problem_type.clone(),
@@ -477,9 +428,7 @@ pub fn gather_author(
 
 pub async fn save_problem_set(session: &mut Session, path: &Path, is_update: bool) -> Result<()> {
     let cfg = parse_author_problem_set_config(path)?;
-    if path
-        .file_name()
-        .map(|name| name.to_string_lossy().to_string())
+    if path.file_name().map(|name| name.to_string_lossy().to_string())
         != Some(format!("{}.cfg", cfg.problem_set_id))
     {
         fail("the problem set file name must match the problem set unique ID")?;
@@ -500,11 +449,7 @@ pub async fn save_problem_set(session: &mut Session, path: &Path, is_update: boo
             .into_iter()
             .map(|problem| ProblemSetProblem {
                 problem_id: problem.problem_id,
-                weight: if problem.weight > 0.0 {
-                    problem.weight
-                } else {
-                    1.0
-                },
+                weight: if problem.weight > 0.0 { problem.weight } else { 1.0 },
                 first_step: problem.first_step,
                 last_step: problem.last_step,
                 ..ProblemSetProblem::default()
@@ -512,14 +457,7 @@ pub async fn save_problem_set(session: &mut Session, path: &Path, is_update: boo
             .collect(),
     };
     let response = session
-        .save_problem_set(
-            if is_update {
-                SaveMode::Update
-            } else {
-                SaveMode::Create
-            },
-            bundle,
-        )
+        .save_problem_set(if is_update { SaveMode::Update } else { SaveMode::Create }, bundle)
         .await?;
     let id = response
         .bundle
@@ -535,11 +473,7 @@ pub fn active_problem_type(layout: &AuthorProblemLayout) -> Result<String> {
     if layout.config.single_step_layout {
         Ok(layout.config.steps[0].problem_type.clone())
     } else if layout.active_step_number >= 1 {
-        Ok(
-            layout.config.steps[(layout.active_step_number - 1) as usize]
-                .problem_type
-                .clone(),
-        )
+        Ok(layout.config.steps[(layout.active_step_number - 1) as usize].problem_type.clone())
     } else {
         fail("you must run this from within a step directory")
     }
@@ -554,11 +488,8 @@ async fn validate_author_solution_bundle(
     }
     for step_number in 1..=bundle.problem_steps.len() {
         println!("validating solution for step {step_number}");
-        let prepared = bundle
-            .signed_validation_bundles
-            .get(step_number - 1)
-            .cloned()
-            .ok_or_else(|| {
+        let prepared =
+            bundle.signed_validation_bundles.get(step_number - 1).cloned().ok_or_else(|| {
                 CliError::Message(format!("missing validation bundle for step {step_number}"))
             })?;
         let validated = handle_daycare_stream(session, prepared, Vec::new(), Path::new(""), false)
@@ -635,10 +566,7 @@ fn gather_step_tree(
     problem_type_files: &BTreeSet<String>,
 ) -> Result<(Vec<AuthorFile>, Vec<AuthorFile>)> {
     if !step_directory.is_dir() {
-        fail(format!(
-            "missing step directory {}",
-            step_directory.display()
-        ))?;
+        fail(format!("missing step directory {}", step_directory.display()))?;
     }
     let mut gathered = BTreeMap::new();
     for path in recursive_files(step_directory)? {
@@ -675,10 +603,7 @@ fn gather_step_tree(
                 &format!("step {step_index} file _starter/{logical_path}"),
                 &content,
             );
-            starter_files.push(AuthorFile {
-                path: logical_path,
-                content,
-            });
+            starter_files.push(AuthorFile { path: logical_path, content });
         } else {
             report_whitespace_issues(&format!("step {step_index} file {rel}"), &content);
             files.push(AuthorFile { path: rel, content });
@@ -691,11 +616,7 @@ pub fn filter_ignored_paths(tree: &BTreeMap<String, Vec<u8>>) -> Result<BTreeMap
     let ignore = gitignore_spec(tree)?;
     Ok(tree
         .iter()
-        .filter(|(path, _)| {
-            !ignore
-                .matched_path_or_any_parents(Path::new(path), false)
-                .is_ignore()
-        })
+        .filter(|(path, _)| !ignore.matched_path_or_any_parents(Path::new(path), false).is_ignore())
         .map(|(path, content)| (path.clone(), content.clone()))
         .collect())
 }
@@ -703,10 +624,7 @@ pub fn filter_ignored_paths(tree: &BTreeMap<String, Vec<u8>>) -> Result<BTreeMap
 fn gitignore_spec(tree: &BTreeMap<String, Vec<u8>>) -> Result<Gitignore> {
     let mut builder = GitignoreBuilder::new("");
     for (path, content) in tree {
-        if Path::new(path)
-            .file_name()
-            .is_none_or(|name| name != ".gitignore")
-        {
+        if Path::new(path).file_name().is_none_or(|name| name != ".gitignore") {
             continue;
         }
         let parent = Path::new(path).parent().unwrap_or(Path::new(""));
@@ -732,9 +650,7 @@ fn gitignore_spec(tree: &BTreeMap<String, Vec<u8>>) -> Result<Gitignore> {
                 .map_err(|error| CliError::Message(error.to_string()))?;
         }
     }
-    builder
-        .build()
-        .map_err(|error| CliError::Message(error.to_string()))
+    builder.build().map_err(|error| CliError::Message(error.to_string()))
 }
 
 fn recursive_files(directory: &Path) -> Result<Vec<PathBuf>> {
@@ -777,9 +693,8 @@ fn plural(count: usize) -> &'static str {
 }
 
 fn format_utc_timestamp(seconds: i64) -> String {
-    const MONTHS: [&str; 12] = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-    ];
+    const MONTHS: [&str; 12] =
+        ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     let days = seconds.div_euclid(86_400);
     let seconds_of_day = seconds.rem_euclid(86_400);
     let (year, month, day) = civil_from_days(days);

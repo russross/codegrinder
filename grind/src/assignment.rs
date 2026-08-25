@@ -123,9 +123,9 @@ pub async fn download_assignment_summary(
     validate_assignment_summary(info)?;
     match info.download_status() {
         AssignmentDownloadStatus::Available => {}
-        AssignmentDownloadStatus::PrereqNotReady => fail(format!(
-            "assignment {pretty_full} prerequisite is not ready"
-        ))?,
+        AssignmentDownloadStatus::PrereqNotReady => {
+            fail(format!("assignment {pretty_full} prerequisite is not ready"))?
+        }
         _ => fail(format!("assignment {pretty_full} is not open yet"))?,
     }
     let parent = root_dir.parent().ok_or_else(|| {
@@ -133,10 +133,7 @@ pub async fn download_assignment_summary(
     })?;
     fs::create_dir_all(parent)?;
     let staging = Builder::new()
-        .prefix(&format!(
-            ".{}.",
-            root_dir.file_name().unwrap_or_default().to_string_lossy()
-        ))
+        .prefix(&format!(".{}.", root_dir.file_name().unwrap_or_default().to_string_lossy()))
         .tempdir_in(parent)?;
     let staging_path = staging.path().to_path_buf();
     let change_to = unpack_assignment(session, info, &staging_path, pretty_full).await?;
@@ -150,11 +147,7 @@ pub async fn download_assignment_summary(
     if change_to == staging_path {
         Ok(root_dir.to_path_buf())
     } else {
-        Ok(root_dir.join(
-            change_to
-                .strip_prefix(&staging_path)
-                .unwrap_or(Path::new("")),
-        ))
+        Ok(root_dir.join(change_to.strip_prefix(&staging_path).unwrap_or(Path::new(""))))
     }
 }
 
@@ -170,17 +163,11 @@ async fn unpack_assignment(
     let assignment = assignment_key_from_summary(info)?.clone();
     for problem in &info.problems {
         let problem_id = problem.problem_id.clone();
-        let target = if total_problems == 1 {
-            root_dir.to_path_buf()
-        } else {
-            root_dir.join(&problem_id)
-        };
+        let target =
+            if total_problems == 1 { root_dir.to_path_buf() } else { root_dir.join(&problem_id) };
         if total_problems > 1 {
             if problem.current_step_number > 1 {
-                println!(
-                    "unpacking problem {} step {}",
-                    problem_id, problem.current_step_number
-                );
+                println!("unpacking problem {} step {}", problem_id, problem.current_step_number);
             } else {
                 println!("unpacking problem {}", problem_id);
             }
@@ -202,10 +189,7 @@ async fn unpack_assignment(
         update_files(&target, &files, None, false)?;
         infos.insert(
             problem_id.clone(),
-            ProblemInfo {
-                problem_id,
-                step: problem.current_step_number,
-            },
+            ProblemInfo { problem_id, step: problem.current_step_number },
         );
     }
     save_dotfile(&DotFile {
@@ -282,11 +266,7 @@ fn dotfile_matches_assignment(dotfile: &DotFile, assignment: &AssignmentKey) -> 
 }
 
 fn dotfile_matches_problems(dotfile: &DotFile, problems: &[AssignmentListProblem]) -> bool {
-    let actual = dotfile
-        .problems
-        .keys()
-        .cloned()
-        .collect::<std::collections::BTreeSet<_>>();
+    let actual = dotfile.problems.keys().cloned().collect::<std::collections::BTreeSet<_>>();
     let expected = problems
         .iter()
         .map(|problem| problem.problem_id.clone())

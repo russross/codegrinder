@@ -19,19 +19,11 @@ pub struct ApiTrace {
 
 impl ApiTrace {
     pub fn new(report: bool, dump: bool) -> Self {
-        Self::with_timeout(
-            report,
-            dump,
-            Duration::from_secs(DEFAULT_RPC_TIMEOUT_SECONDS),
-        )
+        Self::with_timeout(report, dump, Duration::from_secs(DEFAULT_RPC_TIMEOUT_SECONDS))
     }
 
     pub fn with_timeout(report: bool, dump: bool, rpc_timeout: Duration) -> Self {
-        Self {
-            report: report || dump,
-            dump,
-            rpc_timeout,
-        }
+        Self { report: report || dump, dump, rpc_timeout }
     }
 }
 
@@ -111,10 +103,7 @@ pub fn config_file() -> PathBuf {
 pub fn load_config() -> Result<Config> {
     let path = config_file();
     if !path.exists() {
-        fail(format!(
-            "Unable to load config file; try running '{} login'",
-            program_name()
-        ))
+        fail(format!("Unable to load config file; try running '{} login'", program_name()))
     } else {
         load_config_from_path(&path, ApiTrace::new(false, false))
     }
@@ -165,39 +154,25 @@ pub fn write_login_config(config: &Config) -> Result<()> {
         crate::error::CliError::Message(format!("invalid config path {}", path.display()))
     })?;
     fs::create_dir_all(parent).map_err(|error| {
-        CliError::Io(format!(
-            "unable to create config directory {}: {error}",
-            parent.display()
-        ))
+        CliError::Io(format!("unable to create config directory {}: {error}", parent.display()))
     })?;
     let contents = toml::to_string(&raw)?;
     fs::write(&path, contents).map_err(|error| {
-        CliError::Io(format!(
-            "unable to write config {}: {error}",
-            path.display()
-        ))
+        CliError::Io(format!("unable to write config {}: {error}", path.display()))
     })?;
     Ok(())
 }
 
 pub fn find_dotfile(start_dir: &Path) -> Result<(DotFile, PathBuf, Option<PathBuf>)> {
-    let start_dir = if start_dir.is_absolute() {
-        start_dir.to_path_buf()
-    } else {
-        start_dir.canonicalize()?
-    };
-    let ancestors = start_dir
-        .ancestors()
-        .map(Path::to_path_buf)
-        .collect::<Vec<_>>();
+    let start_dir =
+        if start_dir.is_absolute() { start_dir.to_path_buf() } else { start_dir.canonicalize()? };
+    let ancestors = start_dir.ancestors().map(Path::to_path_buf).collect::<Vec<_>>();
     for (index, problem_set_dir) in ancestors.iter().enumerate() {
         let dotfile_path = problem_set_dir.join(DOT_FILE_NAME);
         if dotfile_path.exists() {
             let dotfile = load_dotfile(&dotfile_path)?;
-            let problem_dir = index
-                .checked_sub(1)
-                .and_then(|previous| ancestors.get(previous))
-                .cloned();
+            let problem_dir =
+                index.checked_sub(1).and_then(|previous| ancestors.get(previous)).cloned();
             return Ok((dotfile, problem_set_dir.clone(), problem_dir));
         }
     }
@@ -212,24 +187,15 @@ pub fn load_dotfile(path: &Path) -> Result<DotFile> {
         .map_err(|error| CliError::Io(format!("unable to read {}: {error}", path.display())))?;
     let raw: RawDotFile = toml::from_str(&contents)
         .map_err(|error| CliError::Toml(format!("invalid {}: {error}", path.display())))?;
-    Ok(DotFile {
-        assignment: raw.assignment,
-        problems: raw.problems,
-        path: path.to_path_buf(),
-    })
+    Ok(DotFile { assignment: raw.assignment, problems: raw.problems, path: path.to_path_buf() })
 }
 
 pub fn save_dotfile(dotfile: &DotFile) -> Result<()> {
-    let raw = RawDotFile {
-        assignment: dotfile.assignment.clone(),
-        problems: dotfile.problems.clone(),
-    };
+    let raw =
+        RawDotFile { assignment: dotfile.assignment.clone(), problems: dotfile.problems.clone() };
     let contents = toml::to_string(&raw)?;
     fs::write(&dotfile.path, contents).map_err(|error| {
-        CliError::Io(format!(
-            "unable to write {}: {error}",
-            dotfile.path.display()
-        ))
+        CliError::Io(format!("unable to write {}: {error}", dotfile.path.display()))
     })?;
     Ok(())
 }
@@ -254,18 +220,14 @@ pub fn program_name() -> String {
     env::args()
         .next()
         .and_then(|arg| {
-            PathBuf::from(arg)
-                .file_name()
-                .map(|name| name.to_string_lossy().to_string())
+            PathBuf::from(arg).file_name().map(|name| name.to_string_lossy().to_string())
         })
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| "grind".to_string())
 }
 
 pub fn home_dir() -> PathBuf {
-    env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
+    env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."))
 }
 
 pub fn expand_home(raw: &str) -> PathBuf {
@@ -283,10 +245,7 @@ pub fn abbreviate_home(path: &Path) -> String {
     let expanded = path.to_path_buf();
     match expanded.strip_prefix(&home) {
         Ok(relative) if relative.as_os_str().is_empty() => "~".to_string(),
-        Ok(relative) => PathBuf::from("~")
-            .join(relative)
-            .to_string_lossy()
-            .to_string(),
+        Ok(relative) => PathBuf::from("~").join(relative).to_string_lossy().to_string(),
         Err(_) => expanded.to_string_lossy().to_string(),
     }
 }
@@ -339,10 +298,7 @@ mod tests {
             },
             problems: BTreeMap::from([(
                 "p1".to_string(),
-                ProblemInfo {
-                    problem_id: "p101".to_string(),
-                    step: 3,
-                },
+                ProblemInfo { problem_id: "p101".to_string(), step: 3 },
             )]),
             path: path.clone(),
         };

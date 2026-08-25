@@ -56,10 +56,7 @@ pub struct AuthorProblemSetConfig {
 
 pub fn parse_gcfg(path: &Path) -> Result<Vec<GcfgSection>> {
     if !path.exists() {
-        fail(format!(
-            "failed to parse {}: file does not exist",
-            path.display()
-        ))?;
+        fail(format!("failed to parse {}: file does not exist", path.display()))?;
     }
     let mut sections = Vec::new();
     let mut current: Option<GcfgSection> = None;
@@ -89,11 +86,7 @@ pub fn parse_gcfg(path: &Path) -> Result<Vec<GcfgSection>> {
             } else {
                 (inner.to_lowercase(), None)
             };
-            current = Some(GcfgSection {
-                name,
-                subsection,
-                items: Vec::new(),
-            });
+            current = Some(GcfgSection { name, subsection, items: Vec::new() });
             continue;
         }
         let section = current.as_mut().ok_or_else(|| {
@@ -181,10 +174,7 @@ fn parse_gcfg_value(raw: &str, path: &Path, line_no: usize) -> Result<String> {
 pub fn parse_author_problem_config(path: &Path) -> Result<AuthorProblemConfig> {
     let sections = parse_gcfg(path)?;
     let problem = first_section(&sections, "problem").ok_or_else(|| {
-        CliError::Message(format!(
-            "failed to parse {}: missing [problem] section",
-            path.display()
-        ))
+        CliError::Message(format!("failed to parse {}: missing [problem] section", path.display()))
     })?;
     let problem_id = required_last_non_empty(problem, "unique", "problem.unique", path)?;
     let note = required_last_non_empty(problem, "note", "problem.note", path)?;
@@ -209,9 +199,8 @@ pub fn parse_author_problem_config(path: &Path) -> Result<AuthorProblemConfig> {
                     path.display()
                 ))?;
             }
-            let index = subsection
-                .parse::<i64>()
-                .map_err(|error| CliError::Message(error.to_string()))?;
+            let index =
+                subsection.parse::<i64>().map_err(|error| CliError::Message(error.to_string()))?;
             let step_note =
                 required_last_non_empty(section, "note", &format!("step {index}.note"), path)?;
             let section_type = last_value_or_empty(section, "type");
@@ -224,9 +213,7 @@ pub fn parse_author_problem_config(path: &Path) -> Result<AuthorProblemConfig> {
             let weight = if weight_text.is_empty() {
                 1.0
             } else {
-                weight_text
-                    .parse::<f64>()
-                    .map_err(|error| CliError::Message(error.to_string()))?
+                weight_text.parse::<f64>().map_err(|error| CliError::Message(error.to_string()))?
             };
             step_map.insert(
                 index,
@@ -289,9 +276,7 @@ pub fn parse_author_problem_set_config(path: &Path) -> Result<AuthorProblemSetCo
         let weight = if weight_text.is_empty() {
             1.0
         } else {
-            weight_text
-                .parse::<f64>()
-                .map_err(|error| CliError::Message(error.to_string()))?
+            weight_text.parse::<f64>().map_err(|error| CliError::Message(error.to_string()))?
         };
         let steps_text = last_value_or_empty(section, "steps");
         let (first_step, last_step) = if steps_text.is_empty() {
@@ -319,20 +304,11 @@ pub fn parse_author_problem_set_config(path: &Path) -> Result<AuthorProblemSetCo
             path.display()
         ))?;
     }
-    Ok(AuthorProblemSetConfig {
-        problem_set_id,
-        note,
-        tags,
-        continues_problem_set_id,
-        problems,
-    })
+    Ok(AuthorProblemSetConfig { problem_set_id, note, tags, continues_problem_set_id, problems })
 }
 
 fn sections_named<'a>(sections: &'a [GcfgSection], name: &str) -> Vec<&'a GcfgSection> {
-    sections
-        .iter()
-        .filter(|section| section.name == name)
-        .collect()
+    sections.iter().filter(|section| section.name == name).collect()
 }
 
 fn first_section<'a>(sections: &'a [GcfgSection], name: &str) -> Option<&'a GcfgSection> {
@@ -340,12 +316,7 @@ fn first_section<'a>(sections: &'a [GcfgSection], name: &str) -> Option<&'a Gcfg
 }
 
 fn all_values(section: &GcfgSection, key: &str) -> Vec<String> {
-    section
-        .items
-        .iter()
-        .filter(|item| item.key == key)
-        .map(|item| item.value.clone())
-        .collect()
+    section.items.iter().filter(|item| item.key == key).map(|item| item.value.clone()).collect()
 }
 
 fn last_value_or_empty(section: &GcfgSection, key: &str) -> String {
@@ -364,17 +335,10 @@ fn required_last_non_empty(
     field: &str,
     path: &Path,
 ) -> Result<String> {
-    let Some(value) = section
-        .items
-        .iter()
-        .rev()
-        .find(|item| item.key == key)
-        .map(|item| item.value.as_str())
+    let Some(value) =
+        section.items.iter().rev().find(|item| item.key == key).map(|item| item.value.as_str())
     else {
-        return fail(format!(
-            "failed to parse {}: missing {field}",
-            path.display()
-        ));
+        return fail(format!("failed to parse {}: missing {field}", path.display()));
     };
     let trimmed = value.trim();
     if trimmed.is_empty() {

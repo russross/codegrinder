@@ -13,19 +13,11 @@ pub fn parse_signed_runtime_bundle(
     missing_host_message: &str,
 ) -> Result<crate::proto::codegrinder::RuntimeBundle> {
     let runtime = decode_runtime(bundle)?;
-    if runtime.hostname.is_empty() {
-        fail(missing_host_message)
-    } else {
-        Ok(runtime)
-    }
+    if runtime.hostname.is_empty() { fail(missing_host_message) } else { Ok(runtime) }
 }
 
 pub fn commit_passed(commit: &Commit) -> bool {
-    commit
-        .report_card
-        .as_ref()
-        .is_some_and(|report| report.passed)
-        && commit.score == 1.0
+    commit.report_card.as_ref().is_some_and(|report| report.passed) && commit.score == 1.0
 }
 
 pub async fn handle_daycare_stream(
@@ -35,10 +27,7 @@ pub async fn handle_daycare_stream(
     directory: &Path,
     process_events: bool,
 ) -> Result<Option<SignedRuntimeBundle>> {
-    let request = DaycareRequest {
-        bundle: Some(bundle),
-        args,
-    };
+    let request = DaycareRequest { bundle: Some(bundle), args };
     let stream = session.daycare(request).await?;
     consume_stream(stream, directory, process_events).await
 }
@@ -111,10 +100,7 @@ mod tests {
             step_number: 1,
             ..RuntimeBundle::default()
         };
-        SignedRuntimeBundle {
-            bundle: runtime.encode_to_vec(),
-            signature: "signed".to_string(),
-        }
+        SignedRuntimeBundle { bundle: runtime.encode_to_vec(), signature: "signed".to_string() }
     }
 
     #[test]
@@ -125,18 +111,12 @@ mod tests {
     #[test]
     fn commit_passed_requires_report_card_and_perfect_score() {
         assert!(commit_passed(&Commit {
-            report_card: Some(ReportCard {
-                passed: true,
-                ..ReportCard::default()
-            }),
+            report_card: Some(ReportCard { passed: true, ..ReportCard::default() }),
             score: 1.0,
             ..Commit::default()
         }));
         assert!(!commit_passed(&Commit {
-            report_card: Some(ReportCard {
-                passed: true,
-                ..ReportCard::default()
-            }),
+            report_card: Some(ReportCard { passed: true, ..ReportCard::default() }),
             score: 0.5,
             ..Commit::default()
         }));

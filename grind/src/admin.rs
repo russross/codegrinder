@@ -32,13 +32,8 @@ pub async fn command_files(
     }
     let files = collect_file_set(&resolved.directory)?;
     let file_count = files.len();
-    session
-        .save_problem_type_files(resolved.problem_type.clone(), files)
-        .await?;
-    println!(
-        "set {} files for problem type: {}",
-        file_count, resolved.problem_type
-    );
+    session.save_problem_type_files(resolved.problem_type.clone(), files).await?;
+    println!("set {} files for problem type: {}", file_count, resolved.problem_type);
     Ok(())
 }
 
@@ -66,13 +61,8 @@ pub async fn command_problemtype_action_set(
     let specs = action_specs_from_args(actions, &actions_file)?;
     let parsed = parse_action_specs(&specs)?;
     let action_count = parsed.len();
-    session
-        .save_problem_type(problem_type.clone(), container, parsed)
-        .await?;
-    println!(
-        "set {} actions for problem type: {problem_type}",
-        action_count
-    );
+    session.save_problem_type(problem_type.clone(), container, parsed).await?;
+    println!("set {} actions for problem type: {problem_type}", action_count);
     Ok(())
 }
 
@@ -103,10 +93,7 @@ fn collect_file_set(directory: &Path) -> Result<BTreeMap<String, Vec<u8>>> {
         let rel = local_path
             .strip_prefix(directory)
             .map_err(|error| CliError::Message(error.to_string()))?;
-        if rel
-            .components()
-            .any(|component| component.as_os_str() == ".git")
-        {
+        if rel.components().any(|component| component.as_os_str() == ".git") {
             continue;
         }
         let path = clean_relative_path(&rel.to_string_lossy().replace('\\', "/"))?.as_posix();
@@ -156,11 +143,7 @@ fn parse_action_specs(specs: &[String]) -> Result<BTreeMap<String, ProblemTypeAc
             action_name.to_string(),
             ProblemTypeAction {
                 command: parts[1].to_string(),
-                parser: if parts[2] == "none" {
-                    String::new()
-                } else {
-                    parts[2].to_string()
-                },
+                parser: if parts[2] == "none" { String::new() } else { parts[2].to_string() },
                 max_cpu: parse_int(parts[3], &format!("{action_name} max_cpu"))?,
                 max_fd: parse_int(parts[4], &format!("{action_name} max_fd"))?,
                 max_file_size: parse_int(parts[5], &format!("{action_name} max_file_size"))?,
@@ -191,9 +174,7 @@ fn action_specs_from_args(actions: Vec<String>, actions_file: &str) -> Result<Ve
 }
 
 fn parse_int(value: &str, label: &str) -> Result<i64> {
-    value
-        .parse::<i64>()
-        .map_err(|_| CliError::Message(format!("{label} must be an integer")))
+    value.parse::<i64>().map_err(|_| CliError::Message(format!("{label} must be an integer")))
 }
 
 fn print_problem_type_list(mut problem_types: Vec<ProblemType>) {
@@ -202,18 +183,10 @@ fn print_problem_type_list(mut problem_types: Vec<ProblemType>) {
         return;
     }
     problem_types.sort_by_cached_key(|problem_type| problem_type.problem_type.clone());
-    let width = problem_types
-        .iter()
-        .map(|problem_type| problem_type.problem_type.len())
-        .max()
-        .unwrap_or(0);
+    let width =
+        problem_types.iter().map(|problem_type| problem_type.problem_type.len()).max().unwrap_or(0);
     for problem_type in problem_types {
-        let actions = problem_type
-            .actions
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>()
-            .join(", ");
+        let actions = problem_type.actions.keys().cloned().collect::<Vec<_>>().join(", ");
         println!(
             "{:<width$}  container: {}  actions: {actions}",
             problem_type.problem_type, problem_type.container
@@ -238,10 +211,7 @@ fn print_problem_type(problem_type: &ProblemType) {
         println!();
         println!("action set command:");
         println!("  grind problemtype action set \\");
-        println!(
-            "    --problem-type  {} \\",
-            quote(&problem_type.problem_type)
-        );
+        println!("    --problem-type  {} \\", quote(&problem_type.problem_type));
         println!("    --container     {} \\", quote(&problem_type.container));
         let action_specs = problem_type
             .actions
@@ -249,11 +219,7 @@ fn print_problem_type(problem_type: &ProblemType) {
             .map(|(action_name, action)| action_spec(action_name, action))
             .collect::<Vec<_>>();
         for (index, spec) in action_specs.iter().enumerate() {
-            let suffix = if index < action_specs.len() - 1 {
-                " \\"
-            } else {
-                ""
-            };
+            let suffix = if index < action_specs.len() - 1 { " \\" } else { "" };
             println!("    --action        {}{suffix}", quote(spec));
         }
         println!();
@@ -269,11 +235,7 @@ fn print_problem_type(problem_type: &ProblemType) {
 }
 
 fn print_problem_type_action(action: &ProblemTypeAction) {
-    let parser = if action.parser.is_empty() {
-        "none"
-    } else {
-        &action.parser
-    };
+    let parser = if action.parser.is_empty() { "none" } else { &action.parser };
     println!("    command:        {}", action.command);
     println!("    parser:         {parser}");
     println!("    max_cpu:        {}", action.max_cpu);
@@ -284,11 +246,7 @@ fn print_problem_type_action(action: &ProblemTypeAction) {
 }
 
 fn action_spec(action_name: &str, action: &ProblemTypeAction) -> String {
-    let parser = if action.parser.is_empty() {
-        "none"
-    } else {
-        &action.parser
-    };
+    let parser = if action.parser.is_empty() { "none" } else { &action.parser };
     format!(
         "{action_name}|{}|{parser}|{}|{}|{}|{}|{}",
         action.command,
@@ -301,9 +259,7 @@ fn action_spec(action_name: &str, action: &ProblemTypeAction) -> String {
 }
 
 fn quote(raw: &str) -> String {
-    if raw
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '/' | ':' | '.'))
+    if raw.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '/' | ':' | '.'))
     {
         raw.to_string()
     } else {
