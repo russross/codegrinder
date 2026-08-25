@@ -48,16 +48,22 @@ The server requires an explicit configuration path:
 `CODEGRINDER_CONFIG` may select the path instead. The server never
 searches a user's home directory for configuration or data. Relative
 `sqlite3Path` values are resolved from the directory containing the config
-file. Absolute paths are appropriate for system installations. Caddy serves
-the installed web files from `/usr/share/codegrinder/www`. Start from
+file. Absolute paths are appropriate for system installations. Start from
 `setup/config.example.json`, generate each
 secret independently with `head -c 32 /dev/urandom | base64`, and keep
 the populated config outside the repository.
 
-The checked-in OpenRC and systemd definitions use the generic
-`codegrinder` service account and `/etc/codegrinder/config.json`.
-Customize the installed unit, not the repository copy. OpenRC settings
-can be overridden in `/etc/conf.d/codegrinder`:
+The preferred deployment runs directly from a live checkout. Build the
+release server in that checkout, then customize the installed OpenRC or
+systemd definition to execute `<checkout>/target/release/codegrinder`.
+Do not copy the executable to `/usr/local/bin`; a service restart after a
+successful release build should run that build directly.
+
+The checked-in OpenRC, systemd, and Caddy files are generic installation
+assets. Copy them into the system configuration and customize the installed
+copies for the local checkout, account, hostname, and paths. Do not put
+machine-specific values into the repository templates. OpenRC settings can
+be overridden in `/etc/conf.d/codegrinder`:
 
     codegrinder_user="codegrinder"
     codegrinder_group="codegrinder"
@@ -65,10 +71,20 @@ can be overridden in `/etc/conf.d/codegrinder`:
     codegrinder_roles="-ta -daycare"
 
 Caddy owns public TLS and reverse-proxies to the server's default
-`localhost:1400` cleartext listener. It also serves static files from
-`/usr/share/codegrinder/www`. The server requires `curl` for standalone
-daycare registration and Canvas grade passback, and verifies that it is
-available during startup.
+`localhost:1400` cleartext listener. Configure the installed Caddyfile to
+serve static files directly from `<checkout>/www`; do not maintain a copied
+web tree under `/usr/share`. The Caddy account needs directory traversal
+permission from the checkout's parent directories and read permission for
+the files under `www`. The server requires `curl` for standalone daycare
+registration and Canvas grade passback, and verifies that it is available
+during startup.
+
+With this layout, the deployment workflow is to build generated web assets
+and downloadable clients into the checkout, build the Rust server with
+`cargo build --release -p codegrinder`, and restart the CodeGrinder service.
+Caddy reads static content from the checkout immediately and does not need a
+copy or synchronization step. Docker runtime images and problem type data
+remain explicit manual build and installation steps.
 
 
 Database setup and backup
