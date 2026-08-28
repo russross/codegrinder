@@ -21,6 +21,7 @@ import { createPrompt } from "./prompt.js";
 
 const textDecoder = new TextDecoder("utf-8", { fatal: true });
 const textEncoder = new TextEncoder();
+const binaryFileMessage = "This file contains binary data and cannot be displayed";
 
 function parseAssignmentKey(value) {
   const parts = value.split(":");
@@ -51,15 +52,17 @@ function normalizeRelativePath(path) {
 
 function decodeFileMap(files) {
   const decoded = {};
+  const binary = {};
   for (const [rawPath, content] of Object.entries(files)) {
     const path = normalizeRelativePath(rawPath);
     try {
       decoded[path] = textDecoder.decode(content);
     } catch (error) {
-      throw new Error(`Workspace file ${JSON.stringify(path)} is not UTF-8 text`, { cause: error });
+      decoded[path] = binaryFileMessage;
+      binary[path] = content;
     }
   }
-  return decoded;
+  return { decoded, binary };
 }
 
 function encodeFileMap(files) {
@@ -68,9 +71,10 @@ function encodeFileMap(files) {
   );
 }
 
-function workspaceState(workspace, completed = false) {
-  const systemFiles = decodeFileMap(workspace.systemOwnedFiles);
-  const studentFiles = decodeFileMap(workspace.studentOwnedFiles);
+function workspaceState(workspace, renderInstructions, completed = false) {
+  const system = decodeFileMap(workspace.systemOwnedFiles);
+  const student = decodeFileMap(workspace.studentOwnedFiles);
+  const rawFiles = { ...workspace.systemOwnedFiles, ...workspace.studentOwnedFiles };
   return {
     assignment: workspace.assignment,
     problemId: workspace.problemId,
@@ -81,10 +85,12 @@ function workspaceState(workspace, completed = false) {
     problemType: workspace.problemType,
     stepNote: workspace.stepNote,
     actions: [...workspace.actions].sort((left, right) => left.localeCompare(right)),
-    systemFiles,
-    studentFiles,
-    files: { ...systemFiles, ...studentFiles },
-    studentPaths: new Set(Object.keys(studentFiles)),
+    systemFiles: system.decoded,
+    studentFiles: student.decoded,
+    files: { ...system.decoded, ...student.decoded },
+    binaryFiles: { ...system.binary, ...student.binary },
+    internalFiles: { "doc.html": renderInstructions(rawFiles) },
+    studentPaths: new Set(Object.keys(student.decoded)),
     completed,
   };
 }
@@ -113,7 +119,10 @@ function buildCommit(problem, action, note) {
     step: problem.stepNumber,
     action,
     note,
-    files: encodeFileMap(problem.studentFiles),
+    files: Object.fromEntries(Object.entries(problem.studentFiles).map(([path, content]) => [
+      normalizeRelativePath(path),
+      problem.binaryFiles[path] ?? textEncoder.encode(content),
+    ])),
     createdAt: now,
     updatedAt: now,
   });
@@ -175,7 +184,7 @@ async function consumeDaycareResponses(responses, callbacks) {
         } else if (event.event === "error") {
           callbacks.stderr(`${event.error}\n`);
         } else if (event.event === "files") {
-          callbacks.files(decodeFileMap(event.files));
+          callbacks.files(decodeFileMap(event.files).decoded);
         }
         break;
       }
@@ -187,10 +196,11 @@ async function consumeDaycareResponses(responses, callbacks) {
 }
 
 class CodeGrinder {
-  constructor(sessionKey = "", baseUrl = window.location.origin) {
+  constructor(sessionKey = "", baseUrl = window.location.origin, renderInstructions = () => "") {
     this.sessionKey = sessionKey ?? "";
     this.user = null;
     this.client = this.#createClient(baseUrl, "same-origin");
+    this.renderInstructions = renderInstructions;
   }
 
   #createClient(baseUrl, credentials) {
@@ -274,7 +284,7 @@ class CodeGrinder {
       }),
       this.#authOptions(),
     );
-    return workspaceState(call.response);
+    return workspaceState(call.response, this.renderInstructions);
   }
 
   async loadAssignment(key) {

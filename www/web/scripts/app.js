@@ -43,6 +43,60 @@ try {
 }
 console.info(`CodeGrinder: loaded ${localRuntimeConfig.size} local runtime choices`);
 const md = window.markdownit();
+
+function bytesToBase64(content) {
+    const chunks = [];
+    for (let offset = 0; offset < content.length; offset += 32768) {
+        chunks.push(String.fromCharCode(...content.subarray(offset, offset + 32768)));
+    }
+    return btoa(chunks.join(""));
+}
+
+function imageMimeType(path) {
+    const extension = path.split(".").at(-1)?.toLowerCase();
+    switch (extension) {
+        case "gif": return "image/gif";
+        case "jpg":
+        case "jpeg": return "image/jpeg";
+        case "png": return "image/png";
+        case "svg": return "image/svg+xml";
+        default: return null;
+    }
+}
+
+function renderInstructions(files) {
+    const markdown = files["doc/doc.md"];
+    if (markdown === undefined) {
+        return "";
+    }
+    const source = new TextDecoder("utf-8", { fatal: true }).decode(markdown);
+    const documentUrl = new URL("doc/doc.md", "https://workspace.invalid/");
+    const environment = { imageFiles: files, documentUrl };
+    return md.render(source, environment);
+}
+
+const defaultImageRenderer = md.renderer.rules.image
+    ?? ((tokens, index, options, environment, renderer) => renderer.renderToken(tokens, index, options));
+md.renderer.rules.image = (tokens, index, options, environment, renderer) => {
+    const sourceIndex = tokens[index].attrIndex("src");
+    if (sourceIndex >= 0) {
+        const source = tokens[index].attrs[sourceIndex][1];
+        const url = new URL(source, environment.documentUrl);
+        if (url.origin === environment.documentUrl.origin) {
+            const path = decodeURIComponent(url.pathname.replace(/^\//, ""));
+            const content = environment.imageFiles[path];
+            const mimeType = imageMimeType(path);
+            if (content === undefined) {
+                throw new Error(`Instruction image not found: ${path}`);
+            }
+            if (mimeType === null) {
+                throw new Error(`Instruction image has an unsupported type: ${path}`);
+            }
+            tokens[index].attrs[sourceIndex][1] = `data:${mimeType};base64,${bytesToBase64(content)}`;
+        }
+    }
+    return defaultImageRenderer(tokens, index, options, environment, renderer);
+};
 const fileSystem = new FileSystem();
 const fileSystemUI = new FileSystemUI(fileSystem, document.getElementById("directory_tree"));
 let mostRecentChange = new Date();
@@ -54,6 +108,7 @@ const tabs = new Tabs(document.getElementById("tabs"), (path, content) => {
 });
 let editablePaths = null;
 let activeLocalProblemType = null;
+let activeInstructionsHtml = "";
 
 const urlParams = new URLSearchParams(window.location.search);
 
@@ -86,7 +141,9 @@ fileSystemUI.fileClick = (fileNode, path) => {
     const readOnly = editablePaths !== null && !editablePaths.has(relativePath);
     tabs.addSwitchTab(path, fileNode.content, readOnly);
     if (extension(path) === "md") {
-        mdElement.innerHTML = md.render(fileNode.content);
+        mdElement.innerHTML = relativePath === "doc/doc.md" && activeInstructionsHtml !== ""
+            ? activeInstructionsHtml
+            : md.render(fileNode.content);
     }
 };
 newTab.addEventListener("click", () => {
@@ -329,7 +386,7 @@ run.addEventListener("click", async () => {
 function setupCodegrinder() {
     const sessionStorageKey = "codegrinderSessionKey";
     const savedSessionKey = window.localStorage.getItem(sessionStorageKey) ?? "";
-    const codeGrinder = new CodeGrinder(savedSessionKey);
+    const codeGrinder = new CodeGrinder(savedSessionKey, window.location.origin, renderInstructions);
     let currentAssignment = null;
     let currentProblem = null;
     let syncPromise = Promise.resolve();
@@ -367,8 +424,8 @@ function setupCodegrinder() {
                 tabs.addSwitchTab(`/${path}`, content, false);
             }
         }
-        const instructions = problem.files["doc/doc.md"] ?? "";
-        mdElement.innerHTML = md.render(instructions);
+        activeInstructionsHtml = problem.internalFiles["doc.html"];
+        mdElement.innerHTML = activeInstructionsHtml;
         fileSystemUI.refreshUI();
         codeGrinderUI.buttonGrade.innerText = problem.completed ? "Finished" : "Grade";
         codeGrinderUI.buttonGrade.disabled = problem.completed;

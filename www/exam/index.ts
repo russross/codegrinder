@@ -224,12 +224,56 @@ function mergedWorkspaceFiles(
     return merged;
 }
 
-function renderInstructionsMarkdown(file: Uint8Array | undefined): string {
+function bytesToBase64(content: Uint8Array): string {
+    const chunks: string[] = [];
+    for (let offset = 0; offset < content.length; offset += 32768) {
+        chunks.push(String.fromCharCode(...content.subarray(offset, offset + 32768)));
+    }
+    return btoa(chunks.join(""));
+}
+
+function imageMimeType(path: string): string | null {
+    const parts = path.split(".");
+    const extension = parts[parts.length - 1]?.toLowerCase();
+    switch (extension) {
+        case "gif": return "image/gif";
+        case "jpg":
+        case "jpeg": return "image/jpeg";
+        case "png": return "image/png";
+        case "svg": return "image/svg+xml";
+        default: return null;
+    }
+}
+
+function renderInstructionsMarkdown(files: Map<string, Uint8Array>): string {
+    const file = files.get(DOC_PATH);
     if (file === undefined) {
         return "";
     }
     const source = textDecoder.decode(file);
-    return markdownRenderer.render(markdownParser.parse(source));
+    const document = markdownParser.parse(source);
+    const documentUrl = new URL(DOC_PATH, "https://workspace.invalid/");
+    const walker = document.walker();
+    let event = walker.next();
+    while (event !== null) {
+        if (event.entering && event.node.type === "image" && event.node.destination !== null) {
+            const url = new URL(event.node.destination, documentUrl);
+            if (url.origin === documentUrl.origin) {
+                const path = decodeURIComponent(url.pathname.replace(/^\//, ""));
+                const content = files.get(path);
+                const mimeType = imageMimeType(path);
+                if (content === undefined) {
+                    throw new Error(`Instruction image not found: ${path}`);
+                }
+                if (mimeType === null) {
+                    throw new Error(`Instruction image has an unsupported type: ${path}`);
+                }
+                event.node.destination = `data:${mimeType};base64,${bytesToBase64(content)}`;
+            }
+        }
+        event = walker.next();
+    }
+    return markdownRenderer.render(document);
 }
 
 function buildProblemData(summary: AssignmentProblemProgress, workspace: {
@@ -246,6 +290,7 @@ function buildProblemData(summary: AssignmentProblemProgress, workspace: {
     const systemFiles = assignmentStepFileMap(workspace.systemOwnedFiles);
     const studentFiles = assignmentStepFileMap(workspace.studentOwnedFiles);
     const mergedFiles = mergedWorkspaceFiles(systemFiles, studentFiles);
+    const instructionsHtml = renderInstructionsMarkdown(mergedFiles);
     return {
         problemId: summary.problemId,
         note: summary.problemNote,
@@ -259,7 +304,7 @@ function buildProblemData(summary: AssignmentProblemProgress, workspace: {
         mergedFiles,
         mergedFileList: [...mergedFiles.keys()],
         editablePaths: new Set(studentFiles.keys()),
-        instructionsHtml: renderInstructionsMarkdown(mergedFiles.get(DOC_PATH)),
+        instructionsHtml,
         isComplete: summary.completed,
     };
 }
@@ -287,7 +332,7 @@ function getCurrentProblemOrThrow(): ProblemData {
 function updateProblemFiles(problem: ProblemData): void {
     problem.mergedFiles = mergedWorkspaceFiles(problem.systemFiles, problem.studentFiles);
     problem.mergedFileList = [...problem.mergedFiles.keys()];
-    problem.instructionsHtml = renderInstructionsMarkdown(problem.mergedFiles.get(DOC_PATH));
+    problem.instructionsHtml = renderInstructionsMarkdown(problem.mergedFiles);
 }
 
 function applyWorkspaceRefresh(problem: ProblemData, workspace: {
