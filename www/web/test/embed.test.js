@@ -5,7 +5,7 @@ import {
   createEmbedHtml,
   problemTypeFromFilePaths,
   standaloneProblemType,
-} from "../scripts/embed.js";
+} from "../scripts/embed.ts";
 
 const supportedProblemTypes = new Map([
   ["javascriptunittest", "javascript"],

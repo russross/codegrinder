@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "es2022",
+    "moduleResolution": "node",
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    "strict": true,
+    "esModuleInterop": true,
+    "allowJs": true,
+    "checkJs": false,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["browser-globals.d.ts", "scripts/**/*.ts"],
+  "exclude": ["scripts/jsWorker.ts", "scripts/pythonWorker.ts", "scripts/workerInputReader.ts"]
+}

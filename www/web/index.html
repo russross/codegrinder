@@ -4,37 +4,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="styles.css">
   <title>CodeGrinder Web Editor</title>
   <meta name="description" content="A browser editor for CodeGrinder JavaScript and Python problems.">
-  <script>
-    window.codeGrinderServiceWorkerReady = Promise.resolve();
-    if ('serviceWorker' in navigator) {
-      console.info("CodeGrinder: registering the runtime service worker");
-      window.codeGrinderServiceWorkerReady = navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' })
-        .then(async function () {
-          await navigator.serviceWorker.ready;
-          if (!navigator.serviceWorker.controller) {
-            console.info("CodeGrinder: waiting for the runtime service worker to control the page");
-            await new Promise(function (resolve, reject) {
-              const timeout = setTimeout(function () {
-                reject(new Error("Timed out waiting for the runtime service worker"));
-              }, 10000);
-              navigator.serviceWorker.addEventListener('controllerchange', function () {
-                clearTimeout(timeout);
-                resolve();
-              }, { once: true });
-            });
-          }
-          console.info("CodeGrinder: runtime service worker is ready");
-        })
-        .catch(function (error) {
-          console.warn("CodeGrinder: runtime service worker is unavailable; continuing without it", error);
-        });
-    } else {
-      console.warn("CodeGrinder: this browser does not support service workers");
-    }
-  </script>
 </head>
 
 <body>
@@ -76,13 +49,6 @@
   <script crossorigin="anonymous" integrity="sha384-TXnThML+D1RgOV/BSVaVCzVdDfkH2RzoBHmq1ZVRVSaawWSLpMEIg4cpK8ycff/L" src="https://cdn.jsdelivr.net/npm/ace-builds@1.4.14/src/ace.js"></script>
   <script crossorigin="anonymous" integrity="sha384-rqj0n601Y6jjms5a6VrwXF4K0P5DUkYzngCfgkFfqDtkCcnMyCnSMK37dWAP6IPL" src="https://cdn.jsdelivr.net/npm/ace-builds@1.4.14/src/ext-modelist.js"></script>
   <script crossorigin="anonymous" integrity="sha384-0BUOtnUS08CZakxddXM3URPJ7XND//bbBKdInJDQ1iM7F9C385TNatYumNsRYy44" src="https://cdn.jsdelivr.net/npm/ace-builds@1.4.14/src/ext-language_tools.js"></script>
-  <!-- In an iframe SharedArrayBuffer doesn't work. Use slow fallback -->
-  <script src="scripts/iframeSharedArrayBufferWorkaround.js" type="module"></script>
-  <!-- Firefox polyfill... Even Safari supports Atomics.waitAsync... Just sad :( -->
-  <!-- Remove when firefox gets support eventually. hopefully??? -->
-  <script src="scripts/firefoxPolyfillAtomicsWaitAsync.js" type="module"></script>
-  <!-- AtomicQueue is shared by the lazily loaded JavaScript and Python workers. -->
-  <script src="scripts/atomicQueue.js"></script>
   <!-- app.js contains all glue code between different modules -->
   <script src="scripts/app.js" type="module"></script>
   <!-- These are simply here to allow resizing the terminal and instructions -->

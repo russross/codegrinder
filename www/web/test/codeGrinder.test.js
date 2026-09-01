@@ -8,7 +8,7 @@ import {
   formatAssignmentKey,
   normalizeRelativePath,
   parseAssignmentKey,
-} from "../scripts/codeGrinderApi.js";
+} from "../scripts/protocol.ts";
 
 test("workspace actions keep dedicated controls and flatten the remaining actions", () => {
   assert.deepEqual(availableActionControls(["grade", "test"]), {

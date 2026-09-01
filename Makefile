@@ -4,7 +4,7 @@ PROTO_FILE := $(PROTO_DIR)/codegrinder.proto
 DIST_DIR ?= $(ROOT_DIR)/www
 MACOSX_DEPLOYMENT_TARGET ?= 11.0
 
-.PHONY: all setup build server grind test clean \
+.PHONY: all setup build server grind web web-check exam test clean \
 	grind-dist grind-linux-amd64 grind-linux-arm64 \
 	grind-macos-amd64 grind-macos-arm64
 
@@ -32,6 +32,15 @@ server:
 
 grind:
 	cargo build --release -p grind
+
+web:
+	npm --prefix www/web run build
+
+web-check:
+	npm --prefix www/web run typecheck
+
+exam:
+	npm --prefix www/exam run build
 
 grind-dist: grind-linux-amd64 grind-linux-arm64 grind-macos-amd64 grind-macos-arm64
 

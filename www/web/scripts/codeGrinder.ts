@@ -1,4 +1,5 @@
 import { GrpcWebFetchTransport } from "@protobuf-ts/grpcweb-transport";
+import type { RpcOptions } from "@protobuf-ts/runtime-rpc";
 import {
   AssignmentDownloadStatus,
   Commit,
@@ -15,75 +16,86 @@ import {
   SaveWorkspaceCommitRequest,
   WorkspaceFileState,
 } from "../generated/codegrinder.js";
+import type {
+  AssignmentKey,
+  AssignmentListItem,
+  Commit as CommitMessage,
+  GetAssignmentResponse,
+  GetWorkspaceResponse,
+  HelloResponse,
+  SaveUngradedCommitResponse,
+  SignedRuntimeBundle,
+} from "../generated/codegrinder.js";
 import { CodeGrinderServiceClient } from "../generated/codegrinder.client.js";
 import { Timestamp } from "../generated/google/protobuf/timestamp.js";
+import type { Timestamp as TimestampMessage } from "../generated/google/protobuf/timestamp.js";
 import { createPrompt } from "./prompt.js";
+import {
+  actionButtonLabel,
+  availableActionControls,
+  consumeDaycareResponses,
+  decodeFileMap,
+  formatAssignmentKey,
+  normalizeRelativePath,
+  parseAssignmentKey,
+} from "./protocol.js";
 
-const textDecoder = new TextDecoder("utf-8", { fatal: true });
 const textEncoder = new TextEncoder();
-const binaryFileMessage = "This file contains binary data and cannot be displayed";
 
-function parseAssignmentKey(value) {
-  const parts = value.split(":");
-  if (parts.length !== 3 || parts.some((part) => part.trim() === "")) {
-    throw new Error(`Invalid assignment key ${JSON.stringify(value)}`);
-  }
-  return {
-    userId: parts[0],
-    courseId: parts[1],
-    problemSetId: parts[2],
-  };
+type TextFiles = Record<string, string>;
+type BinaryFiles = Record<string, Uint8Array>;
+type RenderInstructions = (files: Readonly<BinaryFiles>) => string;
+type OutputCallback = (value: string) => void;
+type FileCallback = (files: TextFiles) => void;
+
+type WorkspaceProblem = GetWorkspaceResponse & {
+  systemFiles: TextFiles;
+  studentFiles: TextFiles;
+  files: TextFiles;
+  binaryFiles: BinaryFiles;
+  internalFiles: Record<string, string>;
+  studentPaths: Set<string>;
+  completed: boolean;
+};
+
+type LoadedAssignment = Omit<GetAssignmentResponse, "assignment" | "problems"> & {
+  assignment: AssignmentKey;
+  assignmentKey: string;
+  problems: WorkspaceProblem[];
+  lockedForLms: boolean;
+};
+
+interface WorkspaceSaveResult {
+  problem: WorkspaceProblem;
+  saveStatus: CommitSaveStatus;
+  message: string;
 }
 
-function formatAssignmentKey(assignment) {
-  return `${assignment.userId}:${assignment.courseId}:${assignment.problemSetId}`;
+interface GradeResult extends WorkspaceSaveResult {
+  passed: boolean;
+  commit: CommitMessage;
 }
 
-function normalizeRelativePath(path) {
-  if (path === "" || path.startsWith("/") || path.includes("\\")) {
-    throw new Error(`Invalid workspace path ${JSON.stringify(path)}`);
-  }
-  const parts = path.split("/");
-  if (parts.some((part) => part === "" || part === "." || part === "..")) {
-    throw new Error(`Invalid workspace path ${JSON.stringify(path)}`);
-  }
-  return parts.join("/");
-}
+type PreparedAction = SaveUngradedCommitResponse & {
+  bundle: SignedRuntimeBundle;
+};
 
-function decodeFileMap(files) {
-  const decoded = {};
-  const binary = {};
-  for (const [rawPath, content] of Object.entries(files)) {
-    const path = normalizeRelativePath(rawPath);
-    try {
-      decoded[path] = textDecoder.decode(content);
-    } catch (error) {
-      decoded[path] = binaryFileMessage;
-      binary[path] = content;
-    }
-  }
-  return { decoded, binary };
-}
+type SessionHandler = (sessionKey: string) => void;
+type AssignmentHandler = (assignment: LoadedAssignment) => void | Promise<void>;
+type ErrorHandler = (error: unknown) => void;
+type ActionHandler = (action: string) => void | Promise<void>;
+type TestHandler = () => void | Promise<void>;
 
-function encodeFileMap(files) {
-  return Object.fromEntries(
-    Object.entries(files).map(([path, content]) => [normalizeRelativePath(path), textEncoder.encode(content)]),
-  );
-}
-
-function workspaceState(workspace, renderInstructions, completed = false) {
+function workspaceState(
+  workspace: GetWorkspaceResponse,
+  renderInstructions: RenderInstructions,
+  completed = false,
+): WorkspaceProblem {
   const system = decodeFileMap(workspace.systemOwnedFiles);
   const student = decodeFileMap(workspace.studentOwnedFiles);
   const rawFiles = { ...workspace.systemOwnedFiles, ...workspace.studentOwnedFiles };
   return {
-    assignment: workspace.assignment,
-    problemId: workspace.problemId,
-    problemNote: workspace.problemNote,
-    stepNumber: workspace.stepNumber,
-    firstStepNumber: workspace.firstStepNumber,
-    lastStepNumber: workspace.lastStepNumber,
-    problemType: workspace.problemType,
-    stepNote: workspace.stepNote,
+    ...workspace,
     actions: [...workspace.actions].sort((left, right) => left.localeCompare(right)),
     systemFiles: system.decoded,
     studentFiles: student.decoded,
@@ -95,20 +107,20 @@ function workspaceState(workspace, renderInstructions, completed = false) {
   };
 }
 
-function copyWorkspaceState(target, source) {
+function copyWorkspaceState(target: WorkspaceProblem, source: WorkspaceProblem): WorkspaceProblem {
   Object.assign(target, source);
   return target;
 }
 
-function localStudentFiles(problem, localFiles) {
-  const studentFiles = {};
+function localStudentFiles(problem: WorkspaceProblem, localFiles: Readonly<TextFiles>): TextFiles {
+  const studentFiles: TextFiles = {};
   for (const path of problem.studentPaths) {
     studentFiles[path] = localFiles[path] ?? problem.studentFiles[path];
   }
   return studentFiles;
 }
 
-function buildCommit(problem, action, note) {
+function buildCommit(problem: WorkspaceProblem, action: string, note: string): CommitMessage {
   if (!problem.assignment) {
     throw new Error("Workspace response did not include its assignment key");
   }
@@ -128,13 +140,13 @@ function buildCommit(problem, action, note) {
   });
 }
 
-function assignmentsEqual(left, right) {
+function assignmentsEqual(left: AssignmentKey | undefined, right: AssignmentKey | undefined): boolean {
   return left?.userId === right?.userId
     && left?.courseId === right?.courseId
     && left?.problemSetId === right?.problemSetId;
 }
 
-function timestampHasPassed(timestamp) {
+function timestampHasPassed(timestamp: TimestampMessage | undefined): boolean {
   if (!timestamp) {
     return false;
   }
@@ -142,7 +154,7 @@ function timestampHasPassed(timestamp) {
   return seconds * 1000n + BigInt(Math.floor(timestamp.nanos / 1_000_000)) <= BigInt(Date.now());
 }
 
-function saveStatusMessage(status, operation) {
+function saveStatusMessage(status: CommitSaveStatus, operation: string): string {
   if (status === CommitSaveStatus.SAVED) {
     return "";
   }
@@ -155,83 +167,54 @@ function saveStatusMessage(status, operation) {
   return `${operation} returned an unknown save status`;
 }
 
-function availableActionControls(actions) {
-  const actionSet = new Set(actions);
-  return {
-    actions: [...actionSet].filter((action) => action !== "grade" && action !== "test"),
-    grade: actionSet.has("grade"),
-    test: actionSet.has("test"),
-  };
-}
-
-function actionButtonLabel(action) {
-  return `${action.charAt(0).toUpperCase()}${action.slice(1)}`;
-}
-
-async function consumeDaycareResponses(responses, callbacks) {
-  for await (const response of responses) {
-    switch (response.response.oneofKind) {
-      case "error":
-        throw new Error(response.response.error);
-      case "bundle":
-        return response.response.bundle;
-      case "event": {
-        const event = response.response.event;
-        if (event.event === "stdout") {
-          callbacks.stdout(textDecoder.decode(event.streamData));
-        } else if (event.event === "stderr") {
-          callbacks.stderr(textDecoder.decode(event.streamData));
-        } else if (event.event === "error") {
-          callbacks.stderr(`${event.error}\n`);
-        } else if (event.event === "files") {
-          callbacks.files(decodeFileMap(event.files).decoded);
-        }
-        break;
-      }
-      default:
-        break;
-    }
+function requirePreparedAction(response: SaveUngradedCommitResponse): asserts response is PreparedAction {
+  if (!response.bundle || response.bundle.bundle.length === 0) {
+    throw new Error("The server could not prepare a daycare runtime");
   }
-  return null;
 }
 
 class CodeGrinder {
-  constructor(sessionKey = "", baseUrl = window.location.origin, renderInstructions = () => "") {
+  sessionKey: string;
+  private readonly client: CodeGrinderServiceClient;
+  private readonly renderInstructions: RenderInstructions;
+  private user: HelloResponse | null;
+
+  constructor(
+    sessionKey = "",
+    baseUrl = window.location.origin,
+    renderInstructions: RenderInstructions = () => "",
+  ) {
     this.sessionKey = sessionKey ?? "";
     this.user = null;
     this.client = this.#createClient(baseUrl, "same-origin");
     this.renderInstructions = renderInstructions;
   }
 
-  #createClient(baseUrl, credentials) {
+  #createClient(baseUrl: string, credentials: RequestCredentials): CodeGrinderServiceClient {
     return new CodeGrinderServiceClient(
       new GrpcWebFetchTransport({ baseUrl, fetchInit: { credentials } }),
     );
   }
 
-  #authOptions() {
+  #authOptions(): RpcOptions {
     if (this.sessionKey === "") {
       throw new Error("You are not logged in");
     }
     return { meta: { authorization: `Bearer ${this.sessionKey}` } };
   }
 
-  #rememberHello(hello) {
+  #rememberHello(hello: HelloResponse): HelloResponse {
     if (hello.sessionKey !== "") {
       this.sessionKey = hello.sessionKey;
     }
     if (hello.userId === "" || this.sessionKey === "") {
       throw new Error("Hello did not return an authenticated session");
     }
-    this.user = {
-      id: hello.userId,
-      name: hello.userName,
-      login: hello.userLogin,
-    };
+    this.user = hello;
     return this.user;
   }
 
-  async login(token) {
+  async login(token: string): Promise<HelloResponse> {
     if (token.trim() === "") {
       throw new Error("A login token is required");
     }
@@ -239,29 +222,29 @@ class CodeGrinder {
     return this.#rememberHello(call.response);
   }
 
-  async restoreSession() {
+  async restoreSession(): Promise<HelloResponse | null> {
     if (this.sessionKey === "") {
       return null;
     }
     try {
       const call = await this.client.hello(HelloRequest.create({ token: "" }), this.#authOptions());
       return this.#rememberHello(call.response);
-    } catch (error) {
+    } catch (error: unknown) {
       this.logout();
       throw error;
     }
   }
 
-  logout() {
+  logout(): void {
     this.sessionKey = "";
     this.user = null;
   }
 
-  getMe() {
+  getMe(): HelloResponse | null {
     return this.user;
   }
 
-  async listAssignments() {
+  async listAssignments(): Promise<AssignmentListItem[]> {
     const call = await this.client.listAssignments(
       ListAssignmentsRequest.create({ search: [], includeStudentContext: false }),
       this.#authOptions(),
@@ -272,7 +255,12 @@ class CodeGrinder {
     });
   }
 
-  async #getWorkspace(assignment, problemId, stepNumber, fileState) {
+  async #getWorkspace(
+    assignment: AssignmentKey | undefined,
+    problemId: string,
+    stepNumber: string,
+    fileState: WorkspaceFileState,
+  ): Promise<WorkspaceProblem> {
     const call = await this.client.getWorkspace(
       GetWorkspaceRequest.create({
         assignment,
@@ -287,7 +275,7 @@ class CodeGrinder {
     return workspaceState(call.response, this.renderInstructions);
   }
 
-  async loadAssignment(key) {
+  async loadAssignment(key: string | AssignmentKey): Promise<LoadedAssignment> {
     const assignment = typeof key === "string" ? parseAssignmentKey(key) : key;
     const [assignmentCall, items] = await Promise.all([
       this.client.getAssignment(
@@ -324,6 +312,7 @@ class CodeGrinder {
     }
     const listItem = items.find((item) => assignmentsEqual(item.assignment, assignment));
     return {
+      ...response,
       assignment,
       assignmentKey: formatAssignmentKey(assignment),
       courseName: response.courseName,
@@ -333,7 +322,11 @@ class CodeGrinder {
     };
   }
 
-  async #refreshProblem(problem, localFiles, fileState = WorkspaceFileState.CURRENT) {
+  async #refreshProblem(
+    problem: WorkspaceProblem,
+    localFiles: Readonly<TextFiles> | null,
+    fileState: WorkspaceFileState = WorkspaceFileState.CURRENT,
+  ): Promise<WorkspaceProblem> {
     const refreshed = await this.#getWorkspace(
       problem.assignment,
       problem.problemId,
@@ -347,7 +340,10 @@ class CodeGrinder {
     return copyWorkspaceState(problem, refreshed);
   }
 
-  async sync(problem, localFiles) {
+  async sync(
+    problem: WorkspaceProblem,
+    localFiles: Readonly<TextFiles>,
+  ): Promise<WorkspaceSaveResult> {
     await this.#refreshProblem(problem, localFiles);
     const call = await this.client.saveWorkspaceCommit(
       SaveWorkspaceCommitRequest.create({
@@ -362,11 +358,15 @@ class CodeGrinder {
     };
   }
 
-  async reset(problem) {
+  async reset(problem: WorkspaceProblem): Promise<WorkspaceProblem> {
     return this.#refreshProblem(problem, null, WorkspaceFileState.STEP_START);
   }
 
-  async #prepareAction(problem, localFiles, action) {
+  async #prepareAction(
+    problem: WorkspaceProblem,
+    localFiles: Readonly<TextFiles>,
+    action: string,
+  ): Promise<PreparedAction> {
     await this.#refreshProblem(problem, localFiles);
     if (!problem.actions.includes(action)) {
       throw new Error(`Action ${JSON.stringify(action)} is not available for this step`);
@@ -375,19 +375,23 @@ class CodeGrinder {
       SaveUngradedCommitRequest.create({
         commit: GradingCommit.create({
           hostname: "",
-          userId: this.user?.id ?? "",
+          userId: this.user?.userId ?? "",
           commit: buildCommit(problem, action, `web ${action}`),
         }),
       }),
       this.#authOptions(),
     );
-    if (!call.response.bundle || call.response.bundle.bundle.length === 0) {
-      throw new Error("The server could not prepare a daycare runtime");
-    }
-    return call.response;
+    const response = call.response;
+    requirePreparedAction(response);
+    return response;
   }
 
-  async #runDaycare(signedBundle, stdoutCallback, stderrCallback, fileCallback) {
+  async #runDaycare(
+    signedBundle: SignedRuntimeBundle,
+    stdoutCallback: OutputCallback,
+    stderrCallback: OutputCallback,
+    fileCallback: FileCallback,
+  ): Promise<SignedRuntimeBundle | null> {
     const runtime = RuntimeBundle.fromBinary(signedBundle.bundle);
     if (runtime.hostname === "") {
       throw new Error("The runtime bundle does not name a daycare host");
@@ -401,7 +405,7 @@ class CodeGrinder {
     });
   }
 
-  #applyReturnedFiles(problem, files) {
+  #applyReturnedFiles(problem: WorkspaceProblem, files: Readonly<TextFiles>): void {
     for (const [path, content] of Object.entries(files)) {
       if (!problem.studentPaths.has(path)) {
         continue;
@@ -411,7 +415,12 @@ class CodeGrinder {
     }
   }
 
-  async grade(problem, localFiles, stdoutCallback, stderrCallback) {
+  async grade(
+    problem: WorkspaceProblem,
+    localFiles: Readonly<TextFiles>,
+    stdoutCallback: OutputCallback,
+    stderrCallback: OutputCallback,
+  ): Promise<GradeResult> {
     const prepared = await this.#prepareAction(problem, localFiles, "grade");
     const finalBundle = await this.#runDaycare(
       prepared.bundle,
@@ -453,7 +462,13 @@ class CodeGrinder {
     };
   }
 
-  async action(problem, localFiles, action, stdoutCallback, stderrCallback) {
+  async action(
+    problem: WorkspaceProblem,
+    localFiles: Readonly<TextFiles>,
+    action: string,
+    stdoutCallback: OutputCallback,
+    stderrCallback: OutputCallback,
+  ): Promise<WorkspaceSaveResult> {
     if (action === "grade") {
       throw new Error("Use Grade to submit work for grading");
     }
@@ -472,41 +487,77 @@ class CodeGrinder {
   }
 }
 
+interface NavigationControl {
+  item: HTMLLIElement;
+  button: HTMLButtonElement;
+}
+
+function appendNavigationControl(navBar: HTMLElement, label: string): NavigationControl {
+  const item = document.createElement("li");
+  const button = document.createElement("button");
+  button.innerText = label;
+  item.appendChild(button);
+  navBar.appendChild(item);
+  return { item, button };
+}
+
 class CodeGrinderUI {
-  constructor(navBar, codeGrinder, sessionHandler, assignmentHandler, errorHandler) {
+  actionHandler: ActionHandler;
+  readonly assignmentsList: HTMLOListElement;
+  readonly buttonAssignments: HTMLButtonElement;
+  readonly buttonAuthenticator: HTMLButtonElement;
+  readonly buttonGrade: HTMLButtonElement;
+  readonly buttonProblems: HTMLButtonElement;
+  readonly buttonReset: HTMLButtonElement;
+  readonly buttonSync: HTMLButtonElement;
+  readonly buttonTest: HTMLButtonElement;
+  readonly problemsList: HTMLOListElement;
+  testHandler: TestHandler;
+
+  private readonly actionButtons = new Map<string, NavigationControl>();
+  private actions: string[] = [];
+  private readonly assignmentHandler: AssignmentHandler;
+  private readonly codeGrinder: CodeGrinder;
+  private readonly errorHandler: ErrorHandler;
+  private readonly navBar: HTMLElement;
+  private readonly sessionHandler: SessionHandler;
+
+  constructor(
+    navBar: HTMLElement,
+    codeGrinder: CodeGrinder,
+    sessionHandler: SessionHandler,
+    assignmentHandler: AssignmentHandler,
+    errorHandler: ErrorHandler,
+  ) {
     this.codeGrinder = codeGrinder;
     this.sessionHandler = sessionHandler;
     this.assignmentHandler = assignmentHandler;
     this.errorHandler = errorHandler;
     this.actionHandler = () => {};
     this.testHandler = () => {};
-    this.actionButtons = new Map();
     this.navBar = navBar;
 
-    const controls = [
-      ["Assignments", "buttonAssignments"],
-      ["Problems", "buttonProblems"],
-      ["Test", "buttonTest"],
-      ["Grade", "buttonGrade"],
-      ["Sync", "buttonSync"],
-      ["Reset", "buttonReset"],
-      ["Login", "buttonAuthenticator"],
-    ];
-    for (const [label, property] of controls) {
-      const item = document.createElement("li");
-      const button = document.createElement("button");
-      button.innerText = label;
-      item.appendChild(button);
-      navBar.appendChild(item);
-      this[property] = button;
-    }
+    const assignmentsControl = appendNavigationControl(navBar, "Assignments");
+    const problemsControl = appendNavigationControl(navBar, "Problems");
+    const testControl = appendNavigationControl(navBar, "Test");
+    const gradeControl = appendNavigationControl(navBar, "Grade");
+    const syncControl = appendNavigationControl(navBar, "Sync");
+    const resetControl = appendNavigationControl(navBar, "Reset");
+    const authenticatorControl = appendNavigationControl(navBar, "Login");
+    this.buttonAssignments = assignmentsControl.button;
+    this.buttonProblems = problemsControl.button;
+    this.buttonTest = testControl.button;
+    this.buttonGrade = gradeControl.button;
+    this.buttonSync = syncControl.button;
+    this.buttonReset = resetControl.button;
+    this.buttonAuthenticator = authenticatorControl.button;
 
     this.assignmentsList = document.createElement("ol");
     this.assignmentsList.classList.add("dropdown");
-    this.buttonAssignments.parentElement.appendChild(this.assignmentsList);
+    assignmentsControl.item.appendChild(this.assignmentsList);
     this.problemsList = document.createElement("ol");
     this.problemsList.classList.add("dropdown");
-    this.buttonProblems.parentElement.appendChild(this.problemsList);
+    problemsControl.item.appendChild(this.problemsList);
 
     this.buttonAuthenticator.addEventListener("click", () => this.#handleLogin());
     this.buttonAssignments.addEventListener("click", () => this.#showAssignments());
@@ -528,12 +579,11 @@ class CodeGrinderUI {
         this.assignmentsList.style.display = "none";
       }
     });
-    this.actions = [];
     this.setActions([]);
     this.updateAuthenticationStatus();
   }
 
-  async #handleLogin() {
+  async #handleLogin(): Promise<void> {
     this.buttonAuthenticator.disabled = true;
     try {
       if (this.codeGrinder.getMe()) {
@@ -548,14 +598,14 @@ class CodeGrinderUI {
       }
       this.sessionHandler(this.codeGrinder.sessionKey);
       this.updateAuthenticationStatus();
-    } catch (error) {
+    } catch (error: unknown) {
       this.errorHandler(error);
     } finally {
       this.buttonAuthenticator.disabled = false;
     }
   }
 
-  async #showAssignments() {
+  async #showAssignments(): Promise<void> {
     this.buttonAssignments.disabled = true;
     try {
       const assignments = await this.codeGrinder.listAssignments();
@@ -564,6 +614,7 @@ class CodeGrinderUI {
         if (!item.assignment) {
           continue;
         }
+        const assignment = item.assignment;
         const listItem = document.createElement("li");
         const button = document.createElement("button");
         button.innerText = `${item.courseName}: ${item.assignmentTitle}`;
@@ -572,8 +623,8 @@ class CodeGrinderUI {
         button.addEventListener("click", async () => {
           button.disabled = true;
           try {
-            await this.assignmentHandler(await this.codeGrinder.loadAssignment(item.assignment));
-          } catch (error) {
+            await this.assignmentHandler(await this.codeGrinder.loadAssignment(assignment));
+          } catch (error: unknown) {
             this.errorHandler(error);
           } finally {
             button.disabled = false;
@@ -586,21 +637,21 @@ class CodeGrinderUI {
         this.assignmentsList.appendChild(message);
       }
       this.assignmentsList.style.display = "block";
-    } catch (error) {
+    } catch (error: unknown) {
       this.errorHandler(error);
     } finally {
       this.buttonAssignments.disabled = !this.codeGrinder.getMe();
     }
   }
 
-  setActions(actions) {
+  setActions(actions: Iterable<string>): void {
     this.actions = [...actions];
     const controls = availableActionControls(actions);
-    this.buttonTest.parentElement.hidden = !controls.test;
+    this.buttonTest.parentElement!.hidden = !controls.test;
     this.buttonTest.disabled = !controls.test || !this.codeGrinder.getMe();
-    this.buttonGrade.parentElement.hidden = !controls.grade;
-    for (const button of this.actionButtons.values()) {
-      button.parentElement.remove();
+    this.buttonGrade.parentElement!.hidden = !controls.grade;
+    for (const { item } of this.actionButtons.values()) {
+      item.remove();
     }
     this.actionButtons.clear();
     for (const action of controls.actions) {
@@ -612,7 +663,7 @@ class CodeGrinderUI {
         button.disabled = true;
         try {
           await this.actionHandler(action);
-        } catch (error) {
+        } catch (error: unknown) {
           this.errorHandler(error);
         } finally {
           button.disabled = !this.codeGrinder.getMe();
@@ -620,11 +671,11 @@ class CodeGrinderUI {
       });
       item.appendChild(button);
       this.navBar.appendChild(item);
-      this.actionButtons.set(action, button);
+      this.actionButtons.set(action, { item, button });
     }
   }
 
-  updateAuthenticationStatus() {
+  updateAuthenticationStatus(): void {
     const authenticated = Boolean(this.codeGrinder.getMe());
     this.buttonAuthenticator.innerText = authenticated ? "Logout" : "Login";
     this.buttonAssignments.disabled = !authenticated;
@@ -633,7 +684,7 @@ class CodeGrinderUI {
     this.buttonGrade.disabled = !authenticated;
     this.buttonSync.disabled = !authenticated;
     this.buttonReset.disabled = !authenticated;
-    for (const button of this.actionButtons.values()) {
+    for (const { button } of this.actionButtons.values()) {
       button.disabled = !authenticated;
     }
   }
@@ -649,4 +700,12 @@ export {
   formatAssignmentKey,
   normalizeRelativePath,
   parseAssignmentKey,
+};
+
+export type {
+  GradeResult,
+  LoadedAssignment,
+  TextFiles,
+  WorkspaceProblem,
+  WorkspaceSaveResult,
 };

@@ -6,7 +6,7 @@ import {
   LocalRuntimeController,
   parseLocalRuntimeConfig,
   withTimeout,
-} from "../scripts/localRuntime.js";
+} from "../scripts/localRuntime.ts";
 import { requiredModules } from "../scripts/pythonRuntime.js";
 
 test("the deployed runtime configuration supports only the initial problem types", async () => {
@@ -66,8 +66,11 @@ test("runtime modules remain unloaded until a supported problem is selected", as
   assert.equal(loadCount, 1);
   assert.equal(await controller.select("javascriptunittest"), "javascript");
   assert.equal(loadCount, 1);
-  assert.equal(await controller.select("unsupported"), null);
+  assert.equal(await controller.select("javascriptunittest", "replace"), "javascript");
+  assert.equal(loadCount, 2);
   assert.equal(destroyCount, 1);
+  assert.equal(await controller.select("unsupported"), null);
+  assert.equal(destroyCount, 2);
 });
 
 test("a late runtime import cannot replace a newer problem selection", async () => {

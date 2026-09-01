@@ -59,23 +59,34 @@ original bytes unchanged.
 Source layout
 -------------
 
-*   `scripts/app.js` owns browser state and connects the editor UI to the API
-    client.
-*   `scripts/codeGrinder.js` is the source API client.
-*   `scripts/codeGrinderApi.js` is the generated browser bundle imported by the
-    application.
-*   `scripts/directoryTree.js` and `scripts/editorTabs.js` implement the local
-    text workspace and editor tabs.
+*   `scripts/app.ts` owns browser state and connects the editor UI to the API
+    client. `scripts/app.js` is its deployable bundle.
+*   `scripts/codeGrinder.ts` is the typed source API client and protocol-facing
+    application boundary.
+*   `scripts/protocol.ts` contains the typed file-decoding and daycare-response
+    boundary used by the API client.
+*   `scripts/embed.ts` builds standalone embed URLs and selects their local
+    problem type.
+*   `scripts/directoryTree.ts` defines and validates the canonical local
+    text-workspace tree; `scripts/editorTabs.ts` implements the editor tabs.
+    Their corresponding JavaScript files are deployable bundles.
 *   `local-runtimes.json` maps supported problem types to local runtimes.
-*   `scripts/localRuntime.js` selects and owns the one active local runtime.
-*   `scripts/jsRuntime.js`, `scripts/jsHandler.js`, and `scripts/jsWorker.js`
-    run JavaScript in a worker.
-*   `scripts/pythonRuntime.js`, `scripts/pythonHandler.js`, and
-    `scripts/pythonWorker.js` lazily load Pyodide and run Python in a worker.
-*   `scripts/atomicQueue.js` carries terminal input and output between the page
-    and the worker.
-*   `sw.js` supplies the SharedArrayBuffer iframe fallback. It intercepts only
-    the fallback's `ponyfill/` requests and does not cache application assets.
+*   `scripts/localRuntime.ts` validates that map and selects and owns the one
+    active local runtime.
+*   `scripts/jsRuntime.ts` and `scripts/jsHandler.ts` manage the JavaScript
+    runtime and its worker; `scripts/jsWorker.ts` executes student JavaScript.
+*   `scripts/pythonRuntime.ts` and `scripts/pythonHandler.ts` manage the Python
+    runtime and its worker; `scripts/pythonWorker.ts` lazily loads Pyodide and
+    executes student Python.
+*   `scripts/workerProtocol.ts` defines the commands and events shared by both
+    sides of the worker boundary. Output, images, status, and completion use
+    ordinary worker messages.
+*   `scripts/workerInput.ts` owns a line-input channel for each worker. `sw.ts`
+    is the typed source for the generated `sw.js`; it brokers only the blocking
+    read side required by synchronous student `input()`, `prompt()`, and
+    `readline()` calls.
+*   `FEATURE_PARITY.md` records behavior from the predecessor client that will
+    be restored after the TypeScript and worker-protocol work is complete.
 
 Student files run only in a worker. System-owned files are visible but read-only
 in the editor. The JavaScript runner supports workspace CommonJS modules,
@@ -88,15 +99,23 @@ Building
 --------
 
 The protobuf sources live at `../../protocol/codegrinder.proto`. Build the API
-bundle whenever the protocol or `scripts/codeGrinder.js` changes:
+bundle whenever the protocol or a TypeScript entry point changes:
 
     npm ci
     npm run build
     npm test
 
-`npm run build` generates temporary TypeScript sources under `generated/` and
-bundles them with the API client into `scripts/codeGrinderApi.js`. The generated
-TypeScript directory and `node_modules/` are not deployed.
+`npm run build` generates temporary TypeScript sources under `generated/`, type
+checks the handwritten TypeScript, and bundles the TypeScript entry points with
+webpack. The tracked JavaScript files corresponding to those entry points are
+deployable build output. Page modules and worker modules are checked with
+separate DOM and worker global environments. Existing JavaScript is accepted
+without being checked. The generated TypeScript directory and `node_modules/`
+are not deployed.
+
+The version in `package.json` is compiled into the application. It versions the
+service-worker registration, lazy runtime modules, and execution workers so a
+deployment does not combine browser-cached files from different builds.
 
 Hosting
 -------
@@ -105,10 +124,9 @@ CodeGrinder serves this directory and its gRPC-Web endpoint from the same
 origin. Daycare calls may use another registered host; CORS is therefore
 required at the daycare boundary.
 
-The server sends cross-origin isolation headers for the application document so
-a top-level tab can use SharedArrayBuffer directly. In an LMS iframe the page
-falls back to the service-worker implementation in
-`iframeSharedArrayBufferWorkaround.js`. All ordinary application and API
+The local runtimes require the service worker so a worker can wait synchronously
+for terminal input without blocking the page. The service worker intercepts
+only same-scope `worker-input/` requests. All ordinary application and API
 requests use the browser's normal HTTP behavior; offline operation is not
 supported.
 

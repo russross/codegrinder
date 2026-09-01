@@ -1,12 +1,13 @@
 {
   "name": "codegrinder-web",
-  "version": "0.3.0",
+  "version": "0.4.2",
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "npm run proto:generate && esbuild scripts/codeGrinder.js --bundle --format=esm --platform=browser --target=es2022 --minify --outfile=scripts/codeGrinderApi.js",
+    "build": "npm run proto:generate && npm run typecheck && webpack",
     "proto:generate": "./proto-gen.sh",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.worker.json"
   },
   "dependencies": {
     "@protobuf-ts/grpcweb-transport": "2.11.1",
@@ -15,8 +16,12 @@
   },
   "devDependencies": {
     "@protobuf-ts/plugin": "2.11.1",
-    "esbuild": "0.28.2",
+    "@types/ace": "0.0.52",
+    "@types/markdown-it": "14.2.0",
     "grpc-tools": "1.13.1",
-    "typescript": "5.9.3"
+    "ts-loader": "9.6.2",
+    "typescript": "5.9.3",
+    "webpack": "5.109.2",
+    "webpack-cli": "7.2.2"
   }
 }
