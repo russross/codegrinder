@@ -1,194 +1,148 @@
-interface FileNodeData {
-  content: string;
-  fileType?: string;
-  children?: never;
+type WorkspaceFiles = Record<string, Uint8Array>;
+type FileClickHandler = (content: Uint8Array, path: string) => void;
+
+interface FileTreeNode {
+  readonly kind: "file";
 }
 
-interface DirectoryNodeData {
-  children: Record<string, WorkspaceNode>;
-  collapsed: boolean;
-  content?: never;
+interface DirectoryTreeNode {
+  readonly children: Record<string, DirectoryTreeNode | FileTreeNode>;
+  readonly kind: "directory";
 }
 
-type WorkspaceNode = DirectoryNodeData | FileNodeData;
-type FileClickHandler = (fileNode: FileNodeData, path: string) => void;
-
-function isDirectoryNode(node: WorkspaceNode): node is DirectoryNodeData {
-  return node.children !== undefined;
-}
-
-function parseWorkspaceNode(value: unknown): WorkspaceNode {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("Workspace node must be an object");
+function pathParts(path: string): string[] {
+  const parts = path.split("/");
+  if (parts[0] !== "" || parts.length < 2 || parts.at(-1) === "") {
+    throw new Error(`Workspace path must name an absolute file: ${JSON.stringify(path)}`);
   }
-  if ("children" in value) {
-    if (typeof value.children !== "object" || value.children === null || Array.isArray(value.children)) {
-      throw new Error("Workspace directory children must be an object");
-    }
-    const children: Record<string, WorkspaceNode> = {};
-    for (const [name, child] of Object.entries(value.children)) {
-      children[name] = parseWorkspaceNode(child);
-    }
-    return {
-      children,
-      collapsed: "collapsed" in value && typeof value.collapsed === "boolean" ? value.collapsed : true,
-    };
+  parts.shift();
+  if (parts.some((part) => part === "" || part === "." || part === "..")) {
+    throw new Error(`Workspace path is not normalized: ${JSON.stringify(path)}`);
   }
-  if (!("content" in value) || typeof value.content !== "string") {
-    throw new Error("Workspace file content must be a string");
-  }
-  const node: FileNodeData = { content: value.content };
-  if ("fileType" in value && typeof value.fileType === "string") {
-    node.fileType = value.fileType;
-  }
-  return node;
-}
-
-function parseDirectoryNode(value: unknown): DirectoryNodeData {
-  const node = parseWorkspaceNode(value);
-  if (!isDirectoryNode(node)) {
-    throw new Error("Workspace root must be a directory");
-  }
-  return node;
+  return parts;
 }
 
 function nameFromPath(path: string): string {
-  const parts = path.split("/");
-  return parts[parts.length - 1] ?? "";
+  return path.split("/").at(-1) ?? "";
 }
 
 function extension(path: string): string {
-  const parts = nameFromPath(path).split(".");
-  return parts[parts.length - 1] ?? "";
+  return nameFromPath(path).split(".").at(-1) ?? "";
 }
 
-class FileNode implements FileNodeData {
-  content: string;
-  fileType?: string;
-
-  constructor(content = "") {
-    this.content = content;
+function buildDirectoryTree(files: Readonly<WorkspaceFiles>): DirectoryTreeNode {
+  const root: DirectoryTreeNode = { children: {}, kind: "directory" };
+  for (const path of Object.keys(files).sort()) {
+    const parts = pathParts(`/${path}`);
+    const fileName = parts.pop();
+    if (fileName === undefined) {
+      throw new Error(`Workspace path does not name a file: ${JSON.stringify(path)}`);
+    }
+    let directory = root;
+    for (const part of parts) {
+      const existing = directory.children[part];
+      if (existing?.kind === "file") {
+        throw new Error(`Workspace path crosses file ${JSON.stringify(part)}`);
+      }
+      if (existing === undefined) {
+        directory.children[part] = { children: {}, kind: "directory" };
+      }
+      const child = directory.children[part];
+      if (child?.kind !== "directory") {
+        throw new Error(`Workspace path crosses file ${JSON.stringify(part)}`);
+      }
+      directory = child;
+    }
+    if (directory.children[fileName]?.kind === "directory") {
+      throw new Error(`Workspace file collides with directory ${JSON.stringify(path)}`);
+    }
+    directory.children[fileName] = { kind: "file" };
   }
-}
-
-class DirectoryNode implements DirectoryNodeData {
-  children: Record<string, WorkspaceNode>;
-  collapsed = true;
-
-  constructor(children: Record<string, WorkspaceNode> = {}) {
-    this.children = children;
-  }
+  return root;
 }
 
 class FileSystem {
-  rootNode: DirectoryNodeData;
+  files: WorkspaceFiles;
 
-  constructor(rootNode: DirectoryNodeData = new DirectoryNode()) {
-    if (rootNode.children === undefined) {
-      throw new Error("Filesystem must have directory for root");
-    }
-    this.rootNode = rootNode;
-    this.rootNode.collapsed = false;
+  constructor(files: WorkspaceFiles = {}) {
+    this.files = files;
+    buildDirectoryTree(files);
   }
 
-  touch(path: string): FileNodeData {
-    const parts = path.split("/");
-    if (parts[0] !== "" || parts.length < 2) {
-      throw new Error("Path must be absolute");
-    }
-    parts.shift();
-    const name = parts.pop();
-    if (name === undefined) {
-      throw new Error("Path must name a file");
-    }
-
-    let currentNode = this.rootNode;
-    for (const part of parts) {
-      const child = currentNode.children[part] ?? new DirectoryNode();
-      currentNode.children[part] = child;
-      if (!isDirectoryNode(child)) {
-        throw new Error("Cannot access children of FileNode");
-      }
-      currentNode = child;
-    }
-
-    const node = currentNode.children[name] ?? new FileNode();
-    currentNode.children[name] = node;
-    if (isDirectoryNode(node)) {
-      throw new Error("Referenced Node is a DirectoryNode not a FileNode");
-    }
-    return node;
+  load(files: WorkspaceFiles): void {
+    buildDirectoryTree(files);
+    this.files = files;
   }
 
-  clear(): void {
-    this.rootNode = new DirectoryNode();
-    this.rootNode.collapsed = false;
+  readFile(path: string): Uint8Array {
+    pathParts(path);
+    const content = this.files[path.slice(1)];
+    if (content === undefined) {
+      throw new Error(`Workspace file not found: ${JSON.stringify(path)}`);
+    }
+    return content;
+  }
+
+  writeFile(path: string, content: Uint8Array): void {
+    pathParts(path);
+    const relativePath = path.slice(1);
+    const nextFiles = { ...this.files, [relativePath]: content };
+    buildDirectoryTree(nextFiles);
+    this.files = nextFiles;
   }
 }
 
 class FileSystemUI {
   fileClick: FileClickHandler;
-  private readonly fileSystem: FileSystem;
-  private readonly treeElement: HTMLElement;
+  readonly #expandedPaths = new Set<string>();
+  readonly #fileSystem: FileSystem;
+  readonly #treeElement: HTMLElement;
 
   constructor(fileSystem: FileSystem, treeElement: HTMLElement, fileClick: FileClickHandler = () => {}) {
-    this.fileSystem = fileSystem;
-    this.treeElement = treeElement;
+    this.#fileSystem = fileSystem;
+    this.#treeElement = treeElement;
     this.fileClick = fileClick;
     this.refreshUI();
   }
 
   refreshUI(): void {
-    this.treeElement.innerText = "";
-    this.#presentNode(this.fileSystem.rootNode, this.treeElement, "");
+    this.#treeElement.replaceChildren();
+    this.#presentDirectory(buildDirectoryTree(this.#fileSystem.files), this.#treeElement, "");
   }
 
-  #presentNode(node: WorkspaceNode, parentContainer: HTMLElement, path: string): void {
-    const nodeName = nameFromPath(path);
-    if (nodeName.startsWith(".")) {
-      return;
+  #presentDirectory(directory: DirectoryTreeNode, parent: HTMLElement, path: string): void {
+    for (const [name, node] of Object.entries(directory.children)) {
+      if (name.startsWith(".")) {
+        continue;
+      }
+      const childPath = `${path}/${name}`;
+      const item = document.createElement("li");
+      item.innerText = node.kind === "directory" ? `${name}/` : name;
+      item.classList.add(node.kind === "directory" ? "folder" : "file");
+      if (node.kind === "directory") {
+        const children = document.createElement("ul");
+        this.#presentDirectory(node, children, childPath);
+        item.appendChild(children);
+        item.classList.toggle("collapsed", !this.#expandedPaths.has(childPath));
+        item.addEventListener("click", (event) => {
+          if (this.#expandedPaths.has(childPath)) {
+            this.#expandedPaths.delete(childPath);
+          } else {
+            this.#expandedPaths.add(childPath);
+          }
+          item.classList.toggle("collapsed");
+          event.stopPropagation();
+        });
+      } else {
+        item.addEventListener("click", (event) => {
+          this.fileClick(this.#fileSystem.readFile(childPath), childPath);
+          event.stopPropagation();
+        });
+      }
+      parent.appendChild(item);
     }
-
-    const nodeElement = document.createElement("li");
-    if (isDirectoryNode(node)) {
-      nodeElement.innerText = `${nodeName}/`;
-      nodeElement.classList.add("folder");
-      if (node.collapsed) {
-        nodeElement.classList.add("collapsed");
-      }
-      const childrenElement = document.createElement("ul");
-      for (const [childName, child] of Object.entries(node.children)) {
-        this.#presentNode(child, childrenElement, `${path}/${childName}`);
-      }
-      nodeElement.appendChild(childrenElement);
-      nodeElement.addEventListener("click", (event) => {
-        node.collapsed = !node.collapsed;
-        nodeElement.classList.toggle("collapsed");
-        event.stopPropagation();
-      });
-    } else {
-      nodeElement.innerText = nodeName;
-      nodeElement.classList.add("file");
-      if (node.fileType !== undefined) {
-        nodeElement.classList.add(node.fileType);
-      }
-      nodeElement.addEventListener("click", (event) => {
-        this.fileClick(node, path);
-        event.stopPropagation();
-      });
-    }
-    parentContainer.appendChild(nodeElement);
   }
 }
 
-export {
-  DirectoryNode,
-  extension,
-  FileNode,
-  FileSystem,
-  FileSystemUI,
-  isDirectoryNode,
-  nameFromPath,
-  parseDirectoryNode,
-};
-export type { DirectoryNodeData, FileClickHandler, FileNodeData, WorkspaceNode };
+export { extension, FileSystem, FileSystemUI, nameFromPath };
+export type { FileClickHandler, WorkspaceFiles };

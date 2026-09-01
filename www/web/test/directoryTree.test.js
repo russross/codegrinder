@@ -1,35 +1,24 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { FileSystem, parseDirectoryNode } from "../scripts/directoryTree.ts";
+import { FileSystem } from "../scripts/directoryTree.ts";
 
-test("serialized workspace trees retain file and directory boundaries", () => {
-  const rootNode = parseDirectoryNode(JSON.parse(JSON.stringify({
-    children: {
-      src: {
-        children: {
-          "main.js": { content: "export const answer = 42;" },
-        },
-      },
-    },
-    collapsed: false,
-  })));
-  const fileSystem = new FileSystem(rootNode);
+test("flat byte workspaces preserve files while enforcing path boundaries", () => {
+  const encoder = new TextEncoder();
+  const mainContent = encoder.encode("export const answer = 42;");
+  const fileSystem = new FileSystem({ "src/main.js": mainContent });
 
-  assert.equal(rootNode.children.src.collapsed, true);
-  const main = fileSystem.touch("/src/main.js");
-  assert.equal(main.content, "export const answer = 42;");
-  assert.throws(() => fileSystem.touch("/src/main.js/nested.js"), /FileNode/);
-  assert.throws(() => fileSystem.touch("/src"), /DirectoryNode/);
-
-  const helper = fileSystem.touch("/src/lib/helper.js");
-  helper.content = "export const helper = true;";
-  assert.equal(fileSystem.touch("/src/lib/helper.js"), helper);
-});
-
-test("embedded workspace parsing rejects malformed file content", () => {
+  assert.equal(fileSystem.readFile("/src/main.js"), mainContent);
   assert.throws(
-    () => parseDirectoryNode({ children: { "main.js": { content: 42 } } }),
-    /content must be a string/,
+    () => fileSystem.writeFile("/src/main.js/nested.js", encoder.encode("invalid")),
+    /crosses file/,
   );
+  assert.throws(
+    () => fileSystem.writeFile("/src", encoder.encode("invalid")),
+    /crosses file|collides with directory/,
+  );
+
+  const helperContent = encoder.encode("export const helper = true;");
+  fileSystem.writeFile("/src/lib/helper.js", helperContent);
+  assert.equal(fileSystem.readFile("/src/lib/helper.js"), helperContent);
 });

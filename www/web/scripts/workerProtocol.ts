@@ -1,20 +1,4 @@
-interface WorkerFileNode {
-  content: string;
-  fileType?: string;
-  children?: never;
-}
-
-interface WorkerDirectoryNode {
-  children: Record<string, WorkerWorkspaceNode>;
-  collapsed: boolean;
-  content?: never;
-}
-
-type WorkerWorkspaceNode = WorkerDirectoryNode | WorkerFileNode;
-
-interface WorkerFileSystem {
-  rootNode: WorkerDirectoryNode;
-}
+type WorkerFiles = Record<string, Uint8Array>;
 
 interface InitializeWorkerRequest {
   inputUrl: string;
@@ -23,7 +7,7 @@ interface InitializeWorkerRequest {
 
 interface RunWorkerRequest {
   code: string;
-  fileSystem: WorkerFileSystem;
+  files: WorkerFiles;
   type: "run";
 }
 
@@ -90,24 +74,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isWorkspaceNode(value: unknown): value is WorkerWorkspaceNode {
-  if (!isRecord(value)) {
-    return false;
-  }
-  if ("children" in value) {
-    if (!isRecord(value.children) || typeof value.collapsed !== "boolean") {
-      return false;
-    }
-    return Object.values(value.children).every(isWorkspaceNode);
-  }
-  return typeof value.content === "string"
-    && (value.fileType === undefined || typeof value.fileType === "string");
-}
-
-function isWorkerFileSystem(value: unknown): value is WorkerFileSystem {
-  return isRecord(value)
-    && isWorkspaceNode(value.rootNode)
-    && "children" in value.rootNode;
+function isWorkerFiles(value: unknown): value is WorkerFiles {
+  return isRecord(value) && Object.values(value).every((content) => content instanceof Uint8Array);
 }
 
 function isInitializeRequest(value: unknown): value is InitializeWorkerRequest {
@@ -118,7 +86,7 @@ function isRunRequest(value: unknown): value is RunWorkerRequest {
   return isRecord(value)
     && value.type === "run"
     && typeof value.code === "string"
-    && isWorkerFileSystem(value.fileSystem);
+    && isWorkerFiles(value.files);
 }
 
 function isCommonWorkerRequest(value: unknown): value is CommonWorkerRequest {
@@ -182,7 +150,5 @@ export type {
   ReadyWorkerEvent,
   RunWorkerRequest,
   WorkerEvent,
-  WorkerDirectoryNode,
-  WorkerFileSystem,
-  WorkerWorkspaceNode,
+  WorkerFiles,
 };

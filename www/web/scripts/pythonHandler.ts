@@ -1,5 +1,4 @@
-import type { FileSystem } from "./directoryTree.js";
-import type { RuntimeCallbacks } from "./localRuntime.js";
+import type { RuntimeCallbacks, RuntimeFiles } from "./localRuntime.js";
 import {
   isWorkerEvent,
   type InitializeWorkerRequest,
@@ -14,13 +13,16 @@ interface ModuleLoadResolver {
   resolve(): void;
 }
 
+type PythonExecutionState =
+  | { readonly finish: () => void; readonly kind: "running" }
+  | { readonly kind: "idle" };
+
 class PythonWorker {
   readonly destroyed: Promise<void>;
   readonly ready: Promise<void>;
-  runningPython = false;
 
   readonly #callbacks: RuntimeCallbacks;
-  #finishPython: (() => void) | undefined;
+  #execution: PythonExecutionState = { kind: "idle" };
   readonly #input: WorkerInput;
   #isDestroyed = false;
   #moduleRequest = 0;
@@ -29,6 +31,10 @@ class PythonWorker {
   #resolveDestroyed: () => void = () => {};
   #resolveLoaded: () => void = () => {};
   readonly #worker: Worker;
+
+  get runningPython(): boolean {
+    return this.#execution.kind === "running";
+  }
 
   constructor(callbacks: RuntimeCallbacks) {
     this.#callbacks = callbacks;
@@ -67,8 +73,10 @@ class PythonWorker {
         this.#rejectLoaded(new Error(data.message));
         return;
       case "finished":
-        this.#finishPython?.();
-        this.#finishPython = undefined;
+        if (this.#execution.kind === "running") {
+          this.#execution.finish();
+          this.#execution = { kind: "idle" };
+        }
         return;
       case "loading":
         console.info(`CodeGrinder Python worker: ${data.status}`);
@@ -105,19 +113,18 @@ class PythonWorker {
     this.#moduleResolvers.clear();
   }
 
-  async runPython(fileSystem: FileSystem, code: string): Promise<void> {
+  async runPython(files: RuntimeFiles, code: string): Promise<void> {
     await this.ready;
     if (this.runningPython) {
       throw new Error("Python is already running on this worker");
     }
-    this.runningPython = true;
     const execution = new Promise<void>((resolve) => {
-      this.#finishPython = resolve;
+      this.#execution = { finish: resolve, kind: "running" };
     });
-    const request: RunWorkerRequest = { code, fileSystem, type: "run" };
+    const request: RunWorkerRequest = { code, files, type: "run" };
     this.#worker.postMessage(request);
     await Promise.race([execution, this.destroyed]);
-    this.runningPython = false;
+    this.#execution = { kind: "idle" };
   }
 
   async loadModules(modules: readonly string[]): Promise<void> {
@@ -169,11 +176,11 @@ class PythonRunner {
     this.#worker.destroy();
   }
 
-  async runPython(fileSystem: FileSystem, code: string): Promise<void> {
+  async runPython(files: RuntimeFiles, code: string): Promise<void> {
     if (this.#worker.runningPython) {
       await this.stopPython();
     }
-    await this.#worker.runPython(fileSystem, code);
+    await this.#worker.runPython(files, code);
   }
 
   async loadModules(modules: readonly string[]): Promise<void> {

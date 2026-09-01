@@ -1,17 +1,17 @@
+import type MarkdownIt from "markdown-it";
+import type { AssignmentProblemProgress } from "../generated/codegrinder.js";
 import { Tabs } from "./editorTabs.js";
 import {
     extension,
     FileSystem,
     FileSystemUI,
-    isDirectoryNode,
-    parseDirectoryNode,
 } from "./directoryTree.js";
-import type { DirectoryNodeData } from "./directoryTree.js";
 import { CodeGrinder, CodeGrinderUI, CommitSaveStatus } from "./codeGrinder.js";
-import type { LoadedAssignment, TextFiles, WorkspaceProblem } from "./codeGrinder.js";
+import type { LoadedAssignment, WorkspaceFiles, WorkspaceProblem } from "./codeGrinder.js";
 import {
     createEmbedHtml,
     legacyWebProblemType,
+    parseSerializedDirectory,
     problemTypeFromFilePaths,
     standaloneProblemType,
 } from './embed.js';
@@ -20,14 +20,23 @@ import { createChoicePrompt } from "./prompt.js";
 import { waitForVersionedController } from "./serviceWorker.js";
 import { versionedAssetUrl, webVersion } from "./version.js";
 import { WorkspaceRevisionState } from "./workspaceRevision.js";
-import type MarkdownIt from "markdown-it";
 
 type Operation = () => void | Promise<void>;
+type EditPolicy =
+    | { readonly kind: "all" }
+    | { readonly kind: "selected"; readonly paths: ReadonlySet<string> };
+type RuntimeProblemState =
+    | { readonly kind: "active"; readonly problemType: string }
+    | { readonly kind: "inactive" };
 
 interface InstructionEnvironment {
     imageFiles: Readonly<Record<string, Uint8Array>>;
     documentUrl: URL;
 }
+
+type ServerWorkspaceState =
+    | { readonly kind: "assignment"; readonly assignment: LoadedAssignment; readonly problem: WorkspaceProblem }
+    | { readonly kind: "empty" };
 
 function requireElement(id: string): HTMLElement {
     const element = document.getElementById(id);
@@ -132,6 +141,8 @@ try {
 }
 console.info(`CodeGrinder: loaded ${localRuntimeConfig.size} local runtime choices`);
 const md = window.markdownit();
+const textDecoder = new TextDecoder("utf-8", { fatal: true });
+const textEncoder = new TextEncoder();
 
 function bytesToBase64(content: Uint8Array): string {
     const chunks: string[] = [];
@@ -158,7 +169,7 @@ function renderInstructions(files: Readonly<Record<string, Uint8Array>>): string
     if (markdown === undefined) {
         return "";
     }
-    const source = new TextDecoder("utf-8", { fatal: true }).decode(markdown);
+    const source = textDecoder.decode(markdown);
     const documentUrl = new URL("doc/doc.md", "https://workspace.invalid/");
     const environment: InstructionEnvironment = { imageFiles: files, documentUrl };
     return md.render(source, environment);
@@ -198,27 +209,15 @@ const fileSystem = new FileSystem();
 const fileSystemUI = new FileSystemUI(fileSystem, requireElement("directory_tree"));
 const workspaceRevision = new WorkspaceRevisionState();
 const tabs = new Tabs(requireElement("tabs"), (path, content) => {
-    const fout = fileSystem.touch(path);
-    fout.content = content;
+    fileSystem.writeFile(path, textEncoder.encode(content));
     workspaceRevision.markChanged();
     fileSystemUI.refreshUI();
 });
-let editablePaths: ReadonlySet<string> | null = null;
-let activeLocalProblemType: string | null = null;
+let editPolicy: EditPolicy = { kind: "all" };
+let runtimeProblem: RuntimeProblemState = { kind: "inactive" };
 let activeInstructionsHtml = "";
 
 const urlParams = new URLSearchParams(window.location.search);
-
-function workspaceFiles(directory: DirectoryNodeData, path = "", files: TextFiles = {}): TextFiles {
-    for (const [name, node] of Object.entries(directory.children)) {
-        if (isDirectoryNode(node)) {
-            workspaceFiles(node, `${path}${name}/`, files);
-            continue;
-        }
-        files[`${path}${name}`] = node.content;
-    }
-    return files;
-}
 
 // Set up files dropdown
 filesButton.addEventListener("click", () => {
@@ -232,15 +231,22 @@ document.addEventListener("click", event => {
 })
 
 // Set up tabs
-fileSystemUI.fileClick = (fileNode, path) => {
+fileSystemUI.fileClick = (content, path) => {
     filesList.style.display = "none";
     const relativePath = path.replace(/^\//, "");
-    const readOnly = editablePaths !== null && !editablePaths.has(relativePath);
-    tabs.addSwitchTab(path, fileNode.content, readOnly);
+    const editable = editPolicy.kind === "all" || editPolicy.paths.has(relativePath);
+    let source: string;
+    try {
+        source = textDecoder.decode(content);
+    } catch {
+        tabs.addSwitchTab(path, "This file contains binary data and cannot be displayed", true);
+        return;
+    }
+    tabs.addSwitchTab(path, source, !editable);
     if (extension(path) === "md") {
         mdElement.innerHTML = relativePath === "doc/doc.md" && activeInstructionsHtml !== ""
             ? activeInstructionsHtml
-            : md.render(fileNode.content);
+            : md.render(source);
     }
 };
 newTab.addEventListener("click", () => {
@@ -253,12 +259,12 @@ saveAll.addEventListener("click", () => {
     tabs.saveAllTabs();
 })
 embed.addEventListener("click", async () => {
-    const files = workspaceFiles(fileSystem.rootNode);
+    const files = fileSystem.files;
     const inferredProblemType = problemTypeFromFilePaths(Object.keys(files), localRuntimeConfig);
     const problemType = inferredProblemType ?? await createChoicePrompt(
         "Choose a problem type",
         [...localRuntimeConfig.keys()],
-        activeLocalProblemType ?? legacyWebProblemType,
+        runtimeProblem.kind === "active" ? runtimeProblem.problemType : legacyWebProblemType,
     );
     if (problemType === null) {
         console.info("CodeGrinder: embed problem type selection was cancelled");
@@ -270,18 +276,18 @@ embed.addEventListener("click", async () => {
             : `CodeGrinder: inferred embed problem type ${problemType} from file extensions`,
     );
     await activateLocalRuntime(problemType, files);
-    const html = createEmbedHtml(location, fileSystem.rootNode, problemType);
+    const html = createEmbedHtml(location, files, problemType);
     await navigator.clipboard.writeText(html);
     console.log(html);
 })
 const urlFiles = urlParams.get("files");
 if (urlFiles) {
-    fileSystem.rootNode = parseDirectoryNode(JSON.parse(urlFiles));
+    fileSystem.load(parseSerializedDirectory(JSON.parse(urlFiles)));
     fileSystemUI.refreshUI();
     tabs.closeAll();
-    for (const [file, node] of Object.entries(fileSystem.rootNode.children)) {
-        if (!isDirectoryNode(node)) {
-            tabs.addSwitchTab(`/${file}`, node.content);
+    for (const [path, content] of Object.entries(fileSystem.files)) {
+        if (!path.includes("/")) {
+            tabs.addSwitchTab(`/${path}`, textDecoder.decode(content));
         }
     }
 }
@@ -344,9 +350,9 @@ function setLocalRuntimeLoading(stage: string, status: string): void {
     run.setAttribute("aria-label", status);
 }
 
-async function activateLocalRuntime(problemType: string, files: TextFiles): Promise<void> {
+async function activateLocalRuntime(problemType: string, files: WorkspaceFiles): Promise<void> {
     const operation = ++localRuntimeOperation;
-    activeLocalProblemType = null;
+    runtimeProblem = { kind: "inactive" };
     if (localRuntimeRunning) {
         localRuntimeRunning = false;
         await localRuntime.stop();
@@ -360,16 +366,17 @@ async function activateLocalRuntime(problemType: string, files: TextFiles): Prom
         if (!navigator.serviceWorker?.controller) {
             throw new Error("The local runtime service worker is unavailable; reload the page to try again");
         }
-        const runtimeName = await localRuntime.select(problemType, "replace");
+        const selection = await localRuntime.select(problemType, "replace");
         if (operation !== localRuntimeOperation) {
             return;
         }
-        if (runtimeName === null) {
+        if (selection.kind === "unavailable") {
             tabs.setDefaultMode("ace/mode/text");
             run.innerText = "Run unavailable";
             run.title = `No local runtime is configured for ${problemType}`;
             return;
         }
+        const runtimeName = selection.runtimeName;
         tabs.setDefaultMode(runtimeName === "python" ? "ace/mode/python" : "ace/mode/javascript");
         setLocalRuntimeLoading("dependencies", `configuring dependencies for ${problemType}`);
         await withTimeout(
@@ -380,7 +387,7 @@ async function activateLocalRuntime(problemType: string, files: TextFiles): Prom
         if (operation !== localRuntimeOperation) {
             return;
         }
-        activeLocalProblemType = problemType;
+        runtimeProblem = { kind: "active", problemType };
         setLocalRuntimeReady();
         writeTerminal(">> ", "orange");
     } catch (error) {
@@ -424,6 +431,8 @@ async function stopLocalRuntime(): Promise<void> {
     }
     const operation = ++localRuntimeOperation;
     localRuntimeRunning = false;
+    localRuntimeAvailable = false;
+    input_terminal.disabled = true;
     setLocalRuntimeLoading("runtime-worker", "restarting local runtime");
     try {
         await withTimeout(localRuntime.stop(), 90000, "restarting the local runtime");
@@ -464,8 +473,8 @@ input_terminal.addEventListener("keydown", async event => {
         return;
     }
     writeTerminal(value, "blue");
-    const currentPath = tabs.tabs[tabs.currentTab]?.path ?? "";
-    await executeLocally(() => localRuntime.runLine(fileSystem, value, currentPath));
+    const currentPath = tabs.selectedTab.kind === "selected" ? tabs.selectedTab.tab.path : "";
+    await executeLocally(() => localRuntime.runLine(fileSystem.files, value, currentPath));
 })
 
 run.addEventListener("click", async () => {
@@ -473,12 +482,13 @@ run.addEventListener("click", async () => {
         await stopLocalRuntime();
         return;
     }
-    const currentTab = tabs.tabs[tabs.currentTab];
-    if (!currentTab) {
+    const selection = tabs.selectedTab;
+    if (selection.kind === "empty") {
         return;
     }
+    const currentTab = selection.tab;
     writeTerminal(`Running ${currentTab.path}\n`, "orange");
-    await executeLocally(() => localRuntime.runFile(fileSystem, currentTab.path));
+    await executeLocally(() => localRuntime.runFile(fileSystem.files, currentTab.path));
 })
 
 function setupCodegrinder(): void {
@@ -506,9 +516,8 @@ function setupCodegrinder(): void {
     }
 
     const savedSessionKey = readSessionKey();
-    const codeGrinder = new CodeGrinder(savedSessionKey, window.location.origin, renderInstructions);
-    let currentAssignment: LoadedAssignment | null = null;
-    let currentProblem: WorkspaceProblem | null = null;
+    const codeGrinder = new CodeGrinder(savedSessionKey, window.location.origin);
+    let serverWorkspace: ServerWorkspaceState = { kind: "empty" };
     let syncPromise: Promise<void> = Promise.resolve();
     let syncRunning = false;
     let serverOperationRunning = false;
@@ -519,6 +528,11 @@ function setupCodegrinder(): void {
         console.error(error);
     }
 
+    function currentProblemSupportsTest(): boolean {
+        return serverWorkspace.kind === "assignment"
+            && serverWorkspace.problem.workspace.actions.includes("test");
+    }
+
     const codeGrinderUI = new CodeGrinderUI(
         navBar,
         codeGrinder,
@@ -527,38 +541,44 @@ function setupCodegrinder(): void {
         reportError,
     );
 
-    async function loadProblem(problem: WorkspaceProblem): Promise<void> {
-        currentProblem = problem;
-        editablePaths = problem.studentPaths;
-        fileSystem.clear();
+    async function showProblem(assignment: LoadedAssignment, problem: WorkspaceProblem): Promise<void> {
+        serverWorkspace = { assignment, kind: "assignment", problem };
+        const workspace = problem.workspace;
+        editPolicy = { kind: "selected", paths: new Set(Object.keys(workspace.studentOwnedFiles)) };
+        const files: WorkspaceFiles = {
+            ...workspace.systemOwnedFiles,
+            ...workspace.studentOwnedFiles,
+        };
+        fileSystem.load(files);
         tabs.closeAll();
-        for (const [path, content] of Object.entries(problem.files)) {
-            fileSystem.touch(`/${path}`).content = content;
-            if (problem.studentPaths.has(path)) {
-                tabs.addSwitchTab(`/${path}`, content, false);
+        for (const [path, content] of Object.entries(workspace.studentOwnedFiles)) {
+            try {
+                tabs.addSwitchTab(`/${path}`, textDecoder.decode(content), false);
+            } catch {
+                continue;
             }
         }
-        activeInstructionsHtml = problem.internalFiles["doc.html"];
+        activeInstructionsHtml = renderInstructions(files);
         mdElement.innerHTML = activeInstructionsHtml;
         fileSystemUI.refreshUI();
-        codeGrinderUI.buttonGrade.innerText = problem.completed ? "Finished" : "Grade";
-        codeGrinderUI.buttonGrade.disabled = problem.completed;
-        codeGrinderUI.setActions(problem.actions);
+        codeGrinderUI.buttonGrade.innerText = problem.progress.completed ? "Finished" : "Grade";
+        codeGrinderUI.buttonGrade.disabled = problem.progress.completed;
+        codeGrinderUI.setActions([...workspace.actions].sort((left, right) => left.localeCompare(right)));
         workspaceRevision.markLoaded();
-        await activateLocalRuntime(problem.problemType, problem.files);
+        await activateLocalRuntime(workspace.problemType, files);
     }
 
     async function loadAssignment(
         assignment: LoadedAssignment,
         preferredProblemId: string | null = null,
     ): Promise<void> {
-        currentAssignment = assignment;
         tabs.autoSave = true;
         tabs.setPathChangesAllowed(false);
         newTab.hidden = true;
         embed.hidden = true;
         codeGrinderUI.problemsList.innerText = "";
-        const problems = [...assignment.problems].sort((left, right) => left.problemId.localeCompare(right.problemId));
+        const problems = [...assignment.response.problems]
+            .sort((left, right) => left.problemId.localeCompare(right.problemId));
         for (const problem of problems) {
             const li = document.createElement("li");
             const button = document.createElement("button");
@@ -566,20 +586,21 @@ function setupCodegrinder(): void {
             codeGrinderUI.problemsList.appendChild(li);
             button.innerText = `${problem.completed ? "✓ " : ""}${problem.problemId}`;
             button.addEventListener("click", () => {
-                void switchProblem(problem).catch(reportError);
+                void switchProblem(assignment, problem).catch(reportError);
             });
         }
         const preferred = problems.find(problem => problem.problemId === preferredProblemId && !problem.completed);
-        await loadProblem(preferred ?? problems.find(problem => !problem.completed) ?? problems[0]);
+        const progress = preferred ?? problems.find(problem => !problem.completed) ?? problems[0];
+        await showProblem(assignment, await codeGrinder.loadProblem(assignment, progress));
     }
 
     function queueSync(showStatus: boolean): Promise<void> {
-        const problem = currentProblem;
-        if (!problem) {
+        if (serverWorkspace.kind === "empty") {
             return Promise.resolve();
         }
+        const { assignment, problem } = serverWorkspace;
         tabs.saveAllTabs();
-        const files = workspaceFiles(fileSystem.rootNode);
+        const files = fileSystem.files;
         const revision = workspaceRevision.capture();
         syncPromise = syncPromise
             .catch(() => {})
@@ -594,14 +615,17 @@ function setupCodegrinder(): void {
                     if (result.saveStatus !== CommitSaveStatus.SAVED) {
                         return;
                     }
-                    if (currentProblem === problem) {
+                    if (serverWorkspace.kind === "assignment" && serverWorkspace.problem === problem) {
                         workspaceRevision.markSaved(revision);
                     }
                     if (showStatus) {
-                        if (currentProblem === problem) {
-                            await loadProblem(problem);
+                        if (serverWorkspace.kind === "assignment" && serverWorkspace.problem === problem) {
+                            await showProblem(assignment, problem);
                         }
-                        writeTerminal(`Problem ${problem.problemId} step ${problem.stepNumber} synced\n`, "green");
+                        writeTerminal(
+                            `Problem ${problem.workspace.problemId} step ${problem.workspace.stepNumber} synced\n`,
+                            "green",
+                        );
                     }
                 } finally {
                     syncRunning = false;
@@ -613,7 +637,7 @@ function setupCodegrinder(): void {
 
     async function saveBeforeTransition(): Promise<void> {
         tabs.saveAllTabs();
-        if (!currentProblem || !workspaceRevision.dirty) {
+        if (serverWorkspace.kind === "empty" || !workspaceRevision.dirty) {
             return;
         }
         await queueSync(false);
@@ -622,10 +646,10 @@ function setupCodegrinder(): void {
         }
     }
 
-    async function runServerOperation<Result>(
-        operation: () => Promise<Result>,
+    async function runServerOperation(
+        operation: () => Promise<void>,
         saveCurrentWorkspace = false,
-    ): Promise<Result | undefined> {
+    ): Promise<void> {
         if (serverOperationRunning) {
             return;
         }
@@ -636,15 +660,20 @@ function setupCodegrinder(): void {
             if (saveCurrentWorkspace) {
                 await saveBeforeTransition();
             }
-            return await operation();
+            await operation();
         } finally {
             serverOperationRunning = false;
             tabs.setInteractionDisabled(syncRunning);
         }
     }
 
-    async function switchProblem(problem: WorkspaceProblem): Promise<void> {
-        await runServerOperation(() => loadProblem(problem), true);
+    async function switchProblem(
+        assignment: LoadedAssignment,
+        progress: AssignmentProblemProgress,
+    ): Promise<void> {
+        await runServerOperation(async () => {
+            await showProblem(assignment, await codeGrinder.loadProblem(assignment, progress));
+        }, true);
     }
 
     async function switchAssignment(assignment: LoadedAssignment): Promise<void> {
@@ -655,29 +684,29 @@ function setupCodegrinder(): void {
         void queueSync(true).catch(reportError);
     });
     codeGrinderUI.buttonReset.addEventListener("click", async () => {
-        if (!currentProblem || !window.confirm("Restore all student files to the beginning of this step?")) {
+        if (serverWorkspace.kind === "empty"
+            || !window.confirm("Restore all student files to the beginning of this step?")) {
             return;
         }
-        const problem = currentProblem;
+        const { assignment, problem } = serverWorkspace;
         await runServerOperation(async () => {
             try {
                 await codeGrinder.reset(problem);
-                await loadProblem(problem);
+                await showProblem(assignment, problem);
             } catch (error) {
                 reportError(error);
             }
         });
     });
     codeGrinderUI.buttonGrade.addEventListener("click", async () => {
-        if (!currentProblem || !currentAssignment) {
+        if (serverWorkspace.kind === "empty") {
             return;
         }
         codeGrinderUI.buttonGrade.disabled = true;
         tabs.saveAllTabs();
-        const problem = currentProblem;
-        const assignment = currentAssignment;
-        const problemId = problem.problemId;
-        const files = workspaceFiles(fileSystem.rootNode);
+        const { assignment, problem } = serverWorkspace;
+        const problemId = problem.workspace.problemId;
+        const files = fileSystem.files;
         await runServerOperation(async () => {
             try {
                 const result = await codeGrinder.grade(
@@ -692,33 +721,35 @@ function setupCodegrinder(): void {
                 }
                 if (result.passed) {
                     writeTerminal(
-                        result.problem.completed
+                        result.completed
                             ? `Completed ${problemId}\n`
-                            : `Moving to step ${result.problem.stepNumber}\n`,
+                            : `Moving to step ${result.problem.workspace.stepNumber}\n`,
                         "green",
                     );
                 }
                 if (result.message !== "") {
                     writeTerminal(`${result.message}\n`, "red");
                 }
-                if (currentAssignment?.lockedForLms) {
+                if (assignment.lockedForLms) {
                     writeTerminal("Grade was not posted to the LMS because the assignment is locked\n", "red");
                 }
-                await loadAssignment(assignment, problemId);
+                const refreshedAssignment = await codeGrinder.loadAssignment(assignment.response.assignment);
+                await loadAssignment(refreshedAssignment, problemId);
             } catch (error) {
                 reportError(error);
             } finally {
-                codeGrinderUI.buttonGrade.disabled = currentProblem?.completed ?? true;
+                codeGrinderUI.buttonGrade.disabled = serverWorkspace.kind === "empty"
+                    || serverWorkspace.problem.progress.completed;
             }
         });
     });
     async function runAction(action: string): Promise<void> {
-        if (!currentProblem) {
+        if (serverWorkspace.kind === "empty") {
             return;
         }
-        const problem = currentProblem;
+        const { assignment, problem } = serverWorkspace;
         tabs.saveAllTabs();
-        const files = workspaceFiles(fileSystem.rootNode);
+        const files = fileSystem.files;
         await runServerOperation(async () => {
             const result = await codeGrinder.action(
                 problem,
@@ -730,27 +761,31 @@ function setupCodegrinder(): void {
             if (result.message !== "") {
                 writeTerminal(`${result.message}\n`, "red");
             }
-            await loadProblem(problem);
+            await showProblem(assignment, problem);
         });
     }
 
     codeGrinderUI.actionHandler = runAction;
     codeGrinderUI.testHandler = async () => {
-        if (!currentProblem) {
+        if (serverWorkspace.kind === "empty") {
             return;
         }
         codeGrinderUI.buttonTest.disabled = true;
         try {
             tabs.saveAllTabs();
             if (localRuntime.supportsLocalTests) {
+                await stopLocalRuntime();
+                if (!localRuntimeAvailable) {
+                    return;
+                }
                 writeTerminal("Running tests\n", "orange");
-                await executeLocally(() => localRuntime.runTests(fileSystem));
+                await executeLocally(() => localRuntime.runTests(fileSystem.files));
                 return;
             }
             await runAction("test");
         } finally {
-            codeGrinderUI.buttonTest.disabled = !codeGrinder.getMe()
-                || !currentProblem?.actions.includes("test");
+            codeGrinderUI.buttonTest.disabled = !codeGrinder.authenticated
+                || !currentProblemSupportsTest();
         }
     };
 
@@ -773,10 +808,10 @@ function setupCodegrinder(): void {
                 await withTimeout(codeGrinder.restoreSession(), 30000, "restoring the CodeGrinder session");
             }
             codeGrinderUI.updateAuthenticationStatus();
-            if (assignmentKey && !codeGrinder.getMe()) {
+            if (assignmentKey && !codeGrinder.authenticated) {
                 throw new Error("Log in again from the course site to load this assignment");
             }
-            if (assignmentKey && codeGrinder.getMe()) {
+            if (assignmentKey && codeGrinder.authenticated) {
                 console.info(`CodeGrinder: loading assignment ${assignmentKey}`);
                 const assignment = await withTimeout(
                     codeGrinder.loadAssignment(assignmentKey),
@@ -808,7 +843,10 @@ function setupCodegrinder(): void {
     initialize();
 
     setInterval(() => {
-        if (!currentProblem || syncRunning || serverOperationRunning || !workspaceRevision.dirty) {
+        if (serverWorkspace.kind === "empty"
+            || syncRunning
+            || serverOperationRunning
+            || !workspaceRevision.dirty) {
             return;
         }
         void queueSync(false).catch(reportError);
@@ -833,12 +871,12 @@ if (urlDummy) {
     tabs.autoSave = true;
     try {
         const problemType = standaloneProblemType(urlParams, localRuntimeConfig);
-        if (Object.keys(fileSystem.rootNode.children).length === 0) {
+        if (Object.keys(fileSystem.files).length === 0) {
             requireClassElement("tabs-container").style.display = "none";
             const mainPath = localRuntimeConfig.get(problemType) === "python" ? "/main.py" : "/main.js";
             tabs.addSwitchTab(mainPath, "");
         }
-        await activateLocalRuntime(problemType, workspaceFiles(fileSystem.rootNode));
+        await activateLocalRuntime(problemType, fileSystem.files);
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         run.disabled = true;
@@ -850,7 +888,7 @@ if (urlDummy) {
     if (!urlParams.has("assignment")) {
         try {
             const problemType = standaloneProblemType(urlParams, localRuntimeConfig);
-            await activateLocalRuntime(problemType, workspaceFiles(fileSystem.rootNode));
+            await activateLocalRuntime(problemType, fileSystem.files);
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             run.disabled = true;

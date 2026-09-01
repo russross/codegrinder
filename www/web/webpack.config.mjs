@@ -2,7 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import webpack from "webpack";
 
-import packageMetadata from "./package.json" with { type: "json" };
+import { webBuildVersion } from "./buildVersion.mjs";
 
 const filename = fileURLToPath(import.meta.url);
 const dirname = path.dirname(filename);
@@ -23,6 +23,8 @@ const resolve = {
   },
   modules: [path.resolve(dirname, "node_modules"), "node_modules"],
 };
+
+const buildBanner = `CodeGrinder web build ${webBuildVersion}`;
 
 const browserConfig = {
   mode: "production",
@@ -54,8 +56,12 @@ const browserConfig = {
     outputModule: true,
   },
   plugins: [
+    new webpack.BannerPlugin({
+      banner: buildBanner,
+      stage: webpack.Compilation.PROCESS_ASSETS_STAGE_REPORT,
+    }),
     new webpack.DefinePlugin({
-      CODEGRINDER_WEB_VERSION: JSON.stringify(packageMetadata.version),
+      CODEGRINDER_WEB_VERSION: JSON.stringify(webBuildVersion),
     }),
   ],
   module: {
@@ -77,6 +83,10 @@ const serviceWorkerConfig = {
   module: {
     rules: [typescriptRule],
   },
+  plugins: [new webpack.BannerPlugin({
+    banner: buildBanner,
+    stage: webpack.Compilation.PROCESS_ASSETS_STAGE_REPORT,
+  })],
   resolve,
 };
 

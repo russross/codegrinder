@@ -1,9 +1,7 @@
 import {
   isCommonWorkerRequest,
-  type WorkerDirectoryNode,
   type WorkerEvent,
-  type WorkerFileSystem,
-  type WorkerWorkspaceNode,
+  type WorkerFiles,
 } from "./workerProtocol.js";
 import { readWorkerInput } from "./workerInputReader.js";
 
@@ -21,17 +19,20 @@ interface CommonJsModule {
 }
 
 type CommonJsRequire = (modulePath: string) => unknown;
+type JavaScriptWorkerState =
+  | { readonly kind: "ready"; readonly inputUrl: string; files: WorkerFiles }
+  | { readonly kind: "starting" };
 postMessage({ status: "initializing JavaScript runtime", type: "loading" });
 
-let fileSystem: WorkerFileSystem | null = null;
-let inputUrl: string | null = null;
+let state: JavaScriptWorkerState = { kind: "starting" };
 const moduleCache: Record<string, CommonJsModule> = {};
+const textDecoder = new TextDecoder("utf-8", { fatal: true });
 
 function readInput(): string {
-  if (inputUrl === null) {
+  if (state.kind !== "ready") {
     throw new Error("JavaScript runtime input is not initialized");
   }
-  return readWorkerInput(inputUrl);
+  return readWorkerInput(state.inputUrl);
 }
 
 globalThis.readline = readInput;
@@ -85,36 +86,25 @@ function errorMessage(error: unknown): string {
 
 function runJavaScript(code: string): void {
   try {
+    if (state.kind !== "ready") {
+      throw new Error("JavaScript runtime is not initialized");
+    }
     const execute = new Function("fileSystem", "console", code);
-    execute(fileSystem, console);
+    execute(state.files, console);
   } catch (error: unknown) {
     sendOutput("stderr", errorMessage(error));
   }
 }
 
-function isDirectory(node: WorkerWorkspaceNode): node is WorkerDirectoryNode {
-  return node.children !== undefined;
-}
-
 function getFileContent(path: string): string {
-  if (fileSystem === null) {
+  if (state.kind !== "ready") {
     throw new Error("File system is not initialized");
   }
-  let current: WorkerWorkspaceNode = fileSystem.rootNode;
-  for (const part of path.split("/").filter((pathPart) => pathPart !== "")) {
-    if (!isDirectory(current)) {
-      throw new Error(`File not found: ${path}`);
-    }
-    const child: WorkerWorkspaceNode | undefined = current.children[part];
-    if (child === undefined) {
-      throw new Error(`File not found: ${path}`);
-    }
-    current = child;
+  const content = state.files[path.replace(/^\//, "")];
+  if (content === undefined) {
+    throw new Error(`File not found: ${path}`);
   }
-  if (isDirectory(current)) {
-    throw new Error(`${path} is a directory, not a file`);
-  }
-  return current.content;
+  return textDecoder.decode(content);
 }
 
 function resolveModulePath(modulePath: string, parentPath: string): string {
@@ -180,12 +170,20 @@ addEventListener("message", (event: MessageEvent<unknown>) => {
     return;
   }
   if (request.type === "initialize") {
-    inputUrl = request.inputUrl;
+    if (state.kind === "ready") {
+      postMessage({ message: "JavaScript runtime is already initialized", type: "failed" });
+      return;
+    }
+    state = { files: {}, inputUrl: request.inputUrl, kind: "ready" };
     postMessage({ status: "JavaScript runtime ready", type: "loading" });
     postMessage({ type: "ready" });
     return;
   }
-  fileSystem = request.fileSystem;
+  if (state.kind !== "ready") {
+    postMessage({ message: "JavaScript runtime received a request before initialization", type: "failed" });
+    return;
+  }
+  state.files = request.files;
   runJavaScript(request.code);
   postMessage({ type: "finished" });
 });

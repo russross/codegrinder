@@ -1,9 +1,11 @@
-import type { FileSystem } from "./directoryTree.js";
 import { versionedAssetUrl } from "./version.js";
 
 type RuntimeName = "javascript" | "python";
 type RuntimeSelectionPolicy = "replace" | "reuse";
-type RuntimeFiles = Readonly<Record<string, string>>;
+type RuntimeFiles = Readonly<Record<string, Uint8Array>>;
+type RuntimeSelection =
+  | { readonly kind: "ready"; readonly runtimeName: RuntimeName }
+  | { readonly kind: "unavailable" };
 
 interface RuntimeCallbacks {
   displayImage(image: string): void;
@@ -15,9 +17,9 @@ interface RuntimeCallbacks {
 interface LocalRuntime {
   readonly ready: Promise<void>;
   configure(files: RuntimeFiles): Promise<void>;
-  runFile(fileSystem: FileSystem, path: string): Promise<void>;
-  runLine(fileSystem: FileSystem, line: string, currentPath: string): Promise<void>;
-  runTests?(fileSystem: FileSystem): Promise<void>;
+  runFile(files: RuntimeFiles, path: string): Promise<void>;
+  runLine(files: RuntimeFiles, line: string, currentPath: string): Promise<void>;
+  runTests?(files: RuntimeFiles): Promise<void>;
   writeStdin(input: string): Promise<void>;
   stop(): Promise<void>;
   destroy(): void;
@@ -30,6 +32,9 @@ interface RuntimeModule {
 type RuntimeLoader = () => Promise<RuntimeModule>;
 type RuntimeLoaders = Readonly<Record<RuntimeName, RuntimeLoader>>;
 type ProblemTypeRuntimeMap = ReadonlyMap<string, RuntimeName>;
+type RuntimeState =
+  | { readonly kind: "active"; readonly runtime: LocalRuntime; readonly runtimeName: RuntimeName }
+  | { readonly kind: "idle" };
 
 function isRuntimeModule(value: unknown): value is RuntimeModule {
   return typeof value === "object"
@@ -117,8 +122,7 @@ class LocalRuntimeController {
   readonly #callbacks: RuntimeCallbacks;
   readonly #loaders: RuntimeLoaders;
   readonly #problemTypes: ProblemTypeRuntimeMap;
-  #runtime: LocalRuntime | null = null;
-  #runtimeName: RuntimeName | null = null;
+  #state: RuntimeState = { kind: "idle" };
   #selection = 0;
 
   constructor(
@@ -131,30 +135,29 @@ class LocalRuntimeController {
     this.#loaders = loaders;
   }
 
-  get runtimeName(): RuntimeName | null {
-    return this.#runtimeName;
-  }
-
   get supportsLocalTests(): boolean {
-    return typeof this.#runtime?.runTests === "function";
+    return this.#state.kind === "active" && typeof this.#state.runtime.runTests === "function";
   }
 
   async select(
     problemType: string,
     selectionPolicy: RuntimeSelectionPolicy = "reuse",
-  ): Promise<RuntimeName | null> {
-    const runtimeName = this.#problemTypes.get(problemType) ?? null;
+  ): Promise<RuntimeSelection> {
+    const runtimeName = this.#problemTypes.get(problemType);
     console.info(`CodeGrinder: selected problem type ${problemType}; runtime is ${runtimeName ?? "unavailable"}`);
-    if (selectionPolicy === "reuse" && runtimeName === this.#runtimeName && this.#runtime !== null) {
-      return runtimeName;
+    if (selectionPolicy === "reuse"
+        && this.#state.kind === "active"
+        && runtimeName === this.#state.runtimeName) {
+      return { kind: "ready", runtimeName };
     }
 
     const selection = ++this.#selection;
-    this.#runtime?.destroy();
-    this.#runtime = null;
-    this.#runtimeName = runtimeName;
-    if (runtimeName === null) {
-      return null;
+    if (this.#state.kind === "active") {
+      this.#state.runtime.destroy();
+    }
+    this.#state = { kind: "idle" };
+    if (runtimeName === undefined) {
+      return { kind: "unavailable" };
     }
 
     const loadRuntime = this.#loaders[runtimeName];
@@ -167,9 +170,8 @@ class LocalRuntimeController {
     const runtime = runtimeModule.createRuntime(this.#callbacks);
     if (selection !== this.#selection) {
       runtime.destroy();
-      return this.#runtimeName;
+      return { kind: "unavailable" };
     }
-    this.#runtime = runtime;
     try {
       await withTimeout(
         runtime.ready,
@@ -179,64 +181,65 @@ class LocalRuntimeController {
     } catch (error: unknown) {
       if (selection === this.#selection) {
         runtime.destroy();
-        this.#runtime = null;
-        this.#runtimeName = null;
+        this.#state = { kind: "idle" };
       }
       throw error;
     }
     if (selection !== this.#selection) {
       runtime.destroy();
-      return this.#runtimeName;
+      return { kind: "unavailable" };
     }
+    this.#state = { kind: "active", runtime, runtimeName };
     console.info(`CodeGrinder: ${runtimeName} runtime worker is ready`);
-    return runtimeName;
+    return { kind: "ready", runtimeName };
   }
 
   async configure(files: RuntimeFiles): Promise<void> {
-    if (this.#runtime !== null) {
-      await this.#runtime.configure(files);
-    }
-  }
-
-  async runFile(fileSystem: FileSystem, path: string): Promise<void> {
-    if (this.#runtime === null) {
+    if (this.#state.kind !== "active") {
       throw new Error("This problem type has no local runtime");
     }
-    await this.#runtime.runFile(fileSystem, path);
+    await this.#state.runtime.configure(files);
   }
 
-  async runLine(fileSystem: FileSystem, line: string, currentPath: string): Promise<void> {
-    if (this.#runtime === null) {
+  async runFile(files: RuntimeFiles, path: string): Promise<void> {
+    if (this.#state.kind !== "active") {
       throw new Error("This problem type has no local runtime");
     }
-    await this.#runtime.runLine(fileSystem, line, currentPath);
+    await this.#state.runtime.runFile(files, path);
   }
 
-  async runTests(fileSystem: FileSystem): Promise<void> {
-    const runtime = this.#runtime;
-    if (runtime?.runTests === undefined) {
+  async runLine(files: RuntimeFiles, line: string, currentPath: string): Promise<void> {
+    if (this.#state.kind !== "active") {
+      throw new Error("This problem type has no local runtime");
+    }
+    await this.#state.runtime.runLine(files, line, currentPath);
+  }
+
+  async runTests(files: RuntimeFiles): Promise<void> {
+    if (this.#state.kind !== "active" || this.#state.runtime.runTests === undefined) {
       throw new Error("This problem type has no local test runner");
     }
-    await runtime.runTests(fileSystem);
+    await this.#state.runtime.runTests(files);
   }
 
   async writeStdin(input: string): Promise<void> {
-    if (this.#runtime !== null) {
-      await this.#runtime.writeStdin(input);
+    if (this.#state.kind === "active") {
+      await this.#state.runtime.writeStdin(input);
     }
   }
 
   async stop(): Promise<void> {
-    if (this.#runtime !== null) {
-      await this.#runtime.stop();
+    if (this.#state.kind === "active") {
+      await this.#state.runtime.stop();
     }
   }
 
   destroy(): void {
     ++this.#selection;
-    this.#runtime?.destroy();
-    this.#runtime = null;
-    this.#runtimeName = null;
+    if (this.#state.kind === "active") {
+      this.#state.runtime.destroy();
+    }
+    this.#state = { kind: "idle" };
   }
 }
 
@@ -257,4 +260,5 @@ export type {
   RuntimeModule,
   RuntimeName,
   RuntimeSelectionPolicy,
+  RuntimeSelection,
 };

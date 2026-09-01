@@ -1,4 +1,3 @@
-import type { FileSystem } from "./directoryTree.js";
 import { JavaScriptRunner } from "./jsHandler.js";
 import type {
   LocalRuntime,
@@ -17,12 +16,12 @@ class JavaScriptRuntime implements LocalRuntime {
 
   async configure(_files: RuntimeFiles): Promise<void> {}
 
-  async runFile(fileSystem: FileSystem, path: string): Promise<void> {
-    await this.#runner.runJavaScript(fileSystem, `run_script(${JSON.stringify(`.${path}`)})`);
+  async runFile(files: RuntimeFiles, path: string): Promise<void> {
+    await this.#runner.runJavaScript(files, `run_script(${JSON.stringify(`.${path}`)})`);
   }
 
-  async runLine(fileSystem: FileSystem, line: string, _currentPath: string): Promise<void> {
-    await this.#runner.runJavaScript(fileSystem, line);
+  async runLine(files: RuntimeFiles, line: string, _currentPath: string): Promise<void> {
+    await this.#runner.runJavaScript(files, line);
   }
 
   async writeStdin(input: string): Promise<void> {

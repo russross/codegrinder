@@ -7,7 +7,12 @@ import {
   parseLocalRuntimeConfig,
   withTimeout,
 } from "../scripts/localRuntime.ts";
-import { requiredModules } from "../scripts/pythonRuntime.js";
+import {
+  pythonFileCommand,
+  pythonLineCommand,
+  requiredModules,
+} from "../scripts/pythonRuntime.js";
+import { isTurtleFile } from "../scripts/turtleRuntime.ts";
 
 test("the deployed runtime configuration supports only the initial problem types", async () => {
   const contents = await readFile(new URL("../local-runtimes.json", import.meta.url), "utf-8");
@@ -60,16 +65,25 @@ test("runtime modules remain unloaded until a supported problem is selected", as
     },
   );
 
-  assert.equal(await controller.select("unsupported"), null);
+  assert.deepEqual(await controller.select("unsupported"), { kind: "unavailable" });
   assert.equal(loadCount, 0);
-  assert.equal(await controller.select("javascriptunittest"), "javascript");
+  assert.deepEqual(await controller.select("javascriptunittest"), {
+    kind: "ready",
+    runtimeName: "javascript",
+  });
   assert.equal(loadCount, 1);
-  assert.equal(await controller.select("javascriptunittest"), "javascript");
+  assert.deepEqual(await controller.select("javascriptunittest"), {
+    kind: "ready",
+    runtimeName: "javascript",
+  });
   assert.equal(loadCount, 1);
-  assert.equal(await controller.select("javascriptunittest", "replace"), "javascript");
+  assert.deepEqual(await controller.select("javascriptunittest", "replace"), {
+    kind: "ready",
+    runtimeName: "javascript",
+  });
   assert.equal(loadCount, 2);
   assert.equal(destroyCount, 1);
-  assert.equal(await controller.select("unsupported"), null);
+  assert.deepEqual(await controller.select("unsupported"), { kind: "unavailable" });
   assert.equal(destroyCount, 2);
 });
 
@@ -105,7 +119,7 @@ test("a late runtime import cannot replace a newer problem selection", async () 
   );
 
   const staleSelection = controller.select("python3unittest");
-  await controller.select("javascriptunittest");
+  const activeSelection = await controller.select("javascriptunittest");
   finishPythonImport({
     createRuntime: () => runtime({ destroy: () => { staleRuntimeDestroyed = true; } }),
   });
@@ -114,11 +128,11 @@ test("a late runtime import cannot replace a newer problem selection", async () 
 
   assert.equal(staleRuntimeDestroyed, true);
   assert.equal(activeRuntimeRan, true);
-  assert.equal(controller.runtimeName, "javascript");
+  assert.deepEqual(activeSelection, { kind: "ready", runtimeName: "javascript" });
 });
 
 test("local tests are used only when the selected runtime implements them", async () => {
-  const workspace = { rootNode: { children: {} } };
+  const workspace = { "main.py": new TextEncoder().encode("print('hello')") };
   let testedWorkspace = null;
   const runtime = (runTests) => ({
     configure: async () => {},
@@ -154,12 +168,41 @@ test("local tests are used only when the selected runtime implements them", asyn
   assert.equal(testedWorkspace, workspace);
 });
 
-test("Python requirements are explicit and ignore blank and comment lines", () => {
+test("Python requirements follow the deployed nested files and SQL runtime", () => {
   assert.deepEqual(
     requiredModules({
-      "requirements.txt": "\n# used by the assignment\nmatplotlib\n cisc108 == 3.0.1 \n",
+      "doc/requirements.txt": new TextEncoder().encode("\n# used by the assignment\nmatplotlib\n pyfiglet \n"),
+      "bin/requirements.txt": new TextEncoder().encode("sqlite3\nmatplotlib\n"),
+      "exam.sql": new Uint8Array(),
     }),
-    ["matplotlib", "cisc108 == 3.0.1"],
+    ["matplotlib", "pyfiglet", "sqlite3", "pandas"],
   );
-  assert.deepEqual(requiredModules({ "src/requirements.txt": "numpy" }), []);
+  assert.deepEqual(requiredModules({
+    "src/not-requirements.txt": new TextEncoder().encode("numpy"),
+  }), []);
+});
+
+test("Python execution dispatch follows the selected file type", () => {
+  assert.equal(pythonFileCommand("/main.py"), "run_script(\"./main.py\")");
+  assert.equal(pythonFileCommand("/exam.sql"), "run_sql_file(\"./exam.sql\")");
+  assert.equal(
+    pythonLineCommand("select * from revenue\n", "/exam.sql"),
+    "run_sql_line(\"select * from revenue\\n\")",
+  );
+  assert.equal(
+    pythonLineCommand("await answer()\n", "/main.py"),
+    "await run_console_line(\"await answer()\\n\")",
+  );
+});
+
+test("Turtle dispatch follows source content rather than Python filenames", () => {
+  const encoder = new TextEncoder();
+  const files = {
+    "drawing.py": encoder.encode("import turtle\nturtle.forward(10)\n"),
+    "main.py": encoder.encode("print('turtle')\n"),
+  };
+
+  assert.equal(isTurtleFile(files, "/drawing.py"), true);
+  assert.equal(isTurtleFile(files, "/main.py"), false);
+  assert.equal(isTurtleFile(files, "/missing.py"), false);
 });

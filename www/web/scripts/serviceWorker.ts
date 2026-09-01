@@ -11,7 +11,7 @@ interface RuntimeWorkerContainer {
 function waitForVersionedController(
   container: RuntimeWorkerContainer,
   workerUrl: URL,
-  timeoutMilliseconds = 10000,
+  timeoutMilliseconds = 20000,
 ): Promise<void> {
   if (container.controller?.scriptURL === workerUrl.href) {
     return Promise.resolve();

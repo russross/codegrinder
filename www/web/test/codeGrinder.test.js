@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  actionButtonLabel,
   availableActionControls,
-  consumeDaycareResponses,
+  consumeGradingDaycareResponses,
+  consumeInteractiveDaycareResponses,
   formatAssignmentKey,
   normalizeRelativePath,
   parseAssignmentKey,
@@ -26,13 +26,34 @@ test("workspace actions keep dedicated controls and flatten the remaining action
     grade: false,
     test: true,
   });
-  assert.equal(actionButtonLabel("run"), "Run");
+});
+
+test("daycare output rejects invalid UTF-8 and workspace paths at the protocol boundary", async () => {
+  const callbacks = { files: () => {}, stderr: () => {}, stdout: () => {} };
+  await assert.rejects(
+    () => consumeInteractiveDaycareResponses([{
+      response: {
+        oneofKind: "event",
+        event: { event: "stdout", streamData: new Uint8Array([0xff]) },
+      },
+    }], callbacks),
+    /encoded data was not valid|UTF-8/i,
+  );
+  await assert.rejects(
+    () => consumeInteractiveDaycareResponses([{
+      response: {
+        oneofKind: "event",
+        event: { event: "files", files: { "../outside.txt": new Uint8Array() } },
+      },
+    }], callbacks),
+    /Invalid workspace path/,
+  );
 });
 
 test("a non-grade daycare action completes successfully after its event stream", async () => {
   const stdout = [];
   const stderr = [];
-  const finalBundle = await consumeDaycareResponses(
+  await consumeInteractiveDaycareResponses(
     [
       {
         response: {
@@ -57,9 +78,40 @@ test("a non-grade daycare action completes successfully after its event stream",
     },
   );
 
-  assert.equal(finalBundle, null);
   assert.deepEqual(stdout, ["FAIL tests/test_helloWorld.js\n"]);
   assert.deepEqual(stderr, []);
+});
+
+test("daycare file events preserve binary workspace content", async () => {
+  const binary = new Uint8Array([0xff, 0x00, 0x80]);
+  let returnedFiles;
+
+  await consumeInteractiveDaycareResponses(
+    [{
+      response: {
+        oneofKind: "event",
+        event: { event: "files", files: { "output.bin": binary } },
+      },
+    }],
+    {
+      files: (files) => { returnedFiles = files; },
+      stderr: () => {},
+      stdout: () => {},
+    },
+  );
+
+  assert.equal(returnedFiles["output.bin"], binary);
+});
+
+test("grading requires daycare to return a signed bundle", async () => {
+  await assert.rejects(
+    () => consumeGradingDaycareResponses([], {
+      files: () => {},
+      stderr: () => {},
+      stdout: () => {},
+    }),
+    /without returning a signed graded runtime bundle/,
+  );
 });
 
 test("assignment keys survive the LTI URL representation", () => {

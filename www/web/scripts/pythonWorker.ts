@@ -1,21 +1,20 @@
 import {
   isPythonWorkerRequest,
-  type WorkerDirectoryNode,
   type WorkerEvent,
-  type WorkerFileSystem,
-  type WorkerWorkspaceNode,
+  type WorkerFiles,
 } from "./workerProtocol.js";
 import { readWorkerInput } from "./workerInputReader.js";
 import { createPythonOutputWriter, type PythonOutputWriter } from "./pythonOutput.js";
 
 interface PyodideFileSystem {
+  analyzePath(path: string): { exists: boolean };
   createPath(parent: string, path: string, canRead: boolean, canWrite: boolean): void;
   isDir(mode: number): boolean;
   lookupPath(path: string): { node: { mode: number } };
   readdir(path: string): string[];
   rmdir(path: string): void;
   unlink(path: string): void;
-  writeFile(path: string, content: string): void;
+  writeFile(path: string, content: Uint8Array): void;
 }
 
 interface Pyodide {
@@ -29,6 +28,11 @@ interface Pyodide {
   setStdout(options: PythonOutputWriter): void;
 }
 
+type PythonWorkerState =
+  | { readonly inputUrl: string; readonly kind: "loading" }
+  | { readonly inputUrl: string; readonly kind: "ready"; readonly runtime: Pyodide }
+  | { readonly kind: "starting" };
+
 declare function importScripts(...urls: string[]): void;
 declare function loadPyodide(options: { indexURL: string }): Promise<Pyodide>;
 declare function postMessage(message: WorkerEvent): void;
@@ -38,15 +42,15 @@ const pyodideIndexUrl = "https://cdn.jsdelivr.net/pyodide/v0.29.1/full/";
 postMessage({ status: "downloading Python runtime", type: "loading" });
 importScripts(`${pyodideIndexUrl}pyodide.js`);
 
-let inputUrl: string | null = null;
-let pyodide: Pyodide | null = null;
+let state: PythonWorkerState = { kind: "starting" };
 const modules = new Set(["cisc108"]);
+let workspacePaths = new Set<string>();
 
 function readInput(): string {
-  if (inputUrl === null) {
+  if (state.kind === "starting") {
     throw new Error("Python runtime input is not initialized");
   }
-  return readWorkerInput(inputUrl);
+  return readWorkerInput(state.inputUrl);
 }
 
 function sendOutput(stream: "stderr" | "stdout", value: string): void {
@@ -57,18 +61,18 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function isDirectory(node: WorkerWorkspaceNode): node is WorkerDirectoryNode {
-  return node.children !== undefined;
-}
-
-function writeDirectory(runtime: Pyodide, directory: WorkerDirectoryNode, path: string): void {
-  for (const [name, node] of Object.entries(directory.children)) {
-    if (isDirectory(node)) {
-      writeDirectory(runtime, node, `${path}${name}/`);
-      continue;
+function writeFiles(runtime: Pyodide, files: WorkerFiles): void {
+  for (const [path, content] of Object.entries(files)) {
+    const directory = path.split("/").slice(0, -1).join("/");
+    if (directory !== "") {
+      runtime.FS.createPath(".", directory, true, true);
     }
-    runtime.FS.createPath(".", path, true, true);
-    runtime.FS.writeFile(`${path}${name}`, node.content);
+    const workspacePath = `./${path}`;
+    if (runtime.FS.analyzePath(workspacePath).exists
+      && runtime.FS.isDir(runtime.FS.lookupPath(workspacePath).node.mode)) {
+      deleteRecursively(runtime, workspacePath);
+    }
+    runtime.FS.writeFile(workspacePath, content);
   }
 }
 
@@ -91,9 +95,18 @@ function deleteRecursively(runtime: Pyodide, path: string, onlyChildren = false)
   }
 }
 
-function replaceWorkspace(runtime: Pyodide, fileSystem: WorkerFileSystem): void {
-  deleteRecursively(runtime, ".", true);
-  writeDirectory(runtime, fileSystem.rootNode, "./");
+function syncWorkspace(runtime: Pyodide, files: WorkerFiles): void {
+  for (const path of workspacePaths) {
+    if (files[path] !== undefined) {
+      continue;
+    }
+    const workspacePath = `./${path}`;
+    if (runtime.FS.analyzePath(workspacePath).exists) {
+      deleteRecursively(runtime, workspacePath);
+    }
+  }
+  writeFiles(runtime, files);
+  workspacePaths = new Set(Object.keys(files));
 }
 
 async function loadModules(runtime: Pyodide, requestId: number, requestedModules: readonly string[]): Promise<void> {
@@ -136,9 +149,9 @@ matplotlib.pyplot.show = show_image
   }
 }
 
-async function run(runtime: Pyodide, fileSystem: WorkerFileSystem, code: string): Promise<void> {
+async function run(runtime: Pyodide, files: WorkerFiles, code: string): Promise<void> {
   try {
-    replaceWorkspace(runtime, fileSystem);
+    syncWorkspace(runtime, files);
     await runtime.runPythonAsync(code);
   } catch (error: unknown) {
     sendOutput("stderr", `${errorMessage(error)}\n`);
@@ -153,13 +166,12 @@ async function run(runtime: Pyodide, fileSystem: WorkerFileSystem, code: string)
 }
 
 async function initialize(url: string): Promise<void> {
-  if (pyodide !== null) {
+  if (state.kind !== "starting") {
     throw new Error("Python runtime is already initialized");
   }
-  inputUrl = url;
+  state = { inputUrl: url, kind: "loading" };
   postMessage({ status: "initializing Python runtime", type: "loading" });
   const runtime = await loadPyodide({ indexURL: pyodideIndexUrl });
-  pyodide = runtime;
   runtime.setStdin({ stdin: readInput });
   runtime.setStdout(createPythonOutputWriter((value) => sendOutput("stdout", value)));
   runtime.setStderr(createPythonOutputWriter((value) => sendOutput("stderr", value)));
@@ -208,6 +220,30 @@ def run_script(script_path):
         pass
     finally:
         sys.argv = original_argv
+
+def run_sql_file(script_path):
+    import sqlite3
+    from pathlib import Path
+
+    Path("./bin").mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect("bin/data.db") as connection:
+        with open(script_path) as source:
+            connection.executescript(source.read())
+
+def run_sql_line(source):
+    import sqlite3
+    from pathlib import Path
+    import pandas
+
+    command = source.strip()
+    if not command:
+        return
+    Path("./bin").mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect("bin/data.db") as connection:
+        cursor = connection.execute(command)
+        rows = cursor.fetchall()
+        if rows:
+            print(pandas.DataFrame(rows, columns=[column[0] for column in cursor.description]))
 `);
   runtime.registerJsModule("codegrinder", {
     show_image(image: unknown): void {
@@ -217,6 +253,7 @@ def run_script(script_path):
       postMessage({ pngBase64: image, type: "displayImage" });
     },
   });
+  state = { inputUrl: url, kind: "ready", runtime };
   postMessage({ status: "Python runtime ready", type: "loading" });
   postMessage({ type: "ready" });
 }
@@ -233,14 +270,14 @@ addEventListener("message", (event: MessageEvent<unknown>) => {
     });
     return;
   }
-  const runtime = pyodide;
-  if (runtime === null) {
+  if (state.kind !== "ready") {
     postMessage({ message: "Python runtime received a request before initialization", type: "failed" });
     return;
   }
+  const runtime = state.runtime;
   if (request.type === "loadModules") {
     void loadModules(runtime, request.requestId, request.modules);
     return;
   }
-  void run(runtime, request.fileSystem, request.code);
+  void run(runtime, request.files, request.code);
 });

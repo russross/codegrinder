@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import test from "node:test";
 
+import { webBuildVersion } from "../buildVersion.mjs";
+
 const scriptsDirectory = new URL("../scripts/", import.meta.url);
 const webDirectory = new URL("../", import.meta.url);
 
@@ -14,6 +16,18 @@ function webpackAssetBase(source, name) {
   assert.notEqual(match, null, `${name} does not contain a webpack asset base`);
   return match[1];
 }
+
+test("every deployable script belongs to the current source generation", () => {
+  const expectedBanner = `/*! CodeGrinder web build ${webBuildVersion} */`;
+  const artifactNames = readdirSync(scriptsDirectory)
+    .filter((name) => name.endsWith(".js"));
+
+  for (const name of artifactNames) {
+    assert.equal(readArtifact(name).split("\n", 1)[0], expectedBanner, name);
+  }
+  const serviceWorker = readFileSync(new URL("sw.js", webDirectory), "utf8");
+  assert.equal(serviceWorker.split("\n", 1)[0], expectedBanner, "sw.js");
+});
 
 test("classic worker bundles contain no module-only syntax", () => {
   for (const [name, source] of [

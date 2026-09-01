@@ -7,6 +7,7 @@
     "build": "npm run proto:generate && npm run typecheck && webpack",
     "proto:generate": "./proto-gen.sh",
     "test": "node --test test/*.test.js",
+    "test:browser": "node --test browser-test/*.test.js",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.worker.json"
   },
   "dependencies": {
@@ -19,6 +20,7 @@
     "@types/ace": "0.0.52",
     "@types/markdown-it": "14.2.0",
     "grpc-tools": "1.13.1",
+    "puppeteer-core": "25.9.0",
     "ts-loader": "9.6.2",
     "typescript": "5.9.3",
     "webpack": "5.109.2",

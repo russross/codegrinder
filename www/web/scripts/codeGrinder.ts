@@ -19,9 +19,9 @@ import {
 import type {
   AssignmentKey,
   AssignmentListItem,
+  AssignmentProblemProgress,
   Commit as CommitMessage,
   GetAssignmentResponse,
-  GetWorkspaceResponse,
   HelloResponse,
   SaveUngradedCommitResponse,
   SignedRuntimeBundle,
@@ -33,37 +33,30 @@ import { createPrompt } from "./prompt.js";
 import {
   actionButtonLabel,
   availableActionControls,
-  consumeDaycareResponses,
-  decodeFileMap,
+  consumeGradingDaycareResponses,
+  consumeInteractiveDaycareResponses,
   formatAssignmentKey,
+  localStudentFiles,
   normalizeRelativePath,
   parseAssignmentKey,
+  workspaceState,
+} from "./protocol.js";
+import type {
+  DaycareResponses,
+  WorkspaceFiles,
+  WorkspaceProblem,
+  WorkspaceResponse,
 } from "./protocol.js";
 
-const textEncoder = new TextEncoder();
-
-type TextFiles = Record<string, string>;
-type BinaryFiles = Record<string, Uint8Array>;
-type RenderInstructions = (files: Readonly<BinaryFiles>) => string;
+type AssignmentListEntry = AssignmentListItem & { assignment: AssignmentKey };
 type OutputCallback = (value: string) => void;
-type FileCallback = (files: TextFiles) => void;
 
-type WorkspaceProblem = GetWorkspaceResponse & {
-  systemFiles: TextFiles;
-  studentFiles: TextFiles;
-  files: TextFiles;
-  binaryFiles: BinaryFiles;
-  internalFiles: Record<string, string>;
-  studentPaths: Set<string>;
-  completed: boolean;
-};
+type AssignmentResponse = GetAssignmentResponse & { assignment: AssignmentKey };
 
-type LoadedAssignment = Omit<GetAssignmentResponse, "assignment" | "problems"> & {
-  assignment: AssignmentKey;
-  assignmentKey: string;
-  problems: WorkspaceProblem[];
-  lockedForLms: boolean;
-};
+interface LoadedAssignment {
+  readonly lockedForLms: boolean;
+  readonly response: AssignmentResponse;
+}
 
 interface WorkspaceSaveResult {
   problem: WorkspaceProblem;
@@ -72,6 +65,7 @@ interface WorkspaceSaveResult {
 }
 
 interface GradeResult extends WorkspaceSaveResult {
+  completed: boolean;
   passed: boolean;
   commit: CommitMessage;
 }
@@ -86,64 +80,41 @@ type ErrorHandler = (error: unknown) => void;
 type ActionHandler = (action: string) => void | Promise<void>;
 type TestHandler = () => void | Promise<void>;
 
-function workspaceState(
-  workspace: GetWorkspaceResponse,
-  renderInstructions: RenderInstructions,
-  completed = false,
-): WorkspaceProblem {
-  const system = decodeFileMap(workspace.systemOwnedFiles);
-  const student = decodeFileMap(workspace.studentOwnedFiles);
-  const rawFiles = { ...workspace.systemOwnedFiles, ...workspace.studentOwnedFiles };
-  return {
-    ...workspace,
-    actions: [...workspace.actions].sort((left, right) => left.localeCompare(right)),
-    systemFiles: system.decoded,
-    studentFiles: student.decoded,
-    files: { ...system.decoded, ...student.decoded },
-    binaryFiles: { ...system.binary, ...student.binary },
-    internalFiles: { "doc.html": renderInstructions(rawFiles) },
-    studentPaths: new Set(Object.keys(student.decoded)),
-    completed,
-  };
-}
-
-function copyWorkspaceState(target: WorkspaceProblem, source: WorkspaceProblem): WorkspaceProblem {
-  Object.assign(target, source);
-  return target;
-}
-
-function localStudentFiles(problem: WorkspaceProblem, localFiles: Readonly<TextFiles>): TextFiles {
-  const studentFiles: TextFiles = {};
-  for (const path of problem.studentPaths) {
-    studentFiles[path] = localFiles[path] ?? problem.studentFiles[path];
-  }
-  return studentFiles;
-}
+type SessionState =
+  | { readonly kind: "anonymous" }
+  | { readonly kind: "authenticated"; readonly hello: HelloResponse; readonly sessionKey: string }
+  | { readonly kind: "stored"; readonly sessionKey: string };
 
 function buildCommit(problem: WorkspaceProblem, action: string, note: string): CommitMessage {
-  if (!problem.assignment) {
-    throw new Error("Workspace response did not include its assignment key");
-  }
+  const workspace = problem.workspace;
   const now = Timestamp.fromDate(new Date());
   return Commit.create({
-    assignment: problem.assignment,
-    problemId: problem.problemId,
-    step: problem.stepNumber,
+    assignment: workspace.assignment,
+    problemId: workspace.problemId,
+    step: workspace.stepNumber,
     action,
     note,
-    files: Object.fromEntries(Object.entries(problem.studentFiles).map(([path, content]) => [
+    files: Object.fromEntries(Object.entries(workspace.studentOwnedFiles).map(([path, content]) => [
       normalizeRelativePath(path),
-      problem.binaryFiles[path] ?? textEncoder.encode(content),
+      content,
     ])),
     createdAt: now,
     updatedAt: now,
   });
 }
 
-function assignmentsEqual(left: AssignmentKey | undefined, right: AssignmentKey | undefined): boolean {
-  return left?.userId === right?.userId
-    && left?.courseId === right?.courseId
-    && left?.problemSetId === right?.problemSetId;
+function assignmentsEqual(left: AssignmentKey, right: AssignmentKey): boolean {
+  return left.userId === right.userId
+    && left.courseId === right.courseId
+    && left.problemSetId === right.problemSetId;
+}
+
+function requireAssignmentKey<T extends { assignment?: AssignmentKey }>(
+  message: T,
+): asserts message is T & { assignment: AssignmentKey } {
+  if (!message.assignment) {
+    throw new Error("Server response did not include its assignment key");
+  }
 }
 
 function timestampHasPassed(timestamp: TimestampMessage | undefined): boolean {
@@ -174,20 +145,25 @@ function requirePreparedAction(response: SaveUngradedCommitResponse): asserts re
 }
 
 class CodeGrinder {
-  sessionKey: string;
   private readonly client: CodeGrinderServiceClient;
-  private readonly renderInstructions: RenderInstructions;
-  private user: HelloResponse | null;
+  private session: SessionState;
 
   constructor(
     sessionKey = "",
     baseUrl = window.location.origin,
-    renderInstructions: RenderInstructions = () => "",
   ) {
-    this.sessionKey = sessionKey ?? "";
-    this.user = null;
+    this.session = sessionKey === ""
+      ? { kind: "anonymous" }
+      : { kind: "stored", sessionKey };
     this.client = this.#createClient(baseUrl, "same-origin");
-    this.renderInstructions = renderInstructions;
+  }
+
+  get authenticated(): boolean {
+    return this.session.kind === "authenticated";
+  }
+
+  get sessionKey(): string {
+    return this.session.kind === "anonymous" ? "" : this.session.sessionKey;
   }
 
   #createClient(baseUrl: string, credentials: RequestCredentials): CodeGrinderServiceClient {
@@ -197,21 +173,26 @@ class CodeGrinder {
   }
 
   #authOptions(): RpcOptions {
-    if (this.sessionKey === "") {
+    if (this.session.kind !== "authenticated") {
       throw new Error("You are not logged in");
     }
-    return { meta: { authorization: `Bearer ${this.sessionKey}` } };
+    return { meta: { authorization: `Bearer ${this.session.sessionKey}` } };
+  }
+
+  #storedSessionOptions(): RpcOptions {
+    if (this.session.kind === "anonymous") {
+      throw new Error("There is no stored session to restore");
+    }
+    return { meta: { authorization: `Bearer ${this.session.sessionKey}` } };
   }
 
   #rememberHello(hello: HelloResponse): HelloResponse {
-    if (hello.sessionKey !== "") {
-      this.sessionKey = hello.sessionKey;
-    }
-    if (hello.userId === "" || this.sessionKey === "") {
+    const sessionKey = hello.sessionKey === "" ? this.sessionKey : hello.sessionKey;
+    if (hello.userId === "" || sessionKey === "") {
       throw new Error("Hello did not return an authenticated session");
     }
-    this.user = hello;
-    return this.user;
+    this.session = { hello, kind: "authenticated", sessionKey };
+    return hello;
   }
 
   async login(token: string): Promise<HelloResponse> {
@@ -222,12 +203,12 @@ class CodeGrinder {
     return this.#rememberHello(call.response);
   }
 
-  async restoreSession(): Promise<HelloResponse | null> {
-    if (this.sessionKey === "") {
-      return null;
-    }
+  async restoreSession(): Promise<HelloResponse> {
     try {
-      const call = await this.client.hello(HelloRequest.create({ token: "" }), this.#authOptions());
+      const call = await this.client.hello(
+        HelloRequest.create({ token: "" }),
+        this.#storedSessionOptions(),
+      );
       return this.#rememberHello(call.response);
     } catch (error: unknown) {
       this.logout();
@@ -236,31 +217,37 @@ class CodeGrinder {
   }
 
   logout(): void {
-    this.sessionKey = "";
-    this.user = null;
+    this.session = { kind: "anonymous" };
   }
 
-  getMe(): HelloResponse | null {
-    return this.user;
+  getMe(): HelloResponse {
+    if (this.session.kind !== "authenticated") {
+      throw new Error("You are not logged in");
+    }
+    return this.session.hello;
   }
 
-  async listAssignments(): Promise<AssignmentListItem[]> {
+  async listAssignments(): Promise<AssignmentListEntry[]> {
     const call = await this.client.listAssignments(
       ListAssignmentsRequest.create({ search: [], includeStudentContext: false }),
       this.#authOptions(),
     );
-    return [...call.response.items].sort((left, right) => {
+    const items = call.response.items.map((item) => {
+      requireAssignmentKey(item);
+      return item;
+    });
+    return items.sort((left, right) => {
       const courseOrder = left.courseName.localeCompare(right.courseName);
       return courseOrder || left.assignmentTitle.localeCompare(right.assignmentTitle);
     });
   }
 
   async #getWorkspace(
-    assignment: AssignmentKey | undefined,
+    assignment: AssignmentKey,
     problemId: string,
     stepNumber: string,
     fileState: WorkspaceFileState,
-  ): Promise<WorkspaceProblem> {
+  ): Promise<WorkspaceResponse> {
     const call = await this.client.getWorkspace(
       GetWorkspaceRequest.create({
         assignment,
@@ -272,7 +259,7 @@ class CodeGrinder {
       }),
       this.#authOptions(),
     );
-    return workspaceState(call.response, this.renderInstructions);
+    return workspaceState(call.response);
   }
 
   async loadAssignment(key: string | AssignmentKey): Promise<LoadedAssignment> {
@@ -285,7 +272,8 @@ class CodeGrinder {
       this.listAssignments(),
     ]);
     const response = assignmentCall.response;
-    if (!response.assignment || !assignmentsEqual(response.assignment, assignment)) {
+    requireAssignmentKey(response);
+    if (!assignmentsEqual(response.assignment, assignment)) {
       throw new Error("GetAssignment returned the wrong assignment key");
     }
     if (response.downloadStatus !== AssignmentDownloadStatus.AVAILABLE) {
@@ -297,52 +285,51 @@ class CodeGrinder {
       }
       throw new Error("This assignment is not available");
     }
-    const problems = await Promise.all(response.problems.map(async (summary) => {
-      const problem = await this.#getWorkspace(
-        assignment,
-        summary.problemId,
-        "0",
-        WorkspaceFileState.CURRENT,
-      );
-      problem.completed = summary.completed;
-      return problem;
-    }));
-    if (problems.length === 0) {
+    if (response.problems.length === 0) {
       throw new Error("This assignment has no problems");
     }
     const listItem = items.find((item) => assignmentsEqual(item.assignment, assignment));
     return {
-      ...response,
-      assignment,
-      assignmentKey: formatAssignmentKey(assignment),
-      courseName: response.courseName,
-      problemSetNote: response.problemSetNote,
-      problems,
       lockedForLms: timestampHasPassed(listItem?.lockAt),
+      response,
     };
+  }
+
+  async loadProblem(
+    assignment: LoadedAssignment,
+    progress: AssignmentProblemProgress,
+  ): Promise<WorkspaceProblem> {
+    const workspace = await this.#getWorkspace(
+      assignment.response.assignment,
+      progress.problemId,
+      "0",
+      WorkspaceFileState.CURRENT,
+    );
+    if (workspace.problemId !== progress.problemId) {
+      throw new Error("GetWorkspace returned the wrong problem");
+    }
+    return { progress, workspace };
   }
 
   async #refreshProblem(
     problem: WorkspaceProblem,
-    localFiles: Readonly<TextFiles> | null,
-    fileState: WorkspaceFileState = WorkspaceFileState.CURRENT,
+    localFiles: Readonly<WorkspaceFiles>,
   ): Promise<WorkspaceProblem> {
+    const workspace = problem.workspace;
     const refreshed = await this.#getWorkspace(
-      problem.assignment,
-      problem.problemId,
-      problem.stepNumber,
-      fileState,
+      workspace.assignment,
+      workspace.problemId,
+      workspace.stepNumber,
+      WorkspaceFileState.CURRENT,
     );
-    if (localFiles && fileState === WorkspaceFileState.CURRENT) {
-      refreshed.studentFiles = localStudentFiles(refreshed, localFiles);
-      refreshed.files = { ...refreshed.systemFiles, ...refreshed.studentFiles };
-    }
-    return copyWorkspaceState(problem, refreshed);
+    refreshed.studentOwnedFiles = localStudentFiles(problem, localFiles);
+    problem.workspace = refreshed;
+    return problem;
   }
 
   async sync(
     problem: WorkspaceProblem,
-    localFiles: Readonly<TextFiles>,
+    localFiles: Readonly<WorkspaceFiles>,
   ): Promise<WorkspaceSaveResult> {
     await this.#refreshProblem(problem, localFiles);
     const call = await this.client.saveWorkspaceCommit(
@@ -359,23 +346,30 @@ class CodeGrinder {
   }
 
   async reset(problem: WorkspaceProblem): Promise<WorkspaceProblem> {
-    return this.#refreshProblem(problem, null, WorkspaceFileState.STEP_START);
+    const workspace = problem.workspace;
+    problem.workspace = await this.#getWorkspace(
+      workspace.assignment,
+      workspace.problemId,
+      workspace.stepNumber,
+      WorkspaceFileState.STEP_START,
+    );
+    return problem;
   }
 
   async #prepareAction(
     problem: WorkspaceProblem,
-    localFiles: Readonly<TextFiles>,
+    localFiles: Readonly<WorkspaceFiles>,
     action: string,
   ): Promise<PreparedAction> {
     await this.#refreshProblem(problem, localFiles);
-    if (!problem.actions.includes(action)) {
+    if (!problem.workspace.actions.includes(action)) {
       throw new Error(`Action ${JSON.stringify(action)} is not available for this step`);
     }
     const call = await this.client.saveUngradedCommit(
       SaveUngradedCommitRequest.create({
         commit: GradingCommit.create({
           hostname: "",
-          userId: this.user?.userId ?? "",
+          userId: this.getMe().userId,
           commit: buildCommit(problem, action, `web ${action}`),
         }),
       }),
@@ -386,51 +380,43 @@ class CodeGrinder {
     return response;
   }
 
-  async #runDaycare(
+  #startDaycare(
     signedBundle: SignedRuntimeBundle,
-    stdoutCallback: OutputCallback,
-    stderrCallback: OutputCallback,
-    fileCallback: FileCallback,
-  ): Promise<SignedRuntimeBundle | null> {
+  ): DaycareResponses {
     const runtime = RuntimeBundle.fromBinary(signedBundle.bundle);
     if (runtime.hostname === "") {
       throw new Error("The runtime bundle does not name a daycare host");
     }
     const daycare = this.#createClient(`${window.location.protocol}//${runtime.hostname}`, "omit");
     const call = daycare.daycare(DaycareRequest.create({ bundle: signedBundle, args: [] }), {});
-    return consumeDaycareResponses(call.responses, {
-      files: fileCallback,
-      stderr: stderrCallback,
-      stdout: stdoutCallback,
-    });
+    return call.responses;
   }
 
-  #applyReturnedFiles(problem: WorkspaceProblem, files: Readonly<TextFiles>): void {
+  #applyReturnedFiles(problem: WorkspaceProblem, files: Readonly<WorkspaceFiles>): void {
+    const studentFiles = problem.workspace.studentOwnedFiles;
     for (const [path, content] of Object.entries(files)) {
-      if (!problem.studentPaths.has(path)) {
+      if (!Object.hasOwn(studentFiles, path)) {
         continue;
       }
-      problem.studentFiles[path] = content;
-      problem.files[path] = content;
+      studentFiles[path] = content;
     }
   }
 
   async grade(
     problem: WorkspaceProblem,
-    localFiles: Readonly<TextFiles>,
+    localFiles: Readonly<WorkspaceFiles>,
     stdoutCallback: OutputCallback,
     stderrCallback: OutputCallback,
   ): Promise<GradeResult> {
     const prepared = await this.#prepareAction(problem, localFiles, "grade");
-    const finalBundle = await this.#runDaycare(
-      prepared.bundle,
-      stdoutCallback,
-      stderrCallback,
-      (files) => this.#applyReturnedFiles(problem, files),
+    const finalBundle = await consumeGradingDaycareResponses(
+      this.#startDaycare(prepared.bundle),
+      {
+        files: (files) => this.#applyReturnedFiles(problem, files),
+        stderr: stderrCallback,
+        stdout: stdoutCallback,
+      },
     );
-    if (finalBundle === null) {
-      throw new Error("Daycare ended without returning a signed graded runtime bundle");
-    }
     const runtime = RuntimeBundle.fromBinary(finalBundle.bundle);
     if (!runtime.commit) {
       throw new Error("Daycare returned no graded commit");
@@ -440,21 +426,24 @@ class CodeGrinder {
       this.#authOptions(),
     );
     const passed = runtime.commit.reportCard?.passed === true && runtime.commit.score === 1;
+    let completed = problem.progress.completed;
     if (passed && saved.response.saveStatus === CommitSaveStatus.SAVED) {
-      if (BigInt(problem.stepNumber) < BigInt(problem.lastStepNumber)) {
+      const workspace = problem.workspace;
+      if (BigInt(workspace.stepNumber) < BigInt(workspace.lastStepNumber)) {
         const next = await this.#getWorkspace(
-          problem.assignment,
-          problem.problemId,
-          (BigInt(problem.stepNumber) + 1n).toString(),
+          workspace.assignment,
+          workspace.problemId,
+          (BigInt(workspace.stepNumber) + 1n).toString(),
           WorkspaceFileState.CURRENT,
         );
-        copyWorkspaceState(problem, next);
+        problem.workspace = next;
       } else {
-        problem.completed = true;
+        completed = true;
       }
     }
     return {
       problem,
+      completed,
       passed,
       commit: runtime.commit,
       saveStatus: saved.response.saveStatus,
@@ -464,7 +453,7 @@ class CodeGrinder {
 
   async action(
     problem: WorkspaceProblem,
-    localFiles: Readonly<TextFiles>,
+    localFiles: Readonly<WorkspaceFiles>,
     action: string,
     stdoutCallback: OutputCallback,
     stderrCallback: OutputCallback,
@@ -473,11 +462,13 @@ class CodeGrinder {
       throw new Error("Use Grade to submit work for grading");
     }
     const prepared = await this.#prepareAction(problem, localFiles, action);
-    await this.#runDaycare(
-      prepared.bundle,
-      stdoutCallback,
-      stderrCallback,
-      (files) => this.#applyReturnedFiles(problem, files),
+    await consumeInteractiveDaycareResponses(
+      this.#startDaycare(prepared.bundle),
+      {
+        files: (files) => this.#applyReturnedFiles(problem, files),
+        stderr: stderrCallback,
+        stdout: stdoutCallback,
+      },
     );
     return {
       problem,
@@ -499,6 +490,14 @@ function appendNavigationControl(navBar: HTMLElement, label: string): Navigation
   item.appendChild(button);
   navBar.appendChild(item);
   return { item, button };
+}
+
+function requireParent(element: HTMLElement): HTMLElement {
+  const parent = element.parentElement;
+  if (parent === null) {
+    throw new Error("Navigation control is not attached to its list item");
+  }
+  return parent;
 }
 
 class CodeGrinderUI {
@@ -586,7 +585,7 @@ class CodeGrinderUI {
   async #handleLogin(): Promise<void> {
     this.buttonAuthenticator.disabled = true;
     try {
-      if (this.codeGrinder.getMe()) {
+      if (this.codeGrinder.authenticated) {
         this.codeGrinder.logout();
       } else {
         const response = await createPrompt("CodeGrinder login token");
@@ -611,9 +610,6 @@ class CodeGrinderUI {
       const assignments = await this.codeGrinder.listAssignments();
       this.assignmentsList.replaceChildren();
       for (const item of assignments) {
-        if (!item.assignment) {
-          continue;
-        }
         const assignment = item.assignment;
         const listItem = document.createElement("li");
         const button = document.createElement("button");
@@ -640,16 +636,16 @@ class CodeGrinderUI {
     } catch (error: unknown) {
       this.errorHandler(error);
     } finally {
-      this.buttonAssignments.disabled = !this.codeGrinder.getMe();
+      this.buttonAssignments.disabled = !this.codeGrinder.authenticated;
     }
   }
 
   setActions(actions: Iterable<string>): void {
     this.actions = [...actions];
     const controls = availableActionControls(actions);
-    this.buttonTest.parentElement!.hidden = !controls.test;
-    this.buttonTest.disabled = !controls.test || !this.codeGrinder.getMe();
-    this.buttonGrade.parentElement!.hidden = !controls.grade;
+    requireParent(this.buttonTest).hidden = !controls.test;
+    this.buttonTest.disabled = !controls.test || !this.codeGrinder.authenticated;
+    requireParent(this.buttonGrade).hidden = !controls.grade;
     for (const { item } of this.actionButtons.values()) {
       item.remove();
     }
@@ -658,7 +654,7 @@ class CodeGrinderUI {
       const item = document.createElement("li");
       const button = document.createElement("button");
       button.innerText = actionButtonLabel(action);
-      button.disabled = !this.codeGrinder.getMe();
+      button.disabled = !this.codeGrinder.authenticated;
       button.addEventListener("click", async () => {
         button.disabled = true;
         try {
@@ -666,7 +662,7 @@ class CodeGrinderUI {
         } catch (error: unknown) {
           this.errorHandler(error);
         } finally {
-          button.disabled = !this.codeGrinder.getMe();
+          button.disabled = !this.codeGrinder.authenticated;
         }
       });
       item.appendChild(button);
@@ -676,7 +672,7 @@ class CodeGrinderUI {
   }
 
   updateAuthenticationStatus(): void {
-    const authenticated = Boolean(this.codeGrinder.getMe());
+    const authenticated = this.codeGrinder.authenticated;
     this.buttonAuthenticator.innerText = authenticated ? "Logout" : "Login";
     this.buttonAssignments.disabled = !authenticated;
     this.buttonProblems.disabled = !authenticated;
@@ -696,16 +692,19 @@ export {
   CodeGrinder,
   CodeGrinderUI,
   CommitSaveStatus,
-  consumeDaycareResponses,
+  consumeGradingDaycareResponses,
+  consumeInteractiveDaycareResponses,
   formatAssignmentKey,
+  localStudentFiles,
   normalizeRelativePath,
   parseAssignmentKey,
+  workspaceState,
 };
 
 export type {
   GradeResult,
   LoadedAssignment,
-  TextFiles,
   WorkspaceProblem,
+  WorkspaceFiles,
   WorkspaceSaveResult,
 };

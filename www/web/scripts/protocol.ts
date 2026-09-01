@@ -1,16 +1,23 @@
 import type {
   AssignmentKey,
+  AssignmentProblemProgress,
   DaycareResponse,
+  GetWorkspaceResponse,
   SignedRuntimeBundle,
 } from "../generated/codegrinder.js";
 
-interface DecodedFileMap {
-  decoded: Record<string, string>;
-  binary: Record<string, Uint8Array>;
+type WorkspaceFiles = GetWorkspaceResponse["studentOwnedFiles"];
+type WorkspaceResponse = Omit<GetWorkspaceResponse, "assignment"> & {
+  assignment: AssignmentKey;
+};
+
+interface WorkspaceProblem {
+  readonly progress: AssignmentProblemProgress;
+  workspace: WorkspaceResponse;
 }
 
 interface DaycareResponseCallbacks {
-  files(files: Record<string, string>): void;
+  files(files: Record<string, Uint8Array>): void;
   stderr(value: string): void;
   stdout(value: string): void;
 }
@@ -22,9 +29,11 @@ interface ActionControls {
 }
 
 type DaycareResponses = AsyncIterable<DaycareResponse> | Iterable<DaycareResponse>;
+type DaycareOutcome =
+  | { readonly kind: "bundle"; readonly bundle: SignedRuntimeBundle }
+  | { readonly kind: "completed" };
 
 const textDecoder = new TextDecoder("utf-8", { fatal: true });
-const binaryFileMessage = "This file contains binary data and cannot be displayed";
 
 function parseAssignmentKey(value: string): AssignmentKey {
   const parts = value.split(":");
@@ -66,34 +75,48 @@ function actionButtonLabel(action: string): string {
   return `${action.charAt(0).toUpperCase()}${action.slice(1)}`;
 }
 
-function decodeFileMap(
-  files: Record<string, Uint8Array>,
-): DecodedFileMap {
-  const decoded: Record<string, string> = {};
-  const binary: Record<string, Uint8Array> = {};
-  for (const [rawPath, content] of Object.entries(files)) {
-    const path = normalizeRelativePath(rawPath);
-    try {
-      decoded[path] = textDecoder.decode(content);
-    } catch {
-      decoded[path] = binaryFileMessage;
-      binary[path] = content;
-    }
+function validateFileMapPaths(files: Readonly<Record<string, Uint8Array>>): void {
+  for (const path of Object.keys(files)) {
+    normalizeRelativePath(path);
   }
-  return { decoded, binary };
 }
 
-async function consumeDaycareResponses(
+function workspaceState(
+  workspace: GetWorkspaceResponse,
+): WorkspaceResponse {
+  if (!workspace.assignment) {
+    throw new Error("Workspace response did not include its assignment key");
+  }
+  validateFileMapPaths(workspace.systemOwnedFiles);
+  validateFileMapPaths(workspace.studentOwnedFiles);
+  return {
+    ...workspace,
+    assignment: workspace.assignment,
+  };
+}
+
+function localStudentFiles(
+  problem: WorkspaceProblem,
+  localFiles: Readonly<WorkspaceFiles>,
+): WorkspaceFiles {
+  const studentFiles: WorkspaceFiles = {};
+  for (const [path, serverContent] of Object.entries(problem.workspace.studentOwnedFiles)) {
+    studentFiles[path] = localFiles[path] ?? serverContent;
+  }
+  return studentFiles;
+}
+
+async function consumeDaycareResponseStream(
   responses: DaycareResponses,
   callbacks: DaycareResponseCallbacks,
-): Promise<SignedRuntimeBundle | null> {
+): Promise<DaycareOutcome> {
   for await (const response of responses) {
     const responseBody = response.response;
     switch (responseBody.oneofKind) {
       case "error":
         throw new Error(responseBody.error);
       case "bundle":
-        return responseBody.bundle;
+        return { bundle: responseBody.bundle, kind: "bundle" };
       case "event": {
         const event = responseBody.event;
         if (event.event === "stdout") {
@@ -103,7 +126,8 @@ async function consumeDaycareResponses(
         } else if (event.event === "error") {
           callbacks.stderr(`${event.error}\n`);
         } else if (event.event === "files") {
-          callbacks.files(decodeFileMap(event.files).decoded);
+          validateFileMapPaths(event.files);
+          callbacks.files(event.files);
         }
         break;
       }
@@ -111,17 +135,45 @@ async function consumeDaycareResponses(
         break;
     }
   }
-  return null;
+  return { kind: "completed" };
+}
+
+async function consumeInteractiveDaycareResponses(
+  responses: DaycareResponses,
+  callbacks: DaycareResponseCallbacks,
+): Promise<void> {
+  await consumeDaycareResponseStream(responses, callbacks);
+}
+
+async function consumeGradingDaycareResponses(
+  responses: DaycareResponses,
+  callbacks: DaycareResponseCallbacks,
+): Promise<SignedRuntimeBundle> {
+  const outcome = await consumeDaycareResponseStream(responses, callbacks);
+  if (outcome.kind === "completed") {
+    throw new Error("Daycare ended without returning a signed graded runtime bundle");
+  }
+  return outcome.bundle;
 }
 
 export {
   actionButtonLabel,
   availableActionControls,
-  consumeDaycareResponses,
-  decodeFileMap,
+  consumeGradingDaycareResponses,
+  consumeInteractiveDaycareResponses,
   formatAssignmentKey,
+  localStudentFiles,
   normalizeRelativePath,
   parseAssignmentKey,
+  validateFileMapPaths,
+  workspaceState,
 };
 
-export type { ActionControls, DaycareResponseCallbacks, DaycareResponses };
+export type {
+  ActionControls,
+  DaycareResponseCallbacks,
+  DaycareResponses,
+  WorkspaceFiles,
+  WorkspaceProblem,
+  WorkspaceResponse,
+};

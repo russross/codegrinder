@@ -8,3 +8,6 @@
 # Generated API sources and local build dependencies
 generated/
 node_modules/
+
+# dev nodes
+*.md

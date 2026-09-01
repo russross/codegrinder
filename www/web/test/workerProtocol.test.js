@@ -7,36 +7,17 @@ import {
   isWorkerEvent,
 } from "../scripts/workerProtocol.ts";
 
-const fileSystem = {
-  rootNode: {
-    children: {
-      src: {
-        children: {
-          "main.py": { content: "print('hello')" },
-        },
-        collapsed: false,
-      },
-    },
-    collapsed: false,
-  },
-};
+const files = { "src/main.py": new TextEncoder().encode("print('hello')") };
 
 test("worker requests validate the complete cloned workspace shape", () => {
   assert.equal(isCommonWorkerRequest({
     code: "run_script('./src/main.py')",
-    fileSystem,
+    files,
     type: "run",
   }), true);
   assert.equal(isCommonWorkerRequest({
     code: "run_script('./src/main.py')",
-    fileSystem: {
-      rootNode: {
-        children: {
-          "main.py": { content: new Uint8Array([112, 114, 105, 110, 116]) },
-        },
-        collapsed: false,
-      },
-    },
+    files: { "main.py": "print('hello')" },
     type: "run",
   }), false);
   assert.equal(isPythonWorkerRequest({

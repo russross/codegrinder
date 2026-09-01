@@ -10,6 +10,9 @@ interface AceModeList {
 
 type TabHandler = () => void;
 type SaveHandler = (path: string, content: string) => void;
+type TabSelection =
+  | { readonly kind: "empty" }
+  | { readonly kind: "selected"; readonly tab: Tab };
 
 const modeList: AceModeList = window.ace.require("ace/ext/modelist");
 const untitledPath = "untitled";
@@ -134,7 +137,6 @@ class Tab {
 
 class Tabs {
   autoSave = false;
-  currentTab = 0;
   pathChangesAllowed = true;
   readonly tabs: Tab[] = [];
 
@@ -142,6 +144,7 @@ class Tabs {
   private readonly editorListElement: HTMLDivElement;
   private readonly pathInput: HTMLInputElement;
   private readonly saveHandler: SaveHandler;
+  private selection: TabSelection = { kind: "empty" };
   private readonly tabListElement: HTMLOListElement;
 
   constructor(tabbedEditorElement: HTMLElement, saveHandler: SaveHandler) {
@@ -156,8 +159,8 @@ class Tabs {
     this.editorListElement.classList.add("editor-container");
     tabbedEditorElement.appendChild(this.editorListElement);
     this.pathInput.addEventListener("change", () => {
-      const tab = this.tabs[this.currentTab];
-      if (this.pathChangesAllowed && tab !== undefined) {
+      if (this.pathChangesAllowed && this.selection.kind === "selected") {
+        const tab = this.selection.tab;
         tab.saved = false;
         tab.path = this.pathInput.value;
       }
@@ -171,12 +174,20 @@ class Tabs {
       if (debouncer !== undefined) {
         clearTimeout(debouncer);
       }
-      debouncer = setTimeout(() => this.tabs[this.currentTab]?.updateSize(), 500);
+      debouncer = setTimeout(() => {
+        if (this.selection.kind === "selected") {
+          this.selection.tab.updateSize();
+        }
+      }, 500);
     }).observe(this.editorListElement);
   }
 
-  saveTab(tab: Tab | undefined): void {
-    if (tab === undefined || tab.saved || tab.readOnly) {
+  get selectedTab(): TabSelection {
+    return this.selection;
+  }
+
+  saveTab(tab: Tab): void {
+    if (tab.saved || tab.readOnly) {
       return;
     }
     if (tab.path === untitledPath) {
@@ -190,14 +201,16 @@ class Tabs {
       tab.path = `/${tab.path}`;
     }
     tab.saved = true;
-    if (tab === this.tabs[this.currentTab]) {
+    if (this.selection.kind === "selected" && tab === this.selection.tab) {
       this.pathInput.value = tab.path;
     }
     this.saveHandler(tab.path, tab.content);
   }
 
   saveCurrentTab(): void {
-    this.saveTab(this.tabs[this.currentTab]);
+    if (this.selection.kind === "selected") {
+      this.saveTab(this.selection.tab);
+    }
   }
 
   saveAllTabs(): void {
@@ -212,12 +225,13 @@ class Tabs {
     }
     this.pathInput.disabled = disabled
       || !this.pathChangesAllowed
-      || (this.tabs[this.currentTab]?.readOnly ?? false);
+      || (this.selection.kind === "selected" && this.selection.tab.readOnly);
   }
 
   setPathChangesAllowed(allowed: boolean): void {
     this.pathChangesAllowed = allowed;
-    this.pathInput.disabled = !allowed || (this.tabs[this.currentTab]?.readOnly ?? false);
+    this.pathInput.disabled = !allowed
+      || (this.selection.kind === "selected" && this.selection.tab.readOnly);
   }
 
   setDefaultMode(mode: string): void {
@@ -228,7 +242,7 @@ class Tabs {
   }
 
   closeTab(tab: Tab, canCloseLast: boolean): void {
-    const currentTab = this.tabs[this.currentTab];
+    const currentTab = this.selection.kind === "selected" ? this.selection.tab : undefined;
     const closingCurrent = currentTab === tab;
     this.tabListElement.removeChild(tab.element);
     this.editorListElement.removeChild(tab.editor);
@@ -240,12 +254,17 @@ class Tabs {
         this.addNewTab();
       }
       if (this.tabs.length > 0) {
-        this.switchTab(0);
+        const firstTab = this.tabs[0];
+        if (firstTab !== undefined) {
+          this.switchTab(firstTab);
+        }
+      } else {
+        this.selection = { kind: "empty" };
       }
       return;
     }
     if (currentTab !== undefined) {
-      this.switchTab(this.tabs.indexOf(currentTab));
+      this.switchTab(currentTab);
     }
   }
 
@@ -264,7 +283,7 @@ class Tabs {
         this.saveTab(tab);
       }
     };
-    tab.element.addEventListener("click", () => this.switchTab(this.tabs.indexOf(tab)));
+    tab.element.addEventListener("click", () => this.switchTab(tab));
     tab.closeElement.addEventListener("click", (event) => {
       event.stopPropagation();
       this.tryCloseTab(tab);
@@ -272,25 +291,30 @@ class Tabs {
     this.tabListElement.appendChild(tab.element);
     this.editorListElement.appendChild(tab.editor);
     this.tabs.push(tab);
-    this.switchTab(this.tabs.length - 1);
+    this.switchTab(tab);
   }
 
-  switchTab(tabIndex: number): void {
-    this.currentTab = tabIndex;
-    for (const [index, tab] of this.tabs.entries()) {
-      tab.editor.classList.toggle("active", index === tabIndex);
-      tab.element.classList.toggle("active", index === tabIndex);
+  switchTab(selectedTab: Tab): void {
+    if (!this.tabs.includes(selectedTab)) {
+      throw new Error("Cannot select a tab that is not open");
     }
-    const currentTab = this.tabs[this.currentTab];
-    currentTab?.updateSize();
-    this.pathInput.value = currentTab?.path ?? "";
-    this.pathInput.disabled = !this.pathChangesAllowed || (currentTab?.readOnly ?? false);
+    this.selection = { kind: "selected", tab: selectedTab };
+    for (const tab of this.tabs) {
+      tab.editor.classList.toggle("active", tab === selectedTab);
+      tab.element.classList.toggle("active", tab === selectedTab);
+    }
+    selectedTab.updateSize();
+    this.pathInput.value = selectedTab.path;
+    this.pathInput.disabled = !this.pathChangesAllowed || selectedTab.readOnly;
   }
 
   addSwitchTab(path: string, content: string, readOnly = false): void {
     const existingIndex = this.tabs.findIndex((tab) => tab.path === path);
     if (existingIndex >= 0) {
-      this.switchTab(existingIndex);
+      const existing = this.tabs[existingIndex];
+      if (existing !== undefined) {
+        this.switchTab(existing);
+      }
       return;
     }
     this.addNewTab(new Tab(path, content, readOnly, this.defaultMode));
@@ -308,4 +332,4 @@ class Tabs {
 }
 
 export { Tab, Tabs };
-export type { SaveHandler, TabHandler };
+export type { SaveHandler, TabHandler, TabSelection };

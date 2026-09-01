@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   createEmbedHtml,
+  parseSerializedDirectory,
   problemTypeFromFilePaths,
   standaloneProblemType,
 } from "../scripts/embed.ts";
@@ -13,6 +14,7 @@ const supportedProblemTypes = new Map([
 ]);
 
 test("new embeds carry their exact problem type and filesystem", () => {
+  const encoder = new TextEncoder();
   const rootNode = {
     children: {
       "main.py": { content: "print('hello')" },
@@ -20,7 +22,7 @@ test("new embeds carry their exact problem type and filesystem", () => {
   };
   const html = createEmbedHtml(
     { origin: "https://codegrinder.example", pathname: "/web/" },
-    rootNode,
+    { "main.py": encoder.encode("print('hello')") },
     "python3unittest",
   );
   const source = html.match(/src="([^"]+)"/)?.[1].replaceAll("&amp;", "&");
@@ -31,6 +33,20 @@ test("new embeds carry their exact problem type and filesystem", () => {
   assert.equal(url.searchParams.get("dummy"), "true");
   assert.equal(url.searchParams.get("problemType"), "python3unittest");
   assert.deepEqual(JSON.parse(url.searchParams.get("files")), rootNode);
+});
+
+test("embedded text is encoded into the byte workspace at its boundary", () => {
+  const files = parseSerializedDirectory({
+    children: {
+      src: { children: { "main.py": { content: "print('café')" } } },
+    },
+  });
+
+  assert.equal(new TextDecoder().decode(files["src/main.py"]), "print('café')");
+  assert.throws(
+    () => parseSerializedDirectory({ children: { "main.py": { content: 42 } } }),
+    /must contain text/,
+  );
 });
 
 test("legacy web embeds retain their former Python runtime", () => {
