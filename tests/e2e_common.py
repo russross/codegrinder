@@ -2,37 +2,57 @@
 from __future__ import annotations
 
 import base64
+import binascii
+import fcntl
 import hashlib
 import hmac
 import json
 import os
-import signal
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TextIO
 
 
 TESTS_DIR = Path(__file__).resolve().parent
 ROOT = TESTS_DIR.parent
-RUN_ROOT = Path(os.environ.get("CODEGRINDER_E2E_RUN_ROOT", "/tmp/codegrinder-e2e")).resolve()
+SERVER_CONFIG_PATH = ROOT / "config.json"
+RUN_ROOT = Path(
+    os.environ.get("CODEGRINDER_E2E_RUN_ROOT", "/tmp/codegrinder-e2e")
+).resolve()
 RUN_MARKER = RUN_ROOT / ".codegrinder-e2e"
 ARTIFACT_DIR = RUN_ROOT / "artifacts"
 XDG_CONFIG_HOME = RUN_ROOT / "xdg-config"
 CONFIG_PATH = XDG_CONFIG_HOME / "codegrinder" / "config.toml"
-DB_PATH = RUN_ROOT / "codegrinder.db"
-SERVER_CONFIG_PATH = ARTIFACT_DIR / "config.json"
-TARGET_RELEASE = ROOT / "target" / "release"
-SESSION_KEY = "e2e-test-session-key"
-SESSION_SECRET = "e2e-test-session-secret"
-DAYCARE_SECRET = "e2e-test-daycare-secret"
-USER_ID = "e2e-user"
-COURSE_ID = "e2e-course"
-COURSE_NAME = "CS 2810 E2E"
-COURSE_DIR = "cs2810"
+
+TEST_PREFIX = "test-"
+SESSION_KEY = f"{TEST_PREFIX}e2e-session-key"
+USER_ID = f"{TEST_PREFIX}user"
+COURSE_ID = f"{TEST_PREFIX}course"
+COURSE_NAME = "Test 2810"
+COURSE_DIR = "test2810"
 WORKSPACE_DIR = RUN_ROOT / COURSE_DIR
-SERVER_LOG = ARTIFACT_DIR / "server.log"
-SERVER_BIND_PORT = 1400
+
+RISC_SINGLE_ID = f"{TEST_PREFIX}fixture-riscv-single"
+RISC_SLICES_ID = f"{TEST_PREFIX}fixture-riscv-slices"
+C_STEPS_ID = f"{TEST_PREFIX}fixture-c-steps"
+
+
+@dataclass(frozen=True)
+class LiveConfig:
+    server_endpoint: str
+    database_path: Path
+    session_secret: str
+    container_engine: str
+
+
+@dataclass(frozen=True)
+class SmokeProblem:
+    problem_id: str
+    problem_type: str
+    source_directory: str
+    title: str
 
 
 @dataclass(frozen=True)
@@ -44,9 +64,100 @@ class CommandResult:
     stderr: str
 
 
+def load_live_config() -> LiveConfig:
+    try:
+        raw = json.loads(SERVER_CONFIG_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeError(
+            f"cannot read deployed configuration {SERVER_CONFIG_PATH}: {error}"
+        ) from error
+
+    host = raw.get("taHostname") or raw.get("hostname")
+    if not isinstance(host, str) or not host.strip():
+        raise RuntimeError(
+            f"{SERVER_CONFIG_PATH} does not define taHostname or hostname"
+        )
+    endpoint = host.strip().rstrip("/")
+    if not endpoint.startswith(("http://", "https://")):
+        endpoint = f"https://{endpoint}"
+
+    configured_database = raw.get("sqlite3Path", "db/codegrinder.db")
+    if not isinstance(configured_database, str) or not configured_database.strip():
+        raise RuntimeError(f"{SERVER_CONFIG_PATH} has an invalid sqlite3Path")
+    database_path = Path(configured_database)
+    if not database_path.is_absolute():
+        database_path = SERVER_CONFIG_PATH.parent / database_path
+    database_path = database_path.resolve()
+
+    raw_secret = raw.get("sessionSecret")
+    if not isinstance(raw_secret, str) or not raw_secret:
+        raise RuntimeError(f"{SERVER_CONFIG_PATH} does not define sessionSecret")
+
+    raw_engine = raw.get("containerEngine", "docker")
+    if not isinstance(raw_engine, str) or not raw_engine.strip():
+        raise RuntimeError(f"{SERVER_CONFIG_PATH} has an invalid containerEngine")
+
+    return LiveConfig(
+        server_endpoint=endpoint,
+        database_path=database_path,
+        session_secret=decode_base64_if_text(raw_secret),
+        container_engine=raw_engine.split()[0],
+    )
+
+
+def decode_base64_if_text(raw: str) -> str:
+    try:
+        return base64.b64decode(raw, validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError):
+        return raw
+
+
+LIVE_CONFIG = load_live_config()
+DB_PATH = LIVE_CONFIG.database_path
+
+SMOKE_PROBLEMS = (
+    SmokeProblem(
+        problem_id=f"{TEST_PREFIX}smoke-goinout",
+        problem_type="goinout",
+        source_directory="smoke-goinout",
+        title="Test Go input/output smoke test",
+    ),
+    SmokeProblem(
+        problem_id=f"{TEST_PREFIX}smoke-javascriptunittest",
+        problem_type="javascriptunittest",
+        source_directory="smoke-javascriptunittest",
+        title="Test JavaScript unit-test smoke test",
+    ),
+    SmokeProblem(
+        problem_id=f"{TEST_PREFIX}smoke-python3unittest",
+        problem_type="python3unittest",
+        source_directory="smoke-python3unittest",
+        title="Test Python unit-test smoke test",
+    ),
+    SmokeProblem(
+        problem_id=f"{TEST_PREFIX}smoke-python3inout",
+        problem_type="python3inout",
+        source_directory="smoke-python3inout",
+        title="Test Python input/output smoke test",
+    ),
+    SmokeProblem(
+        problem_id=f"{TEST_PREFIX}smoke-rustinout",
+        problem_type="rustinout",
+        source_directory="smoke-rustinout",
+        title="Test Rust input/output smoke test",
+    ),
+    SmokeProblem(
+        problem_id=f"{TEST_PREFIX}smoke-sqliteinout",
+        problem_type="sqliteinout",
+        source_directory="smoke-sqliteinout",
+        title="Test SQLite input/output smoke test",
+    ),
+)
+
+
 def e2e_env() -> dict[str, str]:
     env = os.environ.copy()
-    env["CONTAINER_ENGINE"] = "docker"
+    env["CONTAINER_ENGINE"] = LIVE_CONFIG.container_engine
     env["XDG_CONFIG_HOME"] = str(XDG_CONFIG_HOME)
     return env
 
@@ -121,25 +232,17 @@ def session_key_hash(session_key: str, session_secret: str) -> str:
 
 
 def server_endpoint() -> str:
-    if SERVER_CONFIG_PATH.is_file():
-        config = json.loads(SERVER_CONFIG_PATH.read_text(encoding="utf-8"))
-        raw = config.get("taHostname") or config.get("hostname")
-        if not isinstance(raw, str) or raw.strip() == "":
-            raise RuntimeError(f"{SERVER_CONFIG_PATH} does not define hostname or taHostname")
-        host = raw.strip().rstrip("/")
-    else:
-        host = os.environ.get("CODEGRINDER_E2E_HOST", "https://dev.russross.com").rstrip("/")
-    if host.startswith("http://") or host.startswith("https://"):
-        return host
-    return f"https://{host}"
+    return LIVE_CONFIG.server_endpoint
 
 
-def stop_process(process: subprocess.Popen[str]) -> None:
-    if process.poll() is not None:
-        return
-    process.send_signal(signal.SIGTERM)
+def acquire_run_lock() -> TextIO:
+    lock_path = RUN_ROOT.parent / "codegrinder-e2e.lock"
+    lock = lock_path.open("w", encoding="utf-8")
     try:
-        process.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait(timeout=10)
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as error:
+        lock.close()
+        raise RuntimeError(
+            "another CodeGrinder end-to-end test is already running"
+        ) from error
+    return lock

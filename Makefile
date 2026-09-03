@@ -4,7 +4,7 @@ PROTO_FILE := $(PROTO_DIR)/codegrinder.proto
 DIST_DIR ?= $(ROOT_DIR)/www
 MACOSX_DEPLOYMENT_TARGET ?= 11.0
 
-.PHONY: all setup build server grind web web-check exam test clean \
+.PHONY: all setup build server grind web web-check exam test end2end clean \
 	grind-dist grind-linux-amd64 grind-linux-arm64 \
 	grind-macos-amd64 grind-macos-arm64
 
@@ -82,6 +82,9 @@ test:
 	cargo test --release --workspace
 	cargo clippy --release --workspace -- -D warnings
 	cargo fmt --all --check
+
+end2end:
+	python3 tests/e2e.py
 
 clean:
 	cargo clean

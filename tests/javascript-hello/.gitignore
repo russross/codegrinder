@@ -1,7 +1,0 @@
-node_modules/
-coverage/
-test_detail.xml
-package-lock.json
-.DS_Store
-Makefile
-package.json

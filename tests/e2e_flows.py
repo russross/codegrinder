@@ -1,23 +1,22 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import sqlite3
 import shutil
 from pathlib import Path
 
 from e2e_common import (
-    ROOT,
-    RUN_ROOT,
+    C_STEPS_ID,
+    COURSE_ID,
+    RISC_SINGLE_ID,
+    RISC_SLICES_ID,
+    SMOKE_PROBLEMS,
     USER_ID,
     WORKSPACE_DIR,
     require,
     run,
     run_expect_failure,
 )
-from e2e_setup import require_download_status
-
-
-DB_PATH = RUN_ROOT / "codegrinder.db"
+from e2e_setup import database, require_download_status
 
 
 def require_current_step(assignment_dir: Path, problem_id: str, step: int) -> None:
@@ -32,14 +31,14 @@ def require_current_step(assignment_dir: Path, problem_id: str, step: int) -> No
 
 
 def require_score(problem_set_id: str, expected: float) -> None:
-    with sqlite3.connect(DB_PATH) as db:
+    with database() as db:
         row = db.execute(
             """
             SELECT COALESCE(assignment_score, 0.0)
             FROM assignment_list_fields
             WHERE user_id = ? AND course_id = ? AND problem_set_id = ?
             """,
-            (USER_ID, "e2e-course", problem_set_id),
+            (USER_ID, COURSE_ID, problem_set_id),
         ).fetchone()
     require(row is not None, f"missing assignment score for {problem_set_id}")
     actual = float(row[0])
@@ -59,11 +58,11 @@ def recover_deleted_assignment(assignment_dir: Path, env: dict[str, str]) -> Non
 def run_riscv_single_flow(env: dict[str, str]) -> None:
     run(["grind", "list"], env=env)
     run(["grind", "get"], env=env)
-    assignment_dir = WORKSPACE_DIR / "fixture-riscv-single"
+    assignment_dir = WORKSPACE_DIR / RISC_SINGLE_ID
     require(assignment_dir.is_dir(), f"{assignment_dir} was not downloaded")
     run_expect_failure(["make"], cwd=assignment_dir, env=env)
     run(["grind", "grade"], cwd=assignment_dir, env=env, check=False, expect_code=0)
-    require_score("fixture-riscv-single", 0.0)
+    require_score(RISC_SINGLE_ID, 0.0)
 
     (assignment_dir / "fixture_single.s").unlink()
     run_expect_failure(["grind", "grade"], cwd=assignment_dir, env=env)
@@ -75,7 +74,7 @@ def run_riscv_single_flow(env: dict[str, str]) -> None:
 
     (assignment_dir / "fixture_single.s").write_text("broken\n", encoding="utf-8")
     run(["grind", "grade"], cwd=assignment_dir, env=env, check=False, expect_code=0)
-    require_score("fixture-riscv-single", 0.0)
+    require_score(RISC_SINGLE_ID, 0.0)
     (assignment_dir / "fixture_single.s").unlink()
     run(["grind", "sync"], cwd=assignment_dir, env=env)
     require(
@@ -99,11 +98,11 @@ def run_riscv_single_flow(env: dict[str, str]) -> None:
     run(["grind", "solve"], cwd=assignment_dir, env=env)
     run(["make"], cwd=assignment_dir, env=env)
     run(["grind", "grade"], cwd=assignment_dir, env=env)
-    require_score("fixture-riscv-single", 1.0)
+    require_score(RISC_SINGLE_ID, 1.0)
 
     solved_fixture = (assignment_dir / "fixture_single.s").read_text(encoding="utf-8")
     recover_deleted_assignment(assignment_dir, env)
-    require_current_step(assignment_dir, "fixture-riscv-single", 1)
+    require_current_step(assignment_dir, RISC_SINGLE_ID, 1)
     require(
         (assignment_dir / "fixture_single.s").read_text(encoding="utf-8")
         == solved_fixture,
@@ -112,7 +111,7 @@ def run_riscv_single_flow(env: dict[str, str]) -> None:
 
     from e2e_setup import update_assignment_lock
 
-    update_assignment_lock("fixture-riscv-single", "2020-01-01 00:00:00")
+    update_assignment_lock(RISC_SINGLE_ID, "2020-01-01 00:00:00")
     (assignment_dir / "fixture_single.s").write_text("broken\n", encoding="utf-8")
     locked_failure = run(
         ["grind", "grade"], cwd=assignment_dir, env=env, check=False, expect_code=0
@@ -122,7 +121,7 @@ def run_riscv_single_flow(env: dict[str, str]) -> None:
         in locked_failure.stdout,
         "locked grade did not report skipped LMS passback",
     )
-    require_score("fixture-riscv-single", 0.0)
+    require_score(RISC_SINGLE_ID, 0.0)
     run(["grind", "solve"], cwd=assignment_dir, env=env)
     locked_success = run(["grind", "grade"], cwd=assignment_dir, env=env)
     require(
@@ -130,62 +129,70 @@ def run_riscv_single_flow(env: dict[str, str]) -> None:
         in locked_success.stdout,
         "locked passing grade did not report skipped LMS passback",
     )
-    require_score("fixture-riscv-single", 1.0)
+    require_score(RISC_SINGLE_ID, 1.0)
 
 
-def run_javascript_hello_flow(env: dict[str, str]) -> None:
-    assignment_dir = WORKSPACE_DIR / "javascript-hello"
-    require(assignment_dir.is_dir(), f"{assignment_dir} was not downloaded")
-    require_current_step(assignment_dir, "javascript-hello", 1)
+def run_smoke_problem_flows(env: dict[str, str]) -> None:
+    run(["grind", "get"], env=env)
+    for smoke in SMOKE_PROBLEMS:
+        assignment_dir = WORKSPACE_DIR / smoke.problem_id
+        require(assignment_dir.is_dir(), f"{assignment_dir} was not downloaded")
+        require_current_step(assignment_dir, smoke.problem_id, 1)
 
-    run(["grind", "grade"], cwd=assignment_dir, env=env, check=False, expect_code=0)
-    require_score("javascript-hello", 0.0)
+        run(
+            ["grind", "grade"],
+            cwd=assignment_dir,
+            env=env,
+            check=False,
+            expect_code=0,
+        )
+        require_score(smoke.problem_id, 0.0)
 
-    run(["grind", "solve"], cwd=assignment_dir, env=env)
-    run(["grind", "grade"], cwd=assignment_dir, env=env)
-    require_score("javascript-hello", 1.0)
+        run(["grind", "solve"], cwd=assignment_dir, env=env)
+        run(["grind", "grade"], cwd=assignment_dir, env=env)
+        require_score(smoke.problem_id, 1.0)
 
 
 def run_followup_download_checks(env: dict[str, str]) -> None:
     run(["grind", "list"], env=env)
-    require_download_status("fixture-riscv-slices", 1)
+    require_download_status(RISC_SLICES_ID, 1)
     run(["grind", "get"], env=env)
     require(
-        (WORKSPACE_DIR / "fixture-riscv-single" / ".grind").is_file(),
+        (WORKSPACE_DIR / RISC_SINGLE_ID / ".grind").is_file(),
         "fixture-riscv-single was disturbed",
     )
     require(
-        (WORKSPACE_DIR / "fixture-c-steps" / ".grind").is_file(),
+        (WORKSPACE_DIR / C_STEPS_ID / ".grind").is_file(),
         "fixture-c-steps was not downloaded",
     )
     require(
-        (WORKSPACE_DIR / "fixture-riscv-slices-1" / ".grind").is_file(),
+        (WORKSPACE_DIR / f"{RISC_SLICES_ID}-1" / ".grind").is_file(),
         "fixture-riscv-slices-1 was not downloaded",
     )
     require(
-        not (WORKSPACE_DIR / "fixture-riscv-slices").exists(),
+        not (WORKSPACE_DIR / RISC_SLICES_ID).exists(),
         "future-locked fixture-riscv-slices downloaded early",
     )
     require(
-        not (WORKSPACE_DIR / "fixture-riscv-slices-2").exists(),
+        not (WORKSPACE_DIR / f"{RISC_SLICES_ID}-2").exists(),
         "fixture-riscv-slices-2 downloaded before prerequisite",
     )
     require(
-        not (WORKSPACE_DIR / "fixture-riscv-slices-3").exists(),
+        not (WORKSPACE_DIR / f"{RISC_SLICES_ID}-3").exists(),
         "fixture-riscv-slices-3 downloaded before prerequisite",
     )
-    (WORKSPACE_DIR / "fixture-c-steps" / "get-marker.txt").write_text(
+    (WORKSPACE_DIR / C_STEPS_ID / "get-marker.txt").write_text(
         "preserved\n", encoding="utf-8"
     )
     run(["grind", "get"], env=env)
     require(
-        (WORKSPACE_DIR / "fixture-c-steps" / "get-marker.txt").is_file(),
+        (WORKSPACE_DIR / C_STEPS_ID / "get-marker.txt").is_file(),
         "grind get rewrote an existing valid assignment directory",
     )
 
 
 def run_c_steps_flow(env: dict[str, str]) -> None:
-    assignment_dir = WORKSPACE_DIR / "fixture-c-steps"
+    assignment_dir = WORKSPACE_DIR / C_STEPS_ID
     for step, filename in [
         (1, "fixture_one.c"),
         (2, "fixture_two.c"),
@@ -193,7 +200,7 @@ def run_c_steps_flow(env: dict[str, str]) -> None:
         (4, "fixture_four.c"),
         (5, "fixture_five.c"),
     ]:
-        require_current_step(assignment_dir, "fixture-c-steps", step)
+        require_current_step(assignment_dir, C_STEPS_ID, step)
         if step == 1:
             run_expect_failure(
                 ["grind", "action", "grade"], cwd=assignment_dir, env=env
@@ -226,7 +233,7 @@ def run_c_steps_flow(env: dict[str, str]) -> None:
         if step == 1:
             run(["grind", "sync"], cwd=assignment_dir / "doc", env=env)
         run(["grind", "grade"], cwd=assignment_dir, env=env)
-        require_score("fixture-c-steps", step / 5.0)
+        require_score(C_STEPS_ID, step / 5.0)
         if step == 2:
             dotfile = assignment_dir / ".grind"
             original_dotfile = dotfile.read_text(encoding="utf-8")
@@ -236,11 +243,11 @@ def run_c_steps_flow(env: dict[str, str]) -> None:
             try:
                 run_expect_failure(["grind", "sync"], cwd=assignment_dir, env=env)
                 run_expect_failure(["grind", "grade"], cwd=assignment_dir, env=env)
-                require_score("fixture-c-steps", 2.0 / 5.0)
+                require_score(C_STEPS_ID, 2.0 / 5.0)
             finally:
                 dotfile.write_text(original_dotfile, encoding="utf-8")
             recover_deleted_assignment(assignment_dir, env)
-            require_current_step(assignment_dir, "fixture-c-steps", 3)
+            require_current_step(assignment_dir, C_STEPS_ID, 3)
             require(
                 (assignment_dir / "fixture_three.c").is_file(),
                 "grind get did not restore fixture-c-steps after directory deletion",
@@ -250,15 +257,15 @@ def run_c_steps_flow(env: dict[str, str]) -> None:
 
 
 def run_riscv_slices_flow(env: dict[str, str]) -> None:
-    slice1 = WORKSPACE_DIR / "fixture-riscv-slices-1"
-    slice2 = WORKSPACE_DIR / "fixture-riscv-slices-2"
-    slice3 = WORKSPACE_DIR / "fixture-riscv-slices-3"
+    slice1 = WORKSPACE_DIR / f"{RISC_SLICES_ID}-1"
+    slice2 = WORKSPACE_DIR / f"{RISC_SLICES_ID}-2"
+    slice3 = WORKSPACE_DIR / f"{RISC_SLICES_ID}-3"
 
-    require_current_step(slice1, "fixture-riscv-slices", 1)
+    require_current_step(slice1, RISC_SLICES_ID, 1)
     run(["grind", "solve"], cwd=slice1, env=env)
     run(["make"], cwd=slice1, env=env)
     run(["grind", "grade"], cwd=slice1, env=env)
-    require_current_step(slice1, "fixture-riscv-slices", 2)
+    require_current_step(slice1, RISC_SLICES_ID, 2)
     run(["grind", "get"], env=env)
     require(
         not slice2.exists(),
@@ -268,7 +275,7 @@ def run_riscv_slices_flow(env: dict[str, str]) -> None:
     run(["grind", "solve"], cwd=slice1, env=env)
     run(["make"], cwd=slice1, env=env)
     run(["grind", "grade"], cwd=slice1, env=env)
-    require_score("fixture-riscv-slices-1", 1.0)
+    require_score(f"{RISC_SLICES_ID}-1", 1.0)
     run(["grind", "get"], env=env)
     require(
         slice2.is_dir(),
@@ -279,7 +286,7 @@ def run_riscv_slices_flow(env: dict[str, str]) -> None:
         "fixture-riscv-slices-3 downloaded before slice 2 completed",
     )
 
-    require_current_step(slice2, "fixture-riscv-slices", 3)
+    require_current_step(slice2, RISC_SLICES_ID, 3)
     value_file = slice2 / "value.s"
     original = value_file.read_bytes()
     value_file.write_bytes(original + b"\n")
@@ -288,7 +295,7 @@ def run_riscv_slices_flow(env: dict[str, str]) -> None:
     run(["grind", "solve"], cwd=slice2, env=env)
     run(["make"], cwd=slice2, env=env)
     run(["grind", "grade"], cwd=slice2, env=env)
-    require_score("fixture-riscv-slices-2", 1.0)
+    require_score(f"{RISC_SLICES_ID}-2", 1.0)
     run(["grind", "get"], env=env)
     require(
         slice3.is_dir(),
@@ -296,7 +303,7 @@ def run_riscv_slices_flow(env: dict[str, str]) -> None:
     )
 
     recover_deleted_assignment(slice2, env)
-    require_current_step(slice2, "fixture-riscv-slices", 3)
+    require_current_step(slice2, RISC_SLICES_ID, 3)
     require(
         (slice2 / "value.s").is_file(),
         "grind get did not restore fixture-riscv-slices-2 after directory deletion",
@@ -305,8 +312,8 @@ def run_riscv_slices_flow(env: dict[str, str]) -> None:
         slice3.is_dir(), "fixture-riscv-slices-3 was disturbed while recovering slice 2"
     )
 
-    require_current_step(slice3, "fixture-riscv-slices", 4)
+    require_current_step(slice3, RISC_SLICES_ID, 4)
     run(["grind", "solve"], cwd=slice3, env=env)
     run(["make"], cwd=slice3, env=env)
     run(["grind", "grade"], cwd=slice3, env=env)
-    require_score("fixture-riscv-slices-3", 1.0)
+    require_score(f"{RISC_SLICES_ID}-3", 1.0)
