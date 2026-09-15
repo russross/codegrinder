@@ -27,7 +27,9 @@ cleanup() {
     exit "$exit_status"
 }
 trap cleanup 0
-trap 'exit 1' 1 2 15
+trap 'exit 129' 1
+trap 'exit 130' 2
+trap 'exit 143' 15
 
 fail() {
     printf 'update-grind: %s\n' "$*" >&2
@@ -39,12 +41,29 @@ succeed() {
     installation_completed=true
 }
 
-profile_configures_path() {
-    [ -r "$1" ] && awk '
-        /^[[:space:]]*#/ { next }
-        /(^|[^[:alnum:]_])PATH[[:space:]]*=/ && /\.local\/bin/ { found = 1 }
-        END { exit found ? 0 : 1 }
-    ' "$1"
+display_path() {
+    if [ -n "${HOME:-}" ]; then
+        case "$1" in
+            "$HOME"/*)
+                printf '~/%s\n' "${1#"$HOME"/}"
+                return 0
+                ;;
+        esac
+    fi
+    printf '%s\n' "$1"
+}
+
+path_line() {
+    printf 'export PATH="$HOME/.local/bin:$PATH" # added by CodeGrinder installer'
+}
+
+fish_path_line() {
+    printf 'contains -- "$HOME/.local/bin" $PATH; or set -gx PATH "$HOME/.local/bin" $PATH # added by CodeGrinder installer'
+}
+
+file_has_line() {
+    [ -f "$1" ] || return 1
+    grep -Fxq -- "$2" "$1" 2>/dev/null
 }
 
 installed_grind_is_in_path() {
@@ -57,68 +76,196 @@ installed_grind_is_in_path() {
     [ -e "$grind_command" ] && [ "$grind_command" -ef "$BIN_DIR/grind" ]
 }
 
-select_profile() {
-    shell_path=${SHELL:-}
-    if [ -z "$shell_path" ]; then
-        user_name=$(id -un)
-        if command -v getent >/dev/null 2>&1; then
-            shell_path=$(getent passwd "$user_name" 2>/dev/null \
-                | awk -F: 'NR == 1 { print $7 }')
-        fi
-        if [ -z "$shell_path" ] && [ -r /etc/passwd ]; then
-            shell_path=$(awk -F: -v user="$user_name" \
-                '$1 == user { print $7; exit }' /etc/passwd)
-        fi
-        if [ -z "$shell_path" ] && command -v dscl >/dev/null 2>&1; then
-            shell_path=$(dscl . -read "/Users/$user_name" UserShell 2>/dev/null \
-                | awk 'NR == 1 { print $2 }')
-        fi
+resolve_zdotdir() {
+    resolved_zdotdir=${ZDOTDIR:-}
+    if [ -n "$resolved_zdotdir" ]; then
+        return 0
     fi
+    resolved_zdotdir=
+    if [ -z "${HOME:-}" ] || [ ! -f "$HOME/.zshenv" ]; then
+        return 0
+    fi
+    while IFS= read -r line || [ -n "$line" ]; do
+        stripped=$(printf '%s' "$line" | sed 's/^[[:space:]]*//')
+        case "$stripped" in
+            export[[:space:]]*)
+                stripped=$(printf '%s' "$stripped" | sed 's/^export[[:space:]][[:space:]]*//')
+                ;;
+        esac
+        case "$stripped" in
+            ZDOTDIR=*) value=${stripped#ZDOTDIR=} ;;
+            *) continue ;;
+        esac
+        case "$value" in
+            '"'* )
+                value=${value#\"}
+                value=${value%%\"*}
+                ;;
+            "'"*)
+                value=${value#\'}
+                value=${value%%\'*}
+                ;;
+            *)
+                value=${value%%;*}
+                value=${value%%#*}
+                while :; do
+                    case "$value" in
+                        *[[:space:]]) value=${value%?} ;;
+                        *) break ;;
+                    esac
+                done
+                ;;
+        esac
+        case "$value" in
+            '~') value=$HOME ;;
+            '~/'*) value="$HOME/${value#\~/}" ;;
+            '$HOME') value=$HOME ;;
+            '$HOME'/*) value="$HOME/${value#\$HOME/}" ;;
+            '${HOME}') value=$HOME ;;
+            '${HOME}'/*) value="$HOME/${value#\$\{HOME\}/}" ;;
+        esac
+        case "$value" in
+            /*) resolved_zdotdir=$value ;;
+            *) resolved_zdotdir= ;;
+        esac
+    done <"$HOME/.zshenv"
+}
 
-    shell_name=${shell_path##*/}
-    profile=
-    case "$shell_name" in
-        bash)
-            if [ -f "$HOME/.bash_profile" ]; then
-                profile=$HOME/.bash_profile
-            elif [ -f "$HOME/.bash_login" ]; then
-                profile=$HOME/.bash_login
-            else
-                profile=$HOME/.profile
-            fi
-            ;;
-        ash|dash|ksh|sh) profile=$HOME/.profile ;;
-        zsh) profile=${ZDOTDIR:-$HOME}/.zprofile ;;
-        *) return 1 ;;
+record_path_file() {
+    if [ -n "$path_updated_files" ]; then
+        path_updated_files="$path_updated_files, $(display_path "$1")"
+    else
+        path_updated_files=$(display_path "$1")
+    fi
+}
+
+record_present_file() {
+    if [ -n "$path_present_files" ]; then
+        path_present_files="$path_present_files, $(display_path "$1")"
+    else
+        path_present_files=$(display_path "$1")
+    fi
+}
+
+append_path_line() {
+    case ":$path_touched_files:" in
+        *":$1:"*) return 0 ;;
     esac
+    path_touched_files="$path_touched_files:$1"
+    wanted_line=$(path_line)
+    if file_has_line "$1" "$wanted_line"; then
+        record_present_file "$1"
+        return 0
+    fi
+    profile_directory=${1%/*}
+    mkdir -p -- "$profile_directory" 2>/dev/null || return 0
+    if printf '\n%s\n' "$wanted_line" >>"$1" 2>/dev/null; then
+        record_path_file "$1"
+    fi
+}
+
+append_fish_path_line() {
+    fish_conf_dir=${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d
+    fish_file=$fish_conf_dir/grind.fish
+    case ":$path_touched_files:" in
+        *":$fish_file:"*) return 0 ;;
+    esac
+    path_touched_files="$path_touched_files:$fish_file"
+    wanted_line=$(fish_path_line)
+    if file_has_line "$fish_file" "$wanted_line"; then
+        record_present_file "$fish_file"
+        return 0
+    fi
+    mkdir -p -- "$fish_conf_dir" 2>/dev/null || return 0
+    if printf '%s\n' "$wanted_line" >>"$fish_file" 2>/dev/null; then
+        record_path_file "$fish_file"
+    fi
 }
 
 configure_grind_path() {
     path_activation=
+    path_updated_files=
+    path_present_files=
+    path_touched_files=
     if installed_grind_is_in_path; then
         return
     fi
 
-    if ! select_profile; then
-        path_activation="export PATH=\"$BIN_DIR:\$PATH\""
+    shell_name=${SHELL:-}
+    shell_name=${shell_name##*/}
+    case "$shell_name" in
+        fish) manual_line="set -gx PATH \"$BIN_DIR\" \$PATH" ;;
+        *) manual_line="export PATH=\"$BIN_DIR:\$PATH\"" ;;
+    esac
+
+    if [ -z "${HOME:-}" ]; then
+        printf '\n%s is not on your PATH and HOME is unset. Add it yourself:\n  %s\n' \
+            "$BIN_DIR" "$manual_line"
+        path_activation=$manual_line
         return
     fi
 
-    if ! profile_configures_path "$profile"; then
-        profile_directory=${profile%/*}
-        mkdir -p "$profile_directory" \
-            || fail "could not create $profile_directory"
-        {
-            printf '\n%s\n' '# CodeGrinder user binaries'
-            printf '%s\n' 'case ":$PATH:" in'
-            printf '%s\n' '    *:"$HOME/.local/bin":*) ;;'
-            printf '%s\n' '    *) PATH="$HOME/.local/bin:$PATH" ;;'
-            printf '%s\n' 'esac'
-            printf '%s\n' 'export PATH'
-        } >>"$profile" || fail "could not update $profile"
-    fi
+    resolve_zdotdir
+    zsh_dotdir=${resolved_zdotdir:-$HOME}
+    zsh_rc=$zsh_dotdir/.zshrc
+    zsh_profile=$zsh_dotdir/.zprofile
+    fish_source=${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/grind.fish
+    case "$shell_name" in
+        zsh) source_file=$zsh_rc ;;
+        bash) source_file=$HOME/.bashrc ;;
+        fish) source_file=$fish_source ;;
+        *) source_file=$HOME/.profile ;;
+    esac
 
-    path_activation=". \"$profile\""
+    if [ "$shell_name" = zsh ] || [ -f "$zsh_rc" ]; then
+        append_path_line "$zsh_rc"
+        if [ "$zsh_rc" != "$HOME/.zshrc" ] && [ -f "$HOME/.zshrc" ]; then
+            append_path_line "$HOME/.zshrc"
+        fi
+    fi
+    if [ "$shell_name" = zsh ] || [ -f "$zsh_profile" ] || [ -f "$HOME/.zprofile" ]; then
+        append_path_line "$zsh_profile"
+    fi
+    if [ "$shell_name" = bash ] || [ -f "$HOME/.bashrc" ] \
+        || [ -f "$HOME/.bash_profile" ] || [ -f "$HOME/.bash_login" ]; then
+        append_path_line "$HOME/.bashrc"
+        if [ -f "$HOME/.bash_profile" ]; then
+            append_path_line "$HOME/.bash_profile"
+        elif [ -f "$HOME/.bash_login" ]; then
+            append_path_line "$HOME/.bash_login"
+        else
+            append_path_line "$HOME/.profile"
+        fi
+    fi
+    if [ "$shell_name" = fish ] \
+        || [ -d "${XDG_CONFIG_HOME:-$HOME/.config}/fish" ]; then
+        append_fish_path_line
+    fi
+    case "$shell_name" in
+        zsh|bash|fish) ;;
+        *) append_path_line "$HOME/.profile" ;;
+    esac
+
+    printf '\n'
+    if [ -n "$path_updated_files" ]; then
+        printf 'Added %s to PATH in %s.\n' "$(display_path "$BIN_DIR")" "$path_updated_files"
+        printf 'Restart your shell, or start in this one by running:\n'
+        printf '  source %s\n' "$(display_path "$source_file")"
+        printf 'Then run grind\n'
+        path_activation="source $(display_path "$source_file")"
+    elif [ -n "$path_present_files" ]; then
+        printf 'A PATH entry for %s is already present in %s.\n' \
+            "$(display_path "$BIN_DIR")" "$path_present_files"
+        printf 'Restart your shell, or start in this one by running:\n'
+        printf '  source %s\n' "$(display_path "$source_file")"
+        printf 'Then run grind\n'
+        path_activation="source $(display_path "$source_file")"
+    else
+        printf '%s is not on your PATH and no profile could be updated. Add it yourself:\n' \
+            "$(display_path "$BIN_DIR")"
+        printf '  %s\n' "$manual_line"
+        path_activation=$manual_line
+    fi
 }
 
 configure_server() {
@@ -188,7 +335,9 @@ download() {
 
     if command -v curl >/dev/null 2>&1; then
         downloader_found=true
-        if curl -fsSL "$url" -o "$destination" 2>/dev/null; then
+        if curl --fail --silent --show-error --location --max-redirs 3 \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            "$url" -o "$destination"; then
             return
         fi
     fi
@@ -259,7 +408,7 @@ detect_platform() {
 
 validate_grind() {
     [ -s "$1" ] || fail 'downloaded grind binary is empty'
-    chmod 755 "$1" || fail 'could not make the downloaded grind binary executable'
+    chmod -- 0755 "$1" || fail 'could not make the downloaded grind binary executable'
     "$1" --help >/dev/null 2>&1 \
         || fail 'downloaded grind binary failed its startup check'
 }
@@ -271,7 +420,15 @@ validate_updater() {
     [ "$updater_first_line" = '#!/bin/sh' ] \
         || fail 'downloaded updater is not a POSIX shell script'
     sh -n "$1" 2>/dev/null || fail 'downloaded updater has invalid shell syntax'
-    chmod 755 "$1" || fail 'could not make the downloaded updater executable'
+    chmod -- 0755 "$1" || fail 'could not make the downloaded updater executable'
+}
+
+install_file() {
+    if [ -f "$2" ] && cmp -s -- "$1" "$2"; then
+        rm -f -- "$1"
+        return 0
+    fi
+    mv -f -- "$1" "$2" || fail "could not install $2"
 }
 
 install_grind() {
@@ -288,11 +445,9 @@ install_grind() {
     validate_updater "$updater_temp"
 
     remove_legacy_binary grind
-    mv -f "$updater_temp" "$BIN_DIR/update-grind" \
-        || fail "could not install $BIN_DIR/update-grind"
+    install_file "$updater_temp" "$BIN_DIR/update-grind"
     updater_temp=
-    mv -f "$grind_temp" "$BIN_DIR/grind" \
-        || fail "could not install $BIN_DIR/grind"
+    install_file "$grind_temp" "$BIN_DIR/grind"
     grind_temp=
 }
 
@@ -334,15 +489,14 @@ install_risclet() {
     download "https://github.com/russross/risclet/releases/download/$requested_version/$binary" \
         "$risclet_temp" "risclet $requested_version"
     [ -s "$risclet_temp" ] || fail 'downloaded risclet binary is empty'
-    chmod 755 "$risclet_temp" \
+    chmod -- 0755 "$risclet_temp" \
         || fail 'could not make the downloaded risclet binary executable'
     downloaded_version=$(risclet_version "$risclet_temp")
     [ "$downloaded_version" = "$requested_version" ] \
         || fail "downloaded risclet did not report version $requested_version"
 
     remove_legacy_binary risclet
-    mv -f "$risclet_temp" "$BIN_DIR/risclet" \
-        || fail "could not install $BIN_DIR/risclet"
+    install_file "$risclet_temp" "$BIN_DIR/risclet"
     risclet_temp=
 }
 
@@ -364,7 +518,9 @@ esac
 reject_sudo_installation
 [ -n "${HOME:-}" ] || fail 'HOME is not set'
 BIN_DIR=$HOME/.local/bin
-mkdir -p "$BIN_DIR" || fail "could not create $BIN_DIR"
+[ "$BIN_DIR" != / ] || fail "refusing to install into $BIN_DIR"
+umask 022
+mkdir -p -- "$BIN_DIR" || fail "could not create $BIN_DIR"
 
 case "$mode" in
     grind)
