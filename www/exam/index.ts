@@ -1219,7 +1219,7 @@ document.addEventListener("DOMContentLoaded", (): void => {
     Split(["#file-tree-pane", "#editor-pane", "#info-pane"], {
         sizes: [10, 45, 45],
         gutterSize: 8,
-        cursor: "grab",
+        cursor: "grabbing",
         onDrag: (): void => {
             if (fitAddon !== undefined) {
                 fitAddon.fit();

@@ -69,6 +69,10 @@ body {
     overflow: hidden;
 }
 
+.gutter-horizontal {
+    cursor: grab;
+}
+
 .pane {
     padding: 10px;
     border: 1px solid #eee;
