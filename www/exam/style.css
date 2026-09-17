@@ -19,6 +19,13 @@ body {
     min-height: 40px;
 }
 
+#menu-items {
+    display: flex;
+    flex: 1 1 auto;
+    align-items: center;
+    min-width: 0;
+}
+
 #menu-bar button,
 #menu-bar select {
     margin-right: 10px;
@@ -74,8 +81,22 @@ body {
 }
 
 /* File Tree Styling */
+#file-tree-pane {
+    padding: 10px 0;
+    min-width: 0;
+    border-inline: 0;
+}
+
+.file-tree,
 .file-tree ul {
+    margin: 0;
+    padding: 0;
     list-style-type: none;
+}
+
+.file-tree {
+    width: max-content;
+    min-width: 100%;
 }
 
 .file-tree li {
@@ -85,10 +106,12 @@ body {
 .file-tree .item-content-wrapper {
     display: flex;
     align-items: center;
-    padding: 2px 0 2px 10px; /* Base indentation for all items */
+    padding: 2px 8px 2px calc(8px + var(--tree-depth) * 16px);
+    white-space: nowrap;
 }
 
 .file-tree .icon {
+    flex-shrink: 0;
     margin-right: 5px;
     font-style: normal;
     font-size: 1.2em;
@@ -102,11 +125,6 @@ body {
 .file-tree li.file > .item-content-wrapper .icon::after {
     content: '📄';
     color: #007bff;
-}
-
-/* Indentation */
-.file-tree ul ul .item-content-wrapper {
-    padding-left: 20px; /* Additional indent for nested items */
 }
 
 /* Interactive Styling */
@@ -130,40 +148,59 @@ body {
     flex-grow: 1;
     display: flex;
     flex-direction: column;
-    /* Removed overflow: hidden; to allow child elements to scroll */
 }
 
 #info-tabs {
     display: flex;
+    gap: 3px;
+    padding: 6px 6px 0;
     border-bottom: 1px solid #ccc;
+    background-color: #f0f0f0;
     flex-shrink: 0; /* Prevent tabs from shrinking */
 }
 
 #info-content {
     flex-grow: 1;
+    min-height: 0;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
 }
 
 .tab-button {
-    padding: 10px 15px;
+    margin-bottom: -1px;
+    padding: 8px 14px;
     cursor: pointer;
-    border: none;
+    border: 1px solid transparent;
+    border-bottom-color: #ccc;
+    border-radius: 4px 4px 0 0;
     background-color: #e0e0e0;
-    border-bottom: 1px solid #ccc;
+    color: #555;
+    font: inherit;
+}
+
+.tab-button:hover:not(.active) {
+    background-color: #d7e7f7;
+    color: #333;
 }
 
 .tab-button.active {
     background-color: #fff;
-    border: 1px solid #ccc;
-    border-bottom: 1px solid #fff;
-    position: relative;
-    top: 1px;
+    border-color: #bbb #bbb #fff;
+    color: #222;
+    font-weight: 600;
+    box-shadow: inset 0 2px #5795ce;
+}
+
+.tab-button:focus-visible {
+    outline: 2px solid #5795ce;
+    outline-offset: 1px;
 }
 
 .tab-content {
     display: none;
     flex-grow: 1;
+    min-height: 0;
     overflow: auto;
 }
 
@@ -180,6 +217,23 @@ body {
 #terminal {
     flex-grow: 1; /* Allow terminal to grow and fill space */
     overflow: hidden; /* Let xterm handle scrolling */
+}
+
+#vm-tab-content {
+    min-height: 0;
+    overflow: hidden;
+}
+
+#vm-boot-button {
+    flex-shrink: 0;
+    margin-left: auto;
+    margin-right: 0;
+}
+
+#vm-terminal {
+    min-height: 0;
+    flex-grow: 1;
+    overflow: hidden;
 }
 
 pre {

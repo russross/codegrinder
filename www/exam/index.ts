@@ -39,6 +39,10 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { FitAddon } from "@xterm/addon-fit";
 
+import { ProblemWorkspace } from "./workspace";
+import type { WorkspaceStudentChange } from "./workspace";
+import { VmController, vmImageForProblemType } from "./vm";
+
 interface ProblemData {
     problemId: string;
     note: string;
@@ -47,13 +51,10 @@ interface ProblemData {
     lastStepNumber: bigint;
     problemType: string;
     actions: string[];
-    systemFiles: Map<string, Uint8Array>;
-    studentFiles: Map<string, Uint8Array>;
-    mergedFiles: Map<string, Uint8Array>;
-    mergedFileList: string[];
-    editablePaths: Set<string>;
+    workspace: ProblemWorkspace;
     instructionsHtml: string;
     isComplete: boolean;
+    savedWorkspaceRevision: number;
 }
 
 interface FileTreeNode {
@@ -69,6 +70,8 @@ declare global {
 }
 
 const DOC_PATH = "doc/doc.md";
+const SESSION_STORAGE_KEY = "codegrinderExamSessionKey";
+const AUTOSAVE_DELAY_MS = 30_000;
 const markdownParser = new commonmark.Parser();
 const markdownRenderer = new commonmark.HtmlRenderer();
 const textEncoder = new TextEncoder();
@@ -82,8 +85,10 @@ let assignment: AssignmentKey | null = null;
 let userId = "";
 let sessionKey = "";
 let currentlyOpenFilePath: string | null = null;
-let hasUserMadeChanges = false;
 let isProgrammaticEditorUpdate = false;
+let vmController: VmController;
+let autosaveTimer: number | undefined;
+let saveInFlight: Promise<void> | undefined;
 
 const language = new Compartment();
 const editableCompartment = new Compartment();
@@ -140,6 +145,15 @@ function createMainClient(): CodeGrinderServiceClient {
     );
 }
 
+function createPageExitClient(): CodeGrinderServiceClient {
+    return new CodeGrinderServiceClient(
+        new GrpcWebFetchTransport({
+            baseUrl: window.location.origin,
+            fetchInit: { credentials: "same-origin", keepalive: true },
+        }),
+    );
+}
+
 function authOptions(): RpcOptions {
     if (sessionKey === "") {
         throw new Error("Missing session key");
@@ -156,12 +170,20 @@ function createDaycareClient(hostname: string): CodeGrinderServiceClient {
     );
 }
 
-function getRequiredElement<T extends HTMLElement>(id: string): T {
+function getRequiredElement(id: string): HTMLElement {
     const element = document.getElementById(id);
     if (!(element instanceof HTMLElement)) {
         throw new Error(`Missing required element: ${id}`);
     }
-    return element as T;
+    return element;
+}
+
+function getRequiredButton(id: string): HTMLButtonElement {
+    const element = document.getElementById(id);
+    if (!(element instanceof HTMLButtonElement)) {
+        throw new Error(`Missing required button: ${id}`);
+    }
+    return element;
 }
 
 function parseAssignmentKeyFromUrl(): AssignmentKey {
@@ -184,6 +206,69 @@ function parseAssignmentKeyFromUrl(): AssignmentKey {
 function getLoginTokenFromUrl(): string {
     const raw = new URLSearchParams(window.location.search).get("token");
     return raw === null ? "" : raw;
+}
+
+function readStoredSessionKey(): string {
+    try {
+        return window.sessionStorage.getItem(SESSION_STORAGE_KEY) ?? "";
+    } catch (error: unknown) {
+        console.warn("CodeGrinder: exam session storage is unavailable", error);
+        return "";
+    }
+}
+
+function storeSessionKey(value: string): void {
+    try {
+        if (value === "") {
+            window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
+            return;
+        }
+        window.sessionStorage.setItem(SESSION_STORAGE_KEY, value);
+    } catch (error: unknown) {
+        console.warn("CodeGrinder: could not update exam session storage", error);
+    }
+}
+
+function removeLoginTokenFromUrl(): void {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("token");
+    window.history.replaceState(null, "", url);
+}
+
+async function authenticate(client: CodeGrinderServiceClient): Promise<string> {
+    const loginToken = getLoginTokenFromUrl();
+    if (loginToken !== "") {
+        const helloCall = await client.hello(HelloRequest.create({ token: loginToken }), {});
+        const response = helloCall.response;
+        if (response.sessionKey === "") {
+            throw new Error("Session key not returned from hello");
+        }
+        if (response.userId === "") {
+            throw new Error("User not returned from hello");
+        }
+        sessionKey = response.sessionKey;
+        storeSessionKey(sessionKey);
+        removeLoginTokenFromUrl();
+        return response.userId;
+    }
+
+    sessionKey = readStoredSessionKey();
+    if (sessionKey === "") {
+        throw new Error("This exam session has ended. Relaunch the assignment from Canvas.");
+    }
+
+    try {
+        const helloCall = await client.hello(HelloRequest.create({ token: "" }), authOptions());
+        if (helloCall.response.userId === "") {
+            throw new Error("User not returned from hello");
+        }
+        return helloCall.response.userId;
+    } catch (error: unknown) {
+        console.warn("CodeGrinder: could not restore the exam session", error);
+        sessionKey = "";
+        storeSessionKey("");
+        throw new Error("This exam session has expired. Relaunch the assignment from Canvas.");
+    }
 }
 
 function normalizeRelativePath(raw: string): string {
@@ -210,20 +295,6 @@ function assignmentStepFileMap(entries: Record<string, Uint8Array>): Map<string,
     return result;
 }
 
-function mergedWorkspaceFiles(
-    systemFiles: Map<string, Uint8Array>,
-    studentFiles: Map<string, Uint8Array>,
-): Map<string, Uint8Array> {
-    const merged = new Map<string, Uint8Array>();
-    for (const [path, content] of systemFiles) {
-        merged.set(path, content);
-    }
-    for (const [path, content] of studentFiles) {
-        merged.set(path, content);
-    }
-    return merged;
-}
-
 function bytesToBase64(content: Uint8Array): string {
     const chunks: string[] = [];
     for (let offset = 0; offset < content.length; offset += 32768) {
@@ -245,8 +316,8 @@ function imageMimeType(path: string): string | null {
     }
 }
 
-function renderInstructionsMarkdown(files: Map<string, Uint8Array>): string {
-    const file = files.get(DOC_PATH);
+function renderInstructionsMarkdown(workspace: ProblemWorkspace): string {
+    const file = workspace.readVisibleFile(DOC_PATH);
     if (file === undefined) {
         return "";
     }
@@ -260,7 +331,7 @@ function renderInstructionsMarkdown(files: Map<string, Uint8Array>): string {
             const url = new URL(event.node.destination, documentUrl);
             if (url.origin === documentUrl.origin) {
                 const path = decodeURIComponent(url.pathname.replace(/^\//, ""));
-                const content = files.get(path);
+                const content = workspace.readVisibleFile(path);
                 const mimeType = imageMimeType(path);
                 if (content === undefined) {
                     throw new Error(`Instruction image not found: ${path}`);
@@ -289,9 +360,8 @@ function buildProblemData(summary: AssignmentProblemProgress, workspace: {
 }): ProblemData {
     const systemFiles = assignmentStepFileMap(workspace.systemOwnedFiles);
     const studentFiles = assignmentStepFileMap(workspace.studentOwnedFiles);
-    const mergedFiles = mergedWorkspaceFiles(systemFiles, studentFiles);
-    const instructionsHtml = renderInstructionsMarkdown(mergedFiles);
-    return {
+    const problemWorkspace = new ProblemWorkspace(systemFiles, studentFiles);
+    const problem: ProblemData = {
         problemId: summary.problemId,
         note: summary.problemNote,
         currentStepNumber: BigInt(workspace.stepNumber),
@@ -299,14 +369,21 @@ function buildProblemData(summary: AssignmentProblemProgress, workspace: {
         lastStepNumber: BigInt(workspace.lastStepNumber),
         problemType: workspace.problemType,
         actions: [...workspace.actions].sort((left, right) => left.localeCompare(right)),
-        systemFiles,
-        studentFiles,
-        mergedFiles,
-        mergedFileList: [...mergedFiles.keys()],
-        editablePaths: new Set(studentFiles.keys()),
-        instructionsHtml,
+        workspace: problemWorkspace,
+        instructionsHtml: renderInstructionsMarkdown(problemWorkspace),
         isComplete: summary.completed,
+        savedWorkspaceRevision: problemWorkspace.revision(),
     };
+    problemWorkspace.subscribe((change: WorkspaceStudentChange): void => {
+        if (currentProblem !== problem) {
+            return;
+        }
+        updateSaveButton();
+        if (currentlyOpenFilePath === change.path) {
+            reloadOpenFileFromState();
+        }
+    });
+    return problem;
 }
 
 function actionLabel(action: string): string {
@@ -329,10 +406,12 @@ function getCurrentProblemOrThrow(): ProblemData {
     return currentProblem;
 }
 
-function updateProblemFiles(problem: ProblemData): void {
-    problem.mergedFiles = mergedWorkspaceFiles(problem.systemFiles, problem.studentFiles);
-    problem.mergedFileList = [...problem.mergedFiles.keys()];
-    problem.instructionsHtml = renderInstructionsMarkdown(problem.mergedFiles);
+function updateSaveButton(): void {
+    const saveButton = document.getElementById("save-button");
+    if (saveButton instanceof HTMLButtonElement) {
+        saveButton.disabled = currentProblem === null
+            || currentProblem.workspace.revision() === currentProblem.savedWorkspaceRevision;
+    }
 }
 
 function applyWorkspaceRefresh(problem: ProblemData, workspace: {
@@ -344,22 +423,16 @@ function applyWorkspaceRefresh(problem: ProblemData, workspace: {
     firstStepNumber: string;
     lastStepNumber: string;
 }): void {
-    const previousStudentFiles = new Map(problem.studentFiles);
-    problem.systemFiles = assignmentStepFileMap(workspace.systemOwnedFiles);
-    problem.studentFiles = assignmentStepFileMap(workspace.studentOwnedFiles);
-    for (const path of problem.studentFiles.keys()) {
-        const local = previousStudentFiles.get(path);
-        if (local !== undefined) {
-            problem.studentFiles.set(path, local);
-        }
-    }
+    problem.workspace.refreshFromServer(
+        assignmentStepFileMap(workspace.systemOwnedFiles),
+        assignmentStepFileMap(workspace.studentOwnedFiles),
+    );
     problem.currentStepNumber = BigInt(workspace.stepNumber);
     problem.firstStepNumber = BigInt(workspace.firstStepNumber);
     problem.lastStepNumber = BigInt(workspace.lastStepNumber);
     problem.problemType = workspace.problemType;
     problem.actions = [...workspace.actions].sort((left, right) => left.localeCompare(right));
-    problem.editablePaths = new Set(problem.studentFiles.keys());
-    updateProblemFiles(problem);
+    problem.instructionsHtml = renderInstructionsMarkdown(problem.workspace);
 }
 
 function replaceProblemState(problem: ProblemData, workspace: {
@@ -371,15 +444,17 @@ function replaceProblemState(problem: ProblemData, workspace: {
     firstStepNumber: string;
     lastStepNumber: string;
 }): void {
-    problem.systemFiles = assignmentStepFileMap(workspace.systemOwnedFiles);
-    problem.studentFiles = assignmentStepFileMap(workspace.studentOwnedFiles);
+    problem.workspace.replaceFromServer(
+        assignmentStepFileMap(workspace.systemOwnedFiles),
+        assignmentStepFileMap(workspace.studentOwnedFiles),
+    );
     problem.currentStepNumber = BigInt(workspace.stepNumber);
     problem.firstStepNumber = BigInt(workspace.firstStepNumber);
     problem.lastStepNumber = BigInt(workspace.lastStepNumber);
     problem.problemType = workspace.problemType;
     problem.actions = [...workspace.actions].sort((left, right) => left.localeCompare(right));
-    problem.editablePaths = new Set(problem.studentFiles.keys());
-    updateProblemFiles(problem);
+    problem.instructionsHtml = renderInstructionsMarkdown(problem.workspace);
+    problem.savedWorkspaceRevision = problem.workspace.revision();
 }
 
 function resetEditorContents(content: string, editable: boolean, filename: string): void {
@@ -395,15 +470,25 @@ function resetEditorContents(content: string, editable: boolean, filename: strin
     isProgrammaticEditorUpdate = false;
 }
 
+function editorTextFromFile(content: Uint8Array): string {
+    const text = textDecoder.decode(content);
+    return text.endsWith("\n") ? text.slice(0, -1) : text;
+}
+
+function fileContentFromEditor(): Uint8Array {
+    const text = editor.state.doc.toString();
+    return textEncoder.encode(text === "" ? "" : `${text}\n`);
+}
+
 function reloadOpenFileFromState(): void {
     if (currentlyOpenFilePath === null || currentProblem === null) {
         return;
     }
-    const content = currentProblem.mergedFiles.get(currentlyOpenFilePath);
+    const content = currentProblem.workspace.readVisibleFile(currentlyOpenFilePath);
     if (content === undefined) {
         return;
     }
-    const editable = currentProblem.editablePaths.has(currentlyOpenFilePath);
+    const editable = currentProblem.workspace.isStudentOwned(currentlyOpenFilePath);
     if (isBinaryFile(content)) {
         resetEditorContents(
             "This file appears to be a binary file and cannot be displayed in the editor.",
@@ -412,7 +497,7 @@ function reloadOpenFileFromState(): void {
         );
         return;
     }
-    resetEditorContents(textDecoder.decode(content), editable, currentlyOpenFilePath);
+    resetEditorContents(editorTextFromFile(content), editable, currentlyOpenFilePath);
 }
 
 function buildCommit(problem: ProblemData, action: string, note: string): Commit {
@@ -427,7 +512,7 @@ function buildCommit(problem: ProblemData, action: string, note: string): Commit
         step: problem.currentStepNumber.toString(),
         action,
         note,
-        files: Object.fromEntries(problem.studentFiles),
+        files: problem.workspace.studentSubmission(),
         createdAt: Timestamp.fromDate(now),
         updatedAt: Timestamp.fromDate(now),
     });
@@ -474,16 +559,7 @@ async function loadProblem(
 
 async function loadAssignment(): Promise<void> {
     const client = createMainClient();
-    const loginToken = getLoginTokenFromUrl();
-    const helloCall = await client.hello(HelloRequest.create({ token: loginToken }), {});
-    sessionKey = helloCall.response.sessionKey;
-    if (sessionKey === "") {
-        throw new Error("Session key not returned from hello");
-    }
-    if (helloCall.response.userId === "") {
-        throw new Error("User not returned from hello");
-    }
-    userId = helloCall.response.userId;
+    userId = await authenticate(client);
 
     assignment = parseAssignmentKeyFromUrl();
     const assignmentCall = await client.getAssignment(GetAssignmentRequest.create({ assignment }), authOptions());
@@ -509,6 +585,7 @@ async function loadAssignment(): Promise<void> {
     renderFileTree();
     renderInstructionsPane();
     updateInstructionsTabVisibility();
+    resetVmForCurrentProblem();
     if (currentProblem.instructionsHtml !== "") {
         selectInstructionsTab();
     } else {
@@ -585,15 +662,18 @@ async function handleDaycare(bundle: SignedRuntimeBundle, action: string): Promi
         const event = response.response.event;
         if (event.event === "files") {
             const problem = getCurrentProblemOrThrow();
-            for (const [path, content] of Object.entries(event.files)) {
-                if (!problem.editablePaths.has(path)) {
+            const studentOwnedPaths = problem.workspace.studentOwnedPaths();
+            for (const [rawPath, content] of Object.entries(event.files)) {
+                const path = normalizeRelativePath(rawPath);
+                if (!studentOwnedPaths.has(path)) {
                     continue;
                 }
-                problem.studentFiles.set(path, content);
-                problem.mergedFiles.set(path, content);
+                const syncError = problem.workspace.writeServerStudentFile(path, content);
+                if (syncError !== undefined) {
+                    vmController.reportFilesystemSyncError(syncError);
+                }
                 term.writeln(`downloading file ${path}`);
             }
-            problem.mergedFileList = [...problem.mergedFiles.keys()];
             if (currentProblem === problem) {
                 renderFileTree();
                 reloadOpenFileFromState();
@@ -612,6 +692,7 @@ async function advanceProblem(problem: ProblemData): Promise<void> {
     if (problem.currentStepNumber >= problem.lastStepNumber) {
         problem.isComplete = true;
         term.writeln("you have completed all steps for this problem");
+        resetVmForCurrentProblem();
         return;
     }
     const nextStepNumber = problem.currentStepNumber + 1n;
@@ -622,6 +703,7 @@ async function advanceProblem(problem: ProblemData): Promise<void> {
     }
     const workspace = await fetchWorkspace(client, currentAssignment, problem.problemId, nextStepNumber);
     replaceProblemState(problem, workspace);
+    resetVmForCurrentProblem();
     term.writeln(`moving to step ${problem.currentStepNumber.toString()}`);
 }
 
@@ -645,10 +727,11 @@ async function doAction(action: string): Promise<void> {
     reloadOpenFileFromState();
 
     if (action === "") {
+        const submittedRevision = problem.workspace.revision();
         const commit = buildCommit(problem, "", "exam interface: save");
         const saved = await client.saveWorkspaceCommit(SaveWorkspaceCommitRequest.create({ commit }), authOptions());
-        hasUserMadeChanges = false;
-        getRequiredElement<HTMLButtonElement>("save-button").disabled = true;
+        problem.savedWorkspaceRevision = submittedRevision;
+        updateSaveButton();
         writeSaveStatus(saved.response.saveStatus, "save");
         return;
     }
@@ -659,6 +742,7 @@ async function doAction(action: string): Promise<void> {
         selectTerminalTab();
     }
 
+    const submittedRevision = problem.workspace.revision();
     const ungradedCommit = buildCommit(problem, action, `exam interface: ${action}`);
     const ungraded = await client.saveUngradedCommit(
         SaveUngradedCommitRequest.create({
@@ -673,8 +757,8 @@ async function doAction(action: string): Promise<void> {
     if (ungraded.response.bundle === undefined) {
         throw new Error("SaveUngradedCommit did not return a signed runtime bundle");
     }
-    getRequiredElement<HTMLButtonElement>("save-button").disabled = true;
-    hasUserMadeChanges = false;
+    problem.savedWorkspaceRevision = submittedRevision;
+    updateSaveButton();
     writeSaveStatus(ungraded.response.saveStatus, action === "grade" ? "grade" : "action");
 
     const finalBundle = await handleDaycare(ungraded.response.bundle, action);
@@ -714,19 +798,89 @@ async function doAction(action: string): Promise<void> {
     writeSaveStatus(graded.response.saveStatus, "grade");
 }
 
-async function saveIfNeeded(): Promise<void> {
-    if (!hasUserMadeChanges) {
+function cancelAutosaveTimer(): void {
+    if (autosaveTimer === undefined) {
         return;
     }
-    await doAction("");
+    window.clearTimeout(autosaveTimer);
+    autosaveTimer = undefined;
+}
+
+async function saveIfNeeded(): Promise<void> {
+    cancelAutosaveTimer();
+    if (saveInFlight !== undefined) {
+        await saveInFlight;
+    }
+    cancelAutosaveTimer();
+    if (currentProblem === null
+        || currentProblem.workspace.revision() === currentProblem.savedWorkspaceRevision) {
+        return;
+    }
+    const save = doAction("");
+    saveInFlight = save;
+    try {
+        await save;
+    } finally {
+        if (saveInFlight === save) {
+            saveInFlight = undefined;
+        }
+    }
+}
+
+function requestAutomaticSave(): void {
+    void saveIfNeeded().catch((error: unknown): void => {
+        console.error("Automatic save failed", error);
+        selectTerminalTab();
+        term.writeln(`Automatic save failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+}
+
+function scheduleAutosave(): void {
+    if (autosaveTimer !== undefined) {
+        return;
+    }
+    autosaveTimer = window.setTimeout((): void => {
+        autosaveTimer = undefined;
+        requestAutomaticSave();
+    }, AUTOSAVE_DELAY_MS);
+}
+
+function saveOnPageExit(): void {
+    cancelAutosaveTimer();
+    const problem = currentProblem;
+    if (problem === null
+        || assignment === null
+        || sessionKey === ""
+        || problem.workspace.revision() === problem.savedWorkspaceRevision) {
+        return;
+    }
+
+    const submittedRevision = problem.workspace.revision();
+    const commit = buildCommit(problem, "", "exam interface: save");
+    const call = createPageExitClient().saveWorkspaceCommit(
+        SaveWorkspaceCommitRequest.create({ commit }),
+        authOptions(),
+    );
+    void call.then(({ response }): void => {
+        problem.savedWorkspaceRevision = submittedRevision;
+        if (currentProblem === problem) {
+            updateSaveButton();
+        }
+        if (response.saveStatus !== CommitSaveStatus.SAVED) {
+            console.warn("Page-exit save was not persisted", CommitSaveStatus[response.saveStatus]);
+        }
+    }).catch((error: unknown): void => {
+        console.warn("Page-exit save failed", error);
+    });
 }
 
 function loadFirstEditableFileIntoEditor(): void {
     if (currentProblem === null) {
         return;
     }
-    for (const filePath of currentProblem.mergedFileList) {
-        if (!currentProblem.editablePaths.has(filePath)) {
+    const studentOwnedPaths = currentProblem.workspace.studentOwnedPaths();
+    for (const filePath of currentProblem.workspace.visiblePaths()) {
+        if (!studentOwnedPaths.has(filePath)) {
             continue;
         }
         const fileTreeElement = document.querySelector<HTMLLIElement>(`.file-tree li[data-path="${CSS.escape(filePath)}"]`);
@@ -738,16 +892,16 @@ function loadFirstEditableFileIntoEditor(): void {
 }
 
 function renderMenuBar(): void {
-    const menuBar = document.getElementById("menu-bar");
-    if (menuBar === null || currentProblem === null) {
+    const menuItems = document.getElementById("menu-items");
+    if (menuItems === null || currentProblem === null) {
         return;
     }
-    menuBar.innerHTML = "";
+    menuItems.innerHTML = "";
 
     const problemLabel = document.createElement("span");
     problemLabel.textContent = window.problemSet.length > 1 ? "Problems:" : "Problem:";
     problemLabel.classList.add("menu-label");
-    menuBar.appendChild(problemLabel);
+    menuItems.appendChild(problemLabel);
 
     for (const problem of window.problemSet) {
         const problemButton = document.createElement("button");
@@ -758,9 +912,11 @@ function renderMenuBar(): void {
             problemButton.classList.add("active-problem");
         } else {
             problemButton.addEventListener("click", async (): Promise<void> => {
+                vmController.resetToReady();
                 await saveIfNeeded();
                 currentProblem = problem;
                 currentlyOpenFilePath = null;
+                resetVmForCurrentProblem();
                 if (term !== undefined) {
                     term.clear();
                 }
@@ -777,22 +933,22 @@ function renderMenuBar(): void {
                 loadFirstEditableFileIntoEditor();
             });
         }
-        menuBar.appendChild(problemButton);
+        menuItems.appendChild(problemButton);
     }
 
     const actionsLabel = document.createElement("span");
     actionsLabel.textContent = "Actions:";
     actionsLabel.classList.add("menu-label", "actions-label");
-    menuBar.appendChild(actionsLabel);
+    menuItems.appendChild(actionsLabel);
 
     const saveButton = document.createElement("button");
     saveButton.id = "save-button";
     saveButton.textContent = "Save";
-    saveButton.disabled = !hasUserMadeChanges;
+    saveButton.disabled = currentProblem.workspace.revision() === currentProblem.savedWorkspaceRevision;
     saveButton.addEventListener("click", async (): Promise<void> => {
         await saveIfNeeded();
     });
-    menuBar.appendChild(saveButton);
+    menuItems.appendChild(saveButton);
 
     for (const action of currentProblem.actions) {
         const actionButton = document.createElement("button");
@@ -803,7 +959,7 @@ function renderMenuBar(): void {
             await saveIfNeeded();
             await doAction(action);
         });
-        menuBar.appendChild(actionButton);
+        menuItems.appendChild(actionButton);
     }
 }
 
@@ -835,7 +991,7 @@ function buildFileTree(filePaths: readonly string[]): Record<string, FileTreeNod
     return tree;
 }
 
-function nodeContainsEditable(node: FileTreeNode, editablePaths: Set<string>): boolean {
+function nodeContainsEditable(node: FileTreeNode, editablePaths: ReadonlySet<string>): boolean {
     if (node.isFile) {
         return editablePaths.has(node.fullPath);
     }
@@ -845,9 +1001,10 @@ function nodeContainsEditable(node: FileTreeNode, editablePaths: Set<string>): b
 function renderTree(
     node: Record<string, FileTreeNode>,
     parentElement: HTMLElement,
-    mergedFiles: Map<string, Uint8Array>,
-    editablePaths: Set<string>,
+    workspace: ProblemWorkspace,
+    editablePaths: ReadonlySet<string>,
     selectedPath: string | null,
+    depth: number = 0,
 ): void {
     const sortedKeys = Object.keys(node).sort((left, right) => {
         const leftNode = node[left];
@@ -873,6 +1030,7 @@ function renderTree(
 
         const wrapper = document.createElement("div");
         wrapper.classList.add("item-content-wrapper");
+        wrapper.style.setProperty("--tree-depth", String(depth));
 
         const icon = document.createElement("span");
         icon.classList.add("icon");
@@ -891,7 +1049,7 @@ function renderTree(
             }
             li.addEventListener("click", async (event: MouseEvent): Promise<void> => {
                 event.stopPropagation();
-                if (!(getRequiredElement<HTMLButtonElement>("save-button").disabled)) {
+                if (!getRequiredButton("save-button").disabled) {
                     await saveIfNeeded();
                 }
                 const previouslySelected = document.querySelector(".file-tree li.selected");
@@ -900,7 +1058,7 @@ function renderTree(
                 }
                 li.classList.add("selected");
                 currentlyOpenFilePath = item.fullPath;
-                const fileContent = mergedFiles.get(item.fullPath);
+                const fileContent = workspace.readVisibleFile(item.fullPath);
                 if (fileContent === undefined) {
                     return;
                 }
@@ -913,7 +1071,7 @@ function renderTree(
                     );
                     return;
                 }
-                resetEditorContents(textDecoder.decode(fileContent), editable, item.fullPath);
+                resetEditorContents(editorTextFromFile(fileContent), editable, item.fullPath);
             });
         }
 
@@ -922,7 +1080,7 @@ function renderTree(
         if (Object.keys(item.children).length > 0) {
             const childList = document.createElement("ul");
             li.appendChild(childList);
-            renderTree(item.children, childList, mergedFiles, editablePaths, selectedPath);
+            renderTree(item.children, childList, workspace, editablePaths, selectedPath, depth + 1);
         }
     }
 }
@@ -933,10 +1091,12 @@ function renderFileTree(): void {
         return;
     }
     fileTreePane.innerHTML = "";
-    const tree = buildFileTree(currentProblem.mergedFileList);
+    const visiblePaths = currentProblem.workspace.visiblePaths();
+    const editablePaths = currentProblem.workspace.studentOwnedPaths();
+    const tree = buildFileTree(visiblePaths);
     const root = document.createElement("ul");
     root.classList.add("file-tree");
-    renderTree(tree, root, currentProblem.mergedFiles, currentProblem.editablePaths, currentlyOpenFilePath);
+    renderTree(tree, root, currentProblem.workspace, editablePaths, currentlyOpenFilePath);
     fileTreePane.appendChild(root);
 }
 
@@ -962,6 +1122,29 @@ function updateInstructionsTabVisibility(): void {
     }
 }
 
+function resetVmForCurrentProblem(): void {
+    const vmTabButton = getRequiredButton("vm-tab-button");
+    const problem = currentProblem;
+    const image = problem === null ? undefined : vmImageForProblemType(problem.problemType);
+    vmTabButton.hidden = image === undefined;
+    if (problem === null || image === undefined) {
+        vmController.setTarget(undefined);
+        if (vmTabButton.classList.contains("active")) {
+            if (problem !== null && problem.instructionsHtml !== "") {
+                selectInstructionsTab();
+            } else {
+                selectTerminalTab();
+            }
+        }
+        return;
+    }
+    vmController.setTarget({
+        filesystem: problem.workspace.filesystem,
+        image,
+        rebuildFilesystem: (): void => problem.workspace.rebuildFilesystem(),
+    });
+}
+
 function selectInstructionsTab(): void {
     const button = document.getElementById("instructions-tab-button");
     if (button instanceof HTMLButtonElement && button.style.display !== "none") {
@@ -972,6 +1155,13 @@ function selectInstructionsTab(): void {
 function selectTerminalTab(): void {
     const button = document.getElementById("terminal-tab-button");
     if (button instanceof HTMLButtonElement) {
+        button.click();
+    }
+}
+
+function selectVmTab(): void {
+    const button = document.getElementById("vm-tab-button");
+    if (button instanceof HTMLButtonElement && !button.hidden) {
         button.click();
     }
 }
@@ -994,6 +1184,9 @@ function initializeTabs(): void {
             const activeContent = document.getElementById(contentId);
             if (activeContent instanceof HTMLElement) {
                 activeContent.classList.add("active");
+            }
+            if (button.id === "vm-tab-button") {
+                vmController.fit();
             }
         });
     }
@@ -1022,19 +1215,29 @@ function initializeTerminal(): void {
 }
 
 document.addEventListener("DOMContentLoaded", (): void => {
+    window.addEventListener("pagehide", saveOnPageExit);
     Split(["#file-tree-pane", "#editor-pane", "#info-pane"], {
         sizes: [10, 45, 45],
         gutterSize: 8,
-        cursor: "col-resize",
+        cursor: "grab",
         onDrag: (): void => {
             if (fitAddon !== undefined) {
                 fitAddon.fit();
+            }
+            if (vmController !== undefined) {
+                vmController.fit();
             }
         },
     });
 
     initializeTabs();
     initializeTerminal();
+    const vmBootButton = getRequiredButton("vm-boot-button");
+    vmBootButton.addEventListener("click", selectVmTab);
+    vmController = new VmController(
+        getRequiredElement("vm-terminal"),
+        vmBootButton,
+    );
 
     const state = EditorState.create({
         extensions: [
@@ -1042,6 +1245,9 @@ document.addEventListener("DOMContentLoaded", (): void => {
             keymap.of([{ key: "Tab", run: softTab }, ...defaultKeymap]),
             language.of([]),
             editableCompartment.of(EditorView.editable.of(true)),
+            EditorView.domEventHandlers({
+                blur: (): void => requestAutomaticSave(),
+            }),
             EditorView.updateListener.of((update: ViewUpdate): void => {
                 if (!update.docChanged || isProgrammaticEditorUpdate || currentProblem === null || currentlyOpenFilePath === null) {
                     return;
@@ -1049,16 +1255,16 @@ document.addEventListener("DOMContentLoaded", (): void => {
                 if (!update.transactions.some((transaction) => transaction.isUserEvent)) {
                     return;
                 }
-                const newContent = textEncoder.encode(editor.state.doc.toString());
-                currentProblem.mergedFiles.set(currentlyOpenFilePath, newContent);
-                if (currentProblem.editablePaths.has(currentlyOpenFilePath)) {
-                    currentProblem.studentFiles.set(currentlyOpenFilePath, newContent);
+                const newContent = fileContentFromEditor();
+                if (!currentProblem.workspace.isStudentOwned(currentlyOpenFilePath)) {
+                    return;
                 }
-                hasUserMadeChanges = true;
-                const saveButton = document.getElementById("save-button");
-                if (saveButton instanceof HTMLButtonElement) {
-                    saveButton.disabled = false;
+                const syncError = currentProblem.workspace.writeStudentFile(currentlyOpenFilePath, newContent);
+                if (syncError !== undefined) {
+                    vmController.reportFilesystemSyncError(syncError);
                 }
+                updateSaveButton();
+                scheduleAutosave();
             }),
         ],
     });
@@ -1070,9 +1276,12 @@ document.addEventListener("DOMContentLoaded", (): void => {
 
     loadAssignment().catch((error: unknown) => {
         console.error("Error loading exam client:", error);
-        const menuBar = document.getElementById("menu-bar");
-        if (menuBar instanceof HTMLElement) {
-            menuBar.innerHTML = "<p style=\"color: red;\">Error loading data. Please try again later.</p>";
+        const menuItems = document.getElementById("menu-items");
+        if (menuItems instanceof HTMLElement) {
+            const message = document.createElement("p");
+            message.style.color = "red";
+            message.textContent = error instanceof Error ? error.message : "Error loading exam data";
+            menuItems.replaceChildren(message);
         }
     });
 });
