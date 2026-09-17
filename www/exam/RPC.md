@@ -142,6 +142,10 @@ the VM tab based on its problem type, and leave its VM ready to Boot.
 VM boot and reboot
 ------------------
 
+Selecting the VM tab boots a ready VM. Selecting the tab while the VM is
+loading, booting, or running leaves the active VM intact. Selecting it after a
+runtime failure performs a clean reboot.
+
 Boot creates a same-origin hidden iframe, configures the Riscbox globals, and
 loads `vm/runtime/riscbox-wasm.js`. The guest terminal is connected through its
 virtio console. The runtime's synchronous 9p endpoint delegates to the active

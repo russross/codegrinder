@@ -1187,6 +1187,7 @@ function initializeTabs(): void {
             }
             if (button.id === "vm-tab-button") {
                 vmController.fit();
+                vmController.bootIfInactive();
             }
         });
     }

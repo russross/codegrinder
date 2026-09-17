@@ -163,6 +163,16 @@ export class VmController {
         this.fitAddon.fit();
     }
 
+    bootIfInactive(): void {
+        if (this.state === VmState.Ready) {
+            this.boot();
+            return;
+        }
+        if (this.state === VmState.Failed) {
+            this.reboot();
+        }
+    }
+
     reportFilesystemSyncError(error: Error): void {
         this.terminal.writeln(`\r\nVM workspace is out of sync; reboot to restore it (${error.message})`);
     }

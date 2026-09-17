@@ -160,9 +160,11 @@ Here is the complete layout of the UI:
                 *   This tab is present only when an image is configured
                     for the active problem type. The current configuration
                     provides one image for the `riscv` problem type.
-                *   Boot VM appears at the right edge of the main action bar
-                    and starts the VM on demand. Once booted, the control
-                    becomes Reboot VM.
+                *   Selecting the VM tab boots the VM when it is not already
+                    active. Selecting the tab again does not reboot an active
+                    VM.
+                *   Boot VM appears at the right edge of the main action bar.
+                    Once booted, the control becomes Reboot VM.
                 *   Reboot destroys the current VM and its root-disk delta,
                     reconstructs the shared 9p tree from the system-owned
                     and student-owned file sets, and boots a clean image.
