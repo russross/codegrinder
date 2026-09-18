@@ -39,8 +39,9 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { FitAddon } from "@xterm/addon-fit";
 
-import { ProblemWorkspace } from "./workspace";
+import { ProblemWorkspace, WorkspaceChangeSource } from "./workspace";
 import type { WorkspaceStudentChange } from "./workspace";
+import { SaveState } from "./saving";
 import { VmController, vmImageForProblemType } from "./vm";
 
 interface ProblemData {
@@ -54,8 +55,12 @@ interface ProblemData {
     workspace: ProblemWorkspace;
     instructionsHtml: string;
     isComplete: boolean;
-    savedWorkspaceRevision: number;
+    saving: SaveState;
 }
+
+type DaycareCompletion =
+    | { kind: "actionComplete" }
+    | { kind: "graded"; bundle: SignedRuntimeBundle };
 
 interface FileTreeNode {
     isFile: boolean;
@@ -71,7 +76,6 @@ declare global {
 
 const DOC_PATH = "doc/doc.md";
 const SESSION_STORAGE_KEY = "codegrinderExamSessionKey";
-const AUTOSAVE_DELAY_MS = 30_000;
 const markdownParser = new commonmark.Parser();
 const markdownRenderer = new commonmark.HtmlRenderer();
 const textEncoder = new TextEncoder();
@@ -87,8 +91,8 @@ let sessionKey = "";
 let currentlyOpenFilePath: string | null = null;
 let isProgrammaticEditorUpdate = false;
 let vmController: VmController;
-let autosaveTimer: number | undefined;
-let saveInFlight: Promise<void> | undefined;
+let saveQueue: Promise<void> = Promise.resolve();
+let actionInProgress = false;
 
 const language = new Compartment();
 const editableCompartment = new Compartment();
@@ -96,6 +100,9 @@ const editableCompartment = new Compartment();
 window.problemSet = [];
 
 function softTab(view: EditorView): boolean {
+    if (view.state.readOnly) {
+        return false;
+    }
     const tabSize = 4;
     const transaction = view.state.changeByRange((range) => {
         const line = view.state.doc.lineAt(range.from);
@@ -141,15 +148,6 @@ function createMainClient(): CodeGrinderServiceClient {
         new GrpcWebFetchTransport({
             baseUrl: window.location.origin,
             fetchInit: { credentials: "same-origin" },
-        }),
-    );
-}
-
-function createPageExitClient(): CodeGrinderServiceClient {
-    return new CodeGrinderServiceClient(
-        new GrpcWebFetchTransport({
-            baseUrl: window.location.origin,
-            fetchInit: { credentials: "same-origin", keepalive: true },
         }),
     );
 }
@@ -372,14 +370,15 @@ function buildProblemData(summary: AssignmentProblemProgress, workspace: {
         workspace: problemWorkspace,
         instructionsHtml: renderInstructionsMarkdown(problemWorkspace),
         isComplete: summary.completed,
-        savedWorkspaceRevision: problemWorkspace.revision(),
+        saving: new SaveState(problemWorkspace.revision(), (): void => requestAutomaticSave(problem)),
     };
     problemWorkspace.subscribe((change: WorkspaceStudentChange): void => {
+        problem.saving.changed();
         if (currentProblem !== problem) {
             return;
         }
         updateSaveButton();
-        if (currentlyOpenFilePath === change.path) {
+        if (change.source !== WorkspaceChangeSource.Editor && currentlyOpenFilePath === change.path) {
             reloadOpenFileFromState();
         }
     });
@@ -399,18 +398,11 @@ function isBinaryFile(content: Uint8Array): boolean {
     return false;
 }
 
-function getCurrentProblemOrThrow(): ProblemData {
-    if (currentProblem === null) {
-        throw new Error("No current problem");
-    }
-    return currentProblem;
-}
-
 function updateSaveButton(): void {
     const saveButton = document.getElementById("save-button");
     if (saveButton instanceof HTMLButtonElement) {
-        saveButton.disabled = currentProblem === null
-            || currentProblem.workspace.revision() === currentProblem.savedWorkspaceRevision;
+        saveButton.disabled = actionInProgress || currentProblem === null
+            || !currentProblem.saving.isDirty(currentProblem.workspace.revision());
     }
 }
 
@@ -454,17 +446,23 @@ function replaceProblemState(problem: ProblemData, workspace: {
     problem.problemType = workspace.problemType;
     problem.actions = [...workspace.actions].sort((left, right) => left.localeCompare(right));
     problem.instructionsHtml = renderInstructionsMarkdown(problem.workspace);
-    problem.savedWorkspaceRevision = problem.workspace.revision();
+    problem.saving.stop();
+    problem.saving = new SaveState(problem.workspace.revision(), (): void => requestAutomaticSave(problem));
 }
 
 function resetEditorContents(content: string, editable: boolean, filename: string): void {
     const effects = [];
-    effects.push(editableCompartment.reconfigure(EditorView.editable.of(editable)));
+    effects.push(editableCompartment.reconfigure([
+        EditorView.editable.of(editable && !actionInProgress),
+        EditorState.readOnly.of(!editable || actionInProgress),
+    ]));
     const lang = getLanguageExtension(filename);
     effects.push(language.reconfigure(lang ?? []));
     isProgrammaticEditorUpdate = true;
     editor.dispatch({
-        changes: { from: 0, to: editor.state.doc.length, insert: content },
+        changes: editor.state.doc.toString() === content
+            ? undefined
+            : { from: 0, to: editor.state.doc.length, insert: content },
         effects,
     });
     isProgrammaticEditorUpdate = false;
@@ -594,21 +592,13 @@ async function loadAssignment(): Promise<void> {
     loadFirstEditableFileIntoEditor();
 }
 
-function writeSaveStatus(status: CommitSaveStatus, context: "save" | "grade" | "action"): void {
+function writeSaveStatus(status: CommitSaveStatus): void {
     if (status === CommitSaveStatus.SAVED) {
         return;
     }
     selectTerminalTab();
     if (status === CommitSaveStatus.NOT_SAVED_LOCKED) {
-        if (context === "save") {
-            term.writeln("work was not saved because the assignment is locked");
-            return;
-        }
         term.writeln("results will not be saved because the assignment is locked");
-        return;
-    }
-    if (context === "save") {
-        term.writeln("work was not saved because you do not own this assignment");
         return;
     }
     term.writeln("results will not be saved because you do not own this assignment");
@@ -637,7 +627,7 @@ function writeEvent(event: EventMessage): void {
     }
 }
 
-async function handleDaycare(bundle: SignedRuntimeBundle, action: string): Promise<SignedRuntimeBundle> {
+async function handleDaycare(problem: ProblemData, bundle: SignedRuntimeBundle, action: string): Promise<DaycareCompletion> {
     selectTerminalTab();
     fitAddon.fit();
 
@@ -651,7 +641,10 @@ async function handleDaycare(bundle: SignedRuntimeBundle, action: string): Promi
             throw new Error(response.response.error);
         }
         if (response.response.oneofKind === "bundle") {
-            return response.response.bundle;
+            if (action !== "grade") {
+                throw new Error("Non-grade action returned an unexpected signed runtime bundle");
+            }
+            return { kind: "graded", bundle: response.response.bundle };
         }
         if (response.response.oneofKind !== "event") {
             continue;
@@ -661,7 +654,6 @@ async function handleDaycare(bundle: SignedRuntimeBundle, action: string): Promi
         }
         const event = response.response.event;
         if (event.event === "files") {
-            const problem = getCurrentProblemOrThrow();
             const studentOwnedPaths = problem.workspace.studentOwnedPaths();
             for (const [rawPath, content] of Object.entries(event.files)) {
                 const path = normalizeRelativePath(rawPath);
@@ -683,6 +675,9 @@ async function handleDaycare(bundle: SignedRuntimeBundle, action: string): Promi
         writeEvent(event);
     }
 
+    if (action !== "grade") {
+        return { kind: "actionComplete" };
+    }
     throw new Error("Daycare stream ended without returning a bundle");
 }
 
@@ -707,32 +702,53 @@ async function advanceProblem(problem: ProblemData): Promise<void> {
     term.writeln(`moving to step ${problem.currentStepNumber.toString()}`);
 }
 
-async function doAction(action: string): Promise<void> {
-    const problem = getCurrentProblemOrThrow();
+async function refreshProblem(problem: ProblemData): Promise<boolean> {
     const currentAssignment = assignment;
     if (currentAssignment === null) {
         throw new Error("Assignment not loaded");
     }
+    const saving = problem.saving;
     const client = createMainClient();
-
-    if (action !== "") {
-        term.clear();
-    }
-
     const refreshedWorkspace = await fetchWorkspace(client, currentAssignment, problem.problemId, problem.currentStepNumber);
+    if (problem.saving !== saving) {
+        return false;
+    }
     applyWorkspaceRefresh(problem, refreshedWorkspace);
-    renderFileTree();
-    renderInstructionsPane();
-    updateInstructionsTabVisibility();
-    reloadOpenFileFromState();
+    if (currentProblem === problem) {
+        renderFileTree();
+        renderInstructionsPane();
+        updateInstructionsTabVisibility();
+        reloadOpenFileFromState();
+    }
+    return true;
+}
 
-    if (action === "") {
-        const submittedRevision = problem.workspace.revision();
-        const commit = buildCommit(problem, "", "exam interface: save");
-        const saved = await client.saveWorkspaceCommit(SaveWorkspaceCommitRequest.create({ commit }), authOptions());
-        problem.savedWorkspaceRevision = submittedRevision;
-        updateSaveButton();
-        writeSaveStatus(saved.response.saveStatus, "save");
+async function saveProblem(problem: ProblemData): Promise<void> {
+    const saving = problem.saving;
+    if (!await refreshProblem(problem)) {
+        return;
+    }
+    const submittedRevision = problem.workspace.revision();
+    const commit = buildCommit(problem, "", "exam interface: save");
+    saving.submitted();
+    const saved = await createMainClient().saveWorkspaceCommit(SaveWorkspaceCommitRequest.create({ commit }), authOptions());
+    if (problem.saving !== saving) {
+        return;
+    }
+    if (saved.response.saveStatus !== CommitSaveStatus.SAVED) {
+        throw new Error(saved.response.saveStatus === CommitSaveStatus.NOT_SAVED_LOCKED
+            ? "Work was not saved because the assignment is locked"
+            : "Work was not saved because you do not own this assignment");
+    }
+    saving.acknowledge(submittedRevision, problem.workspace.revision());
+    updateSaveButton();
+}
+
+async function doAction(problem: ProblemData, action: string): Promise<void> {
+    const saving = problem.saving;
+    const client = createMainClient();
+    term.clear();
+    if (!await refreshProblem(problem)) {
         return;
     }
 
@@ -744,6 +760,7 @@ async function doAction(action: string): Promise<void> {
 
     const submittedRevision = problem.workspace.revision();
     const ungradedCommit = buildCommit(problem, action, `exam interface: ${action}`);
+    saving.submitted();
     const ungraded = await client.saveUngradedCommit(
         SaveUngradedCommitRequest.create({
             commit: GradingCommit.create({
@@ -757,21 +774,28 @@ async function doAction(action: string): Promise<void> {
     if (ungraded.response.bundle === undefined) {
         throw new Error("SaveUngradedCommit did not return a signed runtime bundle");
     }
-    problem.savedWorkspaceRevision = submittedRevision;
+    if (ungraded.response.saveStatus === CommitSaveStatus.SAVED) {
+        saving.acknowledge(submittedRevision, problem.workspace.revision());
+    } else {
+        saving.retry();
+    }
     updateSaveButton();
-    writeSaveStatus(ungraded.response.saveStatus, action === "grade" ? "grade" : "action");
+    writeSaveStatus(ungraded.response.saveStatus);
 
-    const finalBundle = await handleDaycare(ungraded.response.bundle, action);
-    const runtime = RuntimeBundle.fromBinary(finalBundle.bundle);
-
-    if (action !== "grade") {
+    const completion = await handleDaycare(problem, ungraded.response.bundle, action);
+    if (completion.kind === "actionComplete") {
         return;
     }
+    const finalBundle = completion.bundle;
+    const runtime = RuntimeBundle.fromBinary(finalBundle.bundle);
 
     const graded = await client.saveGradedCommit(
         SaveGradedCommitRequest.create({ bundle: finalBundle }),
         authOptions(),
     );
+    if (graded.response.saveStatus === CommitSaveStatus.SAVED) {
+        saving.acknowledge(submittedRevision, problem.workspace.revision());
+    }
     const gradedCommit = runtime.commit;
     if (gradedCommit === undefined) {
         throw new Error("Daycare returned a runtime bundle without a commit");
@@ -785,7 +809,6 @@ async function doAction(action: string): Promise<void> {
             renderFileTree();
             renderInstructionsPane();
             updateInstructionsTabVisibility();
-            loadFirstEditableFileIntoEditor();
         } else {
             term.writeln(`step ${problem.currentStepNumber.toString()} passed`);
         }
@@ -795,83 +818,80 @@ async function doAction(action: string): Promise<void> {
             writeEvent(event);
         }
     }
-    writeSaveStatus(graded.response.saveStatus, "grade");
+    writeSaveStatus(graded.response.saveStatus);
 }
 
-function cancelAutosaveTimer(): void {
-    if (autosaveTimer === undefined) {
-        return;
+function setActionInProgress(inProgress: boolean): void {
+    actionInProgress = inProgress;
+    if (inProgress) {
+        vmController.resetToReady();
     }
-    window.clearTimeout(autosaveTimer);
-    autosaveTimer = undefined;
+    renderMenuBar();
+    reloadOpenFileFromState();
+    getRequiredButton("vm-tab-button").disabled = inProgress;
+    getRequiredButton("vm-boot-button").disabled = inProgress
+        || currentProblem === null
+        || vmImageForProblemType(currentProblem.problemType) === undefined;
 }
 
-async function saveIfNeeded(): Promise<void> {
-    cancelAutosaveTimer();
-    if (saveInFlight !== undefined) {
-        await saveInFlight;
+function requestSave(problem: ProblemData | null = currentProblem, action: string = ""): Promise<boolean> {
+    if (problem === null) {
+        return Promise.resolve(false);
     }
-    cancelAutosaveTimer();
-    if (currentProblem === null
-        || currentProblem.workspace.revision() === currentProblem.savedWorkspaceRevision) {
-        return;
-    }
-    const save = doAction("");
-    saveInFlight = save;
-    try {
-        await save;
-    } finally {
-        if (saveInFlight === save) {
-            saveInFlight = undefined;
+    if (action !== "") {
+        if (actionInProgress) {
+            return Promise.resolve(false);
         }
+        setActionInProgress(true);
     }
-}
-
-function requestAutomaticSave(): void {
-    void saveIfNeeded().catch((error: unknown): void => {
-        console.error("Automatic save failed", error);
-        selectTerminalTab();
-        term.writeln(`Automatic save failed: ${error instanceof Error ? error.message : String(error)}`);
+    const saving = problem.saving;
+    saving.cancelTimer();
+    const operation = saveQueue.then(async (): Promise<boolean> => {
+        const step = problem.currentStepNumber;
+        try {
+            if (problem.saving !== saving) {
+                return false;
+            }
+            if (action === "" && !saving.isDirty(problem.workspace.revision())) {
+                return true;
+            }
+            if (action === "") {
+                await saveProblem(problem);
+            } else {
+                await doAction(problem, action);
+            }
+            return true;
+        } catch (error: unknown) {
+            if (problem.saving === saving && saving.isDirty(problem.workspace.revision())) {
+                saving.retry();
+            }
+            console.error("Save or action failed", error);
+            selectTerminalTab();
+            term.writeln(`${action === "" ? "Save" : actionLabel(action)} failed: ${error instanceof Error ? error.message : String(error)}`);
+            return false;
+        } finally {
+            if (action !== "") {
+                if (problem.currentStepNumber !== step && currentProblem === problem) {
+                    currentlyOpenFilePath = null;
+                    resetEditorContents("", false, "");
+                }
+                setActionInProgress(false);
+                if (problem.currentStepNumber !== step && currentProblem === problem) {
+                    loadFirstEditableFileIntoEditor();
+                }
+            }
+        }
     });
-}
-
-function scheduleAutosave(): void {
-    if (autosaveTimer !== undefined) {
-        return;
-    }
-    autosaveTimer = window.setTimeout((): void => {
-        autosaveTimer = undefined;
-        requestAutomaticSave();
-    }, AUTOSAVE_DELAY_MS);
-}
-
-function saveOnPageExit(): void {
-    cancelAutosaveTimer();
-    const problem = currentProblem;
-    if (problem === null
-        || assignment === null
-        || sessionKey === ""
-        || problem.workspace.revision() === problem.savedWorkspaceRevision) {
-        return;
-    }
-
-    const submittedRevision = problem.workspace.revision();
-    const commit = buildCommit(problem, "", "exam interface: save");
-    const call = createPageExitClient().saveWorkspaceCommit(
-        SaveWorkspaceCommitRequest.create({ commit }),
-        authOptions(),
-    );
-    void call.then(({ response }): void => {
-        problem.savedWorkspaceRevision = submittedRevision;
-        if (currentProblem === problem) {
-            updateSaveButton();
-        }
-        if (response.saveStatus !== CommitSaveStatus.SAVED) {
-            console.warn("Page-exit save was not persisted", CommitSaveStatus[response.saveStatus]);
-        }
-    }).catch((error: unknown): void => {
-        console.warn("Page-exit save failed", error);
+    const save = operation.catch((error: unknown): boolean => {
+        console.error("Unexpected save queue failure", error);
+        return false;
     });
+    saveQueue = save.then((): void => {});
+    return save;
+}
+
+function requestAutomaticSave(problem: ProblemData | null = currentProblem): void {
+    void requestSave(problem);
 }
 
 function loadFirstEditableFileIntoEditor(): void {
@@ -896,6 +916,7 @@ function renderMenuBar(): void {
     if (menuItems === null || currentProblem === null) {
         return;
     }
+    const displayedProblem = currentProblem;
     menuItems.innerHTML = "";
 
     const problemLabel = document.createElement("span");
@@ -911,9 +932,17 @@ function renderMenuBar(): void {
             problemButton.disabled = true;
             problemButton.classList.add("active-problem");
         } else {
+            problemButton.disabled = actionInProgress;
             problemButton.addEventListener("click", async (): Promise<void> => {
+                if (actionInProgress) {
+                    return;
+                }
                 vmController.resetToReady();
-                await saveIfNeeded();
+                if (!await requestSave(displayedProblem)
+                    || actionInProgress
+                    || currentProblem !== displayedProblem) {
+                    return;
+                }
                 currentProblem = problem;
                 currentlyOpenFilePath = null;
                 resetVmForCurrentProblem();
@@ -944,9 +973,9 @@ function renderMenuBar(): void {
     const saveButton = document.createElement("button");
     saveButton.id = "save-button";
     saveButton.textContent = "Save";
-    saveButton.disabled = currentProblem.workspace.revision() === currentProblem.savedWorkspaceRevision;
-    saveButton.addEventListener("click", async (): Promise<void> => {
-        await saveIfNeeded();
+    saveButton.disabled = actionInProgress || !currentProblem.saving.isDirty(currentProblem.workspace.revision());
+    saveButton.addEventListener("click", (): void => {
+        requestAutomaticSave(displayedProblem);
     });
     menuItems.appendChild(saveButton);
 
@@ -954,10 +983,12 @@ function renderMenuBar(): void {
         const actionButton = document.createElement("button");
         actionButton.id = `action-${action}-button`;
         actionButton.textContent = actionLabel(action);
-        actionButton.disabled = currentProblem.isComplete && action === "grade";
-        actionButton.addEventListener("click", async (): Promise<void> => {
-            await saveIfNeeded();
-            await doAction(action);
+        actionButton.disabled = actionInProgress;
+        actionButton.addEventListener("click", (): void => {
+            if (actionInProgress) {
+                return;
+            }
+            void requestSave(displayedProblem, action);
         });
         menuItems.appendChild(actionButton);
     }
@@ -1049,14 +1080,20 @@ function renderTree(
             }
             li.addEventListener("click", async (event: MouseEvent): Promise<void> => {
                 event.stopPropagation();
-                if (!getRequiredButton("save-button").disabled) {
-                    await saveIfNeeded();
+                if (actionInProgress) {
+                    return;
+                }
+                if (!await requestSave()
+                    || actionInProgress
+                    || currentProblem?.workspace !== workspace) {
+                    return;
                 }
                 const previouslySelected = document.querySelector(".file-tree li.selected");
                 if (previouslySelected instanceof HTMLElement) {
                     previouslySelected.classList.remove("selected");
                 }
-                li.classList.add("selected");
+                const selected = document.querySelector<HTMLLIElement>(`.file-tree li[data-path="${CSS.escape(item.fullPath)}"]`);
+                selected?.classList.add("selected");
                 currentlyOpenFilePath = item.fullPath;
                 const fileContent = workspace.readVisibleFile(item.fullPath);
                 if (fileContent === undefined) {
@@ -1172,6 +1209,9 @@ function initializeTabs(): void {
 
     for (const button of tabButtons) {
         button.addEventListener("click", (): void => {
+            if (actionInProgress && button.id === "vm-tab-button") {
+                return;
+            }
             for (const candidate of tabButtons) {
                 candidate.classList.remove("active");
             }
@@ -1216,7 +1256,6 @@ function initializeTerminal(): void {
 }
 
 document.addEventListener("DOMContentLoaded", (): void => {
-    window.addEventListener("pagehide", saveOnPageExit);
     Split(["#file-tree-pane", "#editor-pane", "#info-pane"], {
         sizes: [10, 45, 45],
         gutterSize: 8,
@@ -1250,10 +1289,8 @@ document.addEventListener("DOMContentLoaded", (): void => {
                 blur: (): void => requestAutomaticSave(),
             }),
             EditorView.updateListener.of((update: ViewUpdate): void => {
-                if (!update.docChanged || isProgrammaticEditorUpdate || currentProblem === null || currentlyOpenFilePath === null) {
-                    return;
-                }
-                if (!update.transactions.some((transaction) => transaction.isUserEvent)) {
+                if (!update.docChanged || isProgrammaticEditorUpdate || actionInProgress
+                    || currentProblem === null || currentlyOpenFilePath === null) {
                     return;
                 }
                 const newContent = fileContentFromEditor();
@@ -1264,8 +1301,6 @@ document.addEventListener("DOMContentLoaded", (): void => {
                 if (syncError !== undefined) {
                     vmController.reportFilesystemSyncError(syncError);
                 }
-                updateSaveButton();
-                scheduleAutosave();
             }),
         ],
     });

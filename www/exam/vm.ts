@@ -60,6 +60,7 @@ declare global {
 }
 
 const inputEncoder = new TextEncoder();
+const SHOW_CURSOR = "\x1b[?25h";
 const vmImagePathsByProblemType: ReadonlyMap<string, VmImagePaths> = new Map([
     ["riscv", {
         configPath: "vm/image/risclet.cfg",
@@ -148,7 +149,7 @@ export class VmController {
     setTarget(target: VmTarget | undefined): void {
         this.stop();
         this.target = target;
-        this.terminal.reset();
+        this.resetTerminal();
         this.bootButton.hidden = target === undefined;
         if (target === undefined) {
             this.bootButton.disabled = true;
@@ -180,7 +181,7 @@ export class VmController {
     resetToReady(): void {
         this.stop();
         this.target?.rebuildFilesystem();
-        this.terminal.reset();
+        this.resetTerminal();
         this.updateControls();
     }
 
@@ -190,7 +191,7 @@ export class VmController {
             return;
         }
         this.stop();
-        this.terminal.reset();
+        this.resetTerminal();
         this.state = VmState.Loading;
         this.updateControls();
 
@@ -228,6 +229,11 @@ export class VmController {
         this.frame?.remove();
         this.frame = undefined;
         this.state = VmState.Ready;
+    }
+
+    private resetTerminal(): void {
+        this.terminal.reset();
+        this.terminal.write(SHOW_CURSOR);
     }
 
     private initializeFrame(frame: HTMLIFrameElement, target: VmTarget): void {

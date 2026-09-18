@@ -7,7 +7,7 @@
   "scripts": {
     "proto:generate": "./proto-gen.sh",
     "build": "npm run proto:generate && webpack",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test saving.test.mjs"
   },
   "keywords": [],
   "author": "",

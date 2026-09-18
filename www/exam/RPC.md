@@ -75,13 +75,26 @@ unsaved when the request completes.
 Save
 ----
 
-Save runs when the user clicks Save, leaves the editor, switches files or
-problems, or starts an action. The first editor edit after a save also starts a
-30-second timer that is not extended by later edits. Starting any save cancels
-that timer. Concurrent ordinary save triggers share the in-flight save and
-then save again only if a newer workspace revision remains.
+Save runs when the user clicks Save, leaves the editor, or switches files or
+problems. These requests, timed saves, and grading/actions enter one serialized
+queue. Each request captures its problem and step's save state. A request for a
+replaced step is ignored; a redundant workspace save becomes a no-op when it
+reaches the front of the queue.
 
-1.  If the active problem's current revision is already saved, do nothing.
+Each problem has its own save state and timer. The first editor, VM, or returned
+file change not covered by a submitted snapshot starts a 30-second timer.
+Further changes do not extend that deadline or create additional timers. A save
+request cancels that timer because the queued save will include those changes.
+Submitting a snapshot allows the first subsequent edit to start a new timer.
+Only a successful persistence response acknowledges the submitted revision.
+If newer edits exist, their deadline is preserved; otherwise the problem becomes
+clean and any remaining timer is canceled. Failed saves remain dirty and retry
+after 30 seconds unless an earlier timer or save request handles them.
+
+The deadline controls when a save is requested. Network latency and an operation
+already running in the queue can delay persistence.
+
+1.  If the requested problem's current revision is already saved, do nothing.
 
 2.  Refresh the current step through `GetWorkspace`. Replace
     `systemOwnedFiles`; refresh the official student path set while retaining
@@ -92,16 +105,19 @@ then save again only if a newer workspace revision remains.
     and note `exam interface: save`.
 
 4.  Call `SaveWorkspaceCommit` and record the submitted workspace revision as
-    saved. A newer concurrent revision remains unsaved.
-
-Page close and refresh use a separate last-chance path because the browser
-cannot await the normal refresh-then-save sequence during unload. On
-`pagehide`, send the current in-memory student file set directly to
-`SaveWorkspaceCommit` using a fetch keepalive request.
-
+    saved only when the response is `SAVED`. A newer concurrent revision remains
+    unsaved, even if another problem has since been selected.
 
 Grade and other server actions
 ------------------------------
+
+The entire action, including both persistence calls and daycare execution,
+occupies the same queue as ordinary saves. Requesting an action makes the editor
+read-only, disables file/problem switching and action buttons, and stops the
+local VM with its student-owned files retained. The VM remains ready to Boot
+afterward. This prevents edits from racing the submitted grading snapshot or
+step advancement. Returned action files can still change the workspace and
+start an autosave deadline; that save waits for the action to finish.
 
 1.  Refresh the current workspace as described by Save.
 
@@ -118,7 +134,8 @@ Grade and other server actions
     update both `studentOwnedFiles` and the corresponding live 9p file when its
     current shape permits it. If a guest has made the path structurally
     incompatible, preserve the returned student bytes and ask the user to
-    reboot the VM to restore its working tree.
+    reboot the VM to restore its working tree. Normal end-of-stream completes
+    the action; non-grade actions do not return a signed final bundle.
 
 6.  For grade, ignore intermediate events and call `SaveGradedCommit` with the
     signed final daycare result.

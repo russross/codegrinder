@@ -54,21 +54,27 @@ Here is the complete layout of the UI:
         *   Triggers the "save" action, referenced numerous times in
             this document. The save action is a no-op if there are
             no unsaved changes in the active problem. If there are
-            unsaved changes, the save action initiates the doAction
-            operation with the action parameter set to the empty
-            string.
+            unsaved changes, it requests a workspace save through the
+            same serialized queue used by timers and server actions.
         *   It is only clickable when there are unsaved changes to a
             student-owned file, whether made through the editor, VM,
             or a server action
         *   Leaving the editor automatically saves unsaved changes. This
             includes selecting the VM terminal.
-        *   The first editor change after a save starts a 30-second timer.
-            Further edits do not reset it. Any save cancels the timer; edits
-            made after an in-flight save's submitted revision start a new one.
-        *   Closing or refreshing the page sends the current unsaved workspace
-            through a page-exit keepalive save.
+        *   Each problem has its own 30-second timer. Its first editor, VM,
+            or returned-file change not covered by a submitted save starts
+            that timer; further edits do not reset it. Immediate save requests
+            cancel the timer. Edits after a submitted snapshot start a new
+            deadline, and its response only acknowledges the submitted edits.
+        *   Failed saves remain dirty and retry after 30 seconds unless an
+            earlier timer or save request handles them.
     *   One button for each of the actions defined for the problem
         type of the current step of the active problem
+        *   Requesting an action makes the editor read-only, disables file
+            and problem switching and action buttons, and stops the local VM
+            while retaining student-owned files. The full action shares the
+            save queue; the controls are restored when it finishes, and the
+            VM is ready to Boot.
         *   The problem type has a map called `actions` in the gRPC
             protocol def that maps action names to ProblemTypeAction
             objects.

@@ -2,6 +2,7 @@ import { Memory9PServer } from "./vm/runtime/p9.js";
 import type { P9Change } from "./vm/runtime/p9.js";
 
 export enum WorkspaceChangeSource {
+    Editor = "editor",
     Guest = "guest",
     Server = "server",
 }
@@ -76,12 +77,9 @@ export class ProblemWorkspace {
         }
         this.studentFiles.set(path, content.slice());
         this.studentRevision += 1;
-        try {
-            this.filesystem.writeFile(path, content, "editor");
-        } catch (error: unknown) {
-            return error instanceof Error ? error : new Error(String(error));
-        }
-        return undefined;
+        const syncError = this.writeFilesystemFile(path, content, "editor");
+        this.emit({ path, source: WorkspaceChangeSource.Editor });
+        return syncError;
     }
 
     writeServerStudentFile(path: string, content: Uint8Array): Error | undefined {
