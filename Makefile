@@ -47,15 +47,10 @@ exam:
 
 grind-dist: grind-linux-amd64 grind-linux-arm64 grind-macos-amd64 grind-macos-arm64
 
-grind-linux-amd64:
-	@command -v cargo-zigbuild >/dev/null 2>&1 || { echo "Missing cargo-zigbuild" >&2; exit 1; }
-	@command -v readelf >/dev/null 2>&1 || { echo "Missing readelf (usually provided by binutils)" >&2; exit 1; }
-	@target_libdir="$$(rustc --print target-libdir --target x86_64-unknown-linux-musl)"; ls "$$target_libdir"/libstd-*.rlib >/dev/null 2>&1 || { echo "Missing Rust target x86_64-unknown-linux-musl; run: rustup target add x86_64-unknown-linux-musl" >&2; exit 1; }
-	cargo zigbuild --release -p grind --target x86_64-unknown-linux-musl
+grind-linux-amd64: build
 	mkdir -p $(DIST_DIR)
-	cp target/x86_64-unknown-linux-musl/release/grind $(DIST_DIR)/grind.linux_amd64
+	cp target/release/grind $(DIST_DIR)/grind.linux_amd64
 	@if readelf -l $(DIST_DIR)/grind.linux_amd64 | grep -q INTERP; then echo "Linux AMD64 grind is dynamically linked" >&2; exit 1; fi
-	cargo clean --target x86_64-unknown-linux-musl
 
 grind-linux-arm64:
 	@command -v cargo-zigbuild >/dev/null 2>&1 || { echo "Missing cargo-zigbuild" >&2; exit 1; }
