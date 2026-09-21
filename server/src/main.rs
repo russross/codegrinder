@@ -60,6 +60,7 @@ async fn main() -> AppResult<()> {
             )
         })?;
     let config = Arc::new(load_config(&config_path)?);
+    let ip_filter = IpFilter::from_entries(&config.ip_filter.whitelist)?;
     validate_config(&config, args.ta, args.daycare)?;
     curl::require_available()
         .await
@@ -82,7 +83,6 @@ async fn main() -> AppResult<()> {
         registry
     };
     let registry = Arc::new(registry);
-    let ip_filter = IpFilter::from_entries(&config.ip_filter.whitelist);
     let daycare = args.daycare.then(|| DaycareRuntime::new(config.clone())).transpose()?;
     if args.daycare && !args.ta {
         tokio::spawn(register_daycare(config.clone(), VERSION.to_owned()));

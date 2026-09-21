@@ -849,7 +849,7 @@ mod tests {
     #[tokio::test]
     async fn restricted_assignment_ip_filter_uses_direct_peer_and_proxy_headers() {
         let mut service = test_service().await;
-        service.ip_filter = IpFilter::from_entries(&["203.0.113.0/24".to_owned()]);
+        service.ip_filter = IpFilter::from_entries(&["203.0.113.0/24".to_owned()]).unwrap();
         let sessions = seed_service_users(&service.db, false, false).await;
         seed_service_assignments(&service.db).await;
         service

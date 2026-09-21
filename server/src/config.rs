@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -33,14 +34,14 @@ pub struct ServerConfig {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawIpFilter {
     #[serde(default)]
     whitelist: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawConfig {
     #[serde(default)]
     hostname: String,
@@ -95,6 +96,7 @@ pub fn load_config(path: &Path) -> AppResult<ServerConfig> {
         }
         None => local_session_defaults(),
     };
+    let whitelist = raw.ip_filter.map(|filter| filter.whitelist).unwrap_or_default();
     Ok(ServerConfig {
         hostname: raw.hostname,
         ta_hostname: raw.ta_hostname,
@@ -113,9 +115,7 @@ pub fn load_config(path: &Path) -> AppResult<ServerConfig> {
             Path::new("db/codegrinder.db"),
         ),
         sessions_expire,
-        ip_filter: IpFilterConfig {
-            whitelist: raw.ip_filter.map(|ip| ip.whitelist).unwrap_or_default(),
-        },
+        ip_filter: IpFilterConfig { whitelist },
     })
 }
 
@@ -154,6 +154,17 @@ pub fn validate_config(
             "cannot run Daycare role with no problemTypes in the config file".to_owned(),
         ));
     }
+    let mut problem_types = BTreeSet::new();
+    for problem_type in &config.problem_types {
+        if problem_type.trim().is_empty() {
+            return Err(AppError::Internal("problemTypes entries must not be empty".to_owned()));
+        }
+        if !problem_types.insert(problem_type) {
+            return Err(AppError::Internal(format!(
+                "problemTypes contains duplicate entry {problem_type:?}"
+            )));
+        }
+    }
     if daycare_enabled && config.capacity == 0 {
         return Err(AppError::Internal("Daycare capacity must be greater than zero".to_owned()));
     }
@@ -181,6 +192,13 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    fn config_from_json(raw: &str) -> AppResult<ServerConfig> {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("server.json");
+        fs::write(&config_path, raw).unwrap();
+        load_config(&config_path)
+    }
+
     #[test]
     fn decodes_base64_secrets_when_possible() {
         assert_eq!(decode_base64_if_needed("c2VjcmV0"), "secret");
@@ -203,5 +221,42 @@ mod tests {
         let config = load_config(&config_path).unwrap();
 
         assert_eq!(config.sqlite3_path, dir.path().join("state/server.db"));
+    }
+
+    #[test]
+    fn rejects_unknown_config_fields_at_every_level() {
+        let top_level =
+            config_from_json(r#"{"hostname":"example.test","hostnme":"typo"}"#).unwrap_err();
+        assert!(top_level.to_string().contains("unknown field `hostnme`"));
+
+        let nested = config_from_json(r#"{"hostname":"example.test","ipFilter":{"whiteList":[]}}"#)
+            .unwrap_err();
+        assert!(nested.to_string().contains("unknown field `whiteList`"));
+    }
+
+    #[test]
+    fn rejects_empty_and_duplicate_problem_type_entries() {
+        let mut config = config_from_json(
+            r#"{
+                "hostname": "example.test",
+                "daycareSecret": "secret",
+                "ltiSecret": "secret",
+                "sessionSecret": "secret",
+                "capacity": 1,
+                "problemTypes": ["python"]
+            }"#,
+        )
+        .unwrap();
+
+        config.problem_types = vec!["python".to_owned(), " ".to_owned()];
+        assert!(validate_config(&config, true, true).unwrap_err().to_string().contains("empty"));
+
+        config.problem_types = vec!["python".to_owned(), "python".to_owned()];
+        assert!(
+            validate_config(&config, true, true)
+                .unwrap_err()
+                .to_string()
+                .contains("duplicate entry \"python\"")
+        );
     }
 }

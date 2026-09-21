@@ -1,13 +1,25 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
+use crate::error::{AppError, AppResult};
+
 #[derive(Clone, Debug, Default)]
 pub struct IpFilter {
     entries: Vec<Cidr>,
 }
 
 impl IpFilter {
-    pub fn from_entries(entries: &[String]) -> Self {
-        Self { entries: entries.iter().filter_map(|entry| Cidr::parse(entry)).collect() }
+    pub fn from_entries(entries: &[String]) -> AppResult<Self> {
+        let entries = entries
+            .iter()
+            .map(|entry| {
+                Cidr::parse(entry).ok_or_else(|| {
+                    AppError::BadRequest(format!(
+                        "invalid ipFilter whitelist entry {entry:?}: expected an IP address or CIDR range"
+                    ))
+                })
+            })
+            .collect::<AppResult<Vec<_>>>()?;
+        Ok(Self { entries })
     }
 
     pub fn enabled(&self) -> bool {
@@ -29,7 +41,11 @@ enum Cidr {
 
 impl Cidr {
     fn parse(raw: &str) -> Option<Self> {
-        let (ip_raw, prefix_raw) = raw.split_once('/').unwrap_or((raw, ""));
+        let (ip_raw, prefix_raw) = match raw.split_once('/') {
+            Some((_, "")) => return None,
+            Some(parts) => parts,
+            None => (raw, ""),
+        };
         let ip = ip_raw.parse::<IpAddr>().ok()?;
         match ip {
             IpAddr::V4(ip) => {
@@ -91,9 +107,19 @@ mod tests {
     #[test]
     fn supports_single_ips_and_cidr_blocks() {
         let filter =
-            IpFilter::from_entries(&["192.0.2.0/24".to_owned(), "2001:db8::/32".to_owned()]);
+            IpFilter::from_entries(&["192.0.2.0/24".to_owned(), "2001:db8::/32".to_owned()])
+                .unwrap();
         assert!(filter.allows("192.0.2.55"));
         assert!(!filter.allows("192.0.3.55"));
         assert!(filter.allows("2001:db8::1"));
+    }
+
+    #[test]
+    fn rejects_the_entire_whitelist_when_any_entry_is_invalid() {
+        let error = IpFilter::from_entries(&["192.0.2.0/24".to_owned(), "192.0.2.*".to_owned()])
+            .unwrap_err();
+
+        assert!(error.to_string().contains("192.0.2.*"));
+        assert!(IpFilter::from_entries(&["192.0.2.1/".to_owned()]).is_err());
     }
 }
