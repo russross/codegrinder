@@ -165,7 +165,7 @@ pub fn open_test_connection(path: &Path) -> AppResult<Connection> {
             | OpenFlags::SQLITE_OPEN_FULL_MUTEX,
     )?;
     configure_connection(&conn)?;
-    conn.execute_batch(include_str!("../../setup/schema.sql"))?;
+    conn.execute_batch(include_str!("../setup/schema.sql"))?;
     Ok(conn)
 }
 

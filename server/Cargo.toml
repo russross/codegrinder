@@ -3,6 +3,10 @@ name = "codegrinder"
 version.workspace = true
 edition.workspace = true
 
+[[bin]]
+name = "codegrinder"
+path = "main.rs"
+
 [dependencies]
 axum = { workspace = true, features = ["http2", "tokio", "json"] }
 base64.workspace = true

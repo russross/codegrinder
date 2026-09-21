@@ -3,6 +3,10 @@ name = "grind"
 version.workspace = true
 edition.workspace = true
 
+[[bin]]
+name = "grind"
+path = "main.rs"
+
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
 http.workspace = true
