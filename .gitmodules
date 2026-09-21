@@ -1,0 +1,3 @@
+[submodule "macos-minimal-sdk"]
+	path = macos-minimal-sdk
+	url = https://github.com/tinygo-org/macos-minimal-sdk.git

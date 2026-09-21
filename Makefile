@@ -2,6 +2,9 @@ ROOT_DIR := $(CURDIR)
 PROTO_DIR := $(ROOT_DIR)/protocol
 PROTO_FILE := $(PROTO_DIR)/codegrinder.proto
 DIST_DIR ?= $(ROOT_DIR)/www
+MACOS_SDK_DIR ?= $(ROOT_DIR)/macos-minimal-sdk
+MACOS_AMD64_SDKROOT ?= $(MACOS_SDK_DIR)/sysroot-macos-x86_64
+MACOS_ARM64_SDKROOT ?= $(MACOS_SDK_DIR)/sysroot-macos-arm64
 MACOSX_DEPLOYMENT_TARGET ?= 11.0
 
 .PHONY: all setup build server grind web web-check exam test end2end clean \
@@ -52,6 +55,7 @@ grind-linux-amd64:
 	mkdir -p $(DIST_DIR)
 	cp target/x86_64-unknown-linux-musl/release/grind $(DIST_DIR)/grind.linux_amd64
 	@if readelf -l $(DIST_DIR)/grind.linux_amd64 | grep -q INTERP; then echo "Linux AMD64 grind is dynamically linked" >&2; exit 1; fi
+	cargo clean --target x86_64-unknown-linux-musl
 
 grind-linux-arm64:
 	@command -v cargo-zigbuild >/dev/null 2>&1 || { echo "Missing cargo-zigbuild" >&2; exit 1; }
@@ -61,22 +65,25 @@ grind-linux-arm64:
 	mkdir -p $(DIST_DIR)
 	cp target/aarch64-unknown-linux-musl/release/grind $(DIST_DIR)/grind.linux_arm64
 	@if readelf -l $(DIST_DIR)/grind.linux_arm64 | grep -q INTERP; then echo "Linux ARM64 grind is dynamically linked" >&2; exit 1; fi
+	cargo clean --target aarch64-unknown-linux-musl
 
 grind-macos-amd64:
 	@command -v cargo-zigbuild >/dev/null 2>&1 || { echo "Missing cargo-zigbuild" >&2; exit 1; }
 	@target_libdir="$$(rustc --print target-libdir --target x86_64-apple-darwin)"; ls "$$target_libdir"/libstd-*.rlib >/dev/null 2>&1 || { echo "Missing Rust target x86_64-apple-darwin; run: rustup target add x86_64-apple-darwin" >&2; exit 1; }
-	@if [ "$$(uname -s)" != Darwin ] && [ -z "$$SDKROOT" ]; then echo "Set SDKROOT to a macOS SDK when cross-compiling from $$(uname -s)" >&2; exit 1; fi
-	MACOSX_DEPLOYMENT_TARGET=$(MACOSX_DEPLOYMENT_TARGET) cargo zigbuild --release -p grind --target x86_64-apple-darwin
+	$(MAKE) -C $(MACOS_SDK_DIR) sysroot-macos-x86_64
+	SDKROOT=$(MACOS_AMD64_SDKROOT) MACOSX_DEPLOYMENT_TARGET=$(MACOSX_DEPLOYMENT_TARGET) cargo zigbuild --release -p grind --target x86_64-apple-darwin
 	mkdir -p $(DIST_DIR)
 	cp target/x86_64-apple-darwin/release/grind $(DIST_DIR)/grind.darwin_amd64
+	cargo clean --target x86_64-apple-darwin
 
 grind-macos-arm64:
 	@command -v cargo-zigbuild >/dev/null 2>&1 || { echo "Missing cargo-zigbuild" >&2; exit 1; }
 	@target_libdir="$$(rustc --print target-libdir --target aarch64-apple-darwin)"; ls "$$target_libdir"/libstd-*.rlib >/dev/null 2>&1 || { echo "Missing Rust target aarch64-apple-darwin; run: rustup target add aarch64-apple-darwin" >&2; exit 1; }
-	@if [ "$$(uname -s)" != Darwin ] && [ -z "$$SDKROOT" ]; then echo "Set SDKROOT to a macOS SDK when cross-compiling from $$(uname -s)" >&2; exit 1; fi
-	MACOSX_DEPLOYMENT_TARGET=$(MACOSX_DEPLOYMENT_TARGET) cargo zigbuild --release -p grind --target aarch64-apple-darwin
+	$(MAKE) -C $(MACOS_SDK_DIR) sysroot-macos-arm64
+	SDKROOT=$(MACOS_ARM64_SDKROOT) MACOSX_DEPLOYMENT_TARGET=$(MACOSX_DEPLOYMENT_TARGET) cargo zigbuild --release -p grind --target aarch64-apple-darwin
 	mkdir -p $(DIST_DIR)
 	cp target/aarch64-apple-darwin/release/grind $(DIST_DIR)/grind.darwin_arm64
+	cargo clean --target aarch64-apple-darwin
 
 test:
 	cargo test --release --workspace
@@ -88,3 +95,4 @@ end2end:
 
 clean:
 	cargo clean
+	$(MAKE) -C $(MACOS_SDK_DIR) clean
