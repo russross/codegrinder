@@ -90,6 +90,8 @@ let userId = "";
 let sessionKey = "";
 let currentlyOpenFilePath: string | null = null;
 let isProgrammaticEditorUpdate = false;
+let editorDirty = false;
+let vmConflictPath: string | null = null;
 let vmController: VmController;
 let saveQueue: Promise<void> = Promise.resolve();
 let actionInProgress = false;
@@ -373,11 +375,24 @@ function buildProblemData(summary: AssignmentProblemProgress, workspace: {
         saving: new SaveState(problemWorkspace.revision(), (): void => requestAutomaticSave(problem)),
     };
     problemWorkspace.subscribe((change: WorkspaceStudentChange): void => {
-        problem.saving.changed();
         if (currentProblem !== problem) {
             return;
         }
         updateSaveButton();
+        if (change.source === WorkspaceChangeSource.Guest && currentlyOpenFilePath === change.path && editorDirty) {
+            if (vmConflictPath === change.path) {
+                return;
+            }
+            if (window.confirm("The VM changed this file while you have unsaved edits. Use the VM version and discard your edits?")) {
+                editorDirty = false;
+                vmConflictPath = null;
+                problem.saving.cancelTimer();
+                reloadOpenFileFromState();
+            } else {
+                vmConflictPath = change.path;
+            }
+            return;
+        }
         if (change.source !== WorkspaceChangeSource.Editor && currentlyOpenFilePath === change.path) {
             reloadOpenFileFromState();
         }
@@ -402,7 +417,7 @@ function updateSaveButton(): void {
     const saveButton = document.getElementById("save-button");
     if (saveButton instanceof HTMLButtonElement) {
         saveButton.disabled = actionInProgress || currentProblem === null
-            || !currentProblem.saving.isDirty(currentProblem.workspace.revision());
+            || (!editorDirty && !currentProblem.saving.isDirty(currentProblem.workspace.revision()));
     }
 }
 
@@ -476,6 +491,19 @@ function editorTextFromFile(content: Uint8Array): string {
 function fileContentFromEditor(): Uint8Array {
     const text = editor.state.doc.toString();
     return textEncoder.encode(text === "" ? "" : `${text}\n`);
+}
+
+function flushEditor(): void {
+    if (!editorDirty || currentProblem === null || currentlyOpenFilePath === null) {
+        return;
+    }
+    const syncError = currentProblem.workspace.writeStudentFile(currentlyOpenFilePath, fileContentFromEditor());
+    editorDirty = false;
+    vmConflictPath = null;
+    if (syncError !== undefined) {
+        vmController.reportFilesystemSyncError(syncError);
+    }
+    updateSaveButton();
 }
 
 function reloadOpenFileFromState(): void {
@@ -718,7 +746,9 @@ async function refreshProblem(problem: ProblemData): Promise<boolean> {
         renderFileTree();
         renderInstructionsPane();
         updateInstructionsTabVisibility();
-        reloadOpenFileFromState();
+        if (!editorDirty) {
+            reloadOpenFileFromState();
+        }
     }
     return true;
 }
@@ -731,6 +761,9 @@ async function saveProblem(problem: ProblemData): Promise<void> {
     const submittedRevision = problem.workspace.revision();
     const commit = buildCommit(problem, "", "exam interface: save");
     saving.submitted();
+    if (editorDirty && currentProblem === problem) {
+        saving.changed();
+    }
     const saved = await createMainClient().saveWorkspaceCommit(SaveWorkspaceCommitRequest.create({ commit }), authOptions());
     if (problem.saving !== saving) {
         return;
@@ -741,6 +774,9 @@ async function saveProblem(problem: ProblemData): Promise<void> {
             : "Work was not saved because you do not own this assignment");
     }
     saving.acknowledge(submittedRevision, problem.workspace.revision());
+    if (editorDirty && currentProblem === problem) {
+        saving.changed();
+    }
     updateSaveButton();
 }
 
@@ -837,6 +873,9 @@ function setActionInProgress(inProgress: boolean): void {
 function requestSave(problem: ProblemData | null = currentProblem, action: string = ""): Promise<boolean> {
     if (problem === null) {
         return Promise.resolve(false);
+    }
+    if (currentProblem === problem) {
+        flushEditor();
     }
     if (action !== "") {
         if (actionInProgress) {
@@ -973,7 +1012,8 @@ function renderMenuBar(): void {
     const saveButton = document.createElement("button");
     saveButton.id = "save-button";
     saveButton.textContent = "Save";
-    saveButton.disabled = actionInProgress || !currentProblem.saving.isDirty(currentProblem.workspace.revision());
+    saveButton.disabled = actionInProgress
+        || (!editorDirty && !currentProblem.saving.isDirty(currentProblem.workspace.revision()));
     saveButton.addEventListener("click", (): void => {
         requestAutomaticSave(displayedProblem);
     });
@@ -1286,21 +1326,22 @@ document.addEventListener("DOMContentLoaded", (): void => {
             language.of([]),
             editableCompartment.of(EditorView.editable.of(true)),
             EditorView.domEventHandlers({
-                blur: (): void => requestAutomaticSave(),
+                blur: (): void => {
+                    flushEditor();
+                    requestAutomaticSave();
+                },
             }),
             EditorView.updateListener.of((update: ViewUpdate): void => {
                 if (!update.docChanged || isProgrammaticEditorUpdate || actionInProgress
                     || currentProblem === null || currentlyOpenFilePath === null) {
                     return;
                 }
-                const newContent = fileContentFromEditor();
                 if (!currentProblem.workspace.isStudentOwned(currentlyOpenFilePath)) {
                     return;
                 }
-                const syncError = currentProblem.workspace.writeStudentFile(currentlyOpenFilePath, newContent);
-                if (syncError !== undefined) {
-                    vmController.reportFilesystemSyncError(syncError);
-                }
+                editorDirty = true;
+                currentProblem.saving.changed();
+                updateSaveButton();
             }),
         ],
     });

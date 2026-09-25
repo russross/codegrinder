@@ -213,6 +213,9 @@ const tabs = new Tabs(requireElement("tabs"), (path, content) => {
     workspaceRevision.markChanged();
     fileSystemUI.refreshUI();
 });
+let saveBeforeLocalExecution = async (): Promise<void> => {
+    tabs.saveAllTabs();
+};
 let editPolicy: EditPolicy = { kind: "all" };
 let runtimeProblem: RuntimeProblemState = { kind: "inactive" };
 let activeInstructionsHtml = "";
@@ -259,6 +262,12 @@ saveAll.addEventListener("click", () => {
     tabs.saveAllTabs();
 })
 embed.addEventListener("click", async () => {
+    try {
+        await saveBeforeLocalExecution();
+    } catch (error) {
+        writeTerminal(`Save failed: ${error instanceof Error ? error.message : String(error)}\n`, "red");
+        return;
+    }
     const files = fileSystem.files;
     const inferredProblemType = problemTypeFromFilePaths(Object.keys(files), localRuntimeConfig);
     const problemType = inferredProblemType ?? await createChoicePrompt(
@@ -473,6 +482,12 @@ input_terminal.addEventListener("keydown", async event => {
         return;
     }
     writeTerminal(value, "blue");
+    try {
+        await saveBeforeLocalExecution();
+    } catch (error) {
+        writeTerminal(`Save failed: ${error instanceof Error ? error.message : String(error)}\n`, "red");
+        return;
+    }
     const currentPath = tabs.selectedTab.kind === "selected" ? tabs.selectedTab.tab.path : "";
     await executeLocally(() => localRuntime.runLine(fileSystem.files, value, currentPath));
 })
@@ -487,6 +502,12 @@ run.addEventListener("click", async () => {
         return;
     }
     const currentTab = selection.tab;
+    try {
+        await saveBeforeLocalExecution();
+    } catch (error) {
+        writeTerminal(`Save failed: ${error instanceof Error ? error.message : String(error)}\n`, "red");
+        return;
+    }
     writeTerminal(`Running ${currentTab.path}\n`, "orange");
     await executeLocally(() => localRuntime.runFile(fileSystem.files, currentTab.path));
 })
@@ -521,6 +542,9 @@ function setupCodegrinder(): void {
     let syncPromise: Promise<void> = Promise.resolve();
     let syncRunning = false;
     let serverOperationRunning = false;
+    let autosaveTimer: ReturnType<typeof setTimeout> | undefined;
+    let queuedRevision = 0;
+    let loadingProblem = false;
 
     function reportError(error: unknown): void {
         const message = error instanceof Error ? error.message : String(error);
@@ -542,37 +566,45 @@ function setupCodegrinder(): void {
     );
 
     async function showProblem(assignment: LoadedAssignment, problem: WorkspaceProblem): Promise<void> {
-        serverWorkspace = { assignment, kind: "assignment", problem };
-        const workspace = problem.workspace;
-        editPolicy = { kind: "selected", paths: new Set(Object.keys(workspace.studentOwnedFiles)) };
-        const files: WorkspaceFiles = {
-            ...workspace.systemOwnedFiles,
-            ...workspace.studentOwnedFiles,
-        };
-        fileSystem.load(files);
-        tabs.closeAll();
-        for (const [path, content] of Object.entries(workspace.studentOwnedFiles)) {
-            try {
-                tabs.addSwitchTab(`/${path}`, textDecoder.decode(content), false);
-            } catch {
-                continue;
-            }
+        loadingProblem = true;
+        if (autosaveTimer !== undefined) {
+            clearTimeout(autosaveTimer);
+            autosaveTimer = undefined;
         }
-        activeInstructionsHtml = renderInstructions(files);
-        mdElement.innerHTML = activeInstructionsHtml;
-        fileSystemUI.refreshUI();
-        codeGrinderUI.buttonGrade.innerText = problem.progress.completed ? "Finished" : "Grade";
-        codeGrinderUI.buttonGrade.disabled = problem.progress.completed;
-        codeGrinderUI.setActions([...workspace.actions].sort((left, right) => left.localeCompare(right)));
-        workspaceRevision.markLoaded();
-        await activateLocalRuntime(workspace.problemType, files);
+        try {
+            serverWorkspace = { assignment, kind: "assignment", problem };
+            const workspace = problem.workspace;
+            editPolicy = { kind: "selected", paths: new Set(Object.keys(workspace.studentOwnedFiles)) };
+            const files: WorkspaceFiles = {
+                ...workspace.systemOwnedFiles,
+                ...workspace.studentOwnedFiles,
+            };
+            fileSystem.load(files);
+            tabs.closeAll();
+            for (const [path, content] of Object.entries(workspace.studentOwnedFiles)) {
+                try {
+                    tabs.addSwitchTab(`/${path}`, textDecoder.decode(content), false);
+                } catch {
+                    continue;
+                }
+            }
+            activeInstructionsHtml = renderInstructions(files);
+            mdElement.innerHTML = activeInstructionsHtml;
+            fileSystemUI.refreshUI();
+            codeGrinderUI.buttonGrade.innerText = problem.progress.completed ? "Finished" : "Grade";
+            codeGrinderUI.buttonGrade.disabled = problem.progress.completed;
+            codeGrinderUI.setActions([...workspace.actions].sort((left, right) => left.localeCompare(right)));
+            workspaceRevision.markLoaded();
+            await activateLocalRuntime(workspace.problemType, files);
+        } finally {
+            loadingProblem = false;
+        }
     }
 
     async function loadAssignment(
         assignment: LoadedAssignment,
         preferredProblemId: string | null = null,
     ): Promise<void> {
-        tabs.autoSave = true;
         tabs.setPathChangesAllowed(false);
         newTab.hidden = true;
         embed.hidden = true;
@@ -598,30 +630,45 @@ function setupCodegrinder(): void {
         if (serverWorkspace.kind === "empty") {
             return Promise.resolve();
         }
-        const { assignment, problem } = serverWorkspace;
+        const { problem } = serverWorkspace;
         tabs.saveAllTabs();
         const files = fileSystem.files;
         const revision = workspaceRevision.capture();
+        if (!workspaceRevision.dirty || revision.value <= queuedRevision) {
+            if (showStatus) {
+                return syncPromise.then(() => {
+                    if (!workspaceRevision.dirty) {
+                        writeTerminal(
+                            `Problem ${problem.workspace.problemId} step ${problem.workspace.stepNumber} synced\n`,
+                            "green",
+                        );
+                    }
+                });
+            }
+            return syncPromise;
+        }
+        queuedRevision = revision.value;
+        if (autosaveTimer !== undefined) {
+            clearTimeout(autosaveTimer);
+            autosaveTimer = undefined;
+        }
         syncPromise = syncPromise
             .catch(() => {})
             .then(async () => {
                 syncRunning = true;
-                tabs.setInteractionDisabled(true);
                 try {
                     const result = await codeGrinder.sync(problem, files);
                     if (result.message !== "") {
                         writeTerminal(`${result.message}\n`, "red");
                     }
                     if (result.saveStatus !== CommitSaveStatus.SAVED) {
+                        queuedRevision = 0;
                         return;
                     }
                     if (serverWorkspace.kind === "assignment" && serverWorkspace.problem === problem) {
                         workspaceRevision.markSaved(revision);
                     }
                     if (showStatus) {
-                        if (serverWorkspace.kind === "assignment" && serverWorkspace.problem === problem) {
-                            await showProblem(assignment, problem);
-                        }
                         writeTerminal(
                             `Problem ${problem.workspace.problemId} step ${problem.workspace.stepNumber} synced\n`,
                             "green",
@@ -629,11 +676,18 @@ function setupCodegrinder(): void {
                     }
                 } finally {
                     syncRunning = false;
-                    tabs.setInteractionDisabled(serverOperationRunning);
                 }
+            }).catch((error: unknown) => {
+                queuedRevision = 0;
+                scheduleAutosave();
+                throw error;
             });
         return syncPromise;
     }
+    saveBeforeLocalExecution = async () => {
+        tabs.saveAllTabs();
+        await queueSync(false);
+    };
 
     async function saveBeforeTransition(): Promise<void> {
         tabs.saveAllTabs();
@@ -683,6 +737,29 @@ function setupCodegrinder(): void {
     codeGrinderUI.buttonSync.addEventListener("click", () => {
         void queueSync(true).catch(reportError);
     });
+    function scheduleAutosave(): void {
+        if (serverWorkspace.kind === "empty" || loadingProblem) {
+            return;
+        }
+        if (autosaveTimer !== undefined) {
+            clearTimeout(autosaveTimer);
+        }
+        autosaveTimer = setTimeout(() => {
+            autosaveTimer = undefined;
+            void queueSync(false).catch(reportError);
+        }, 30000);
+    }
+    tabs.changeHandler = scheduleAutosave;
+    tabs.blurHandler = () => {
+        if (loadingProblem) {
+            return;
+        }
+        if (serverWorkspace.kind === "assignment") {
+            void queueSync(false).catch(reportError);
+        } else {
+            tabs.saveAllTabs();
+        }
+    };
     codeGrinderUI.buttonReset.addEventListener("click", async () => {
         if (serverWorkspace.kind === "empty"
             || !window.confirm("Restore all student files to the beginning of this step?")) {
@@ -842,15 +919,6 @@ function setupCodegrinder(): void {
 
     initialize();
 
-    setInterval(() => {
-        if (serverWorkspace.kind === "empty"
-            || syncRunning
-            || serverOperationRunning
-            || !workspaceRevision.dirty) {
-            return;
-        }
-        void queueSync(false).catch(reportError);
-    }, 5000);
 }
 const urlDummy = urlParams.get("dummy");
 if (urlDummy) {
@@ -868,7 +936,6 @@ if (urlDummy) {
     run.style.borderRadius = "100%";
     run.style.backgroundColor = "green";
     run.style.margin = "20px";
-    tabs.autoSave = true;
     try {
         const problemType = standaloneProblemType(urlParams, localRuntimeConfig);
         if (Object.keys(fileSystem.files).length === 0) {

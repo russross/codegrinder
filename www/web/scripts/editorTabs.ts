@@ -36,6 +36,7 @@ class Tab {
   readonly element: HTMLLIElement;
   changeHandler: TabHandler = () => {};
   saveHandler: TabHandler = () => {};
+  blurHandler: TabHandler = () => {};
 
   readonly #ace: AceAjax.Editor;
   #defaultMode: string;
@@ -62,6 +63,7 @@ class Tab {
         this.changeHandler();
       }
     });
+    this.#ace.on("blur", () => this.blurHandler());
     this.#ace.commands.addCommand({
       name: "saveFile",
       bindKey: { win: "Ctrl-S", mac: "Command-S" },
@@ -136,7 +138,8 @@ class Tab {
 }
 
 class Tabs {
-  autoSave = false;
+  changeHandler: TabHandler = () => {};
+  blurHandler: TabHandler = () => {};
   pathChangesAllowed = true;
   readonly tabs: Tab[] = [];
 
@@ -279,10 +282,9 @@ class Tabs {
   addNewTab(tab = new Tab(untitledPath, "", false, this.defaultMode)): void {
     tab.saveHandler = () => this.saveTab(tab);
     tab.changeHandler = () => {
-      if (this.autoSave) {
-        this.saveTab(tab);
-      }
+      this.changeHandler();
     };
+    tab.blurHandler = () => this.blurHandler();
     tab.element.addEventListener("click", () => this.switchTab(tab));
     tab.closeElement.addEventListener("click", (event) => {
       event.stopPropagation();

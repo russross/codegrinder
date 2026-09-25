@@ -40,7 +40,7 @@ function withFakeTimers(run) {
     }
 }
 
-test("the clean-to-dirty transition starts one fixed deadline", () => {
+test("each edit restarts the autosave deadline", () => {
     withFakeTimers((timers) => {
         let saveRequests = 0;
         const saving = new SaveState(4, () => {
@@ -52,13 +52,13 @@ test("the clean-to-dirty transition starts one fixed deadline", () => {
         saving.changed();
 
         assert.equal(timers.callbacks.size, 1);
-        assert.deepEqual(timers.delays, [30_000]);
+        assert.deepEqual(timers.delays, [30_000, 30_000, 30_000]);
         timers.fire();
         assert.equal(saveRequests, 1);
     });
 });
 
-test("an immediate request cancels its timer without creating another deadline", () => {
+test("a new edit after an immediate request gets a new deadline", () => {
     withFakeTimers((timers) => {
         const saving = new SaveState(0, () => assert.fail("canceled timer fired"));
 
@@ -66,8 +66,8 @@ test("an immediate request cancels its timer without creating another deadline",
         saving.cancelTimer();
         saving.changed();
 
-        assert.equal(timers.callbacks.size, 0);
-        assert.deepEqual(timers.delays, [30_000]);
+        assert.equal(timers.callbacks.size, 1);
+        assert.deepEqual(timers.delays, [30_000, 30_000]);
     });
 });
 

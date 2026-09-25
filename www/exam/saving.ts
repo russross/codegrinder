@@ -3,7 +3,6 @@ const AUTOSAVE_DELAY_MS = 30_000;
 export class SaveState {
     private readonly requestSave: () => void;
     private savedRevision: number;
-    private pendingEdits = false;
     private timer: number | undefined;
     private stopped = false;
 
@@ -17,10 +16,10 @@ export class SaveState {
     }
 
     changed(): void {
-        if (this.stopped || this.pendingEdits) {
+        if (this.stopped) {
             return;
         }
-        this.pendingEdits = true;
+        this.cancelTimer();
         const timer = window.setTimeout((): void => {
             if (this.timer !== timer) {
                 return;
@@ -41,7 +40,6 @@ export class SaveState {
 
     submitted(): void {
         this.cancelTimer();
-        this.pendingEdits = false;
     }
 
     acknowledge(revision: number, currentRevision: number): void {
@@ -51,7 +49,6 @@ export class SaveState {
         this.savedRevision = Math.max(this.savedRevision, revision);
         if (!this.isDirty(currentRevision)) {
             this.cancelTimer();
-            this.pendingEdits = false;
         }
     }
 
@@ -59,7 +56,6 @@ export class SaveState {
         if (this.stopped || this.timer !== undefined) {
             return;
         }
-        this.pendingEdits = false;
         this.changed();
     }
 
