@@ -66,6 +66,7 @@ impl DaycareRuntime {
         tokio::spawn(async move {
             let result = runtime.handle(request, tx.clone()).await;
             if let Err(err) = result {
+                eprintln!("daycare execution failed: {err}");
                 let _ = tx
                     .send(Ok(DaycareResponse {
                         response: Some(daycare_response::Response::Error(err.to_string())),
@@ -368,6 +369,28 @@ async fn finalize_action(
         commit.report_card = Some(report.clone());
         commit.score = if report.passed { 1.0 } else { score_from_report(&report) };
         commit.updated_at = Some(timestamp(Utc::now()));
+    }
+    if !report.passed && (!report.note.is_empty() || report.results.is_empty()) {
+        eprintln!(
+            "daycare action failed: user={:?} assignment={:?} problem={:?} step={} action={:?} reason={:?}",
+            bundle.user_id,
+            bundle.assignment,
+            bundle.problem_id,
+            bundle.step_number,
+            bundle.action,
+            report.note
+        );
+    }
+    if bundle.action != "grade" {
+        eprintln!(
+            "action completed: user={:?} assignment={:?} problem={:?} step={} action={:?} passed={}",
+            bundle.user_id,
+            bundle.assignment,
+            bundle.problem_id,
+            bundle.step_number,
+            bundle.action,
+            report.passed
+        );
     }
     if bundle.action == "grade" {
         let signed = encode_signed_runtime_bundle(bundle, secret)?;

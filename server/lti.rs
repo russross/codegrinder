@@ -78,6 +78,13 @@ pub struct VersionPayload {
     pub grind_version_recommended: String,
 }
 
+struct LaunchUpdate {
+    assignment_key: String,
+    new_course: bool,
+    new_user: bool,
+    new_assignment: bool,
+}
+
 pub fn router(state: LtiState) -> Router {
     Router::new()
         .route("/lti/config.xml", get(get_config))
@@ -184,6 +191,13 @@ async fn launch_inner(
     let ip_allowed = !state.ip_filter.enabled()
         || client_ip.as_deref().is_some_and(|ip| state.ip_filter.allows(ip));
     if restricted && !ip_allowed && !is_instructor_role(&roles) {
+        eprintln!(
+            "exam launch denied: user={:?} course={:?} problem_set={:?} ip={:?}",
+            form_first(&form, "user_id"),
+            form_first(&form, "context_id"),
+            unique,
+            client_ip
+        );
         return Err(AppError::Forbidden(
             "exam access is restricted to approved IP ranges".to_owned(),
         ));
@@ -192,12 +206,39 @@ async fn launch_inner(
     let user_id = form_first(&form, "user_id");
     let course_label = form_first(&form, "context_label");
     let form_for_db = form.clone();
-    let assignment_key = state
+    let update = state
         .db
         .transaction(move |conn| update_launch(conn, &form_for_db, &unique, restricted, now))
         .await?;
+    if update.new_course {
+        eprintln!(
+            "new course: course={:?} name={:?}",
+            form_first(&form, "context_id"),
+            form_first(&form, "context_title")
+        );
+    }
+    if update.new_user {
+        eprintln!(
+            "new user: user={user_id:?} name={:?}",
+            form_first(&form, "lis_person_name_full")
+        );
+    }
+    if update.new_assignment {
+        eprintln!(
+            "new assignment: user={user_id:?} course={:?} assignment={:?} title={:?}",
+            form_first(&form, "context_id"),
+            update.assignment_key,
+            form_first(&form, "resource_link_title")
+        );
+    }
     let token = state.login_tokens.insert(&user_id, now)?;
-    Ok(launch_location(ui, &assignment_key, &token, &course_label))
+    if restricted {
+        eprintln!(
+            "exam launch allowed: user={user_id:?} assignment={:?} ip={client_ip:?}",
+            update.assignment_key
+        );
+    }
+    Ok(launch_location(ui, &update.assignment_key, &token, &course_label))
 }
 
 fn launch_location(ui: LaunchUi, assignment_key: &str, token: &str, course_label: &str) -> String {
@@ -216,7 +257,7 @@ fn update_launch(
     unique: &str,
     restricted: bool,
     now: chrono::DateTime<Utc>,
-) -> AppResult<String> {
+) -> AppResult<LaunchUpdate> {
     let problem_set_id = if unique == BOOTSTRAP_ASSIGNMENT_NAME {
         String::new()
     } else {
@@ -234,6 +275,16 @@ fn update_launch(
     let user_name = form_first(form, "lis_person_name_full");
     let user_login = form_first(form, "custom_canvas_user_login_id");
     let roles = form_first(form, "roles");
+    let new_course = !conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM courses WHERE course_id = ?)",
+        params![course_id],
+        |row| row.get::<_, bool>(0),
+    )?;
+    let new_user = !conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM users WHERE user_id = ?)",
+        params![user_id],
+        |row| row.get::<_, bool>(0),
+    )?;
     conn.execute(
         "INSERT INTO courses(course_id, course_name) VALUES (?, ?) ON CONFLICT(course_id) DO UPDATE SET course_name = excluded.course_name",
         params![course_id, course_name],
@@ -247,8 +298,14 @@ fn update_launch(
         params![user_id, course_id, roles],
     )?;
     if unique == BOOTSTRAP_ASSIGNMENT_NAME {
-        return Ok(String::new());
+        return Ok(LaunchUpdate {
+            assignment_key: String::new(),
+            new_course,
+            new_user,
+            new_assignment: false,
+        });
     }
+    let new_assignment = !conn.query_row("SELECT EXISTS(SELECT 1 FROM assignments WHERE user_id = ? AND course_id = ? AND problem_set_id = ?)", params![user_id, course_id, problem_set_id], |row| row.get::<_, bool>(0))?;
     let assignment_title = {
         let value = form_first(form, "resource_link_title");
         if value.is_empty() { problem_set_id.clone() } else { value }
@@ -280,7 +337,12 @@ fn update_launch(
         ],
     )?;
     let _ = now;
-    Ok(format!("{user_id}:{course_id}:{problem_set_id}"))
+    Ok(LaunchUpdate {
+        assignment_key: format!("{user_id}:{course_id}:{problem_set_id}"),
+        new_course,
+        new_user,
+        new_assignment,
+    })
 }
 
 fn validate_oauth_signature(
@@ -461,9 +523,12 @@ mod tests {
             form.insert(key.to_owned(), vec![value.to_owned()]);
         }
 
-        let assignment_key = update_launch(&conn, &form, "ps1", false, Utc::now()).unwrap();
+        let update = update_launch(&conn, &form, "ps1", false, Utc::now()).unwrap();
 
-        assert_eq!(assignment_key, "u1:c1:ps1");
+        assert_eq!(update.assignment_key, "u1:c1:ps1");
+        assert!(update.new_course && update.new_user && update.new_assignment);
+        let repeated = update_launch(&conn, &form, "ps1", false, Utc::now()).unwrap();
+        assert!(!repeated.new_course && !repeated.new_user && !repeated.new_assignment);
         let times = conn
             .query_row(
                 "SELECT unlock_at, due_at, lock_at FROM assignments WHERE user_id = 'u1' AND course_id = 'c1' AND problem_set_id = 'ps1'",

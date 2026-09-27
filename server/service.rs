@@ -271,6 +271,7 @@ impl CodeGrinderService for CodeGrinderServer {
         let current_user =
             self.authenticated_user(&request).await.map_err(AppError::grpc_status)?;
         Self::require_admin(&current_user).map_err(AppError::grpc_status)?;
+        let actor = current_user.user_id.clone();
         let req = request.into_inner();
         let problem_type = self
             .db
@@ -279,6 +280,10 @@ impl CodeGrinderService for CodeGrinderServer {
             })
             .await
             .map_err(AppError::grpc_status)?;
+        eprintln!(
+            "problem type files saved: actor={actor:?} problem_type={:?}",
+            problem_type.problem_type
+        );
         Ok(Response::new(SaveProblemTypeFilesResponse { problem_type: Some(problem_type) }))
     }
 
@@ -291,7 +296,9 @@ impl CodeGrinderService for CodeGrinderServer {
         let current_user =
             self.authenticated_user(&request).await.map_err(AppError::grpc_status)?;
         Self::require_admin(&current_user).map_err(AppError::grpc_status)?;
+        let actor = current_user.user_id.clone();
         let req = request.into_inner();
+        let problem_type_name = req.problem_type.clone();
         let problem_types = self
             .db
             .transaction_until(deadline, move |conn| {
@@ -299,6 +306,7 @@ impl CodeGrinderService for CodeGrinderServer {
             })
             .await
             .map_err(AppError::grpc_status)?;
+        eprintln!("problem type saved: actor={actor:?} problem_type={problem_type_name:?}");
         Ok(Response::new(SaveProblemTypeResponse { problem_types }))
     }
 
@@ -398,7 +406,9 @@ impl CodeGrinderService for CodeGrinderServer {
         let current_user =
             self.authenticated_user(&request).await.map_err(AppError::grpc_status)?;
         Self::require_author(&current_user).map_err(AppError::grpc_status)?;
+        let actor = current_user.user_id.clone();
         let req = request.into_inner();
+        let mode = req.mode;
         let bundle = req.bundle.ok_or_else(|| Status::invalid_argument("bundle is required"))?;
         let config = self.config.clone();
         let saved = self
@@ -408,6 +418,10 @@ impl CodeGrinderService for CodeGrinderServer {
             })
             .await
             .map_err(AppError::grpc_status)?;
+        eprintln!(
+            "problem saved: actor={actor:?} mode={mode} problem={:?}",
+            saved.problem.as_ref().map(|problem| &problem.problem_id)
+        );
         Ok(Response::new(SaveProblemResponse { bundle: Some(saved) }))
     }
 
@@ -420,7 +434,9 @@ impl CodeGrinderService for CodeGrinderServer {
         let current_user =
             self.authenticated_user(&request).await.map_err(AppError::grpc_status)?;
         Self::require_author(&current_user).map_err(AppError::grpc_status)?;
+        let actor = current_user.user_id.clone();
         let req = request.into_inner();
+        let mode = req.mode;
         let bundle = req.bundle.ok_or_else(|| Status::invalid_argument("bundle is required"))?;
         let saved = self
             .db
@@ -429,6 +445,10 @@ impl CodeGrinderService for CodeGrinderServer {
             })
             .await
             .map_err(AppError::grpc_status)?;
+        eprintln!(
+            "problem set saved: actor={actor:?} mode={mode} problem_set={:?}",
+            saved.problem_set.as_ref().map(|set| &set.problem_set_id)
+        );
         Ok(Response::new(SaveProblemSetResponse { bundle: Some(saved) }))
     }
 
@@ -464,6 +484,7 @@ impl CodeGrinderService for CodeGrinderServer {
         let ip_allowed = self.ip_allowed(&request);
         let current_user =
             self.authenticated_user(&request).await.map_err(AppError::grpc_status)?;
+        let actor = current_user.user_id.clone();
         let req = request.into_inner();
         let commit = req.commit.ok_or_else(|| Status::invalid_argument("commit is required"))?;
         let config = self.config.clone();
@@ -476,7 +497,17 @@ impl CodeGrinderService for CodeGrinderServer {
                 })
             })
             .await
+            .inspect_err(|err| eprintln!("action submission failed: user={actor:?} error={err}"))
             .map_err(AppError::grpc_status)?;
+        eprintln!(
+            "action submitted: user={:?} assignment={:?} problem={:?} step={} action={:?} save_status={}",
+            result.bundle.user_id,
+            result.bundle.assignment,
+            result.bundle.problem_id,
+            result.bundle.step_number,
+            result.bundle.action,
+            result.save_status
+        );
         let signed =
             crate::signatures::encode_signed_runtime_bundle(&result.bundle, &config.daycare_secret)
                 .map_err(AppError::grpc_status)?;
@@ -495,6 +526,7 @@ impl CodeGrinderService for CodeGrinderServer {
         let ip_allowed = self.ip_allowed(&request);
         let current_user =
             self.authenticated_user(&request).await.map_err(AppError::grpc_status)?;
+        let actor = current_user.user_id.clone();
         let signed = request
             .into_inner()
             .bundle
@@ -506,7 +538,20 @@ impl CodeGrinderService for CodeGrinderServer {
                 mutations::save_graded_commit(conn, &current_user, &signed, &config, ip_allowed)
             })
             .await
+            .inspect_err(|err| eprintln!("grade save failed: user={actor:?} error={err}"))
             .map_err(AppError::grpc_status)?;
+        let commit = result.bundle.commit.as_ref();
+        eprintln!(
+            "grade completed: user={:?} assignment={:?} problem={:?} step={} score={:?} passed={:?} save_status={} locked={}",
+            result.bundle.user_id,
+            result.bundle.assignment,
+            result.bundle.problem_id,
+            result.bundle.step_number,
+            commit.map(|commit| commit.score),
+            commit.and_then(|commit| commit.report_card.as_ref()).map(|report| report.passed),
+            result.save_status,
+            result.locked
+        );
         if result.save_status == crate::proto::CommitSaveStatus::Saved as i32
             && let Some((target, html)) =
                 passback_work(&self.db, &result.bundle, result.locked, deadline)

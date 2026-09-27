@@ -337,7 +337,10 @@ pub fn spawn_grade_passback(
                     return;
                 }
                 Err(err) if err.is_transient() && attempt < 10 => {
-                    eprintln!("error posting grade back to LMS (attempt {attempt}/10): {err}");
+                    eprintln!(
+                        "error posting grade back to LMS: user={:?} course={:?} problem_set={:?} attempt={attempt}/10 error={err}",
+                        target.user_id, target.course_id, target.problem_set_id
+                    );
                     tokio::time::sleep(delay).await;
                     delay = (delay * 2).min(Duration::from_secs(300));
                 }
