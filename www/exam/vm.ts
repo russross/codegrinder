@@ -1,7 +1,9 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
-import type { P9Endpoint } from "./vm/runtime/p9.js";
+import { openHttpBlockProvider } from "./vm/runtime/block/http.js";
+import type { BlockProvider } from "./vm/runtime/block/index.js";
+import type { Memory9PServer } from "./vm/runtime/p9/index.js";
 
 export interface VmImageDescriptor {
     readonly configUrl: URL;
@@ -10,7 +12,7 @@ export interface VmImageDescriptor {
 }
 
 export interface VmTarget {
-    readonly filesystem: P9Endpoint;
+    readonly filesystem: Memory9PServer;
     readonly image: VmImageDescriptor;
     rebuildFilesystem(): void;
 }
@@ -29,33 +31,41 @@ enum VmState {
     Failed,
 }
 
-interface RiscboxTerminal {
-    write(bytes: string): void;
-    getSize(): [number, number];
+interface ResolvedVmConfig {
+    readonly drive0?: {
+        readonly file?: string;
+        readonly provider?: number;
+        readonly capacity_sectors?: string;
+    };
+    readonly [key: string]: unknown;
 }
 
-interface RiscboxModule {
-    p9Server: P9Endpoint;
-    ccall?(
-        name: string,
-        returnType: null,
-        argumentTypes: string[],
-        argumentsList: (string | number | null)[],
-    ): void;
-    _console_queue_char?(byte: number): void;
-    _console_resize?(): void;
-    onRuntimeInitialized(): void;
-    onVmStarted(): void;
+interface RiscboxRuntime {
+    startResolved(config: ResolvedVmConfig, memoryMiB: number): number;
+    consoleInput(data: Uint8Array): number;
+    consoleResize(columns: number, rows: number): number;
+    reset(): Promise<void>;
+    halt(): Promise<void>;
+    destroy(): Promise<void>;
+}
+
+interface RiscboxConstructor {
+    instantiate(bytes: ArrayBuffer, options: {
+        blockProviders: Map<number, BlockProvider>;
+        p9Servers: Map<string, Memory9PServer>;
+        consoleWrite(text: string): void;
+        consoleReset(): void;
+        onVmStarted(): void;
+        onVmReset(cause: string): void;
+        onVmHalted(cause: string): void;
+        onError(error: unknown): void;
+    }): Promise<RiscboxRuntime>;
+    loadResolvedConfig(url: string): Promise<ResolvedVmConfig>;
 }
 
 declare global {
     interface Window {
-        Module?: RiscboxModule;
-        Uint8Array: Uint8ArrayConstructor;
-        graphic_display: null;
-        net_state: null;
-        term?: RiscboxTerminal;
-        update_downloading?: (active: boolean) => void;
+        Riscbox?: RiscboxConstructor;
     }
 }
 
@@ -65,7 +75,7 @@ const vmImagePathsByProblemType: ReadonlyMap<string, VmImagePaths> = new Map([
     ["riscv", {
         configPath: "vm/image/risclet.cfg",
         memoryMiB: 256,
-        runtimePath: "vm/runtime/riscbox-wasm.js",
+        runtimePath: "vm/runtime/riscbox.js",
     }],
 ]);
 
@@ -100,8 +110,9 @@ export class VmController {
     private readonly fitAddon = new FitAddon();
     private readonly host: HTMLElement;
     private readonly terminal: Terminal;
-    private frame: HTMLIFrameElement | undefined;
-    private frameWindow: Window | undefined;
+    private runtime: RiscboxRuntime | undefined;
+    private teardown: Promise<void> = Promise.resolve();
+    private generation = 0;
     private inputBytes: number[] = [];
     private inputOffset = 0;
     private inputTimer: number | undefined;
@@ -133,11 +144,15 @@ export class VmController {
         this.fitAddon.fit();
         this.terminal.onData((text: string): void => this.sendInput(text));
         this.terminal.onResize((): void => {
-            this.frameWindow?.Module?._console_resize?.();
+            this.runtime?.consoleResize(this.terminal.cols, this.terminal.rows);
         });
         this.bootButton.addEventListener("click", (): void => {
             if (this.state === VmState.Ready) {
                 this.boot();
+                return;
+            }
+            if (this.state === VmState.Running) {
+                this.resetVm();
                 return;
             }
             this.reboot();
@@ -155,7 +170,11 @@ export class VmController {
             this.bootButton.disabled = true;
             return;
         }
-        target.rebuildFilesystem();
+        this.teardown = this.teardown.then((): void => {
+            if (this.target === target) {
+                target.rebuildFilesystem();
+            }
+        });
         this.state = VmState.Ready;
         this.updateControls();
     }
@@ -176,11 +195,18 @@ export class VmController {
 
     reportFilesystemSyncError(error: Error): void {
         this.terminal.writeln(`\r\nVM workspace is out of sync; reboot to restore it (${error.message})`);
+        this.state = VmState.Failed;
+        this.updateControls();
     }
 
     resetToReady(): void {
         this.stop();
-        this.target?.rebuildFilesystem();
+        const target = this.target;
+        this.teardown = this.teardown.then((): void => {
+            if (target !== undefined && this.target === target) {
+                target.rebuildFilesystem();
+            }
+        });
         this.resetTerminal();
         this.updateControls();
     }
@@ -194,19 +220,7 @@ export class VmController {
         this.resetTerminal();
         this.state = VmState.Loading;
         this.updateControls();
-
-        const frame = document.createElement("iframe");
-        frame.hidden = true;
-        frame.title = "Risclet virtual machine runtime";
-        frame.src = new URL("../frame.html", target.image.runtimeUrl).href;
-        frame.addEventListener("load", (): void => this.initializeFrame(frame, target), { once: true });
-        frame.addEventListener("error", (): void => {
-            if (frame === this.frame) {
-                this.fail("Could not create the VM runtime");
-            }
-        }, { once: true });
-        this.frame = frame;
-        document.body.appendChild(frame);
+        void this.start(target, this.generation);
     }
 
     private reboot(): void {
@@ -214,20 +228,39 @@ export class VmController {
         if (target === undefined) {
             return;
         }
-        target.rebuildFilesystem();
+        this.stop();
+        this.teardown = this.teardown.then((): void => {
+            if (this.target === target) {
+                target.rebuildFilesystem();
+            }
+        });
         this.boot();
     }
 
     private stop(): void {
+        this.generation += 1;
         if (this.inputTimer !== undefined) {
             window.clearTimeout(this.inputTimer);
         }
         this.inputBytes = [];
         this.inputOffset = 0;
         this.inputTimer = undefined;
-        this.frameWindow = undefined;
-        this.frame?.remove();
-        this.frame = undefined;
+        const runtime = this.runtime;
+        this.runtime = undefined;
+        if (runtime !== undefined) {
+            const active = this.state !== VmState.Ready;
+            this.teardown = (async (): Promise<void> => {
+                try {
+                    if (active) {
+                        await runtime.halt();
+                    }
+                } finally {
+                    await runtime.destroy();
+                }
+            })().catch((error: unknown): void => {
+                console.error("VM teardown failed", error);
+            });
+        }
         this.state = VmState.Ready;
     }
 
@@ -236,84 +269,112 @@ export class VmController {
         this.terminal.write(SHOW_CURSOR);
     }
 
-    private initializeFrame(frame: HTMLIFrameElement, target: VmTarget): void {
-        if (frame !== this.frame || frame.contentWindow === null) {
-            return;
-        }
-        const runtimeWindow = frame.contentWindow;
-        this.frameWindow = runtimeWindow;
-        runtimeWindow.term = {
-            write: (binaryText: string): void => {
-                const bytes = new Uint8Array(binaryText.length);
-                for (let i = 0; i < binaryText.length; i += 1) {
-                    bytes[i] = binaryText.charCodeAt(i);
-                }
-                this.terminal.write(bytes);
-            },
-            getSize: (): [number, number] => [this.terminal.cols, this.terminal.rows],
-        };
-        runtimeWindow.graphic_display = null;
-        runtimeWindow.net_state = null;
-        runtimeWindow.update_downloading = (active: boolean): void => {
-            if (frame !== this.frame || this.state === VmState.Running) {
+    private async start(target: VmTarget, generation: number): Promise<void> {
+        try {
+            await this.teardown;
+            if (generation !== this.generation) {
                 return;
             }
-            this.state = active ? VmState.Loading : VmState.Booting;
-            this.updateControls();
-        };
-        runtimeWindow.Module = {
-            p9Server: {
-                request: (request: Uint8Array, replyCapacity: number): Uint8Array => {
-                    const reply = target.filesystem.request(new Uint8Array(request), replyCapacity);
-                    return new runtimeWindow.Uint8Array(reply);
+            if (window.Riscbox === undefined) {
+                const runtimeScript = document.createElement("script");
+                runtimeScript.src = target.image.runtimeUrl.href;
+                await new Promise<void>((resolve, reject): void => {
+                    runtimeScript.addEventListener("load", (): void => resolve(), { once: true });
+                    runtimeScript.addEventListener("error", (): void => reject(new Error("Could not load the VM runtime")), { once: true });
+                    document.body.appendChild(runtimeScript);
+                });
+            }
+            if (generation !== this.generation) {
+                return;
+            }
+            const Riscbox = window.Riscbox;
+            if (Riscbox === undefined) {
+                throw new Error("VM runtime did not expose Riscbox");
+            }
+            const wasmUrl = new URL("riscbox.wasm", target.image.runtimeUrl);
+            const wasmResponse = await fetch(wasmUrl);
+            if (!wasmResponse.ok) {
+                throw new Error(`VM runtime HTTP ${wasmResponse.status}`);
+            }
+            const [wasmBytes, config] = await Promise.all([
+                wasmResponse.arrayBuffer(),
+                Riscbox.loadResolvedConfig(target.image.configUrl.href),
+            ]);
+            if (generation !== this.generation) {
+                return;
+            }
+            const manifestUrl = config.drive0?.file;
+            if (manifestUrl === undefined) {
+                throw new Error("VM configuration has no block manifest");
+            }
+            const disk = await openHttpBlockProvider(manifestUrl);
+            if (generation !== this.generation) {
+                disk.close();
+                return;
+            }
+            const runtime = await Riscbox.instantiate(wasmBytes, {
+                blockProviders: new Map([[1, disk]]),
+                p9Servers: new Map([["workspace", target.filesystem]]),
+                consoleWrite: (text: string): void => this.terminal.write(text),
+                consoleReset: (): void => this.resetTerminal(),
+                onVmStarted: (): void => {
+                    if (generation !== this.generation) {
+                        return;
+                    }
+                    this.state = VmState.Running;
+                    runtime.consoleResize(this.terminal.cols, this.terminal.rows);
+                    this.updateControls();
+                    this.terminal.focus();
                 },
-            },
-            onRuntimeInitialized: (): void => {
-                if (frame !== this.frame) {
-                    return;
-                }
-                this.state = VmState.Loading;
-                this.updateControls();
-                const module = runtimeWindow.Module;
-                if (module?.ccall === undefined) {
-                    this.fail("VM runtime did not expose its startup function");
-                    return;
-                }
-                module.ccall(
-                    "vm_start",
-                    null,
-                    ["string", "number", "string", "string", "number", "number", "number"],
-                    [target.image.configUrl.href, target.image.memoryMiB, "", null, 0, 0, 0],
-                );
-            },
-            onVmStarted: (): void => {
-                if (frame !== this.frame) {
-                    return;
-                }
-                this.state = VmState.Running;
-                this.updateControls();
-                this.terminal.focus();
-            },
-        };
-        runtimeWindow.addEventListener("error", (): void => {
-            if (frame === this.frame) {
-                this.fail("The VM runtime stopped unexpectedly");
+                onVmReset: (): void => {
+                    if (generation !== this.generation) {
+                        return;
+                    }
+                    this.state = VmState.Running;
+                    runtime.consoleResize(this.terminal.cols, this.terminal.rows);
+                    this.updateControls();
+                    this.terminal.focus();
+                },
+                onVmHalted: (): void => {
+                    if (generation === this.generation) {
+                        this.state = VmState.Ready;
+                        this.updateControls();
+                    }
+                },
+                onError: (error: unknown): void => {
+                    if (generation === this.generation) {
+                        this.fail(`The VM runtime stopped unexpectedly: ${String(error)}`);
+                    }
+                },
+            });
+            if (generation !== this.generation) {
+                disk.close();
+                return;
             }
-        });
-        runtimeWindow.addEventListener("unhandledrejection", (event: PromiseRejectionEvent): void => {
-            if (frame === this.frame) {
-                this.fail(`The VM runtime stopped unexpectedly: ${String(event.reason)}`);
+            this.runtime = runtime;
+            this.state = VmState.Booting;
+            this.updateControls();
+            runtime.startResolved({
+                ...config,
+                drive0: { provider: 1, capacity_sectors: disk.capacitySectors.toString() },
+            }, target.image.memoryMiB);
+        } catch (error: unknown) {
+            if (generation === this.generation) {
+                this.fail(error instanceof Error ? error.message : String(error));
             }
-        });
+        }
+    }
 
-        const runtime = runtimeWindow.document.createElement("script");
-        runtime.src = target.image.runtimeUrl.href;
-        runtime.addEventListener("error", (): void => {
-            if (frame === this.frame) {
-                this.fail("Could not load the VM runtime");
-            }
-        }, { once: true });
-        runtimeWindow.document.body.appendChild(runtime);
+    private resetVm(): void {
+        const runtime = this.runtime;
+        if (runtime === undefined) {
+            return;
+        }
+        this.state = VmState.Booting;
+        this.updateControls();
+        void runtime.reset().catch((error: unknown): void => {
+            this.fail(`Could not reboot the VM: ${String(error)}`);
+        });
     }
 
     private sendInput(text: string): void {
@@ -330,8 +391,8 @@ export class VmController {
 
     private sendNextInputByte(): void {
         this.inputTimer = undefined;
-        const queueCharacter = this.frameWindow?.Module?._console_queue_char;
-        if (this.state !== VmState.Running || queueCharacter === undefined) {
+        const runtime = this.runtime;
+        if (this.state !== VmState.Running || runtime === undefined) {
             this.inputBytes = [];
             this.inputOffset = 0;
             return;
@@ -342,7 +403,7 @@ export class VmController {
             this.inputOffset = 0;
             return;
         }
-        queueCharacter(byte);
+        runtime.consoleInput(Uint8Array.of(byte));
         this.inputOffset += 1;
         this.inputTimer = window.setTimeout((): void => this.sendNextInputByte(), 2);
     }

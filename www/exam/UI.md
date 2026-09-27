@@ -171,9 +171,8 @@ Here is the complete layout of the UI:
                     VM.
                 *   Boot VM appears at the right edge of the main action bar.
                     Once booted, the control becomes Reboot VM.
-                *   Reboot destroys the current VM and its root-disk delta,
-                    reconstructs the shared 9p tree from the system-owned
-                    and student-owned file sets, and boots a clean image.
+                *   Reboot resets the guest in place and retains the VM's
+                    session-local root-disk changes and shared 9p tree.
                 *   The terminal uses the guest's virtio console. The guest
                     receives terminal-size changes without rebooting. The
                     terminal uses xterm's custom WebGL glyphs so box-drawing

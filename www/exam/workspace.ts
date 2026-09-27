@@ -1,5 +1,5 @@
-import { Memory9PServer } from "./vm/runtime/p9.js";
-import type { P9Change } from "./vm/runtime/p9.js";
+import { Memory9PServer } from "./vm/runtime/p9/index.js";
+import type { P9Change, SyncResult } from "./vm/runtime/p9/index.js";
 
 export enum WorkspaceChangeSource {
     Editor = "editor",
@@ -127,12 +127,10 @@ export class ProblemWorkspace {
     }
 
     private writeFilesystemFile(path: string, content: Uint8Array, source: string): Error | undefined {
-        try {
-            this.filesystem.writeFile(path, content, source);
-        } catch (error: unknown) {
-            return error instanceof Error ? error : new Error(String(error));
-        }
-        return undefined;
+        const result = this.filesystem.writeFile(path, content, source);
+        return result.kind === "ok" ? undefined : new Error(
+            result.kind === "error" ? result.error.message : `File is not loaded: ${path}`,
+        );
     }
 
     private handleFilesystemChange(change: P9Change): void {
@@ -145,13 +143,11 @@ export class ProblemWorkspace {
         if (!this.studentFiles.has(change.path)) {
             return;
         }
-        let content: Uint8Array;
-        try {
-            content = this.filesystem.readFile(change.path);
-        } catch {
+        const result: SyncResult<Uint8Array> = this.filesystem.readFile(change.path);
+        if (result.kind !== "ok") {
             return;
         }
-        this.studentFiles.set(change.path, content);
+        this.studentFiles.set(change.path, result.value);
         this.studentRevision += 1;
         this.emit({ path: change.path, source: WorkspaceChangeSource.Guest });
     }

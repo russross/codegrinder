@@ -163,27 +163,28 @@ Selecting the VM tab boots a ready VM. Selecting the tab while the VM is
 loading, booting, or running leaves the active VM intact. Selecting it after a
 runtime failure performs a clean reboot.
 
-Boot creates a same-origin hidden iframe, configures the Riscbox globals, and
-loads `vm/runtime/riscbox-wasm.js`. The guest terminal is connected through its
-virtio console. The runtime's synchronous 9p endpoint delegates to the active
-`Memory9PServer`. Request and response arrays are copied across the iframe
-boundary because typed-array identity is realm-specific.
+Boot loads `vm/runtime/riscbox.js` and `riscbox.wasm` in the page. The browser
+loads the VM configuration with `no-store`, opens
+the existing split drive through the HTTP block provider, and registers the
+active `Memory9PServer` under the `workspace` key. The guest terminal is
+connected through its virtio console.
 
-Terminal input is UTF-8 encoded and paced into `_console_queue_char` so pasted
-commands do not overflow the emulated serial input queue. Console output is
-passed to xterm as bytes for streaming UTF-8 decoding. Changes to xterm's row
-or column count call `_console_resize`, which notifies the guest through its
-virtio console.
+Terminal input is UTF-8 encoded and paced through `consoleInput` so pasted
+commands do not overflow the emulated input queue. Console output is passed
+to xterm. Changes to xterm's row or column count call `consoleResize`.
 
-Reboot performs this sequence:
+The Reboot VM button resets the guest in place. The runtime resets the VM and
+its device interfaces while retaining the session-local block overlay and
+the current 9p filesystem. A problem switch or step advancement performs this
+sequence:
 
-1.  Destroy the iframe, its WASM runtime, and the in-memory root-disk delta.
+1.  Halt and destroy the WASM runtime and its in-memory root-disk delta.
 
 2.  Rebuild the 9p tree exactly from `systemOwnedFiles` and
     `studentOwnedFiles`, removing guest-only artifacts and restoring canonical
     paths.
 
-3.  Create a new iframe and boot the configured image.
+3.  Create a new runtime and boot the configured image.
 
 The current image lookup contains only `riscv`. Problems without a configured
 image do not show the VM tab.
