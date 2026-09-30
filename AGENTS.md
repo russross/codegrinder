@@ -55,10 +55,12 @@ For database schema and queries:
 
 For protocol changes:
 
-- Backware compatibility of the protocol is NOT a goal
-- Always clean up/remove fields that are not actually used
-- Favor flattening message data types where appropriate
-- Client does not know/care about database layout—protocol should minimize leaking relational database structure
+- Protocol changes must be explicitly approved
+- When we DO make changes:
+    * Backward compatibility of the protocol is NOT a goal--the server and all clients must be migrated together and we do not support old clients
+    * Always clean up/remove fields that are not actually used
+    * Favor flattening message data types where appropriate
+    * Client does not know/care about database layout—protocol should minimize leaking relational database structure
 - Session authentication uses explicit raw session keys in gRPC metadata. Do not use HTTP cookies or `session_cookie` request fields for session auth.
 
 For the web interfaces under `www/exam` and `www/web`:

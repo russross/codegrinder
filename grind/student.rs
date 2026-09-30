@@ -12,7 +12,8 @@ use crate::files::{
     workspace_official_paths,
 };
 use crate::proto::codegrinder::{
-    AssignmentKey, Commit, GetWorkspaceResponse, GradingCommit, WorkspaceFileState,
+    AssignmentKey, Commit, CommitSaveStatus, GetWorkspaceResponse, GradingCommit,
+    WorkspaceFileState,
 };
 use crate::transcript::dump_transcript;
 use prost_types::Timestamp;
@@ -51,7 +52,6 @@ pub async fn command_grade(extra: Vec<String>, trace: ApiTrace) -> Result<()> {
     }
     let mut session = connect(trace).await?;
     let mut student = gather_student_context(&mut session, Path::new(".")).await?;
-    let locked_for_lms = assignment_locked_for_lms(&mut session, &student).await?;
     let unsigned = build_grading_commit(&session.user.user_id, &student, "grade", "grind grade");
     let signed_resp = session.save_ungraded_commit(unsigned).await?;
     let signed = signed_resp.bundle.unwrap_or_default();
@@ -71,7 +71,14 @@ pub async fn command_grade(extra: Vec<String>, trace: ApiTrace) -> Result<()> {
                 "the server ended the connection without sending a report card".to_string(),
             )
         })?;
-    session.save_graded_commit(graded.clone()).await?;
+    let locked_for_lms = match assignment_locked_for_lms(&mut session, &student).await {
+        Ok(locked) => locked,
+        Err(error) => {
+            eprintln!("unable to check the Canvas close deadline: {error}");
+            false
+        }
+    };
+    let saved = session.save_graded_commit(graded.clone()).await?;
     let graded_bundle = decode_signed_runtime(&graded)?;
     let saved_commit = graded_bundle.commit.unwrap_or_default();
     if commit_passed(&saved_commit) {
@@ -110,7 +117,7 @@ pub async fn command_grade(extra: Vec<String>, trace: ApiTrace) -> Result<()> {
             println!();
         }
     }
-    if locked_for_lms {
+    if locked_for_lms && saved.save_status == CommitSaveStatus::Saved as i32 {
         println!("grade was not posted to the LMS because the assignment is locked");
     }
     Ok(())

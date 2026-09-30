@@ -54,7 +54,7 @@ type OutputCallback = (value: string) => void;
 type AssignmentResponse = GetAssignmentResponse & { assignment: AssignmentKey };
 
 interface LoadedAssignment {
-  readonly lockedForLms: boolean;
+  readonly closeAt: TimestampMessage | undefined;
   readonly response: AssignmentResponse;
 }
 
@@ -65,6 +65,7 @@ interface WorkspaceSaveResult {
 }
 
 interface GradeResult extends WorkspaceSaveResult {
+  lockedForLms: boolean;
   completed: boolean;
   passed: boolean;
   commit: CommitMessage;
@@ -290,7 +291,7 @@ class CodeGrinder {
     }
     const listItem = items.find((item) => assignmentsEqual(item.assignment, assignment));
     return {
-      lockedForLms: timestampHasPassed(listItem?.lockAt),
+      closeAt: listItem?.lockAt,
       response,
     };
   }
@@ -407,6 +408,7 @@ class CodeGrinder {
     localFiles: Readonly<WorkspaceFiles>,
     stdoutCallback: OutputCallback,
     stderrCallback: OutputCallback,
+    closeAt?: TimestampMessage,
   ): Promise<GradeResult> {
     const prepared = await this.#prepareAction(problem, localFiles, "grade");
     const finalBundle = await consumeGradingDaycareResponses(
@@ -421,6 +423,7 @@ class CodeGrinder {
     if (!runtime.commit) {
       throw new Error("Daycare returned no graded commit");
     }
+    const lockedForLms = timestampHasPassed(closeAt);
     const saved = await this.client.saveGradedCommit(
       SaveGradedCommitRequest.create({ bundle: finalBundle }),
       this.#authOptions(),
@@ -446,6 +449,7 @@ class CodeGrinder {
       completed,
       passed,
       commit: runtime.commit,
+      lockedForLms: lockedForLms && saved.response.saveStatus === CommitSaveStatus.SAVED,
       saveStatus: saved.response.saveStatus,
       message: saveStatusMessage(saved.response.saveStatus, "grade"),
     };

@@ -4,6 +4,7 @@ import { Terminal } from "@xterm/xterm";
 import { openHttpBlockProvider } from "./vm/runtime/block/http.js";
 import type { BlockProvider } from "./vm/runtime/block/index.js";
 import type { Memory9PServer } from "./vm/runtime/p9/index.js";
+import { registerClipboardTerminal } from "./clipboard";
 
 export interface VmImageDescriptor {
     readonly configUrl: URL;
@@ -134,6 +135,7 @@ export class VmController {
         });
         this.terminal.loadAddon(this.fitAddon);
         this.terminal.open(this.host);
+        registerClipboardTerminal(this.terminal);
         try {
             const webglAddon = new WebglAddon();
             webglAddon.onContextLoss((): void => webglAddon.dispose());

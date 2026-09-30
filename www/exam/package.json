@@ -7,7 +7,7 @@
   "scripts": {
     "proto:generate": "./proto-gen.sh",
     "build": "npm run proto:generate && webpack",
-    "test": "node --test saving.test.mjs"
+    "test": "node --experimental-transform-types --test saving.test.mjs workspace.test.mjs"
   },
   "keywords": [],
   "author": "",

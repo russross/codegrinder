@@ -32,6 +32,37 @@ interactions. Any other problems are completely ignored until the
 user changes the active problem.
 
 
+Clipboard behavior
+------------------
+
+Copy, cut, and paste use one private text buffer shared by instructions,
+the editor, action output, and the VM terminal. The buffer lives only in
+memory and survives focus changes and problem switching; reloading the
+page clears it. Editor cuts and pastes preserve undo history and cannot
+modify read-only files. Cutting selected terminal output or instructions
+copies it without deleting it.
+
+The system clipboard receives `[redacted]` when the private buffer contains
+text and empty text otherwise. Copy and cut events replace their outgoing
+payload with this marker. Copy, cut, paste, window focus and blur, and tab
+visibility changes also attempt to write the marker through the browser
+clipboard API while the document is focused and has active user interaction.
+Writes without that interaction are skipped to avoid Chrome's clipboard
+permission prompt. Failed writes do not interrupt editing. Paste never reads
+the system clipboard.
+
+Keyboard shortcuts and native clipboard events use the same private buffer.
+The VM supports Ctrl+Shift+C/V; Ctrl+C without selected terminal text remains
+a guest interrupt. Standard Ctrl/Cmd+C/X/V and Insert-based clipboard
+shortcuts are also supported. Native context-menu Paste availability depends
+on whether the browser permitted the system marker to be written.
+
+Middle-button copying/pasting and HTML drag/drop are blocked inside the app.
+Pane resizing remains available. Browser restrictions can prevent system
+clipboard writes, and the page cannot control Linux PRIMARY selection
+export or clipboard operations performed outside the page.
+
+
 UI layout
 ---------
 
@@ -68,6 +99,19 @@ Here is the complete layout of the UI:
             deadline, and its response only acknowledges the submitted edits.
         *   Failed saves remain dirty and retry after 30 seconds unless an
             earlier timer or save request handles them.
+    *   A "Reset" button immediately after "Save".
+        *   Fetch the starting workspace for the current problem step and
+            refresh system-owned files without replacing student work.
+        *   Compare all student-owned files with their starting contents.
+        *   Always open a modal dialog. If nothing changed, show only the
+            explanation and "Cancel". Otherwise show a "Changed files" list.
+        *   Only offer confirmation when the currently edited student file
+            differs from its starting contents. Reset affects only that file.
+        *   Focus "Cancel" by default and require a button click to dismiss.
+            If student files changed while the dialog was open, update it and
+            require confirmation again.
+        *   Preserve editor undo history. After resetting, save the workspace
+            and synchronize the restored file with the VM filesystem.
     *   One button for each of the actions defined for the problem
         type of the current step of the active problem
         *   Requesting an action makes the editor read-only, disables file

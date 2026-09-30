@@ -103,6 +103,12 @@ export class ProblemWorkspace {
     ): void {
         const previousStudentFiles = this.studentFiles;
         this.systemFiles = copyFileMap(systemOwnedFiles);
+        for (const [path, content] of this.systemFiles) {
+            const syncError = this.writeFilesystemFile(path, content, "server");
+            if (syncError !== undefined) {
+                throw syncError;
+            }
+        }
         this.studentFiles = copyFileMap(studentOwnedFiles);
         for (const path of this.studentFiles.keys()) {
             const localContent = previousStudentFiles.get(path);

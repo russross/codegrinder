@@ -791,6 +791,7 @@ function setupCodegrinder(): void {
                     files,
                     output => writeTerminal(output, "green"),
                     output => writeTerminal(output, "darkgreen"),
+                    assignment.closeAt,
                 );
                 const note = result.commit.reportCard?.note;
                 if (note) {
@@ -807,7 +808,7 @@ function setupCodegrinder(): void {
                 if (result.message !== "") {
                     writeTerminal(`${result.message}\n`, "red");
                 }
-                if (assignment.lockedForLms) {
+                if (result.lockedForLms) {
                     writeTerminal("Grade was not posted to the LMS because the assignment is locked\n", "red");
                 }
                 const refreshedAssignment = await codeGrinder.loadAssignment(assignment.response.assignment);

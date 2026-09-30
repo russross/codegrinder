@@ -150,13 +150,12 @@ async fn prepare_startup_grade_passback(
     key: &AssignmentKey,
 ) -> AppResult<Option<(GradePassbackTarget, String)>> {
     let key = key.clone();
-    db.transaction(move |conn| prepare_startup_grade_passback_tx(conn, &key, Utc::now())).await
+    db.transaction(move |conn| prepare_startup_grade_passback_tx(conn, &key)).await
 }
 
 fn prepare_startup_grade_passback_tx(
     conn: &Connection,
     key: &AssignmentKey,
-    now: chrono::DateTime<Utc>,
 ) -> AppResult<Option<(GradePassbackTarget, String)>> {
     let assignment = conn
         .query_row(
@@ -165,17 +164,13 @@ fn prepare_startup_grade_passback_tx(
                     assignments.outcome_url,
                     assignments.outcome_ext_accepted,
                     assignments.consumer_key,
-                    COALESCE(assignment_scores.assignment_score, 0.0),
-                    assignments.lock_at IS NOT NULL
-                        AND datetime(assignments.lock_at) <= datetime(?)
-                        AND NOT user_courses.is_instructor
+                    COALESCE(assignment_scores.assignment_score, 0.0)
              FROM assignments
-             NATURAL JOIN user_courses
              NATURAL LEFT JOIN assignment_scores
              WHERE assignments.user_id = ?
                AND assignments.course_id = ?
                AND assignments.problem_set_id = ?",
-            params![crate::timeutil::db_time(now), key.user_id, key.course_id, key.problem_set_id],
+            params![key.user_id, key.course_id, key.problem_set_id],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -184,21 +179,16 @@ fn prepare_startup_grade_passback_tx(
                     row.get::<_, String>(3)?,
                     row.get::<_, String>(4)?,
                     row.get::<_, f64>(5)?,
-                    row.get::<_, bool>(6)?,
                 ))
             },
         )
         .optional()?;
-    let Some((status, grade_id, outcome_url, outcome_ext_accepted, consumer_key, score, locked)) =
+    let Some((status, grade_id, outcome_url, outcome_ext_accepted, consumer_key, score)) =
         assignment
     else {
         return Ok(None);
     };
     if status != PASSBACK_FAILED && status != PASSBACK_PENDING {
-        return Ok(None);
-    }
-    if locked {
-        set_passback_status(conn, key, PASSBACK_LOCKED)?;
         return Ok(None);
     }
     if grade_id.is_empty() || outcome_url.is_empty() {
@@ -938,8 +928,8 @@ mod tests {
             problem_set_id: "ps1".to_owned(),
         };
 
-        let (target, html) =
-            prepare_startup_grade_passback_tx(&conn, &key, Utc::now()).unwrap().unwrap();
+        conn.execute("UPDATE assignments SET lock_at = '2026-01-03T00:00:00Z'", []).unwrap();
+        let (target, html) = prepare_startup_grade_passback_tx(&conn, &key).unwrap().unwrap();
 
         assert_eq!(target.score, 0.75);
         assert!(html.contains("latest"));
@@ -954,8 +944,13 @@ mod tests {
             PASSBACK_PENDING
         );
 
-        conn.execute("UPDATE assignments SET grade_passback_status = ?", params![PASSBACK_POSTED])
-            .unwrap();
-        assert!(prepare_startup_grade_passback_tx(&conn, &key, Utc::now()).unwrap().is_none());
+        let (pending_target, _) = prepare_startup_grade_passback_tx(&conn, &key).unwrap().unwrap();
+        assert_eq!(pending_target.score, target.score);
+
+        for status in [PASSBACK_POSTED, PASSBACK_LOCKED] {
+            conn.execute("UPDATE assignments SET grade_passback_status = ?", params![status])
+                .unwrap();
+            assert!(prepare_startup_grade_passback_tx(&conn, &key).unwrap().is_none());
+        }
     }
 }

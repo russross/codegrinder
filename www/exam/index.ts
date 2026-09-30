@@ -11,6 +11,7 @@ import {
     GetWorkspaceRequest,
     GradingCommit,
     HelloRequest,
+    ListAssignmentsRequest,
     RuntimeBundle,
     SaveGradedCommitRequest,
     SaveUngradedCommitRequest,
@@ -43,6 +44,7 @@ import { ProblemWorkspace, WorkspaceChangeSource } from "./workspace";
 import type { WorkspaceStudentChange } from "./workspace";
 import { SaveState } from "./saving";
 import { VmController, vmImageForProblemType } from "./vm";
+import { installExamClipboard, registerClipboardTerminal } from "./clipboard";
 
 interface ProblemData {
     problemId: string;
@@ -86,6 +88,7 @@ let editor: EditorView;
 let fitAddon: FitAddon;
 let term: Terminal;
 let assignment: AssignmentKey | null = null;
+let assignmentCloseAt: Timestamp | undefined;
 let userId = "";
 let sessionKey = "";
 let currentlyOpenFilePath: string | null = null;
@@ -98,6 +101,7 @@ let actionInProgress = false;
 
 const language = new Compartment();
 const editableCompartment = new Compartment();
+let resetInProgress = false;
 
 window.problemSet = [];
 
@@ -549,6 +553,7 @@ async function fetchWorkspace(
     assignmentKey: AssignmentKey,
     problemId: string,
     stepNumber: bigint,
+    fileState: WorkspaceFileState = WorkspaceFileState.CURRENT,
 ): Promise<{
     problemId: string;
     problemNote: string;
@@ -565,7 +570,7 @@ async function fetchWorkspace(
             assignment: assignmentKey,
             problemId,
             stepNumber: stepNumber.toString(),
-            fileState: WorkspaceFileState.CURRENT,
+            fileState,
             includeContents: true,
             includeSolutionFiles: false,
         }),
@@ -595,6 +600,19 @@ async function loadAssignment(): Promise<void> {
     }
     if (assignmentResponse.assignment.userId !== userId) {
         throw new Error("Assignment user does not match current user");
+    }
+
+    assignmentCloseAt = undefined;
+    try {
+        const listed = await client.listAssignments(ListAssignmentsRequest.create(), authOptions());
+        const key = assignmentResponse.assignment;
+        assignmentCloseAt = listed.response.items.find(item =>
+            item.assignment?.userId === key.userId
+            && item.assignment.courseId === key.courseId
+            && item.assignment.problemSetId === key.problemSetId
+        )?.lockAt;
+    } catch (error: unknown) {
+        console.warn("CodeGrinder: could not check the Canvas close deadline", error);
     }
 
     window.problemSet = [];
@@ -825,6 +843,8 @@ async function doAction(problem: ProblemData, action: string): Promise<void> {
     const finalBundle = completion.bundle;
     const runtime = RuntimeBundle.fromBinary(finalBundle.bundle);
 
+    const lockedForLms = assignmentCloseAt !== undefined
+        && Timestamp.toDate(assignmentCloseAt).getTime() <= Date.now();
     const graded = await client.saveGradedCommit(
         SaveGradedCommitRequest.create({ bundle: finalBundle }),
         authOptions(),
@@ -855,6 +875,9 @@ async function doAction(problem: ProblemData, action: string): Promise<void> {
         }
     }
     writeSaveStatus(graded.response.saveStatus);
+    if (lockedForLms && graded.response.saveStatus === CommitSaveStatus.SAVED) {
+        term.writeln("Grade was not posted to the LMS because the assignment is locked");
+    }
 }
 
 function setActionInProgress(inProgress: boolean): void {
@@ -933,6 +956,110 @@ function requestAutomaticSave(problem: ProblemData | null = currentProblem): voi
     void requestSave(problem);
 }
 
+async function requestReset(): Promise<void> {
+    const problem = currentProblem;
+    const currentAssignment = assignment;
+    if (problem === null || currentAssignment === null || actionInProgress || resetInProgress) {
+        return;
+    }
+    resetInProgress = true;
+    renderMenuBar();
+    const path = currentlyOpenFilePath;
+    const step = problem.currentStepNumber;
+    try {
+        const workspace = await fetchWorkspace(
+            createMainClient(), currentAssignment, problem.problemId, step, WorkspaceFileState.STEP_START,
+        );
+        await saveQueue;
+        if (currentProblem !== problem || problem.currentStepNumber !== step || currentlyOpenFilePath !== path) {
+            return;
+        }
+        flushEditor();
+        applyWorkspaceRefresh(problem, workspace);
+        renderFileTree();
+        renderInstructionsPane();
+        updateInstructionsTabVisibility();
+        reloadOpenFileFromState();
+        const starterFiles = assignmentStepFileMap(workspace.studentOwnedFiles);
+        const dialog = document.getElementById("reset-dialog");
+        if (!(dialog instanceof HTMLDialogElement)) {
+            throw new Error("Reset dialog is missing");
+        }
+        const confirmed = await new Promise<boolean>((resolve) => {
+            let revision = problem.workspace.revision();
+            const render = (): void => {
+                revision = problem.workspace.revision();
+                const changed = [...starterFiles].filter(([filePath, starter]) => {
+                    const local = problem.workspace.readVisibleFile(filePath);
+                    return local === undefined || local.length !== starter.length
+                        || starter.some((byte, i) => byte !== local[i]);
+                }).map(([filePath]) => filePath).sort();
+                const canReset = path !== null && changed.includes(path) && problem.workspace.isStudentOwned(path);
+                const message = document.createElement("p");
+                message.textContent = changed.length === 0
+                    ? "All files are already in their reset state, nothing to do"
+                    : canReset
+                        ? "Warning! This will throw away all changes you have made to this file since the beginning of this step! The editor's undo function may be able to restore the changes."
+                        : "Reset only applies to the file you are currently editing";
+                dialog.replaceChildren(message);
+                if (changed.length > 0) {
+                    const heading = document.createElement("h2");
+                    heading.textContent = "Changed files";
+                    const list = document.createElement("ul");
+                    for (const filePath of changed) {
+                        const item = document.createElement("li");
+                        item.textContent = filePath;
+                        list.appendChild(item);
+                    }
+                    dialog.append(heading, list);
+                }
+                const cancel = document.createElement("button");
+                cancel.type = "button";
+                cancel.textContent = "Cancel";
+                cancel.autofocus = true;
+                cancel.addEventListener("click", (): void => { dialog.close(); resolve(false); });
+                if (canReset) {
+                    const accept = document.createElement("button");
+                    accept.type = "button";
+                    accept.textContent = "Reset";
+                    accept.addEventListener("click", (): void => {
+                        if (problem.workspace.revision() !== revision) {
+                            render();
+                            cancel.focus();
+                            return;
+                        }
+                        dialog.close();
+                        resolve(true);
+                    });
+                    dialog.appendChild(accept);
+                }
+                dialog.appendChild(cancel);
+            };
+            render();
+            dialog.showModal();
+        });
+        if (!confirmed || path === null || currentProblem !== problem || problem.currentStepNumber !== step) {
+            return;
+        }
+        const starter = starterFiles.get(path);
+        if (starter === undefined) {
+            throw new Error("Reset file is missing from the step-start workspace");
+        }
+        const syncError = problem.workspace.writeStudentFile(path, starter);
+        if (syncError !== undefined) {
+            vmController.reportFilesystemSyncError(syncError);
+        }
+        reloadOpenFileFromState();
+        await requestSave(problem);
+    } catch (error: unknown) {
+        selectTerminalTab();
+        term.writeln(`Reset failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+        resetInProgress = false;
+        renderMenuBar();
+    }
+}
+
 function loadFirstEditableFileIntoEditor(): void {
     if (currentProblem === null) {
         return;
@@ -971,9 +1098,9 @@ function renderMenuBar(): void {
             problemButton.disabled = true;
             problemButton.classList.add("active-problem");
         } else {
-            problemButton.disabled = actionInProgress;
+            problemButton.disabled = actionInProgress || resetInProgress;
             problemButton.addEventListener("click", async (): Promise<void> => {
-                if (actionInProgress) {
+                if (actionInProgress || resetInProgress) {
                     return;
                 }
                 vmController.resetToReady();
@@ -1019,11 +1146,18 @@ function renderMenuBar(): void {
     });
     menuItems.appendChild(saveButton);
 
+    const resetButton = document.createElement("button");
+    resetButton.type = "button";
+    resetButton.textContent = "Reset";
+    resetButton.disabled = actionInProgress || resetInProgress;
+    resetButton.addEventListener("click", (): void => { void requestReset(); });
+    menuItems.appendChild(resetButton);
+
     for (const action of currentProblem.actions) {
         const actionButton = document.createElement("button");
         actionButton.id = `action-${action}-button`;
         actionButton.textContent = actionLabel(action);
-        actionButton.disabled = actionInProgress;
+        actionButton.disabled = actionInProgress || resetInProgress;
         actionButton.addEventListener("click", (): void => {
             if (actionInProgress) {
                 return;
@@ -1276,10 +1410,15 @@ function initializeTabs(): void {
 function initializeTerminal(): void {
     term = new Terminal({
         convertEol: true,
-        scrollback: 500,
+        customGlyphs: true,
+        scrollback: 1000,
         theme: {
-            background: "#1e1e1e",
-            foreground: "#d4d4d4",
+            background: "#ffffff",
+            foreground: "#454545",
+            black: "#454545", red: "#a31515", green: "#236b23", yellow: "#785600",
+            blue: "#2455a4", magenta: "#853585", cyan: "#006b73", white: "#666666",
+            brightBlack: "#666666", brightRed: "#b52020", brightGreen: "#287828", brightYellow: "#896100",
+            brightBlue: "#2862ba", brightMagenta: "#963d96", brightCyan: "#007a84", brightWhite: "#454545",
         },
         disableStdin: true,
         cursorBlink: false,
@@ -1290,12 +1429,20 @@ function initializeTerminal(): void {
     const terminalElement = document.getElementById("terminal");
     if (terminalElement instanceof HTMLElement) {
         term.open(terminalElement);
-        fitAddon.fit();
+        registerClipboardTerminal(term);
+        new ResizeObserver((): void => {
+            if (terminalElement.clientWidth > 0 && terminalElement.clientHeight > 0) {
+                fitAddon.fit();
+            }
+        }).observe(terminalElement);
     }
     window.addEventListener("resize", (): void => fitAddon.fit());
 }
 
 document.addEventListener("DOMContentLoaded", (): void => {
+    getRequiredElement("reset-dialog").addEventListener("cancel", (event: Event): void => {
+        event.preventDefault();
+    });
     Split(["#file-tree-pane", "#editor-pane", "#info-pane"], {
         sizes: [10, 45, 45],
         gutterSize: 8,
@@ -1350,6 +1497,7 @@ document.addEventListener("DOMContentLoaded", (): void => {
         state,
         parent: getRequiredElement("editor-pane"),
     });
+    installExamClipboard(editor);
 
     loadAssignment().catch((error: unknown) => {
         console.error("Error loading exam client:", error);

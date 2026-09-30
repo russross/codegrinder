@@ -181,6 +181,7 @@ body {
     background-color: #e0e0e0;
     color: #555;
     font: inherit;
+    font-weight: 600;
 }
 
 .tab-button:hover:not(.active) {
@@ -219,8 +220,23 @@ body {
 }
 
 #terminal {
+    min-height: 0;
     flex-grow: 1; /* Allow terminal to grow and fill space */
     overflow: hidden; /* Let xterm handle scrolling */
+}
+
+#reset-dialog {
+    max-width: min(36rem, 80vw);
+    max-height: 80vh;
+    overflow: auto;
+}
+
+#reset-dialog::backdrop {
+    background: rgb(0 0 0 / 45%);
+}
+
+#reset-dialog button {
+    margin-right: 0.5rem;
 }
 
 #vm-tab-content {
