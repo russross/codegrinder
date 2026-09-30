@@ -16,6 +16,13 @@ const config = {
   module: {
     rules: [
       {
+        test: /ghostty-web\/dist\/ghostty-web\.js$/,
+        use: [
+          path.resolve(dirname, 'ghostty-clipboard-loader.cjs'),
+          path.resolve(dirname, 'ghostty-renderer-loader.cjs'),
+        ],
+      },
+      {
         test: /\.ts$/,
         use: 'ts-loader',
         exclude: /node_modules/,

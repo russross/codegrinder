@@ -57,14 +57,21 @@ Each problem keeps three related pieces of state:
 *   `studentOwnedFiles` is the current savable student file set. Editor writes
     and valid guest writes update this map.
 
-*   `Memory9PServer` is the VM's live working tree. It initially contains both
-    owned file sets and may accumulate guest changes and build artifacts.
+*   A Riscbox `Filesystem` is the VM's live working tree. It is created lazily
+    in the page's shared WASM instance, initially contains both owned file
+    sets, and may accumulate guest changes and build artifacts.
 
 The UI lists only paths present in the two owned maps. Guest-created paths do
 not become visible or submit-capable. Guest writes, creates, or renames into an
 existing student-owned path update `studentOwnedFiles`. Guest removal or rename
 away from an owned path does not delete the canonical map entry. Guest changes
 to system-owned paths remain local to the live VM.
+
+Host writes are serialized and copy their submitted bytes. Guest notifications
+start asynchronous reads of affected official paths, including hard-link
+aliases and paths below renamed directories. Per-path revisions and read
+generations prevent late reads from overwriting newer editor or guest work.
+Save snapshots wait for pending writes and guest reads to settle.
 
 The workspace maintains a monotonically increasing student revision. A Save or
 action records the exact submitted revision. If an editor or guest change
@@ -81,10 +88,10 @@ queue. Each request captures its problem and step's save state. A request for a
 replaced step is ignored; a redundant workspace save becomes a no-op when it
 reaches the front of the queue.
 
-Each problem has its own save state and timer. The first editor, VM, or returned
-file change not covered by a submitted snapshot starts a 30-second timer.
-Further changes do not extend that deadline or create additional timers. A save
-request cancels that timer because the queued save will include those changes.
+Each problem has its own save state and timer. Every editor, VM, or returned
+file change restarts its 30-second timer. Continuous editing postpones autosave
+indefinitely. A save request cancels that timer because the queued save will
+include those changes.
 Submitting a snapshot allows the first subsequent edit to start a new timer.
 Only a successful persistence response acknowledges the submitted revision.
 If newer edits exist, their deadline is preserved; otherwise the problem becomes
@@ -161,30 +168,40 @@ VM boot and reboot
 
 Selecting the VM tab boots a ready VM. Selecting the tab while the VM is
 loading, booting, or running leaves the active VM intact. Selecting it after a
-runtime failure performs a clean reboot.
+runtime failure performs a clean reboot. Selecting either terminal tab focuses
+that terminal. VM input, boot, and reboot explicitly flush the editor into the
+local filesystem before proceeding; they do not wait for TA persistence.
 
-Boot loads `vm/runtime/riscbox.js` and `riscbox.wasm` in the page. The browser
-loads the VM configuration with `no-store`, opens
-the existing split drive through the HTTP block provider, and registers the
-active `Memory9PServer` under the `workspace` key. The guest terminal is
+The first boot loads `vm/runtime/riscbox.js` and `riscbox.wasm` in the page.
+The browser loads the VM configuration with `no-store`. Riscbox opens the
+existing split drive and retains session-local disk writes. The active
+problem's `Filesystem` is bound under the `workspace` key before boot.
+The guest terminal is
 connected through its virtio console.
 
-Terminal input is UTF-8 encoded and paced through `consoleInput` so pasted
-commands do not overflow the emulated input queue. Console output is passed
-to xterm. Changes to xterm's row or column count call `consoleResize`.
+Terminal input is UTF-8 encoded and copied into a queue. Each browser task
+offers at most 1024 bytes through `consoleInput` and retains bytes that the
+guest FIFO did not accept. Reset and teardown clear queued input and invalidate
+input waiting for editor writes. Console output is passed to Ghostty. Changes
+to its row or column count call `consoleResize`. The VM cursor blinks; grade
+output disables cursor blinking. Reset clears the screen, scrollback, and
+selection without replacing the parser used by Ghostty's renderer and input
+components.
 
 The Reboot VM button resets the guest in place. The runtime resets the VM and
 its device interfaces while retaining the session-local block overlay and
 the current 9p filesystem. A problem switch or step advancement performs this
 sequence:
 
-1.  Halt and destroy the WASM runtime and its in-memory root-disk delta.
+1.  Halt and destroy the VM and its in-memory root-disk delta. Retain the
+    WASM instance and its per-problem filesystem handles.
 
 2.  Rebuild the 9p tree exactly from `systemOwnedFiles` and
     `studentOwnedFiles`, removing guest-only artifacts and restoring canonical
     paths.
 
-3.  Create a new runtime and boot the configured image.
+3.  Leave the selected problem ready to boot. Its next boot binds its
+    filesystem and starts the configured image in the retained runtime.
 
 The current image lookup contains only `riscv`. Problems without a configured
 image do not show the VM tab.

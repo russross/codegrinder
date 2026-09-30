@@ -5,7 +5,7 @@ This is a simple, single-page app with minimal dependencies. The
 primary external libraries are:
 
 * CodeMirror editor widget
-* xterm.js terminal widget, also referred to as @xterm/xterm
+* Ghostty terminal widget, provided by ghostty-web
 * split.js split window panes with draggable gutters
 
 The app is launched on the same server and port as a gRPC server
@@ -58,6 +58,16 @@ shortcuts are also supported. Native context-menu Paste availability depends
 on whether the browser permitted the system marker to be written.
 
 Middle-button copying/pasting and HTML drag/drop are blocked inside the app.
+Ghostty's selection copier is routed through this policy at build time; it
+cannot export selected text directly to the system clipboard. Dependency
+changes that alter that integration fail the build and require review.
+
+Ghostty's canvas sizing is also adjusted at build time to round backing sizes
+and resize comparisons consistently. Fractional display scaling or browser
+zoom must not cause an idle terminal to resize and repaint every frame.
+Cell dimensions and baselines align to physical pixels, keeping adjacent
+backgrounds seamless. Standard single-line box characters are drawn directly
+to cell boundaries so terminal borders do not depend on font glyph spacing.
 Pane resizing remains available. Browser restrictions can prevent system
 clipboard writes, and the page cannot control Linux PRIMARY selection
 export or clipboard operations performed outside the page.
@@ -92,9 +102,9 @@ Here is the complete layout of the UI:
             or a server action
         *   Leaving the editor automatically saves unsaved changes. This
             includes selecting the VM terminal.
-        *   Each problem has its own 30-second timer. Its first editor, VM,
-            or returned-file change not covered by a submitted save starts
-            that timer; further edits do not reset it. Immediate save requests
+        *   Each problem has its own 30-second timer. Every editor, VM,
+            or returned-file change restarts that timer, postponing autosave
+            indefinitely while editing continues. Immediate save requests
             cancel the timer. Edits after a submitted snapshot start a new
             deadline, and its response only acknowledges the submitted edits.
         *   Failed saves remain dirty and retry after 30 seconds unless an
@@ -187,14 +197,16 @@ Here is the complete layout of the UI:
             problem steps, a VM tab
             *   Instructions renders `doc/doc.md` from the current
                 workspace and embeds referenced workspace images.
+                *   Changes to the canonical document or its referenced
+                    images refresh the rendered instructions.
                 *   This tab is selected by default when the page
                     first renders or the active problem is changed
-            *   Terminal: the xterm.js instance fills the space
+            *   Grade output: the Ghostty instance fills the space
                 *   The terminal is readonly for the user. It shows
                     output and status info but accepts no user input
-                *   There is no visible cursor.
-                *   The terminal has default ANSI colors with a dark
-                    background
+                *   The cursor does not blink.
+                *   The terminal uses a light background and a readable
+                    ANSI palette.
                 *   The terminal is writable from various actions in
                     the UI
                 *   The contents of the terminal are cleared when
@@ -203,23 +215,29 @@ Here is the complete layout of the UI:
                     time there is any output to the terminal
                 *   The terminal fits its container and resizes
                     dynamically.
-                *   The terminal has a scrollback buffer of 500
+                *   The terminal has a scrollback buffer of 1000
                     lines
-            *   VM: an interactive xterm.js instance connected to a
+            *   VM: an interactive Ghostty instance connected to a
                 browser-hosted Alpine RISC-V virtual machine
                 *   This tab is present only when an image is configured
                     for the active problem type. The current configuration
                     provides one image for the `riscv` problem type.
                 *   Selecting the VM tab boots the VM when it is not already
                     active. Selecting the tab again does not reboot an active
-                    VM.
+                    VM and focuses the terminal.
+                *   Both terminals use 18px Latin Modern Mono with a
+                    monospace fallback. The VM uses a black background and
+                    the demo's ANSI palette. The VM cursor blinks; grade
+                    output keeps its cursor non-blinking.
                 *   Boot VM appears at the right edge of the main action bar.
                     Once booted, the control becomes Reboot VM.
                 *   Reboot resets the guest in place and retains the VM's
                     session-local root-disk changes and shared 9p tree.
+                    It clears terminal output, scrollback, selection, and
+                    pending input.
                 *   The terminal uses the guest's virtio console. The guest
                     receives terminal-size changes without rebooting. The
-                    terminal uses xterm's custom WebGL glyphs so box-drawing
+                    terminal uses Ghostty's canvas renderer so box-drawing
                     lines remain connected. The guest mounts the shared tree
                     at `/home/student`.
                 *   Guest writes to student-owned paths are reflected in

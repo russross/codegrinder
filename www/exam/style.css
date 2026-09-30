@@ -222,7 +222,10 @@ body {
 #terminal {
     min-height: 0;
     flex-grow: 1; /* Allow terminal to grow and fill space */
-    overflow: hidden; /* Let xterm handle scrolling */
+    overflow: hidden; /* Let the terminal handle scrolling */
+    box-sizing: border-box;
+    padding: 4px;
+    background: #fff;
 }
 
 #reset-dialog {
@@ -254,6 +257,17 @@ body {
     min-height: 0;
     flex-grow: 1;
     overflow: hidden;
+    box-sizing: border-box;
+    padding: 4px;
+    background: #000;
+}
+
+#editor-pane .cm-editor {
+    height: 100%;
+}
+
+#editor-pane .cm-scroller {
+    overflow: auto;
 }
 
 pre {

@@ -36,15 +36,14 @@ import { python } from "@codemirror/lang-python";
 import { StreamLanguage, LanguageSupport } from "@codemirror/language";
 import { gas } from "@codemirror/legacy-modes/mode/gas";
 import { shell } from "@codemirror/legacy-modes/mode/shell";
-import { Terminal } from "@xterm/xterm";
-import "@xterm/xterm/css/xterm.css";
-import { FitAddon } from "@xterm/addon-fit";
+import { FitAddon, init as initializeGhostty, Terminal } from "ghostty-web";
 
 import { ProblemWorkspace, WorkspaceChangeSource } from "./workspace";
 import type { WorkspaceStudentChange } from "./workspace";
 import { SaveState } from "./saving";
 import { VmController, vmImageForProblemType } from "./vm";
 import { installExamClipboard, registerClipboardTerminal } from "./clipboard";
+import { clearTerminal } from "./terminal";
 
 interface ProblemData {
     problemId: string;
@@ -56,6 +55,7 @@ interface ProblemData {
     actions: string[];
     workspace: ProblemWorkspace;
     instructionsHtml: string;
+    instructionPaths: Set<string>;
     isComplete: boolean;
     saving: SaveState;
 }
@@ -320,7 +320,7 @@ function imageMimeType(path: string): string | null {
     }
 }
 
-function renderInstructionsMarkdown(workspace: ProblemWorkspace): string {
+function renderInstructionsMarkdown(workspace: ProblemWorkspace, dependencies: Set<string>): string {
     const file = workspace.readVisibleFile(DOC_PATH);
     if (file === undefined) {
         return "";
@@ -335,6 +335,7 @@ function renderInstructionsMarkdown(workspace: ProblemWorkspace): string {
             const url = new URL(event.node.destination, documentUrl);
             if (url.origin === documentUrl.origin) {
                 const path = decodeURIComponent(url.pathname.replace(/^\//, ""));
+                dependencies.add(path);
                 const content = workspace.readVisibleFile(path);
                 const mimeType = imageMimeType(path);
                 if (content === undefined) {
@@ -365,6 +366,7 @@ function buildProblemData(summary: AssignmentProblemProgress, workspace: {
     const systemFiles = assignmentStepFileMap(workspace.systemOwnedFiles);
     const studentFiles = assignmentStepFileMap(workspace.studentOwnedFiles);
     const problemWorkspace = new ProblemWorkspace(systemFiles, studentFiles);
+    const instructionPaths = new Set([DOC_PATH]);
     const problem: ProblemData = {
         problemId: summary.problemId,
         note: summary.problemNote,
@@ -374,15 +376,24 @@ function buildProblemData(summary: AssignmentProblemProgress, workspace: {
         problemType: workspace.problemType,
         actions: [...workspace.actions].sort((left, right) => left.localeCompare(right)),
         workspace: problemWorkspace,
-        instructionsHtml: renderInstructionsMarkdown(problemWorkspace),
+        instructionsHtml: renderInstructionsMarkdown(problemWorkspace, instructionPaths),
+        instructionPaths,
         isComplete: summary.completed,
         saving: new SaveState(problemWorkspace.revision(), (): void => requestAutomaticSave(problem)),
     };
     problemWorkspace.subscribe((change: WorkspaceStudentChange): void => {
+        if (change.source !== WorkspaceChangeSource.Editor && problemWorkspace.isStudentOwned(change.path)) {
+            problem.saving.changed();
+        }
         if (currentProblem !== problem) {
             return;
         }
         updateSaveButton();
+        if (problem.instructionPaths.has(change.path)) {
+            refreshInstructions(problem);
+            renderInstructionsPane();
+            updateInstructionsTabVisibility();
+        }
         if (change.source === WorkspaceChangeSource.Guest && currentlyOpenFilePath === change.path && editorDirty) {
             if (vmConflictPath === change.path) {
                 return;
@@ -425,7 +436,7 @@ function updateSaveButton(): void {
     }
 }
 
-function applyWorkspaceRefresh(problem: ProblemData, workspace: {
+async function applyWorkspaceRefresh(problem: ProblemData, workspace: {
     stepNumber: string;
     problemType: string;
     actions: string[];
@@ -433,8 +444,8 @@ function applyWorkspaceRefresh(problem: ProblemData, workspace: {
     studentOwnedFiles: Record<string, Uint8Array>;
     firstStepNumber: string;
     lastStepNumber: string;
-}): void {
-    problem.workspace.refreshFromServer(
+}): Promise<void> {
+    await problem.workspace.refreshFromServer(
         assignmentStepFileMap(workspace.systemOwnedFiles),
         assignmentStepFileMap(workspace.studentOwnedFiles),
     );
@@ -443,10 +454,10 @@ function applyWorkspaceRefresh(problem: ProblemData, workspace: {
     problem.lastStepNumber = BigInt(workspace.lastStepNumber);
     problem.problemType = workspace.problemType;
     problem.actions = [...workspace.actions].sort((left, right) => left.localeCompare(right));
-    problem.instructionsHtml = renderInstructionsMarkdown(problem.workspace);
+    refreshInstructions(problem);
 }
 
-function replaceProblemState(problem: ProblemData, workspace: {
+async function replaceProblemState(problem: ProblemData, workspace: {
     stepNumber: string;
     problemType: string;
     actions: string[];
@@ -454,8 +465,8 @@ function replaceProblemState(problem: ProblemData, workspace: {
     studentOwnedFiles: Record<string, Uint8Array>;
     firstStepNumber: string;
     lastStepNumber: string;
-}): void {
-    problem.workspace.replaceFromServer(
+}): Promise<void> {
+    await problem.workspace.replaceFromServer(
         assignmentStepFileMap(workspace.systemOwnedFiles),
         assignmentStepFileMap(workspace.studentOwnedFiles),
     );
@@ -464,7 +475,7 @@ function replaceProblemState(problem: ProblemData, workspace: {
     problem.lastStepNumber = BigInt(workspace.lastStepNumber);
     problem.problemType = workspace.problemType;
     problem.actions = [...workspace.actions].sort((left, right) => left.localeCompare(right));
-    problem.instructionsHtml = renderInstructionsMarkdown(problem.workspace);
+    refreshInstructions(problem);
     problem.saving.stop();
     problem.saving = new SaveState(problem.workspace.revision(), (): void => requestAutomaticSave(problem));
 }
@@ -501,12 +512,9 @@ function flushEditor(): void {
     if (!editorDirty || currentProblem === null || currentlyOpenFilePath === null) {
         return;
     }
-    const syncError = currentProblem.workspace.writeStudentFile(currentlyOpenFilePath, fileContentFromEditor());
+    currentProblem.workspace.writeStudentFile(currentlyOpenFilePath, fileContentFromEditor());
     editorDirty = false;
     vmConflictPath = null;
-    if (syncError !== undefined) {
-        vmController.reportFilesystemSyncError(syncError);
-    }
     updateSaveButton();
 }
 
@@ -706,12 +714,10 @@ async function handleDaycare(problem: ProblemData, bundle: SignedRuntimeBundle, 
                 if (!studentOwnedPaths.has(path)) {
                     continue;
                 }
-                const syncError = problem.workspace.writeServerStudentFile(path, content);
-                if (syncError !== undefined) {
-                    vmController.reportFilesystemSyncError(syncError);
-                }
+                problem.workspace.writeServerStudentFile(path, content);
                 term.writeln(`downloading file ${path}`);
             }
+            await problem.workspace.settle();
             if (currentProblem === problem) {
                 renderFileTree();
                 reloadOpenFileFromState();
@@ -743,7 +749,7 @@ async function advanceProblem(problem: ProblemData): Promise<void> {
         throw new Error("Assignment not loaded");
     }
     const workspace = await fetchWorkspace(client, currentAssignment, problem.problemId, nextStepNumber);
-    replaceProblemState(problem, workspace);
+    await replaceProblemState(problem, workspace);
     resetVmForCurrentProblem();
     term.writeln(`moving to step ${problem.currentStepNumber.toString()}`);
 }
@@ -759,7 +765,7 @@ async function refreshProblem(problem: ProblemData): Promise<boolean> {
     if (problem.saving !== saving) {
         return false;
     }
-    applyWorkspaceRefresh(problem, refreshedWorkspace);
+    await applyWorkspaceRefresh(problem, refreshedWorkspace);
     if (currentProblem === problem) {
         renderFileTree();
         renderInstructionsPane();
@@ -801,7 +807,7 @@ async function saveProblem(problem: ProblemData): Promise<void> {
 async function doAction(problem: ProblemData, action: string): Promise<void> {
     const saving = problem.saving;
     const client = createMainClient();
-    term.clear();
+    clearTerminal(term);
     if (!await refreshProblem(problem)) {
         return;
     }
@@ -911,6 +917,8 @@ function requestSave(problem: ProblemData | null = currentProblem, action: strin
     const operation = saveQueue.then(async (): Promise<boolean> => {
         const step = problem.currentStepNumber;
         try {
+            await vmController.settle();
+            await problem.workspace.settle();
             if (problem.saving !== saving) {
                 return false;
             }
@@ -975,7 +983,7 @@ async function requestReset(): Promise<void> {
             return;
         }
         flushEditor();
-        applyWorkspaceRefresh(problem, workspace);
+        await applyWorkspaceRefresh(problem, workspace);
         renderFileTree();
         renderInstructionsPane();
         updateInstructionsTabVisibility();
@@ -1045,10 +1053,8 @@ async function requestReset(): Promise<void> {
         if (starter === undefined) {
             throw new Error("Reset file is missing from the step-start workspace");
         }
-        const syncError = problem.workspace.writeStudentFile(path, starter);
-        if (syncError !== undefined) {
-            vmController.reportFilesystemSyncError(syncError);
-        }
+        problem.workspace.writeStudentFile(path, starter);
+        await problem.workspace.settle();
         reloadOpenFileFromState();
         await requestSave(problem);
     } catch (error: unknown) {
@@ -1113,7 +1119,7 @@ function renderMenuBar(): void {
                 currentlyOpenFilePath = null;
                 resetVmForCurrentProblem();
                 if (term !== undefined) {
-                    term.clear();
+                    clearTerminal(term);
                 }
                 renderMenuBar();
                 renderFileTree();
@@ -1283,6 +1289,7 @@ function renderTree(
                     return;
                 }
                 resetEditorContents(editorTextFromFile(fileContent), editable, item.fullPath);
+                editor.focus();
             });
         }
 
@@ -1309,6 +1316,15 @@ function renderFileTree(): void {
     root.classList.add("file-tree");
     renderTree(tree, root, currentProblem.workspace, editablePaths, currentlyOpenFilePath);
     fileTreePane.appendChild(root);
+}
+
+function refreshInstructions(problem: ProblemData): void {
+    const dependencies = new Set([DOC_PATH]);
+    try {
+        problem.instructionsHtml = renderInstructionsMarkdown(problem.workspace, dependencies);
+    } finally {
+        problem.instructionPaths = dependencies;
+    }
 }
 
 function renderInstructionsPane(): void {
@@ -1350,9 +1366,8 @@ function resetVmForCurrentProblem(): void {
         return;
     }
     vmController.setTarget({
-        filesystem: problem.workspace.filesystem,
+        workspace: problem.workspace,
         image,
-        rebuildFilesystem: (): void => problem.workspace.rebuildFilesystem(),
     });
 }
 
@@ -1400,8 +1415,13 @@ function initializeTabs(): void {
                 activeContent.classList.add("active");
             }
             if (button.id === "vm-tab-button") {
+                flushEditor();
                 vmController.fit();
                 vmController.bootIfInactive();
+            }
+            if (button.id === "terminal-tab-button") {
+                fitAddon.fit();
+                term.focus();
             }
         });
     }
@@ -1410,7 +1430,8 @@ function initializeTabs(): void {
 function initializeTerminal(): void {
     term = new Terminal({
         convertEol: true,
-        customGlyphs: true,
+        fontFamily: '"Latin Modern Mono", monospace',
+        fontSize: 18,
         scrollback: 1000,
         theme: {
             background: "#ffffff",
@@ -1439,7 +1460,8 @@ function initializeTerminal(): void {
     window.addEventListener("resize", (): void => fitAddon.fit());
 }
 
-document.addEventListener("DOMContentLoaded", (): void => {
+async function initialize(): Promise<void> {
+    await initializeGhostty();
     getRequiredElement("reset-dialog").addEventListener("cancel", (event: Event): void => {
         event.preventDefault();
     });
@@ -1464,6 +1486,7 @@ document.addEventListener("DOMContentLoaded", (): void => {
     vmController = new VmController(
         getRequiredElement("vm-terminal"),
         vmBootButton,
+        flushEditor,
     );
 
     const state = EditorState.create({
@@ -1499,7 +1522,11 @@ document.addEventListener("DOMContentLoaded", (): void => {
     });
     installExamClipboard(editor);
 
-    loadAssignment().catch((error: unknown) => {
+    await loadAssignment();
+}
+
+document.addEventListener("DOMContentLoaded", (): void => {
+    void initialize().catch((error: unknown): void => {
         console.error("Error loading exam client:", error);
         const menuItems = document.getElementById("menu-items");
         if (menuItems instanceof HTMLElement) {

@@ -1,6 +1,6 @@
 import { EditorSelection } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
-import type { Terminal } from "@xterm/xterm";
+import type { Terminal } from "ghostty-web";
 
 interface ClipboardContent {
     readonly text: string;
