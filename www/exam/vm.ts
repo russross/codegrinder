@@ -1,9 +1,8 @@
-import { FitAddon, Terminal } from "ghostty-web";
 import type { FilesystemRuntime } from "./vm/runtime/p9/index.js";
 import type { ProblemWorkspace } from "./workspace";
 import { registerClipboardTerminal } from "./clipboard";
 import { TerminalInputQueue } from "./terminal_input";
-import { clearTerminal } from "./terminal";
+import { clearTerminal, TerminalKind, TerminalView } from "./terminal";
 
 export interface VmImageDescriptor {
     readonly configUrl: URL;
@@ -96,8 +95,7 @@ export function vmImageForProblemType(problemType: string): VmImageDescriptor | 
 }
 
 export class VmController {
-    private readonly fitAddon = new FitAddon();
-    private readonly terminal: Terminal;
+    private readonly terminal: TerminalView;
     private runtime: RiscboxRuntime | undefined;
     private runtimeLoading: Promise<RiscboxRuntime> | undefined;
     private lifecycle: Promise<void> = Promise.resolve();
@@ -114,31 +112,16 @@ export class VmController {
         private readonly bootButton: HTMLButtonElement,
         private readonly flushEditor: () => void,
     ) {
-        this.terminal = new Terminal({
-            convertEol: false,
-            cursorBlink: true,
-            fontFamily: '"Latin Modern Mono", monospace',
-            fontSize: 18,
-            scrollback: 1000,
-            theme: {
-                background: "#000000", foreground: "#c0c0c0",
-                black: "#000000", red: "#ff0000", green: "#00ff00", yellow: "#ffff00",
-                blue: "#0000ff", magenta: "#ff00ff", cyan: "#00ffff", white: "#ffffff",
-                brightBlack: "#808080", brightRed: "#ff8080", brightGreen: "#80ff80",
-                brightYellow: "#ffff80", brightBlue: "#8080ff", brightMagenta: "#ff80ff",
-                brightCyan: "#80ffff", brightWhite: "#ffffff",
-            },
+        this.terminal = new TerminalView(host, TerminalKind.Vm, {
+            onData: text => this.sendInput(text),
+            onBinary: bytes => this.sendInput(bytes),
+            onResize: (cols, rows) => { this.runtime?.consoleResize(cols, rows); },
         });
-        this.terminal.loadAddon(this.fitAddon);
-        this.terminal.open(host);
         registerClipboardTerminal(this.terminal);
-        this.terminal.onData((text: string): void => this.sendInput(text));
-        this.terminal.onResize(({ cols, rows }): void => { this.runtime?.consoleResize(cols, rows); });
         this.bootButton.addEventListener("click", (): void => {
             if (this.state === VmState.Running) this.resetVm();
             else this.bootIfInactive();
         });
-        new ResizeObserver((): void => this.fit()).observe(host);
         this.updateControls();
     }
 
@@ -166,7 +149,9 @@ export class VmController {
         } while (pending !== this.lifecycle);
     }
 
-    fit(): void { this.fitAddon.fit(); }
+    fit(): void { this.terminal.fit(); }
+
+    get ready(): Promise<void> { return this.terminal.ready; }
 
     bootIfInactive(): void {
         this.terminal.focus();
@@ -180,6 +165,7 @@ export class VmController {
         this.state = VmState.Loading;
         this.updateControls();
         this.enqueue(async (): Promise<void> => {
+            await this.terminal.ready;
             if (generation !== this.generation) return;
             if (retained && this.runtime !== undefined) {
                 await target.workspace.settle();
@@ -326,14 +312,14 @@ export class VmController {
         this.terminal.focus();
     }
 
-    private sendInput(text: string): void {
+    private sendInput(text: string | Uint8Array): void {
         const target = this.target;
         if (this.state !== VmState.Running || target === undefined) return;
         const generation = this.inputGeneration;
         this.flushEditor();
         void target.workspace.settle().then((): void => {
             if (generation === this.inputGeneration && this.state === VmState.Running) {
-                this.input.enqueue(inputEncoder.encode(text));
+                this.input.enqueue(typeof text === "string" ? inputEncoder.encode(text) : text);
             }
         }).catch((error: unknown): void => {
             this.reportFilesystemSyncError(error instanceof Error ? error : new Error(String(error)));

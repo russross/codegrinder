@@ -36,14 +36,13 @@ import { python } from "@codemirror/lang-python";
 import { StreamLanguage, LanguageSupport } from "@codemirror/language";
 import { gas } from "@codemirror/legacy-modes/mode/gas";
 import { shell } from "@codemirror/legacy-modes/mode/shell";
-import { FitAddon, init as initializeGhostty, Terminal } from "ghostty-web";
 
 import { ProblemWorkspace, WorkspaceChangeSource } from "./workspace";
 import type { WorkspaceStudentChange } from "./workspace";
 import { SaveState } from "./saving";
 import { VmController, vmImageForProblemType } from "./vm";
 import { installExamClipboard, registerClipboardTerminal } from "./clipboard";
-import { clearTerminal } from "./terminal";
+import { clearTerminal, TerminalKind, TerminalView } from "./terminal";
 
 interface ProblemData {
     problemId: string;
@@ -85,8 +84,7 @@ const textDecoder = new TextDecoder();
 
 let currentProblem: ProblemData | null = null;
 let editor: EditorView;
-let fitAddon: FitAddon;
-let term: Terminal;
+let term: TerminalView;
 let assignment: AssignmentKey | null = null;
 let assignmentCloseAt: Timestamp | undefined;
 let userId = "";
@@ -683,7 +681,7 @@ function writeEvent(event: EventMessage): void {
 
 async function handleDaycare(problem: ProblemData, bundle: SignedRuntimeBundle, action: string): Promise<DaycareCompletion> {
     selectTerminalTab();
-    fitAddon.fit();
+    term.fit();
 
     const runtime = RuntimeBundle.fromBinary(bundle.bundle);
     const daycareClient = createDaycareClient(runtime.hostname);
@@ -1420,48 +1418,20 @@ function initializeTabs(): void {
                 vmController.bootIfInactive();
             }
             if (button.id === "terminal-tab-button") {
-                fitAddon.fit();
+                term.fit();
                 term.focus();
             }
         });
     }
 }
 
-function initializeTerminal(): void {
-    term = new Terminal({
-        convertEol: true,
-        fontFamily: '"Latin Modern Mono", monospace',
-        fontSize: 18,
-        scrollback: 1000,
-        theme: {
-            background: "#ffffff",
-            foreground: "#454545",
-            black: "#454545", red: "#a31515", green: "#236b23", yellow: "#785600",
-            blue: "#2455a4", magenta: "#853585", cyan: "#006b73", white: "#666666",
-            brightBlack: "#666666", brightRed: "#b52020", brightGreen: "#287828", brightYellow: "#896100",
-            brightBlue: "#2862ba", brightMagenta: "#963d96", brightCyan: "#007a84", brightWhite: "#454545",
-        },
-        disableStdin: true,
-        cursorBlink: false,
-        cursorStyle: "underline",
-    });
-    fitAddon = new FitAddon();
-    term.loadAddon(fitAddon);
-    const terminalElement = document.getElementById("terminal");
-    if (terminalElement instanceof HTMLElement) {
-        term.open(terminalElement);
-        registerClipboardTerminal(term);
-        new ResizeObserver((): void => {
-            if (terminalElement.clientWidth > 0 && terminalElement.clientHeight > 0) {
-                fitAddon.fit();
-            }
-        }).observe(terminalElement);
-    }
-    window.addEventListener("resize", (): void => fitAddon.fit());
+async function initializeTerminal(): Promise<void> {
+    term = new TerminalView(getRequiredElement("terminal"), TerminalKind.Grade);
+    await term.ready;
+    registerClipboardTerminal(term);
 }
 
 async function initialize(): Promise<void> {
-    await initializeGhostty();
     getRequiredElement("reset-dialog").addEventListener("cancel", (event: Event): void => {
         event.preventDefault();
     });
@@ -1470,8 +1440,8 @@ async function initialize(): Promise<void> {
         gutterSize: 8,
         cursor: "grabbing",
         onDrag: (): void => {
-            if (fitAddon !== undefined) {
-                fitAddon.fit();
+            if (term !== undefined) {
+                term.fit();
             }
             if (vmController !== undefined) {
                 vmController.fit();
@@ -1480,7 +1450,7 @@ async function initialize(): Promise<void> {
     });
 
     initializeTabs();
-    initializeTerminal();
+    await initializeTerminal();
     const vmBootButton = getRequiredButton("vm-boot-button");
     vmBootButton.addEventListener("click", selectVmTab);
     vmController = new VmController(
@@ -1488,6 +1458,7 @@ async function initialize(): Promise<void> {
         vmBootButton,
         flushEditor,
     );
+    await vmController.ready;
 
     const state = EditorState.create({
         extensions: [

@@ -1,6 +1,6 @@
 import { EditorSelection } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
-import type { Terminal } from "ghostty-web";
+import type { TerminalView } from "./terminal";
 
 interface ClipboardContent {
     readonly text: string;
@@ -9,9 +9,9 @@ interface ClipboardContent {
 
 type ClipboardOperation = "copy" | "cut" | "paste";
 
-const terminals: Terminal[] = [];
+const terminals: TerminalView[] = [];
 
-export function registerClipboardTerminal(terminal: Terminal): void {
+export function registerClipboardTerminal(terminal: TerminalView): void {
     terminals.push(terminal);
 }
 
@@ -30,11 +30,11 @@ export function installExamClipboard(editor: EditorView): void {
         void navigator.clipboard.writeText(systemText()).catch(() => {});
     }
 
-    function terminalFor(target: EventTarget | null): Terminal | undefined {
+    function terminalFor(target: EventTarget | null): TerminalView | undefined {
         if (!(target instanceof Node)) {
             return undefined;
         }
-        return terminals.find((terminal: Terminal): boolean =>
+        return terminals.find((terminal: TerminalView): boolean =>
             terminal.element?.contains(target) === true);
     }
 
@@ -71,7 +71,7 @@ export function installExamClipboard(editor: EditorView): void {
         }
         const terminal = terminalFor(target);
         if (terminal !== undefined) {
-            if (!terminal.options.disableStdin) {
+            if (terminal.acceptsInput) {
                 terminal.paste(clipboard.text);
             }
             return;

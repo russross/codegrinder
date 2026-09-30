@@ -5,7 +5,7 @@ This is a simple, single-page app with minimal dependencies. The
 primary external libraries are:
 
 * CodeMirror editor widget
-* Ghostty terminal widget, provided by ghostty-web
+* Wterm terminal widget, using its Ghostty backend
 * split.js split window panes with draggable gutters
 
 The app is launched on the same server and port as a gRPC server
@@ -58,16 +58,27 @@ shortcuts are also supported. Native context-menu Paste availability depends
 on whether the browser permitted the system marker to be written.
 
 Middle-button copying/pasting and HTML drag/drop are blocked inside the app.
-Ghostty's selection copier is routed through this policy at build time; it
-cannot export selected text directly to the system clipboard. Dependency
-changes that alter that integration fail the build and require review.
+Wterm's clipboard events are intercepted by the document policy before its
+own handlers. Private terminal paste respects bracketed-paste mode and removes
+escape characters inside a bracketed payload. Grade output rejects input.
+Application clipboard requests do not access the system clipboard.
 
-Ghostty's canvas sizing is also adjusted at build time to round backing sizes
-and resize comparisons consistently. Fractional display scaling or browser
-zoom must not cause an idle terminal to resize and repaint every frame.
-Cell dimensions and baselines align to physical pixels, keeping adjacent
-backgrounds seamless. Standard single-line box characters are drawn directly
-to cell boundaries so terminal borders do not depend on font glyph spacing.
+Both terminals use separate Ghostty cores with 64 KiB history budgets.
+Wterm renders text and backgrounds in the DOM, with geometric CSS drawing for
+supported box characters. Painting is scheduled when output changes rather
+than continuously polling the terminal. Fractional display scaling and browser
+zoom are covered by browser rendering checks. Straight box strokes overlap
+only at connected cell edges and stop at their junction boundaries. A build
+integration supplies each box character's arm directions to CSS and requires
+review if Wterm changes that renderer. The terminal grid fills partial-row
+space below the live screen so bottom alignment does not expose scrollback
+above the screen after clearing. Padding belongs to the outer host, while a
+separate inner surface owns scrolling and clips history at the viewport edge.
+Its height uses whole CSS pixels to match browser scroll-height measurements.
+The viewport integration uses the live-screen boundary when following output
+and omits off-screen history overscan at the bottom. This prevents history
+paint from bleeding across fractional physical-pixel edges. Scrolling up
+retains the usual history window and overscan.
 Pane resizing remains available. Browser restrictions can prevent system
 clipboard writes, and the page cannot control Linux PRIMARY selection
 export or clipboard operations performed outside the page.
@@ -215,8 +226,7 @@ Here is the complete layout of the UI:
                     time there is any output to the terminal
                 *   The terminal fits its container and resizes
                     dynamically.
-                *   The terminal has a scrollback buffer of 1000
-                    lines
+                *   The terminal has a 64 KiB scrollback budget.
             *   VM: an interactive Ghostty instance connected to a
                 browser-hosted Alpine RISC-V virtual machine
                 *   This tab is present only when an image is configured
@@ -228,7 +238,7 @@ Here is the complete layout of the UI:
                 *   Both terminals use 18px Latin Modern Mono with a
                     monospace fallback. The VM uses a black background and
                     the demo's ANSI palette. The VM cursor blinks; grade
-                    output keeps its cursor non-blinking.
+                    output hides its cursor and rejects input.
                 *   Boot VM appears at the right edge of the main action bar.
                     Once booted, the control becomes Reboot VM.
                 *   Reboot resets the guest in place and retains the VM's
@@ -237,7 +247,7 @@ Here is the complete layout of the UI:
                     pending input.
                 *   The terminal uses the guest's virtio console. The guest
                     receives terminal-size changes without rebooting. The
-                    terminal uses Ghostty's canvas renderer so box-drawing
+                    terminal uses Wterm's DOM renderer so box-drawing
                     lines remain connected. The guest mounts the shared tree
                     at `/home/student`.
                 *   Guest writes to student-owned paths are reflected in

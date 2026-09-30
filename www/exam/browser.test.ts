@@ -1,8 +1,7 @@
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { FitAddon, init, Terminal } from "ghostty-web";
 import { installExamClipboard, registerClipboardTerminal } from "./clipboard";
-import { clearTerminal } from "./terminal";
+import { clearTerminal, TerminalKind, TerminalView } from "./terminal";
 import { ProblemWorkspace } from "./workspace";
 import { VmController, vmImageForProblemType } from "./vm";
 
@@ -24,15 +23,11 @@ function element(tag: string, parent: HTMLElement): HTMLElement {
     return result;
 }
 
-function terminalText(terminal: Terminal): string {
-    const buffer = terminal.buffer.active;
-    const lines: string[] = [];
-    for (let i = 0; i < buffer.length; i += 1) lines.push(buffer.getLine(i)?.translateToString() ?? "");
-    return lines.join("\n");
+async function paint(): Promise<void> {
+    await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
 }
 
 export async function run(): Promise<string[]> {
-    await init();
     const results: string[] = [];
     const clipboardWrites: string[] = [];
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
@@ -42,130 +37,111 @@ export async function run(): Promise<string[]> {
     const editor = new EditorView({ state: EditorState.create({ doc: "private editor text" }), parent: document.body });
     const host = element("div", document.body);
     host.style.cssText = "width:800px;height:250px;background:black";
-    const terminal = new Terminal({ cursorBlink: false, scrollback: 1000, fontSize: 18 });
-    const fit = new FitAddon();
-    terminal.loadAddon(fit);
-    terminal.open(host);
-    fit.fit();
+    let input = "";
+    const terminal = new TerminalView(host, TerminalKind.Vm, { onData: text => { input += text; } });
+    await terminal.ready;
+    terminal.fit();
     registerClipboardTerminal(terminal);
     installExamClipboard(editor);
-
-    const canvas = host.querySelector("canvas");
-    if (canvas === null) throw new Error("terminal canvas missing");
-    const context = canvas.getContext("2d");
-    if (context === null) throw new Error("terminal canvas context missing");
     check(window.devicePixelRatio === 1.203125, "fractional display scaling was not configured");
-    await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
-    let backingSizeChanges = 0;
-    let textPaints = 0;
-    const fontBoxCharacters: string[] = [];
-    const observer = new MutationObserver((changes: MutationRecord[]): void => {
-        backingSizeChanges += changes.length;
-    });
-    observer.observe(canvas, { attributes: true, attributeFilter: ["width", "height"] });
-    const fillText = context.fillText.bind(context);
-    context.fillText = (text: string, x: number, y: number, maxWidth?: number): void => {
-        textPaints += 1;
-        if ("┌─┐│└┘".includes(text)) fontBoxCharacters.push(text);
-        if (maxWidth === undefined) fillText(text, x, y);
-        else fillText(text, x, y, maxWidth);
-    };
-    await new Promise<void>(resolve => window.setTimeout(resolve, 1000));
-    observer.disconnect();
-    check(backingSizeChanges === 0, `idle terminal resized its canvas ${backingSizeChanges} times`);
-    check(textPaints === 0, `idle terminal repainted text ${textPaints} times`);
-    const redPixels = (): number => {
-        const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
-        let count = 0;
-        for (let i = 0; i < pixels.length; i += 4) {
-            if (pixels[i] === 255 && pixels[i + 1] === 0 && pixels[i + 2] === 0) count += 1;
-        }
-        return count;
-    };
     terminal.write("\x1b[48;2;255;0;0m" + Array.from({ length: 50 }, (_, i) => `old line ${i}\r\n`).join(""));
-    await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
-    check(redPixels() > 100, "old output was not painted for the clearing check");
-    check(textPaints > 0, "terminal did not repaint after new output");
-    terminal.selectAll();
+    await paint();
+    check((await terminal.readText()).includes("old line"), "old output missing");
+    await terminal.selectAll();
     clearTerminal(terminal);
     terminal.write("fresh boot");
-    await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
-    check(redPixels() === 0, "old output remained painted after reboot clearing");
-    check(!terminalText(terminal).includes("old line"), "reboot retained old screen or scrollback");
-    check(terminalText(terminal).includes("fresh boot"), "fresh boot output missing");
-    backingSizeChanges = 0;
-    textPaints = 0;
-    observer.observe(canvas, { attributes: true, attributeFilter: ["width", "height"] });
+    await paint();
+    const freshText = await terminal.readText();
+    check(!freshText.includes("old line") && freshText.includes("fresh boot"), "reset retained old output or lost new output");
+    check(terminal.selectWord(0, 1) && terminal.getSelection() === "fresh", "selection broken after reset");
+    terminal.clearSelection();
+    terminal.write(Array.from({ length: 50 }, (_, i) => `scrollback marker ${i}\r\n`).join(""));
+    await paint();
+    terminal.write("\x1b[H\x1b[2Jcleared screen");
+    await paint();
+    const liveRow = host.querySelector<HTMLElement>(".term-row:not(.term-scrollback-row)");
+    if (liveRow === null) throw new Error("live terminal row missing after clear");
+    const hostTop = host.getBoundingClientRect().top + parseFloat(getComputedStyle(host).paddingTop);
+    check(Math.abs(liveRow.getBoundingClientRect().top - hostTop) < 0.05,
+        `clear exposed history above the live screen: ${liveRow.getBoundingClientRect().top - hostTop}px`);
+    const scrollSurface = host.querySelector<HTMLElement>(".terminal-surface");
+    if (scrollSurface === null) throw new Error("scrolling surface missing");
+    scrollSurface.scrollTop = 0;
+    await paint();
+    check(host.querySelector(".term-scrollback-row")?.textContent?.includes("scrollback marker") === true,
+        "clearing made retained history inaccessible");
+    scrollSurface.scrollTop = scrollSurface.scrollHeight;
+    await paint();
+    check(Math.abs(liveRow.getBoundingClientRect().top - hostTop) < 0.05,
+        "returning from history misaligned the live screen");
+    let mutations = 0;
+    let idleFrames = 0;
+    const requestFrame = window.requestAnimationFrame.bind(window);
+    window.requestAnimationFrame = callback => {
+        idleFrames += 1;
+        return requestFrame(callback);
+    };
+    const observer = new MutationObserver(changes => { mutations += changes.length; });
+    const grid = host.querySelector(".term-grid");
+    if (grid === null) throw new Error("terminal grid missing");
+    observer.observe(grid, { subtree: true, attributes: true, childList: true, characterData: true });
     await new Promise<void>(resolve => window.setTimeout(resolve, 1000));
     observer.disconnect();
-    check(backingSizeChanges === 0 && textPaints === 0, "idle terminal with visible output kept resizing or repainting text");
+    window.requestAnimationFrame = requestFrame;
+    check(mutations === 0, `idle output changed DOM ${mutations} times`);
+    check(idleFrames === 0, `idle terminal scheduled ${idleFrames} animation frames`);
     clearTerminal(terminal);
     terminal.write("\x1b[?25l\x1b[48;2;0;255;0m" + " ".repeat(20)
         + "\x1b[0m\x1b[38;2;255;255;255m\r\n┌──────────────────┐\r\n│                  │\r\n└──────────────────┘");
-    await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
-    const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
-    check(fontBoxCharacters.length === 0, `box characters fell back to fonts: ${fontBoxCharacters.join("")}`);
-    const cellWidth = canvas.width / terminal.cols;
-    const cellHeight = canvas.height / terminal.rows;
-    check(Number.isInteger(cellWidth) && Number.isInteger(cellHeight), "cell edges do not align to physical pixels");
-    const isColor = (x: number, y: number, red: number, green: number, blue: number): boolean => {
-        const offset = (y * canvas.width + x) * 4;
-        return pixels[offset] === red && pixels[offset + 1] === green && pixels[offset + 2] === blue;
-    };
-    for (let x = 0; x < 20 * cellWidth; x += 1) {
-        check(isColor(x, Math.floor(cellHeight / 2), 0, 255, 0), `highlight seam at physical column ${x}`);
-    }
-    const thickness = Math.max(1, Math.round(window.devicePixelRatio));
-    const centerX = Math.floor((cellWidth - thickness) / 2);
-    const centerY = Math.floor((cellHeight - thickness) / 2);
-    for (let x = centerX; x <= 19 * cellWidth + centerX; x += 1) {
-        const offset = ((cellHeight + centerY) * canvas.width + x) * 4;
-        check(isColor(x, cellHeight + centerY, 255, 255, 255), `horizontal box seam at physical column ${x}: ${pixels.slice(offset, offset + 4)}, cell ${cellWidth}x${cellHeight}`);
-        check(isColor(x, 3 * cellHeight + centerY, 255, 255, 255), `bottom box seam at physical column ${x}`);
-    }
-    for (let y = cellHeight + centerY; y <= 3 * cellHeight + centerY; y += 1) {
-        check(isColor(centerX, y, 255, 255, 255), `vertical box seam at physical row ${y}`);
-        check(isColor(19 * cellWidth + centerX, y, 255, 255, 255), `right box seam at physical row ${y}`);
-    }
+    await paint();
+    check(host.querySelectorAll(".term-box").length >= 40, "box drawing did not use geometric rendering");
+    host.id = "rendering-fixture";
+    results.push("screen clearing, idle rendering, and geometric box drawing at fractional pixel ratio");
     clearTerminal(terminal);
     terminal.write("fresh boot");
-    terminal.select(0, terminal.buffer.active.baseY, 5);
-    check(terminal.getSelection() === "fresh", "selection broken after reset");
-    results.push("screen, scrollback, and selection survive terminal reset");
-
-    canvas.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, clientX: 12, clientY: host.getBoundingClientRect().top + 8 }));
-    await Promise.resolve();
-    check(clipboardWrites.every(text => text === "[redacted]" || text === ""), "terminal selection leaked to system clipboard");
-    // Select known content and exercise native Copy through the document policy.
-    terminal.select(0, terminal.buffer.active.baseY, 5);
+    await paint();
+    terminal.selectWord(0, 1);
     host.dispatchEvent(new ClipboardEvent("copy", { bubbles: true, cancelable: true }));
     editor.dispatch({ selection: { anchor: editor.state.doc.length } });
     editor.dom.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true }));
     check(editor.state.doc.toString().endsWith("fresh"), "terminal-to-editor private paste failed");
-    let input = "";
-    terminal.onData(text => { input += text; });
+    input = "";
     host.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true }));
     check(input === "fresh", "private paste did not reach terminal");
+    terminal.write("\x1b[?2004h");
+    input = "";
+    terminal.paste("one\x1b[201~two");
+    check(input === "\x1b[200~one[201~two\x1b[201~", "bracketed paste allowed an injected escape");
     input = "";
     terminal.clearSelection();
     host.querySelector("textarea")?.dispatchEvent(new KeyboardEvent("keydown", { key: "c", code: "KeyC", ctrlKey: true, bubbles: true, cancelable: true }));
     check(input === "\x03", "Ctrl+C did not remain a guest interrupt");
     const gradeHost = element("div", document.body);
-    gradeHost.style.cssText = "width:800px;height:100px;background:white";
-    const gradeTerminal = new Terminal({ disableStdin: true, cursorBlink: false, theme: { background: "#ffffff", foreground: "#454545" } });
-    gradeTerminal.open(gradeHost);
+    gradeHost.style.cssText = "width:800px;height:100px";
+    let gradeInput = "";
+    const gradeTerminal = new TerminalView(gradeHost, TerminalKind.Grade, { onData: text => { gradeInput += text; } });
+    await gradeTerminal.ready;
     registerClipboardTerminal(gradeTerminal);
-    gradeTerminal.write("grade output");
-    gradeTerminal.select(0, 0, 5);
+    gradeTerminal.write("oldest history marker\r\n" + "history row ".repeat(6).concat("\r\n").repeat(5000) + "newest history marker");
+    await paint();
+    const history = await gradeTerminal.readText();
+    check(!history.includes("oldest history marker") && history.includes("newest history marker"), "history budget did not evict old output");
+    clearTerminal(gradeTerminal);
+    gradeTerminal.write("grade output\r");
+    gradeTerminal.write("\nsecond line\nthird line");
+    await paint();
+    check((await gradeTerminal.readText()).startsWith("grade output\nsecond line\nthird line"), "grade line endings changed");
+    gradeTerminal.selectWord(0, 1);
     gradeHost.dispatchEvent(new ClipboardEvent("copy", { bubbles: true, cancelable: true }));
     editor.dom.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true }));
     check(editor.state.doc.toString().endsWith("grade"), "grade-output copy did not use private clipboard");
-    let gradeInput = "";
-    gradeTerminal.onData(text => { gradeInput += text; });
     gradeHost.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true }));
-    check(gradeInput === "", "grade output accepted pasted input");
+    const gradeTextarea = gradeHost.querySelector("textarea");
+    check(gradeTextarea?.readOnly === true, "grade input is editable");
+    gradeTextarea?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));
+    check(gradeInput === "", "grade output accepted input");
     check(clipboardWrites.every(text => text === "[redacted]" || text === ""), "clipboard contained unredacted text");
-    results.push("private clipboard, selection copying, paste, and guest Ctrl+C");
+    results.push("private clipboard, bracketed paste, read-only grade output, and guest Ctrl+C");
 
     const workspace = new ProblemWorkspace(
         new Map([["system.txt", new TextEncoder().encode("canonical system\n")]]),
@@ -216,14 +192,29 @@ export async function run(): Promise<string[]> {
     const send = (text: string): void => {
         const input = vmHost.querySelector("textarea");
         if (input === null) throw new Error("VM terminal input missing");
-        for (const key of text) {
-            input.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
-        }
+        input.value = text;
+        input.dispatchEvent(new InputEvent("input", { data: text, inputType: "insertText", bubbles: true }));
         input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));
     };
     const decoded = (): string => new TextDecoder().decode(workspace.readVisibleFile("src/main.s"));
     try {
         await until(() => guestOutput.includes("$ "), "guest shell never became ready");
+        send("seq 1 60; printf 'finished-output\\n'");
+        const liveRows = (): HTMLElement[] => Array.from(vmHost.querySelectorAll<HTMLElement>(".term-row:not(.term-scrollback-row)"));
+        await until(() => liveRows().some(row => row.textContent?.trim() === "finished-output"), "guest output did not fill the screen");
+        send("clear; printf 'clear-screen-marker\\n'");
+        await until(() => liveRows()[0]?.textContent?.trim() === "clear-screen-marker", "guest clear did not clear the live screen");
+        const checkViewportTop = (): void => {
+            const expected = vmHost.getBoundingClientRect().top + parseFloat(getComputedStyle(vmHost).paddingTop);
+            check(Math.abs((liveRows()[0]?.getBoundingClientRect().top ?? 0) - expected) < 0.05,
+                "guest clear left scrollback visible above the live screen");
+        };
+        checkViewportTop();
+        vmHost.querySelector("textarea")?.dispatchEvent(new KeyboardEvent("keydown", {
+            key: "l", code: "KeyL", ctrlKey: true, bubbles: true, cancelable: true,
+        }));
+        await until(() => liveRows()[0]?.textContent?.trim().endsWith("$") === true, "guest Ctrl+L did not redraw the prompt at the top");
+        checkViewportTop();
         send("printf 'guest-one\\n' > src/main.s");
         await until(() => decoded() === "guest-one\n", "guest write did not reach official workspace");
     } catch (error: unknown) {
@@ -255,8 +246,120 @@ export async function run(): Promise<string[]> {
     vm.resetToReady();
     await vm.settle();
     results.push("guest writes, editor flush, hard links, directory renames, ownership, and repeated boot");
-    terminal.dispose();
-    gradeTerminal.dispose();
+    terminal.destroy();
+    gradeTerminal.destroy();
     editor.destroy();
     return results;
+}
+
+export async function renderFixture(): Promise<void> {
+    document.body.replaceChildren();
+    const host = element("div", document.body);
+    host.id = "pixel-fixture";
+    host.style.cssText = "width:800px;height:250px";
+    const terminal = new TerminalView(host, TerminalKind.Vm);
+    await terminal.ready;
+    terminal.write("\x1b[?25l\x1b[48;2;0;255;0m" + " ".repeat(20)
+        + "\x1b[0m\x1b[38;2;255;255;255m\r\n┌──────────────────┐\r\n│                  │\r\n└──────────────────┘\r\n├── branch\r\n│\r\n└── leaf");
+    await paint();
+}
+
+async function screenshotPixels(screenshot: string): Promise<ImageData> {
+    const image = new Image();
+    image.src = `data:image/png;base64,${screenshot}`;
+    await image.decode();
+    const canvas = document.createElement("canvas");
+    canvas.width = image.width;
+    canvas.height = image.height;
+    const context = canvas.getContext("2d");
+    if (context === null) throw new Error("screenshot context missing");
+    context.drawImage(image, 0, 0);
+    return context.getImageData(0, 0, canvas.width, canvas.height);
+}
+
+export async function verifyPixels(screenshot: string): Promise<void> {
+    const captured = await screenshotPixels(screenshot);
+    const pixels = captured.data;
+    const host = document.getElementById("pixel-fixture");
+    const rows = host?.querySelectorAll<HTMLElement>(".term-row");
+    if (rows === undefined || rows.length < 4) throw new Error("fixture rows missing");
+    const first = rows[0].getBoundingClientRect();
+    const surface = host?.querySelector<HTMLElement>(".terminal-surface");
+    if (surface === null || surface === undefined) throw new Error("terminal surface missing");
+    const cellWidth = parseFloat(surface.style.getPropertyValue("--term-cell-width"));
+    check(Number.isFinite(cellWidth) && cellWidth > 0, "cell width missing");
+    const ratio = window.devicePixelRatio;
+    const left = first.left * ratio;
+    const right = left + 20 * cellWidth * ratio;
+    const greenY = Math.floor((first.top + first.height / 2) * ratio);
+    for (let x = Math.ceil(left); x < Math.floor(right); x += 1) {
+        const offset = (greenY * captured.width + x) * 4;
+        check(pixels[offset] < 10 && pixels[offset + 1] > 245 && pixels[offset + 2] < 10,
+            `background seam at physical column ${x}`);
+    }
+    const white = (x: number, y: number): boolean => {
+        const offset = (y * captured.width + x) * 4;
+        return pixels[offset] > 150 && pixels[offset + 1] > 150 && pixels[offset + 2] > 150;
+    };
+    const firstCenterX = (first.left + cellWidth / 2) * ratio;
+    const lastCenterX = firstCenterX + 19 * cellWidth * ratio;
+    const top = rows[1].getBoundingClientRect();
+    const bottom = rows[3].getBoundingClientRect();
+    const topY = (top.top + top.height / 2) * ratio;
+    const bottomY = (bottom.top + bottom.height / 2) * ratio;
+    for (const centerY of [topY, bottomY]) {
+        for (let x = Math.ceil(firstCenterX); x < Math.floor(lastCenterX); x += 1) {
+            let connected = false;
+            for (let y = Math.floor(centerY) - 2; y <= Math.ceil(centerY) + 2; y += 1) connected ||= white(x, y);
+            check(connected, `horizontal border gap at ${x}, ${centerY}`);
+        }
+    }
+    for (const centerX of [firstCenterX, lastCenterX]) {
+        for (let y = Math.ceil(topY); y < Math.floor(bottomY); y += 1) {
+            let connected = false;
+            for (let x = Math.floor(centerX) - 2; x <= Math.ceil(centerX) + 2; x += 1) connected ||= white(x, y);
+            check(connected, `vertical border gap at ${centerX}, ${y}`);
+        }
+    }
+    const corner = rows[1].querySelector<HTMLElement>(".term-box");
+    if (corner === null) throw new Error("corner geometry missing");
+    const stroke = parseFloat(getComputedStyle(corner, "::after").width) * ratio;
+    for (const [x, y] of [
+        [Math.round(firstCenterX), Math.floor(topY - stroke / 2) - 1],
+        [Math.round(firstCenterX), Math.ceil(bottomY + stroke / 2) + 1],
+        [Math.floor(firstCenterX - stroke / 2) - 1, Math.round(topY)],
+        [Math.ceil(lastCenterX + stroke / 2) + 1, Math.round(topY)],
+    ]) check(!white(x, y), `corner stroke overshot its junction at ${x}, ${y}`);
+    const treeEnd = rows[6].getBoundingClientRect();
+    const treeCenterY = (treeEnd.top + treeEnd.height / 2) * ratio;
+    check(!white(Math.round(firstCenterX), Math.ceil(treeCenterY + stroke / 2) + 1), "tree leaf overshot its horizontal stroke");
+}
+
+export async function renderClearFixture(height: number): Promise<void> {
+    document.body.replaceChildren();
+    const host = element("div", document.body);
+    host.id = "clear-fixture";
+    host.style.cssText = `width:800px;height:${height}px`;
+    const terminal = new TerminalView(host, TerminalKind.Vm);
+    await terminal.ready;
+    terminal.write("\x1b[41;31m" + "gggg old output\r\n".repeat(60));
+    await paint();
+    terminal.write("\x1b[0m\x1b[H\x1b[2J\x1b[?25lcleared screen");
+    await paint();
+}
+
+export async function verifyClearPixels(screenshot: string): Promise<void> {
+    const captured = await screenshotPixels(screenshot);
+    const host = document.getElementById("clear-fixture");
+    if (host === null) throw new Error("clear fixture missing");
+    const rect = host.getBoundingClientRect();
+    const ratio = window.devicePixelRatio;
+    for (let y = Math.ceil(rect.top * ratio); y < Math.floor((rect.top + 30) * ratio); y += 1) {
+        for (let x = Math.ceil(rect.left * ratio); x < Math.floor(rect.right * ratio); x += 1) {
+            const offset = (y * captured.width + x) * 4;
+            const red = captured.data[offset];
+            check(!(red > 20 && red > captured.data[offset + 1] * 2 && red > captured.data[offset + 2] * 2),
+                `old output remained visible at ${x}, ${y} after clear`);
+        }
+    }
 }

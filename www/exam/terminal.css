@@ -1,0 +1,63 @@
+.terminal-vm,
+.terminal-grade {
+    padding: 4px;
+    box-sizing: border-box;
+}
+
+.terminal-vm { background: #000000; }
+.terminal-grade { background: #ffffff; }
+
+.terminal-surface.wterm {
+    --term-font-family: "Latin Modern Mono", monospace;
+    --term-font-size: 18px;
+    --term-line-height: 1.2;
+    width: 100%;
+    height: round(down, 100%, 1px);
+    padding: 0;
+    border-radius: 0;
+    box-shadow: none;
+    box-sizing: border-box;
+    container-type: size;
+}
+
+.terminal-surface.wterm.has-scrollback {
+    overflow-y: auto;
+}
+
+/* Keep the live grid at the top of the viewport when its height leaves a
+   partial row. Scrollback then ends above the viewport rather than inside it. */
+.wterm .term-grid::after {
+    content: "";
+    display: block;
+    height: mod(100cqh, var(--term-row-height));
+}
+
+/* Only connected cell edges overlap. Free ends stop at the junction's stroke
+   boundary, so corners and branches do not project beyond their intersections. */
+.wterm .term-box:not(.term-box-round) {
+    position: relative;
+}
+
+.wterm .term-box:not(.term-box-round)::before {
+    content: "";
+    position: absolute;
+    display: var(--terminal-horizontal);
+    top: calc(50% - var(--term-box-stroke) / 2);
+    height: var(--term-box-stroke);
+    left: var(--terminal-left);
+    right: var(--terminal-right);
+    background: currentColor;
+    pointer-events: none;
+}
+
+.wterm .term-box:not(.term-box-round)::after {
+    content: "";
+    position: absolute;
+    display: var(--terminal-vertical);
+    left: calc(50% - var(--term-box-stroke) / 2);
+    width: var(--term-box-stroke);
+    top: var(--terminal-top);
+    bottom: var(--terminal-bottom);
+    background: currentColor;
+    pointer-events: none;
+}

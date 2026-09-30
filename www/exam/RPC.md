@@ -182,10 +182,10 @@ connected through its virtio console.
 Terminal input is UTF-8 encoded and copied into a queue. Each browser task
 offers at most 1024 bytes through `consoleInput` and retains bytes that the
 guest FIFO did not accept. Reset and teardown clear queued input and invalidate
-input waiting for editor writes. Console output is passed to Ghostty. Changes
-to its row or column count call `consoleResize`. The VM cursor blinks; grade
-output disables cursor blinking. Reset clears the screen, scrollback, and
-selection without replacing the parser used by Ghostty's renderer and input
+input waiting for editor writes. Console output is passed to Wterm with a
+Ghostty core. Changes to its row or column count call `consoleResize`.
+The VM cursor blinks; grade output hides its cursor. Reset clears the screen, scrollback, and
+selection without replacing the parser used by Wterm's renderer and input
 components.
 
 The Reboot VM button resets the guest in place. The runtime resets the VM and
