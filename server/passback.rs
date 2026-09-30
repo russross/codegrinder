@@ -18,6 +18,7 @@ use crate::db::Db;
 use crate::error::{AppError, AppResult};
 use crate::proto::{AssignmentKey, Commit, EventMessage};
 use crate::signatures::{encode_params, escape, hmac_sha1_base64};
+use crate::store::assignment_log_names;
 
 pub const PASSBACK_POSTED: &str = "posted";
 pub const PASSBACK_PENDING: &str = "post_pending";
@@ -132,11 +133,12 @@ pub async fn spawn_startup_grade_passbacks(db: Db, config: Arc<ServerConfig>) ->
         let jitter = Duration::from_millis(rand::rng().random_range(0..=max_jitter_millis));
         tokio::spawn(async move {
             tokio::time::sleep(jitter).await;
+            let names = assignment_log_names(&db, &key).await;
             match prepare_startup_grade_passback(&db, &key).await {
                 Ok(Some((target, html))) => spawn_grade_passback(db, config, target, html),
                 Ok(None) => {}
                 Err(err) => eprintln!(
-                    "error preparing startup LMS grade passback for assignment {}/{}/{}: {err}",
+                    "error preparing startup LMS grade passback for assignment {}/{}/{} {names}: {err}",
                     key.user_id, key.course_id, key.problem_set_id
                 ),
             }
@@ -319,6 +321,15 @@ pub fn spawn_grade_passback(
     report_html: String,
 ) {
     tokio::spawn(async move {
+        let names = assignment_log_names(
+            &db,
+            &AssignmentKey {
+                user_id: target.user_id.clone(),
+                course_id: target.course_id.clone(),
+                problem_set_id: target.problem_set_id.clone(),
+            },
+        )
+        .await;
         let mut delay = Duration::from_secs(10);
         for attempt in 1..=10 {
             match save_grade(&config, &target, &report_html).await {
@@ -328,7 +339,7 @@ pub fn spawn_grade_passback(
                 }
                 Err(err) if err.is_transient() && attempt < 10 => {
                     eprintln!(
-                        "error posting grade back to LMS: user={:?} course={:?} problem_set={:?} attempt={attempt}/10 error={err}",
+                        "error posting grade back to LMS: {names} user={:?} course={:?} problem_set={:?} attempt={attempt}/10 error={err}",
                         target.user_id, target.course_id, target.problem_set_id
                     );
                     tokio::time::sleep(delay).await;
@@ -338,13 +349,13 @@ pub fn spawn_grade_passback(
                     if err.is_user_not_in_course() {
                         update_passback_status(&db, &target, PASSBACK_USER_NOT_IN_COURSE).await;
                         eprintln!(
-                            "LMS grade passback permanently failed because the user is no longer in the course for assignment {}/{}/{}: {err}",
+                            "LMS grade passback permanently failed because the user is no longer in the course for assignment {}/{}/{} {names}: {err}",
                             target.user_id, target.course_id, target.problem_set_id
                         );
                     } else {
                         update_passback_status(&db, &target, PASSBACK_FAILED).await;
                         eprintln!(
-                            "giving up posting LMS grade for assignment {}/{}/{}: {err}",
+                            "giving up posting LMS grade for assignment {}/{}/{} {names}: {err}",
                             target.user_id, target.course_id, target.problem_set_id
                         );
                     }
@@ -370,7 +381,13 @@ async fn update_passback_status(db: &Db, target: &GradePassbackTarget, status: &
         })
         .await
     {
-        eprintln!("error updating LMS grade passback status: {err}");
+        let key = AssignmentKey {
+            user_id: target.user_id.clone(),
+            course_id: target.course_id.clone(),
+            problem_set_id: target.problem_set_id.clone(),
+        };
+        let names = assignment_log_names(db, &key).await;
+        eprintln!("error updating LMS grade passback status: assignment={key:?} {names} error={err}");
     }
 }
 

@@ -271,7 +271,7 @@ impl CodeGrinderService for CodeGrinderServer {
         let current_user =
             self.authenticated_user(&request).await.map_err(AppError::grpc_status)?;
         Self::require_admin(&current_user).map_err(AppError::grpc_status)?;
-        let actor = current_user.user_id.clone();
+        let actor = format!("{} ({})", current_user.user_name, current_user.user_id);
         let req = request.into_inner();
         let problem_type = self
             .db
@@ -296,7 +296,7 @@ impl CodeGrinderService for CodeGrinderServer {
         let current_user =
             self.authenticated_user(&request).await.map_err(AppError::grpc_status)?;
         Self::require_admin(&current_user).map_err(AppError::grpc_status)?;
-        let actor = current_user.user_id.clone();
+        let actor = format!("{} ({})", current_user.user_name, current_user.user_id);
         let req = request.into_inner();
         let problem_type_name = req.problem_type.clone();
         let problem_types = self
@@ -406,7 +406,7 @@ impl CodeGrinderService for CodeGrinderServer {
         let current_user =
             self.authenticated_user(&request).await.map_err(AppError::grpc_status)?;
         Self::require_author(&current_user).map_err(AppError::grpc_status)?;
-        let actor = current_user.user_id.clone();
+        let actor = format!("{} ({})", current_user.user_name, current_user.user_id);
         let req = request.into_inner();
         let mode = req.mode;
         let bundle = req.bundle.ok_or_else(|| Status::invalid_argument("bundle is required"))?;
@@ -434,7 +434,7 @@ impl CodeGrinderService for CodeGrinderServer {
         let current_user =
             self.authenticated_user(&request).await.map_err(AppError::grpc_status)?;
         Self::require_author(&current_user).map_err(AppError::grpc_status)?;
-        let actor = current_user.user_id.clone();
+        let actor = format!("{} ({})", current_user.user_name, current_user.user_id);
         let req = request.into_inner();
         let mode = req.mode;
         let bundle = req.bundle.ok_or_else(|| Status::invalid_argument("bundle is required"))?;
@@ -484,7 +484,7 @@ impl CodeGrinderService for CodeGrinderServer {
         let ip_allowed = self.ip_allowed(&request);
         let current_user =
             self.authenticated_user(&request).await.map_err(AppError::grpc_status)?;
-        let actor = current_user.user_id.clone();
+        let actor = format!("{} ({})", current_user.user_name, current_user.user_id);
         let req = request.into_inner();
         let commit = req.commit.ok_or_else(|| Status::invalid_argument("commit is required"))?;
         let config = self.config.clone();
@@ -499,8 +499,12 @@ impl CodeGrinderService for CodeGrinderServer {
             .await
             .inspect_err(|err| eprintln!("action submission failed: user={actor:?} error={err}"))
             .map_err(AppError::grpc_status)?;
+        let names = match &result.bundle.assignment {
+            Some(key) => store::assignment_log_names(&self.db, key).await,
+            None => format!("actor={actor:?}"),
+        };
         eprintln!(
-            "action submitted: user={:?} assignment={:?} problem={:?} step={} action={:?} save_status={}",
+            "action submitted: {names} user={:?} assignment={:?} problem={:?} step={} action={:?} save_status={}",
             result.bundle.user_id,
             result.bundle.assignment,
             result.bundle.problem_id,
@@ -526,7 +530,7 @@ impl CodeGrinderService for CodeGrinderServer {
         let ip_allowed = self.ip_allowed(&request);
         let current_user =
             self.authenticated_user(&request).await.map_err(AppError::grpc_status)?;
-        let actor = current_user.user_id.clone();
+        let actor = format!("{} ({})", current_user.user_name, current_user.user_id);
         let signed = request
             .into_inner()
             .bundle
@@ -541,8 +545,12 @@ impl CodeGrinderService for CodeGrinderServer {
             .inspect_err(|err| eprintln!("grade save failed: user={actor:?} error={err}"))
             .map_err(AppError::grpc_status)?;
         let commit = result.bundle.commit.as_ref();
+        let names = match &result.bundle.assignment {
+            Some(key) => store::assignment_log_names(&self.db, key).await,
+            None => format!("actor={actor:?}"),
+        };
         eprintln!(
-            "grade completed: user={:?} assignment={:?} problem={:?} step={} score={:?} passed={:?} save_status={} locked={}",
+            "grade completed: {names} user={:?} assignment={:?} problem={:?} step={} score={:?} passed={:?} save_status={} locked={}",
             result.bundle.user_id,
             result.bundle.assignment,
             result.bundle.problem_id,

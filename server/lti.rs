@@ -192,9 +192,12 @@ async fn launch_inner(
         || client_ip.as_deref().is_some_and(|ip| state.ip_filter.allows(ip));
     if restricted && !ip_allowed && !is_instructor_role(&roles) {
         eprintln!(
-            "exam launch denied: user={:?} course={:?} problem_set={:?} ip={:?}",
+            "exam launch denied: user={:?} user_name={:?} course={:?} course_name={:?} assignment_title={:?} problem_set={:?} ip={:?}",
             form_first(&form, "user_id"),
+            form_first(&form, "lis_person_name_full"),
             form_first(&form, "context_id"),
+            form_first(&form, "context_title"),
+            form_first(&form, "resource_link_title"),
             unique,
             client_ip
         );
@@ -225,8 +228,10 @@ async fn launch_inner(
     }
     if update.new_assignment {
         eprintln!(
-            "new assignment: user={user_id:?} course={:?} assignment={:?} title={:?}",
+            "new assignment: user={user_id:?} user_name={:?} course={:?} course_name={:?} assignment={:?} title={:?}",
+            form_first(&form, "lis_person_name_full"),
             form_first(&form, "context_id"),
+            form_first(&form, "context_title"),
             update.assignment_key,
             form_first(&form, "resource_link_title")
         );
@@ -234,7 +239,10 @@ async fn launch_inner(
     let token = state.login_tokens.insert(&user_id, now)?;
     if restricted {
         eprintln!(
-            "exam launch allowed: user={user_id:?} assignment={:?} ip={client_ip:?}",
+            "exam launch allowed: user={user_id:?} user_name={:?} course_name={:?} assignment_title={:?} assignment={:?} ip={client_ip:?}",
+            form_first(&form, "lis_person_name_full"),
+            form_first(&form, "context_title"),
+            form_first(&form, "resource_link_title"),
             update.assignment_key
         );
     }

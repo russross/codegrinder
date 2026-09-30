@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
+use crate::db::Db;
 use crate::error::{AppError, AppResult};
 use crate::files::split_system_and_student;
 use crate::proto;
@@ -11,6 +12,28 @@ use crate::proto::{
     ProblemCatalogSet, ProblemCatalogStep, ProblemType, ProblemTypeAction,
 };
 use crate::timeutil::timestamp_opt;
+
+pub async fn assignment_log_names(db: &Db, key: &AssignmentKey) -> String {
+    let key = key.clone();
+    db.transaction(move |conn| {
+        let user_name: Option<String> = conn
+            .query_row("SELECT user_name FROM users WHERE user_id = ?", [&key.user_id], |row| row.get(0))
+            .optional()?;
+        let course_name: Option<String> = conn
+            .query_row("SELECT course_name FROM courses WHERE course_id = ?", [&key.course_id], |row| row.get(0))
+            .optional()?;
+        let assignment_title: Option<String> = conn
+            .query_row(
+                "SELECT assignment_title FROM assignments WHERE user_id = ? AND course_id = ? AND problem_set_id = ?",
+                params![key.user_id, key.course_id, key.problem_set_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(format!("user_name={user_name:?} course_name={course_name:?} assignment_title={assignment_title:?}"))
+    })
+    .await
+    .unwrap_or_else(|err| format!("name_lookup_error={err:?}"))
+}
 
 #[derive(Clone, Debug)]
 pub struct UserRow {
