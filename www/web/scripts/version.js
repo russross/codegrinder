@@ -1,2 +1,2 @@
-/*! CodeGrinder web build 0.4.2+b1a02bc1ccba */
-const e={d:(r,t)=>{if(Array.isArray(t))for(var o=0;o<t.length;){var a=t[o++],n=t[o++];e.o(r,a)?0===n&&o++:0===n?Object.defineProperty(r,a,{enumerable:!0,value:t[o++]}):Object.defineProperty(r,a,{enumerable:!0,get:n})}else for(var a in t)e.o(t,a)&&!e.o(r,a)&&Object.defineProperty(r,a,{enumerable:!0,get:t[a]})},o:(e,r)=>Object.prototype.hasOwnProperty.call(e,r)};let r={};e.d(r,{r:()=>o});const t="0.4.2+b1a02bc1ccba";function o(e){return e.searchParams.set("version",t),e}e.d(r,["j",0,t]);export{o as versionedAssetUrl,t as webVersion};
+/*! CodeGrinder web build 0.4.2+7708789ab125 */
+const r="0.4.2+7708789ab125";function e(e){return e.searchParams.set("version",r),e}export{e as versionedAssetUrl,r as webVersion};
