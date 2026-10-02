@@ -211,7 +211,7 @@ async fn launch_inner(
     let form_for_db = form.clone();
     let update = state
         .db
-        .transaction(move |conn| update_launch(conn, &form_for_db, &unique, restricted, now))
+        .transaction(true, move |conn| update_launch(conn, &form_for_db, &unique, restricted, now))
         .await?;
     if update.new_course {
         eprintln!(

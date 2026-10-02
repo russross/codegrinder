@@ -67,7 +67,7 @@ async fn main() -> AppResult<()> {
         .map_err(|err| AppError::Internal(format!("curl is required: {err}")))?;
     let db = Db::open(&config.sqlite3_path)?;
     if args.ta {
-        db.transaction(|conn| delete_expired_sessions(conn, now_utc())).await?;
+        db.transaction(true, |conn| delete_expired_sessions(conn, now_utc())).await?;
         let recovery_count = spawn_startup_grade_passbacks(db.clone(), config.clone()).await?;
         if recovery_count > 0 {
             eprintln!(

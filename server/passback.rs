@@ -25,7 +25,7 @@ pub const PASSBACK_PENDING: &str = "post_pending";
 pub const PASSBACK_FAILED: &str = "post_failed";
 pub const PASSBACK_NO_TARGET: &str = "not_posted_no_target";
 pub const PASSBACK_LOCKED: &str = "not_posted_locked";
-pub const PASSBACK_USER_NOT_IN_COURSE: &str = "not_posted_user_not_in_course";
+pub const PASSBACK_FAILED_PERMANENT: &str = "post_failed_permanent";
 const USER_AGENT_VALUE: &str = concat!("CodeGrinder/", env!("CARGO_PKG_VERSION"));
 const STARTUP_RECOVERY_JITTER: Duration = Duration::from_secs(10 * 60);
 const GRADE_PASSBACK_TIMEOUT: Duration = Duration::from_secs(60);
@@ -47,23 +47,6 @@ impl GradePassbackError {
             Self::Transport(_) => true,
             Self::Http { status, .. } => is_transient_http_status(*status),
         }
-    }
-
-    fn is_user_not_in_course(&self) -> bool {
-        let Self::Http { status, body } = self else {
-            return false;
-        };
-        if *status != http::StatusCode::UNPROCESSABLE_ENTITY {
-            return false;
-        }
-        let Ok(document) = roxmltree::Document::parse(body) else {
-            return false;
-        };
-        document.descendants().any(|node| {
-            node.is_element()
-                && node.tag_name().name() == "ext_canvas_error_code"
-                && node.text().is_some_and(|text| text.trim() == "user_not_in_course")
-        })
     }
 }
 
@@ -108,7 +91,7 @@ struct StoredTranscriptEvent {
 
 pub async fn spawn_startup_grade_passbacks(db: Db, config: Arc<ServerConfig>) -> AppResult<usize> {
     let assignments = db
-        .transaction(|conn| {
+        .transaction(false, |conn| {
             let mut statement = conn.prepare(
                 "SELECT user_id, course_id, problem_set_id
                  FROM assignments
@@ -152,7 +135,7 @@ async fn prepare_startup_grade_passback(
     key: &AssignmentKey,
 ) -> AppResult<Option<(GradePassbackTarget, String)>> {
     let key = key.clone();
-    db.transaction(move |conn| prepare_startup_grade_passback_tx(conn, &key)).await
+    db.transaction(true, move |conn| prepare_startup_grade_passback_tx(conn, &key)).await
 }
 
 fn prepare_startup_grade_passback_tx(
@@ -337,25 +320,29 @@ pub fn spawn_grade_passback(
                     update_passback_status(&db, &target, PASSBACK_POSTED).await;
                     return;
                 }
-                Err(err) if err.is_transient() && attempt < 10 => {
+                Err(err) => {
+                    let transient = err.is_transient();
+                    let retry_delay = (transient && attempt < 10).then_some(delay);
                     eprintln!(
-                        "error posting grade back to LMS: {names} user={:?} course={:?} problem_set={:?} attempt={attempt}/10 error={err}",
+                        "LMS grade passback attempt failed: {names} user={:?} course={:?} problem_set={:?} attempt={attempt}/10 transient={transient} retry_in={retry_delay:?} error={err}",
                         target.user_id, target.course_id, target.problem_set_id
                     );
-                    tokio::time::sleep(delay).await;
-                    delay = (delay * 2).min(Duration::from_secs(300));
-                }
-                Err(err) => {
-                    if err.is_user_not_in_course() {
-                        update_passback_status(&db, &target, PASSBACK_USER_NOT_IN_COURSE).await;
+                    if let Some(retry_delay) = retry_delay {
+                        tokio::time::sleep(retry_delay).await;
+                        delay = (delay * 2).min(Duration::from_secs(300));
+                        continue;
+                    }
+                    // Only exhausted transient failures remain eligible for startup recovery.
+                    if !transient {
+                        update_passback_status(&db, &target, PASSBACK_FAILED_PERMANENT).await;
                         eprintln!(
-                            "LMS grade passback permanently failed because the user is no longer in the course for assignment {}/{}/{} {names}: {err}",
+                            "LMS grade passback permanently failed for assignment {}/{}/{} {names}: {err}",
                             target.user_id, target.course_id, target.problem_set_id
                         );
                     } else {
                         update_passback_status(&db, &target, PASSBACK_FAILED).await;
                         eprintln!(
-                            "giving up posting LMS grade for assignment {}/{}/{} {names}: {err}",
+                            "giving up posting LMS grade after attempt {attempt}/10 for assignment {}/{}/{} {names}",
                             target.user_id, target.course_id, target.problem_set_id
                         );
                     }
@@ -372,7 +359,7 @@ async fn update_passback_status(db: &Db, target: &GradePassbackTarget, status: &
     let problem_set_id = target.problem_set_id.clone();
     let status = status.to_owned();
     if let Err(err) = db
-        .transaction(move |conn| {
+        .transaction(true, move |conn| {
             conn.execute(
                 "UPDATE assignments SET grade_passback_status = ? WHERE user_id = ? AND course_id = ? AND problem_set_id = ?",
                 params![status, user_id, course_id, problem_set_id],
@@ -886,31 +873,6 @@ mod tests {
     }
 
     #[test]
-    fn canvas_user_not_in_course_response_is_a_resolved_failure() {
-        let response = GradePassbackError::Http {
-            status: http::StatusCode::UNPROCESSABLE_ENTITY,
-            body: r#"<?xml version="1.0" encoding="UTF-8"?>
-                <imsx_POXEnvelopeResponse xmlns="http://www.imsglobal.org/services/ltiv1p1/xsd/imsoms_v1p0">
-                    <imsx_POXHeader><imsx_POXResponseHeaderInfo><imsx_statusInfo>
-                        <imsx_description>User is no longer in course</imsx_description>
-                        <ext_canvas_error_code>
-                            user_not_in_course
-                        </ext_canvas_error_code>
-                    </imsx_statusInfo></imsx_POXResponseHeaderInfo></imsx_POXHeader>
-                </imsx_POXEnvelopeResponse>"#
-                .to_owned(),
-        };
-
-        assert!(response.is_user_not_in_course());
-
-        let unrelated_response = GradePassbackError::Http {
-            status: http::StatusCode::UNPROCESSABLE_ENTITY,
-            body: "<error>User is no longer in course</error>".to_owned(),
-        };
-        assert!(!unrelated_response.is_user_not_in_course());
-    }
-
-    #[test]
     fn startup_recovery_reloads_current_grade_and_latest_commit() {
         let dir = tempfile::tempdir().unwrap();
         let conn = open_test_connection(&dir.path().join("db.sqlite")).unwrap();
@@ -964,7 +926,7 @@ mod tests {
         let (pending_target, _) = prepare_startup_grade_passback_tx(&conn, &key).unwrap().unwrap();
         assert_eq!(pending_target.score, target.score);
 
-        for status in [PASSBACK_POSTED, PASSBACK_LOCKED] {
+        for status in [PASSBACK_POSTED, PASSBACK_LOCKED, PASSBACK_FAILED_PERMANENT] {
             conn.execute("UPDATE assignments SET grade_passback_status = ?", params![status])
                 .unwrap();
             assert!(prepare_startup_grade_passback_tx(&conn, &key).unwrap().is_none());

@@ -15,7 +15,7 @@ use crate::timeutil::timestamp_opt;
 
 pub async fn assignment_log_names(db: &Db, key: &AssignmentKey) -> String {
     let key = key.clone();
-    db.transaction(move |conn| {
+    db.transaction(false, move |conn| {
         let user_name: Option<String> = conn
             .query_row("SELECT user_name FROM users WHERE user_id = ?", [&key.user_id], |row| row.get(0))
             .optional()?;

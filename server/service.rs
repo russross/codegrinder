@@ -96,7 +96,7 @@ impl CodeGrinderServer {
             .to_owned();
         let config = self.config.clone();
         self.db
-            .transaction_until(request_deadline(request), move |conn| {
+            .transaction_until(true, request_deadline(request), move |conn| {
                 let user_id =
                     load_session_user_id(conn, &session_key, &config.session_secret, now_utc())?;
                 store::load_user_by_id(conn, &user_id)
@@ -166,7 +166,7 @@ impl CodeGrinderService for CodeGrinderServer {
                 self.login_tokens.take(&token, now_utc()).map_err(AppError::grpc_status)?;
             let response = self
                 .db
-                .transaction_until(deadline, move |conn| {
+                .transaction_until(true, deadline, move |conn| {
                     let user = store::load_user_by_id(conn, &user_id)?;
                     let session = create_session(
                         conn,
@@ -197,7 +197,7 @@ impl CodeGrinderService for CodeGrinderServer {
         let req = request.into_inner();
         let items = self
             .db
-            .transaction_until(deadline, move |conn| {
+            .transaction_until(false, deadline, move |conn| {
                 store::list_assignments(
                     conn,
                     &current_user,
@@ -223,7 +223,7 @@ impl CodeGrinderService for CodeGrinderServer {
         let req = request.into_inner();
         let problem_sets = self
             .db
-            .transaction_until(deadline, move |conn| {
+            .transaction_until(false, deadline, move |conn| {
                 store::search_problem_catalog(conn, &current_user, &req.search)
             })
             .await
@@ -239,7 +239,7 @@ impl CodeGrinderService for CodeGrinderServer {
         let deadline = request_deadline(&request);
         let problem_types = self
             .db
-            .transaction_until(deadline, store::list_problem_types)
+            .transaction_until(false, deadline, store::list_problem_types)
             .await
             .map_err(AppError::grpc_status)?;
         Ok(Response::new(GetProblemTypesResponse { problem_types }))
@@ -254,7 +254,7 @@ impl CodeGrinderService for CodeGrinderServer {
         let problem_type_name = request.into_inner().problem_type;
         let problem_type = self
             .db
-            .transaction_until(deadline, move |conn| {
+            .transaction_until(false, deadline, move |conn| {
                 store::load_problem_type(conn, &problem_type_name)
             })
             .await
@@ -275,7 +275,7 @@ impl CodeGrinderService for CodeGrinderServer {
         let req = request.into_inner();
         let problem_type = self
             .db
-            .transaction_until(deadline, move |conn| {
+            .transaction_until(true, deadline, move |conn| {
                 mutations::save_problem_type_files(conn, &req.problem_type, &req.files)
             })
             .await
@@ -301,7 +301,7 @@ impl CodeGrinderService for CodeGrinderServer {
         let problem_type_name = req.problem_type.clone();
         let problem_types = self
             .db
-            .transaction_until(deadline, move |conn| {
+            .transaction_until(true, deadline, move |conn| {
                 mutations::save_problem_type(conn, &req.problem_type, &req.container, &req.actions)
             })
             .await
@@ -325,7 +325,7 @@ impl CodeGrinderService for CodeGrinderServer {
             .ok_or_else(|| Status::invalid_argument("assignment is required"))?;
         let response = self
             .db
-            .transaction_until(deadline, move |conn| {
+            .transaction_until(false, deadline, move |conn| {
                 store::get_assignment(conn, &current_user, &key, ip_allowed)
             })
             .await
@@ -347,7 +347,7 @@ impl CodeGrinderService for CodeGrinderServer {
             req.assignment.ok_or_else(|| Status::invalid_argument("assignment is required"))?;
         let response = self
             .db
-            .transaction_until(deadline, move |conn| {
+            .transaction_until(false, deadline, move |conn| {
                 store::get_workspace(
                     conn,
                     &current_user,
@@ -382,7 +382,7 @@ impl CodeGrinderService for CodeGrinderServer {
         let this = self.clone();
         let bundle = self
             .db
-            .transaction_until(deadline, move |conn| {
+            .transaction_until(false, deadline, move |conn| {
                 mutations::prepare_problem(
                     conn,
                     &current_user,
@@ -413,7 +413,7 @@ impl CodeGrinderService for CodeGrinderServer {
         let config = self.config.clone();
         let saved = self
             .db
-            .transaction_until(deadline, move |conn| {
+            .transaction_until(true, deadline, move |conn| {
                 mutations::save_problem(conn, &current_user, req.mode, &bundle, &config)
             })
             .await
@@ -440,7 +440,7 @@ impl CodeGrinderService for CodeGrinderServer {
         let bundle = req.bundle.ok_or_else(|| Status::invalid_argument("bundle is required"))?;
         let saved = self
             .db
-            .transaction_until(deadline, move |conn| {
+            .transaction_until(true, deadline, move |conn| {
                 mutations::save_problem_set(conn, req.mode, &bundle)
             })
             .await
@@ -467,7 +467,7 @@ impl CodeGrinderService for CodeGrinderServer {
             .ok_or_else(|| Status::invalid_argument("commit is required"))?;
         let (save_status, _) = self
             .db
-            .transaction_until(deadline, move |conn| {
+            .transaction_until(true, deadline, move |conn| {
                 mutations::save_workspace_commit(conn, &current_user, &commit, ip_allowed)
             })
             .await
@@ -491,7 +491,7 @@ impl CodeGrinderService for CodeGrinderServer {
         let this = self.clone();
         let result = self
             .db
-            .transaction_until(deadline, move |conn| {
+            .transaction_until(true, deadline, move |conn| {
                 mutations::save_ungraded_commit(conn, &current_user, &commit, ip_allowed, |types| {
                     this.select_daycare_host(types)
                 })
@@ -538,7 +538,7 @@ impl CodeGrinderService for CodeGrinderServer {
         let config = self.config.clone();
         let result = self
             .db
-            .transaction_until(deadline, move |conn| {
+            .transaction_until(true, deadline, move |conn| {
                 mutations::save_graded_commit(conn, &current_user, &signed, &config, ip_allowed)
             })
             .await
@@ -668,7 +668,7 @@ async fn passback_work(
     let problem_id = bundle.problem_id.clone();
     let total_steps = bundle.total_steps;
     let commit = commit.clone();
-    db.transaction_until(deadline, move |conn| {
+    db.transaction_until(true, deadline, move |conn| {
         if locked {
             update_passback_status(conn, &key, PASSBACK_LOCKED)?;
             return Ok(None);
@@ -907,7 +907,7 @@ mod tests {
         seed_service_assignments(&service.db).await;
         service
             .db
-            .transaction(|conn| {
+            .transaction(true, |conn| {
                 conn.execute(
                     "UPDATE assignments SET restricted = 1 WHERE user_id = 'student'",
                     [],
@@ -1020,7 +1020,7 @@ mod tests {
     }
 
     async fn seed_service_users(db: &Db, admin: bool, instructor: bool) -> Sessions {
-        db.transaction(move |conn| {
+        db.transaction(true, move |conn| {
             conn.execute(
                 "INSERT INTO users(user_id, user_name, user_login, admin) VALUES ('student', 'Student', 'student', 0)
                  ON CONFLICT(user_id) DO NOTHING",
@@ -1069,7 +1069,7 @@ mod tests {
     }
 
     async fn seed_service_assignments(db: &Db) {
-        db.transaction(|conn| {
+        db.transaction(true, |conn| {
             crate::mutations::save_problem_type(
                 conn,
                 "python",
@@ -1123,7 +1123,7 @@ mod tests {
     }
 
     async fn seed_second_step_and_scores(db: &Db) {
-        db.transaction(|conn| {
+        db.transaction(true, |conn| {
             conn.execute(
                 "INSERT INTO problem_steps(problem_id, step_number, problem_type, step_note, step_weight)
                  VALUES ('p1', 2, 'python', 'Step 2', 1)",
@@ -1148,7 +1148,7 @@ mod tests {
     }
 
     async fn assignment_passback_status(db: &Db) -> String {
-        db.transaction(|conn| {
+        db.transaction(false, |conn| {
             Ok(conn.query_row(
                 "SELECT grade_passback_status FROM assignments WHERE user_id = 'student' AND course_id = 'c1' AND problem_set_id = 'ps1'",
                 [],
