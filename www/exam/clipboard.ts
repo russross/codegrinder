@@ -1,6 +1,6 @@
 import { EditorSelection } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
-import type { TerminalView } from "./terminal";
+import type { TerminalView } from "./client-core/terminal";
 
 interface ClipboardContent {
     readonly text: string;
@@ -11,8 +11,12 @@ type ClipboardOperation = "copy" | "cut" | "paste";
 
 const terminals: TerminalView[] = [];
 
-export function registerClipboardTerminal(terminal: TerminalView): void {
+export function registerClipboardTerminal(terminal: TerminalView): () => void {
     terminals.push(terminal);
+    return () => {
+        const index = terminals.indexOf(terminal);
+        if (index !== -1) terminals.splice(index, 1);
+    };
 }
 
 export function installExamClipboard(editor: EditorView): void {

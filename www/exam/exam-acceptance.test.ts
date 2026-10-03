@@ -1,0 +1,346 @@
+import { EditorView } from "@codemirror/view";
+import { language } from "@codemirror/language";
+import { riscletLanguage } from "./client-core/risclet";
+import type { Riscbox } from "@riscbox/runtime";
+import {
+    CommitSaveStatus, DaycareResponse, EventMessage, GetAssignmentResponse, GetWorkspaceRequest, GetWorkspaceResponse,
+    HelloResponse, ListAssignmentsResponse, RuntimeBundle, SaveGradedCommitResponse,
+    SaveUngradedCommitRequest, SaveUngradedCommitResponse, SaveWorkspaceCommitRequest, SaveWorkspaceCommitResponse,
+} from "./codegrinder";
+import { loadRuntime, vmImageForProblemType } from "./vm";
+
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+function check(condition: boolean, message: string): void { if (!condition) throw new Error(message); }
+async function until(predicate: () => boolean, message: string): Promise<void> {
+    const deadline = Date.now() + 20_000;
+    while (!predicate()) {
+        if (Date.now() > deadline) throw new Error(message);
+        await new Promise<void>(resolve => setTimeout(resolve, 20));
+    }
+}
+function button(id: string): HTMLButtonElement {
+    const node = document.getElementById(id);
+    if (!(node instanceof HTMLButtonElement)) throw new Error(`Missing button: ${id}`);
+    return node;
+}
+function editor(): EditorView {
+    const host = document.querySelector<HTMLElement>(".cm-editor");
+    const view = host === null ? undefined : EditorView.findFromDOM(host);
+    if (view === undefined || view === null) throw new Error("Editor is unavailable");
+    return view;
+}
+function edit(text: string): void {
+    const view = editor();
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
+}
+function frame(bytes: Uint8Array, kind = 0): Uint8Array {
+    const framed = new Uint8Array(bytes.length + 5);
+    framed[0] = kind;
+    new DataView(framed.buffer).setUint32(1, bytes.length);
+    framed.set(bytes, 5);
+    return framed;
+}
+function reply(bytes: Uint8Array, status = 0): Response {
+    const body = new Uint8Array([...frame(bytes), ...frame(encoder.encode(`grpc-status: ${status}\r\n`), 128)]);
+    return new Response(body, { headers: { "content-type": "application/grpc-web+proto" } });
+}
+
+let acceptance: { results?: string[]; error?: string } | null = null;
+let rebootClickNeeded = false;
+export function examAcceptanceNeedsRebootClick(): boolean { return rebootClickNeeded; }
+async function clickRebootRecovery(): Promise<void> {
+    await new Promise<void>(resolve => {
+        rebootClickNeeded = true;
+        button("vm-boot-button").addEventListener("click", () => { rebootClickNeeded = false; resolve(); }, { once: true });
+    });
+}
+export function startExamAcceptance(): void {
+    acceptance = null;
+    void runExamAcceptance().then(results => { acceptance = { results }; }, error => {
+        acceptance = { error: error instanceof Error ? error.stack ?? error.message : String(error) };
+    });
+}
+export function examAcceptanceResult(): { results?: string[]; error?: string } | null { return acceptance; }
+
+// Exercise the actual page and transport against a deterministic protobuf RPC peer.
+export async function runExamAcceptance(): Promise<string[]> {
+    const nativeFetch = window.fetch.bind(window);
+    const markup = await (await nativeFetch("index.html")).text();
+    const page = new DOMParser().parseFromString(markup, "text/html");
+    document.body.replaceChildren(...page.body.childNodes);
+    const key = { userId: "student", courseId: "course", problemSetId: "quiz" };
+    history.replaceState(null, "", "?assignment=student:course:quiz&token=test");
+    const saved = new Map<string, string>();
+    let currentStep = "1";
+    let gradePassed = true;
+    let actionBundle = RuntimeBundle.create();
+    const calls: string[] = [];
+    const confirmations: string[] = [];
+    const nativeConfirm = window.confirm;
+    window.confirm = message => { confirmations.push(message ?? ""); return false; };
+    let failSave = false;
+    let blockSave = false;
+    let release: (() => void) | undefined;
+    let machine: Riscbox | undefined;
+    let guestOutput = "";
+    const image = vmImageForProblemType("riscv");
+    if (image === undefined) throw new Error("Missing VM image");
+    const constructor = await loadRuntime(image);
+    const instantiate = constructor.instantiate.bind(constructor);
+    constructor.instantiate = async (bytes, options) => {
+        machine = await instantiate(bytes, {
+            ...options,
+            consoleReset: () => { guestOutput = ""; options?.consoleReset?.(); },
+            consoleWrite: text => { guestOutput += text; options?.consoleWrite?.(text); },
+        });
+        return machine;
+    };
+    window.fetch = async (input, init) => {
+        const request = new Request(input, init);
+        const method = new URL(request.url).pathname.split("/").pop() ?? "";
+        if (!new URL(request.url).pathname.includes("codegrinder.CodeGrinderService")) return nativeFetch(input, init);
+        calls.push(method);
+        if (method === "Daycare") check(!request.headers.has("authorization"), "Daycare received TA authentication");
+        else if (method !== "Hello") check(request.headers.get("authorization") === "Bearer fixture-session", "RPC lost raw session metadata");
+        const body = request.headers.get("content-type")?.includes("grpc-web-text")
+            ? Uint8Array.from(atob(await request.text()), character => character.charCodeAt(0))
+            : new Uint8Array(await request.arrayBuffer());
+        const payload = body.subarray(5);
+        switch (method) {
+            case "Hello": return reply(HelloResponse.toBinary(HelloResponse.create({ userId: "student", sessionKey: "fixture-session" })));
+            case "ListAssignments": return reply(ListAssignmentsResponse.toBinary(ListAssignmentsResponse.create()));
+            case "GetAssignment": return reply(GetAssignmentResponse.toBinary(GetAssignmentResponse.create({ assignment: key,
+                problems: ["first", "second", "plain"].map(problemId => ({ problemId, problemNote: problemId,
+                    firstStepNumber: "1", lastStepNumber: problemId === "first" ? "2" : "1", currentStepNumber: "1" })) })));
+            case "GetWorkspace": {
+                const request = GetWorkspaceRequest.fromBinary(payload);
+                return reply(GetWorkspaceResponse.toBinary(GetWorkspaceResponse.create({ assignment: key,
+                    problemId: request.problemId, problemType: request.problemId === "plain" ? "python" : "riscv",
+                    stepNumber: request.problemId === "first" ? (request.stepNumber === "0" ? currentStep : request.stepNumber) : "1",
+                    firstStepNumber: "1", lastStepNumber: request.problemId === "first" ? "2" : "1", actions: ["grade", "write"],
+                    systemOwnedFiles: request.problemId === "second" ? { "system.txt": encoder.encode("system\n") }
+                        : { "system.txt": encoder.encode("system\n"), "doc/doc.md": encoder.encode("# Instructions\n") },
+                    studentOwnedFiles: { "main.s": encoder.encode(request.problemId === "first" && request.stepNumber === "2"
+                        ? "step two\n" : saved.get(request.problemId) ?? `${request.problemId}\n`) },
+                })));
+            }
+            case "SaveWorkspaceCommit": {
+                const commit = SaveWorkspaceCommitRequest.fromBinary(payload).commit;
+                check(commit !== undefined && Object.keys(commit.files).join() === "main.s", "Save included unofficial files");
+                if (commit === undefined) throw new Error("Missing commit");
+                if (blockSave) { blockSave = false; await new Promise<void>(resolve => { release = resolve; }); }
+                if (failSave) { failSave = false; return reply(new Uint8Array(), 14); }
+                saved.set(commit.problemId, decoder.decode(commit.files["main.s"]));
+                return reply(SaveWorkspaceCommitResponse.toBinary(SaveWorkspaceCommitResponse.create({ saveStatus: CommitSaveStatus.SAVED })));
+            }
+            case "SaveUngradedCommit": {
+                const commit = SaveUngradedCommitRequest.fromBinary(payload).commit?.commit;
+                if (commit === undefined) throw new Error("Missing grading commit");
+                actionBundle = RuntimeBundle.create({ hostname: window.location.host, commit: {
+                    ...commit, score: gradePassed ? 1 : 0, reportCard: { passed: gradePassed },
+                    files: commit.action === "grade" ? { "main.s": encoder.encode("graded output\n"),
+                        "unofficial": encoder.encode("excluded") } : commit.files,
+                } });
+                return reply(SaveUngradedCommitResponse.toBinary(SaveUngradedCommitResponse.create({ saveStatus: CommitSaveStatus.SAVED,
+                    bundle: { bundle: RuntimeBundle.toBinary(actionBundle), signature: "fixture" } })));
+            }
+            case "Daycare": return actionBundle.commit?.action === "grade"
+                ? reply(DaycareResponse.toBinary(DaycareResponse.create({ response: { oneofKind: "bundle",
+                    bundle: { bundle: RuntimeBundle.toBinary(actionBundle), signature: "fixture" } } })))
+                : reply(DaycareResponse.toBinary(DaycareResponse.create({ response: { oneofKind: "event",
+                    event: EventMessage.create({ event: "files", files: { "main.s": encoder.encode("action output\n"), "unofficial": encoder.encode("excluded") } }) } })));
+            case "SaveGradedCommit":
+                if (gradePassed) currentStep = "2";
+                return reply(SaveGradedCommitResponse.toBinary(SaveGradedCommitResponse.create({ saveStatus: CommitSaveStatus.SAVED })));
+            default: throw new Error(`Unexpected RPC: ${method}`);
+        }
+    };
+    try {
+        await import("./index");
+        document.dispatchEvent(new Event("DOMContentLoaded"));
+        await until(() => document.querySelector(".file-tree button") !== null, "Exam never displayed its workspace");
+        check(editor().state.doc.toString() === "first", "Initial selection opened the wrong file");
+        check(editor().state.facet(language) === riscletLanguage, "Exam .s files did not select the dialect highlighter");
+        check(document.getElementById("instructions-tab-content")?.textContent?.includes("Instructions") === true, "Instructions did not render");
+        check(button("instructions-tab-button").classList.contains("active") && machine?.started === false,
+            "Initial load must select instructions and leave the VM unbooted");
+        edit("explicit save");
+        button("save-button").click();
+        await until(() => saved.get("first") === "explicit save\n" && button("save-button").disabled, "Save did not flush and acknowledge editor bytes");
+        blockSave = true;
+        edit("in flight");
+        button("save-button").click();
+        await until(() => release !== undefined, "Save never reached RPC peer");
+        edit("newer edit");
+        release?.();
+        await until(() => saved.get("first") === "in flight\n", "Blocked save did not finish");
+        check(!button("save-button").disabled, "Older acknowledgement cleared newer editor edits");
+        failSave = true;
+        button("save-button").click();
+        await until(() => document.getElementById("terminal")?.textContent?.includes("Save failed") === true, "RPC failure was not reported");
+        check(!button("save-button").disabled, "RPC failure cleared pending work");
+        button("save-button").click();
+        await until(() => saved.get("first") === "newer edit\n", "Retry did not save retained bytes");
+        const active = machine;
+        if (active === undefined) throw new Error("VM was not prepared");
+        check(!active.started, "Routine saves booted the VM");
+        const bootWidth = button("vm-boot-button").getBoundingClientRect().width;
+        button("vm-boot-button").click();
+        await until(() => guestOutput.includes("$ "), "Initial exam guest did not reach its shell");
+        check(button("vm-boot-button").getBoundingClientRect().width === bootWidth,
+            "Reboot label changed the Boot VM button width");
+        const filesystem = active.filesystem("workspace");
+        filesystem.writeFile("doc/doc.md", "# Guest replacement");
+        filesystem.writeFile("system.txt", "guest system");
+        await new Promise<void>(resolve => setTimeout(resolve, 0));
+        check(decoder.decode(window.problemSet[0].workspace.readFile("system.txt")) === "system\n",
+            "System views followed guest writes");
+        check(document.getElementById("instructions-tab-content")?.textContent?.includes("Guest replacement") === false,
+            "Instructions followed a guest system-file write");
+        filesystem.mkdir("empty");
+        filesystem.writeFile("extra", Uint8Array.of(0, 255, 42));
+        filesystem.link("main.s", "alias");
+        filesystem.symlink("broken", "absent");
+        await new Promise<void>(resolve => setTimeout(resolve, 0));
+        await active.halt();
+        check(button("vm-boot-button").textContent === "Boot VM", "Halt event did not restore normal boot behavior");
+        const disk = active.block(0);
+        const diskOriginal = (await disk.read(0n, 512)).slice();
+        const diskChanged = diskOriginal.slice();
+        diskChanged[0] ^= 255;
+        disk.write(0n, diskChanged);
+        const boot = active.boot.bind(active);
+        await boot();
+        const initialRequestReboot = active.requestReboot.bind(active);
+        let initialRebootRequested = false;
+        active.requestReboot = async () => { initialRebootRequested = true; };
+        button("vm-boot-button").click();
+        await until(() => initialRebootRequested, "First reboot click did not request orderly reboot");
+        let checkedResetDisk = false;
+        active.boot = async () => {
+            check((await disk.read(0n, 512)).every((byte, index) => byte === diskOriginal[index]), "VM Reset retained disk changes");
+            checkedResetDisk = true;
+            await boot();
+        };
+        edit("buffer before reset");
+        editor().focus();
+        const beforeCalls = calls.filter(method => method === "SaveWorkspaceCommit").length;
+        await clickRebootRecovery();
+        await until(() => button("vm-boot-button").textContent === "Reboot VM" && !button("vm-boot-button").disabled, "VM recovery did not reboot");
+        check(editor().state.doc.toString() === "buffer before reset", "VM Reset discarded editor text");
+        check(decoder.decode(filesystem.readFile("main.s")) === "newer edit\n", "VM Reset flushed or replaced workspace bytes");
+        check(!filesystem.listDirectory("").some(entry => ["empty", "extra", "alias", "broken"].includes(entry.name)),
+            "VM Reset retained guest-only namespace entries");
+        check(checkedResetDisk, "VM Reset did not inspect the cleared disk before boot");
+        active.boot = boot;
+        active.requestReboot = initialRequestReboot;
+        check(decoder.decode(filesystem.readFile("doc/doc.md")) === "# Instructions\n", "VM Reset did not restore canonical system files");
+        check(calls.filter(method => method === "SaveWorkspaceCommit").length === beforeCalls, "VM Reset sent a save RPC");
+        await until(() => guestOutput.includes("$ "), "Recovered exam guest did not reach its shell");
+        const select = (name: string): void => {
+            const target = [...document.querySelectorAll<HTMLButtonElement>(".problem-button")].find(node => node.textContent === name);
+            if (target === undefined) throw new Error(`Missing problem: ${name}`);
+            target.click();
+        };
+        select("second");
+        await until(() => editor().state.doc.toString() === "second", "Problem switch did not complete");
+        await until(() => guestOutput.includes("$ "), "Second problem guest did not reach its shell");
+        check(button("vm-tab-button").classList.contains("active") && machine === active,
+            "Missing instructions must boot the default VM tab using the same image");
+        check(saved.get("first") === "buffer before reset\n", "Switch lost final outgoing editor work");
+        check(!active.filesystem("workspace").listFiles().includes("extra"), "Second problem received first problem namespace");
+        select("first");
+        await until(() => editor().state.doc.toString() === "buffer before reset", "Returning to first problem failed");
+        check(!active.started && button("instructions-tab-button").classList.contains("active"),
+            "Returning to an instructed problem booted automatically");
+        const restored = active.filesystem("workspace");
+        check(!restored.listFiles().includes("extra") && !restored.listFiles().includes("alias"),
+            "Returning to a problem restored guest-only files");
+        check(!document.querySelector('.file-tree [data-path="extra"]'), "Guest extra became visible in exam file tree");
+        select("plain");
+        await until(() => editor().state.doc.toString() === "plain", "Non-VM problem did not open");
+        check(button("vm-tab-button").hidden, "Non-VM problem exposed VM controls");
+        edit("plain edit");
+        button("save-button").click();
+        await until(() => saved.get("plain") === "plain edit\n", "Non-VM workspace did not save");
+        select("first");
+        await until(() => editor().state.doc.toString() === "buffer before reset", "VM problem did not return after non-VM selection");
+        const latest = machine;
+        if (latest === undefined) throw new Error("VM disappeared after non-VM selection");
+        check(!latest.started, "Non-VM return booted an instructed problem");
+        button("action-write-button").click();
+        await until(() => editor().state.doc.toString() === "action output" && !button("action-write-button").disabled,
+            "Returned action files did not update the current editor");
+        check(!window.problemSet[0].workspace.isStudentOwned("unofficial"), "Action widened the official student whitelist");
+        check(!latest.started, "Action booted an unbooted VM");
+        button("vm-tab-button").click();
+        await until(() => guestOutput.includes("$ "), "VM tab did not boot");
+        const bootsBeforeGrade = guestOutput;
+        gradePassed = false;
+        button("action-grade-button").click();
+        await until(() => calls.includes("SaveGradedCommit") && !button("action-grade-button").disabled,
+            "Failed grade did not finish");
+        check(latest.started && guestOutput.startsWith(bootsBeforeGrade) && editor().state.doc.toString() === "graded output",
+            "Failed grade restarted the VM or advanced the step");
+        const actionsBeforeWrite = calls.filter(method => method === "SaveUngradedCommit").length;
+        button("action-write-button").click();
+        await until(() => calls.filter(method => method === "SaveUngradedCommit").length > actionsBeforeWrite
+            && !button("action-write-button").disabled, "Running action did not finish");
+        check(latest.started && guestOutput.startsWith(bootsBeforeGrade), "Action restarted the running VM");
+        gradePassed = true;
+        button("action-grade-button").click();
+        await until(() => editor().state.doc.toString() === "step two" && !button("action-grade-button").disabled,
+            "Passing grade did not replace the step workspace");
+        check(!window.problemSet[0].workspace.listFiles().includes("extra"), "Step advance restored an old namespace snapshot");
+        check(calls.includes("SaveGradedCommit"), "Grade did not use its final persistence RPC");
+        check(!latest.started && button("instructions-tab-button").classList.contains("active") && machine === latest,
+            "Step advancement must reuse the same image and wait on instructions");
+        button("vm-boot-button").click();
+        await until(() => guestOutput.includes("$ "), "New step did not boot on demand");
+        const bootsBeforeFinalGrade = guestOutput;
+        button("action-grade-button").click();
+        await until(() => !button("action-grade-button").disabled && window.problemSet[0].isComplete,
+            "Final passing grade did not complete");
+        check(latest.started && guestOutput.startsWith(bootsBeforeFinalGrade), "Final grade restarted the VM");
+        const requestReboot = latest.requestReboot.bind(latest);
+        let rebootRequested = false;
+        latest.requestReboot = async () => { rebootRequested = true; };
+        const rebootWidth = button("vm-boot-button").getBoundingClientRect().width;
+        button("vm-boot-button").click();
+        await until(() => rebootRequested && !button("vm-boot-button").disabled, "Stalled reboot did not expose recovery");
+        check(!button("vm-boot-button").disabled && button("vm-boot-button").textContent === "Reset VM"
+            && !editor().state.readOnly, "Reboot wait must keep the same button and editor usable");
+        check(button("vm-boot-button").getBoundingClientRect().width === rebootWidth,
+            "Reset label changed the button width");
+        check(rebootWidth === bootWidth, "Boot, Reboot, and Reset labels have different widths");
+        edit("save during reboot");
+        button("save-button").click();
+        await until(() => saved.get("first") === "save during reboot\n", "Reboot wait blocked a save");
+        const beforeStalledRecovery = calls.filter(method => method === "SaveWorkspaceCommit").length;
+        await clickRebootRecovery();
+        await until(() => !button("vm-boot-button").disabled, "Recovery did not release the selection queue");
+        check(button("vm-boot-button").textContent === "Reboot VM"
+            && button("vm-boot-button").getBoundingClientRect().width === rebootWidth,
+            "Recovery did not restore the reboot label at the same width");
+        latest.requestReboot = requestReboot;
+        check(editor().state.doc.toString() === "save during reboot" && !editor().state.readOnly, "Stalled-reboot recovery lost the editable workspace");
+        check(calls.filter(method => method === "SaveWorkspaceCommit").length === beforeStalledRecovery, "Stalled-switch recovery saved or reset files");
+        await until(() => guestOutput.includes("$ "), "Second-click recovery did not reach its shell");
+        latest.filesystem("workspace").writeFile("normal-reboot-retained", "keep");
+        guestOutput = "";
+        button("vm-boot-button").click();
+        await until(() => guestOutput.includes("$ ") && !button("vm-boot-button").disabled,
+            "Normal reboot did not resume after second-click recovery");
+        check(latest.filesystem("workspace").listFiles().includes("normal-reboot-retained"),
+            "A completed reboot did not revert the button to ordinary reboot behavior");
+        check(document.getElementById("vm-reset-button") === null, "Separate Reset VM button remains visible");
+        check(confirmations.length === 0, `Unexpected editor conflict: ${confirmations.join("; ")}`);
+        return ["page RPC saves, revisions, failure/retry, clean VM Reset, lazy boot, canonical system views, same-image reuse, actions, grade advancement, and stalled-reboot recovery"];
+    } finally {
+        window.fetch = nativeFetch;
+        window.confirm = nativeConfirm;
+        constructor.instantiate = instantiate;
+        if (machine?.started) await machine.halt();
+    }
+}

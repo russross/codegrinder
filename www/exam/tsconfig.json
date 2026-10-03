@@ -1,13 +1,13 @@
 {
+  "extends": "./client-core/tsconfig.json",
   "compilerOptions": {
-    "target": "es2020",
-    "module": "es2020",
-    "moduleResolution": "node",
-    "strict": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true,
-    "resolveJsonModule": true
+    "baseUrl": ".",
+    "paths": {
+      "@riscbox/runtime": ["vm/runtime/riscbox.d.ts"],
+      "@riscbox/storage": ["vm/runtime/riscbox.d.ts"],
+      "@codemirror/*": ["./client-core/node_modules/@codemirror/*"]
+    }
   },
-  "include": ["**/*.ts"]
+  "include": ["*.ts", "*.d.ts", "google/**/*.ts", "./client-core/*.ts", "./client-core/*.d.ts"],
+  "exclude": ["node_modules", "vm/runtime"]
 }

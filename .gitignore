@@ -11,3 +11,5 @@ problemtypes
 .ruff_cache
 TODO.md
 /target/
+/www/exam/client-core/node_modules/
+/www/exam/client-core/build/test-*/

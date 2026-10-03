@@ -1,212 +1,131 @@
-import { Filesystem, FilesystemError, SeedBuilder } from "./vm/runtime/p9/index.js";
-import type { FilesystemRuntime, P9Change } from "./vm/runtime/p9/index.js";
+import type { Filesystem, P9Change } from "@riscbox/storage";
+import type { EditorFilesystem } from "./client-core/editor-session";
+import { changeAffectsPath } from "./client-core/workspace";
 
-export enum WorkspaceChangeSource {
-    Editor = "editor",
-    Guest = "guest",
-    Server = "server",
-}
-
-export interface WorkspaceStudentChange {
-    readonly path: string;
-    readonly source: WorkspaceChangeSource;
-}
-
+export enum WorkspaceChangeSource { Editor = "editor", Guest = "guest", Server = "server" }
+export interface WorkspaceStudentChange { readonly path: string; readonly source: WorkspaceChangeSource; }
 export type WorkspaceStudentChangeListener = (change: WorkspaceStudentChange) => void;
+const SERVER_ORIGIN = 2n;
 
-function copyFileMap(files: ReadonlyMap<string, Uint8Array>): Map<string, Uint8Array> {
-    return new Map([...files].map(([path, content]) => [path, content.slice()]));
+function copyFiles(files: ReadonlyMap<string, Uint8Array>): Map<string, Uint8Array> {
+    return new Map([...files].map(([path, bytes]) => [path, bytes.slice()]));
+}
+function equalBytes(left: Uint8Array | undefined, right: Uint8Array): boolean {
+    return left !== undefined && left.length === right.length && right.every((byte, index) => byte === left[index]);
 }
 
-export class ProblemWorkspace {
+// Official submission entries survive guest removals and renames away from them.
+export class ProblemWorkspace implements EditorFilesystem {
     private filesystem: Filesystem | undefined;
     private systemFiles: Map<string, Uint8Array>;
     private studentFiles: Map<string, Uint8Array>;
-    private readonly listeners = new Set<WorkspaceStudentChangeListener>();
-    private readonly pathRevisions = new Map<string, number>();
-    private readonly guestReads = new Map<string, number>();
+    private originals: Map<string, Uint8Array>;
     private studentRevision = 0;
-    private generation = 0;
-    private operations: Promise<void> = Promise.resolve();
-    private syncError: Error | undefined;
-    private subscribed = false;
+    private readonly listeners = new Set<WorkspaceStudentChangeListener>();
+    onFilesystemChange: ((change: P9Change) => void) | undefined;
 
-    constructor(
-        systemOwnedFiles: ReadonlyMap<string, Uint8Array>,
-        studentOwnedFiles: ReadonlyMap<string, Uint8Array>,
-    ) {
-        this.systemFiles = copyFileMap(systemOwnedFiles);
-        this.studentFiles = copyFileMap(studentOwnedFiles);
+    constructor(system: ReadonlyMap<string, Uint8Array>, student: ReadonlyMap<string, Uint8Array>) {
+        this.systemFiles = copyFiles(system);
+        this.studentFiles = copyFiles(student);
+        this.originals = copyFiles(new Map([...system, ...student]));
     }
-
     subscribe(listener: WorkspaceStudentChangeListener): () => void {
         this.listeners.add(listener);
-        return (): void => { this.listeners.delete(listener); };
+        return () => { this.listeners.delete(listener); };
     }
-
     revision(): number { return this.studentRevision; }
-
-    visiblePaths(): string[] {
-        return [...new Set([...this.studentFiles.keys(), ...this.systemFiles.keys()])];
-    }
-
+    visiblePaths(): string[] { return [...new Set([...this.studentFiles.keys(), ...this.systemFiles.keys()])]; }
     studentOwnedPaths(): ReadonlySet<string> { return new Set(this.studentFiles.keys()); }
-
     isStudentOwned(path: string): boolean { return this.studentFiles.has(path); }
+    studentSubmission(): Record<string, Uint8Array> { return Object.fromEntries(copyFiles(this.studentFiles)); }
+    originalFiles(): ReadonlyMap<string, Uint8Array> { return copyFiles(this.originals); }
+    currentFiles(): ReadonlyMap<string, Uint8Array> { return copyFiles(new Map([...this.systemFiles, ...this.studentFiles])); }
 
+    // The adapter also supports problems without a VM using the official maps.
+    attach(filesystem: Filesystem | undefined): void { this.filesystem = filesystem; }
+    listFiles(): readonly string[] { return [...new Set([...this.visiblePaths(), ...this.filesystem?.listFiles() ?? []])]; }
+    readFile(path: string): Uint8Array {
+        const system = this.systemFiles.get(path);
+        if (system !== undefined) return system.slice();
+        if (this.filesystem?.listFiles().includes(path)) return this.filesystem.readFile(path);
+        const bytes = this.readVisibleFile(path);
+        if (bytes === undefined) throw new Error(`Workspace file not found: ${path}`);
+        return bytes;
+    }
     readVisibleFile(path: string): Uint8Array | undefined {
         return (this.studentFiles.get(path) ?? this.systemFiles.get(path))?.slice();
     }
-
-    writeStudentFile(path: string, content: Uint8Array): void {
-        if (!this.studentFiles.has(path)) {
-            throw new Error(`Cannot edit non-student-owned file: ${path}`);
+    writeFile(path: string, bytes: Uint8Array | string, origin = 1n): void {
+        if (!this.isStudentOwned(path)) throw new Error(`Cannot edit non-student-owned file: ${path}`);
+        const content = typeof bytes === "string" ? new TextEncoder().encode(bytes) : bytes;
+        if (this.filesystem !== undefined) {
+            this.ensureParents(path);
+            this.filesystem.writeFile(path, content, origin);
+            this.record(path, this.filesystem.readFile(path), origin === SERVER_ORIGIN
+                ? WorkspaceChangeSource.Server : WorkspaceChangeSource.Editor);
+        } else {
+            this.record(path, content, origin === SERVER_ORIGIN ? WorkspaceChangeSource.Server : WorkspaceChangeSource.Editor);
+            this.onFilesystemChange?.({ kind: "write", path, aliases: [], inode: 0n, source: "host", origin });
         }
-        this.writeOwnedFile(path, content, WorkspaceChangeSource.Editor);
     }
-
-    writeServerStudentFile(path: string, content: Uint8Array): void {
-        if (!this.studentFiles.has(path)) return;
-        this.writeOwnedFile(path, content, WorkspaceChangeSource.Server);
+    writeStudentFile(path: string, bytes: Uint8Array): void { this.writeFile(path, bytes); }
+    writeServerStudentFile(path: string, bytes: Uint8Array): void {
+        if (!this.isStudentOwned(path)) return;
+        // Returned action bytes remain savable even if the guest changed the path shape.
+        this.record(path, bytes, WorkspaceChangeSource.Server);
+        this.writeFile(path, bytes, SERVER_ORIGIN);
     }
-
-    studentSubmission(): Record<string, Uint8Array> {
-        return Object.fromEntries(copyFileMap(this.studentFiles));
-    }
-
-    async settle(): Promise<void> {
-        // Notifications may enqueue reads while earlier operations finish.
-        let pending: Promise<void>;
-        do {
-            pending = this.operations;
-            await pending;
-        } while (pending !== this.operations);
-        if (this.syncError !== undefined) throw this.syncError;
-    }
-
-    async refreshFromServer(
-        systemOwnedFiles: ReadonlyMap<string, Uint8Array>,
-        studentOwnedFiles: ReadonlyMap<string, Uint8Array>,
-    ): Promise<void> {
-        await this.settle();
-        const previousStudentFiles = this.studentFiles;
-        this.systemFiles = copyFileMap(systemOwnedFiles);
-        this.studentFiles = copyFileMap(studentOwnedFiles);
+    // Reads are synchronous; all origins contribute to submission revisions.
+    handleFilesystemChange(change: P9Change): void {
+        const filesystem = this.filesystem;
+        if (filesystem === undefined || change.kind === "metadata") return;
+        const existing = new Set(filesystem.listFiles());
         for (const path of this.studentFiles.keys()) {
-            const localContent = previousStudentFiles.get(path);
-            if (localContent !== undefined) this.studentFiles.set(path, localContent);
-            else {
-                const content = this.studentFiles.get(path);
-                if (content !== undefined) this.queueFilesystemWrite(path, content);
-            }
+            if (!existing.has(path) || !changeAffectsPath(change, path)) continue;
+            this.record(path, filesystem.readFile(path), change.source === "guest" ? WorkspaceChangeSource.Guest
+                : change.origin === SERVER_ORIGIN ? WorkspaceChangeSource.Server : WorkspaceChangeSource.Editor);
         }
-        for (const [path, content] of this.systemFiles) {
-            this.queueFilesystemWrite(path, content);
-            this.emit({ path, source: WorkspaceChangeSource.Server });
-        }
-        await this.settle();
     }
-
-    async replaceFromServer(
-        systemOwnedFiles: ReadonlyMap<string, Uint8Array>,
-        studentOwnedFiles: ReadonlyMap<string, Uint8Array>,
-    ): Promise<void> {
-        await this.settle();
-        this.generation += 1;
-        this.systemFiles = copyFileMap(systemOwnedFiles);
-        this.studentFiles = copyFileMap(studentOwnedFiles);
-        this.studentRevision = 0;
-        this.pathRevisions.clear();
-        this.guestReads.clear();
-        await this.rebuildFilesystem();
+    captureStudentFiles(): void {
+        this.handleFilesystemChange({ kind: "rescan", path: "", aliases: [], inode: 0n, source: "guest", origin: 0n });
     }
-
-    async rebuildFilesystem(runtime?: FilesystemRuntime): Promise<Filesystem | undefined> {
-        if (this.filesystem === undefined) {
-            if (runtime === undefined) return undefined;
-            this.filesystem = await Filesystem.create(runtime);
-        }
-        // Recover failed host writes from the canonical maps after VM teardown.
-        await this.operations;
-        this.generation += 1;
-        const filesystem = this.filesystem;
-        const builder = new SeedBuilder<Uint8Array>();
-        for (const [path, content] of [...this.systemFiles, ...this.studentFiles]) {
-            builder.addFile(path, content.length, content.slice());
-        }
-        await filesystem.installSeed({
-            entries: builder.finish(),
-            loader: { load: async (content: Uint8Array): Promise<Uint8Array> => content.slice() },
-        });
-        this.syncError = undefined;
-        if (!this.subscribed) {
-            await filesystem.subscribe((change: P9Change): void => this.handleFilesystemChange(change));
-            this.subscribed = true;
-        }
-        return filesystem;
-    }
-
-    private writeOwnedFile(path: string, content: Uint8Array, source: WorkspaceChangeSource): void {
-        this.studentFiles.set(path, content.slice());
+    private record(path: string, bytes: Uint8Array, source: WorkspaceChangeSource): void {
+        if (equalBytes(this.studentFiles.get(path), bytes)) return;
+        this.studentFiles.set(path, bytes.slice());
         this.studentRevision += 1;
-        this.pathRevisions.set(path, this.studentRevision);
-        this.queueFilesystemWrite(path, content);
-        this.emit({ path, source });
+        for (const listener of this.listeners) listener({ path, source });
     }
-
-    private track(operation: Promise<void>): void {
-        const pending = operation.catch((error: unknown): void => {
-            this.syncError = error instanceof Error ? error : new Error(String(error));
-        });
-        this.operations = Promise.all([this.operations, pending]).then((): void => {});
-    }
-
-    private queueFilesystemWrite(path: string, content: Uint8Array): void {
+    private ensureParents(path: string): void {
         const filesystem = this.filesystem;
         if (filesystem === undefined) return;
-        const bytes = content.slice();
-        this.track(this.operations.then(async (): Promise<void> => {
-            // Guest renames and removals may have removed a canonical parent directory.
-            const parts = path.split("/");
-            for (let i = 1; i < parts.length; i += 1) {
-                try {
-                    await filesystem.mkdir(parts.slice(0, i).join("/"));
-                } catch (error: unknown) {
-                    if (!(error instanceof FilesystemError) || error.errno !== 17) throw error;
-                }
-            }
-            await filesystem.writeFile(path, bytes);
-        }));
-    }
-
-    private handleFilesystemChange(change: P9Change): void {
-        if (change.source !== "guest" || change.kind === "remove" || change.kind === "metadata") return;
-        const paths = change.kind === "rescan" || change.kind === "reset"
-            ? [...this.studentFiles.keys()]
-            : [...this.studentFiles.keys()].filter(path =>
-                [change.path, ...change.aliases].some(name => path === name || path.startsWith(`${name}/`)));
-        const filesystem = this.filesystem;
-        if (filesystem === undefined) return;
-        for (const path of paths) {
-            const generation = this.generation;
-            const revision = this.pathRevisions.get(path);
-            const read = (this.guestReads.get(path) ?? 0) + 1;
-            this.guestReads.set(path, read);
-            this.track(filesystem.readFile(path).then((content: Uint8Array): void => {
-                if (generation !== this.generation || revision !== this.pathRevisions.get(path)
-                    || read !== this.guestReads.get(path) || !this.studentFiles.has(path)) return;
-                this.studentFiles.set(path, content);
-                this.studentRevision += 1;
-                this.pathRevisions.set(path, this.studentRevision);
-                this.emit({ path, source: WorkspaceChangeSource.Guest });
-            }).catch((error: unknown): void => {
-                // Rename-away and removal preserve the official student file entry.
-                if (!(error instanceof FilesystemError) || error.errno !== 2) throw error;
-            }));
+        const parts = path.split("/");
+        for (let end = 1; end < parts.length; end++) {
+            const parent = parts.slice(0, end).join("/");
+            const name = parts[end - 1];
+            const directory = parts.slice(0, end - 1).join("/");
+            if (!filesystem.listDirectory(directory).some(entry => entry.name === name)) filesystem.mkdir(parent, SERVER_ORIGIN);
         }
     }
 
-    private emit(change: WorkspaceStudentChange): void {
-        for (const listener of this.listeners) listener(change);
+    // Refresh updates system files while retaining the student's working bytes.
+    async refreshFromServer(system: ReadonlyMap<string, Uint8Array>, student: ReadonlyMap<string, Uint8Array>): Promise<void> {
+        this.systemFiles = copyFiles(system);
+        const previous = this.studentFiles;
+        this.studentFiles = copyFiles(student);
+        for (const [path, bytes] of previous) if (this.studentFiles.has(path)) this.studentFiles.set(path, bytes);
+        for (const [path, bytes] of new Map([...system, ...student])) {
+            if (previous.has(path) && !system.has(path)) continue;
+            if (this.filesystem !== undefined) {
+                this.ensureParents(path);
+                this.filesystem.writeFile(path, bytes, SERVER_ORIGIN);
+            }
+        }
+    }
+    async replaceFromServer(system: ReadonlyMap<string, Uint8Array>, student: ReadonlyMap<string, Uint8Array>): Promise<void> {
+        this.attach(undefined);
+        this.systemFiles = copyFiles(system);
+        this.studentFiles = copyFiles(student);
+        this.originals = copyFiles(new Map([...system, ...student]));
+        this.studentRevision = 0;
     }
 }

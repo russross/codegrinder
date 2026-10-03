@@ -57,21 +57,22 @@ Each problem keeps three related pieces of state:
 *   `studentOwnedFiles` is the current savable student file set. Editor writes
     and valid guest writes update this map.
 
-*   A Riscbox `Filesystem` is the VM's live working tree. It is created lazily
-    in the page's shared WASM instance, initially contains both owned file
-    sets, and may accumulate guest changes and build artifacts.
+*   A Riscbox `Filesystem` is the current VM-owned working tree. Selection and
+    step transitions rebuild it from official maps; guest-only namespace entries
+    do not survive. Step-start bytes remain separate for CodeGrinder file Reset.
 
 The UI lists only paths present in the two owned maps. Guest-created paths do
 not become visible or submit-capable. Guest writes, creates, or renames into an
 existing student-owned path update `studentOwnedFiles`. Guest removal or rename
 away from an owned path does not delete the canonical map entry. Guest changes
-to system-owned paths remain local to the live VM.
+to system-owned paths remain local to the live VM. Instructions and system-file
+views use canonical bytes even when the guest changes or removes those paths.
 
-Host writes are serialized and copy their submitted bytes. Guest notifications
-start asynchronous reads of affected official paths, including hard-link
-aliases and paths below renamed directories. Per-path revisions and read
-generations prevent late reads from overwriting newer editor or guest work.
-Save snapshots wait for pending writes and guest reads to settle.
+Host reads and writes are synchronous and copy their bytes. Notifications from
+both host and guest update official paths, including hard-link aliases and
+paths below renamed directories. Identical bytes do not increment submission
+revisions. The shared editor owns its buffered revisions and write failures;
+the application owns server acknowledgements and retry deadlines.
 
 The workspace maintains a monotonically increasing student revision. A Save or
 action records the exact submitted revision. If an editor or guest change
@@ -88,10 +89,11 @@ queue. Each request captures its problem and step's save state. A request for a
 replaced step is ignored; a redundant workspace save becomes a no-op when it
 reaches the front of the queue.
 
-Each problem has its own save state and timer. Every editor, VM, or returned
-file change restarts its 30-second timer. Continuous editing postpones autosave
-indefinitely. A save request cancels that timer because the queued save will
-include those changes.
+The shared editor debounces its buffered changes for thirty seconds after the
+latest edit. Blur and timer flushes immediately enqueue server persistence.
+Each problem separately debounces guest and returned-file changes. Explicit
+Save and file selection flush the editor before entering the server queue.
+VM interaction flushes editor bytes independently of network persistence.
 Submitting a snapshot allows the first subsequent edit to start a new timer.
 Only a successful persistence response acknowledges the submitted revision.
 If newer edits exist, their deadline is preserved; otherwise the problem becomes
@@ -120,10 +122,8 @@ Grade and other server actions
 
 The entire action, including both persistence calls and daycare execution,
 occupies the same queue as ordinary saves. Requesting an action makes the editor
-read-only, disables file/problem switching and action buttons, and stops the
-local VM with its student-owned files retained. The VM remains ready to Boot
-afterward. This prevents edits from racing the submitted grading snapshot or
-step advancement. Returned action files can still change the workspace and
+read-only and disables file/problem switching, action buttons, and VM input.
+The VM keeps its current boot state. Returned action files can change the workspace and
 start an autosave deadline; that save waits for the action to finish.
 
 1.  Refresh the current workspace as described by Save.
@@ -139,43 +139,53 @@ start an autosave deadline; that save waits for the action to finish.
 5.  For non-grade actions, display streamed terminal events. An `EventMessage`
     containing files may update only existing student-owned paths. Those bytes
     update both `studentOwnedFiles` and the corresponding live 9p file when its
-    current shape permits it. If a guest has made the path structurally
-    incompatible, preserve the returned student bytes and ask the user to
-    reboot the VM to restore its working tree. Normal end-of-stream completes
+    current shape permits it. A structurally incompatible path reports a write
+    failure while retaining the returned official bytes for persistence.
+    Normal end-of-stream completes
     the action; non-grade actions do not return a signed final bundle.
 
 6.  For grade, ignore intermediate events and call `SaveGradedCommit` with the
-    signed final daycare result.
+    signed final daycare result. Apply its returned official student files to
+    the local workspace and views without changing VM power state.
 
 7.  A saved result passes when its commit has `report_card.passed` and score
     `1.0`. Fetch the next in-scope step with `GetWorkspace`, replace both owned
-    maps, rebuild the 9p tree, destroy the current VM, and leave the next step
-    ready to Boot. Mark the problem complete when the current step is its last
-    in-scope step.
+    maps, force halt, discard disk overlays, replace the 9p tree, and select
+    Instructions. Boot waits for a user action, except when instructions are
+    absent and VM becomes the default tab. Mark the problem complete on its last
+    in-scope step without resetting or rebooting the VM. Failed grades likewise
+    leave power state unchanged.
 
 
 Problem switching
 -----------------
 
-Before switching, stop the active VM and rebuild its 9p tree so no guest writes
-can race the automatic Save. Save the current student revision if needed, then
-select the new problem. Rebuild the selected problem's 9p tree, expose or hide
-the VM tab based on its problem type, and leave its VM ready to Boot.
+Selections are serialized and carry a generation check. Flush the editor,
+disable editing and input, select Instructions, and force halt. Capture and save
+the outgoing official student revision before replacing files. A failed outgoing save leaves
+the halted workspace available for retry. Superseded selections do not replace
+the visible problem.
+
+Same-image selections reuse the runtime, cold-reset it, discard disk overlays,
+and clear/rebuild 9p from the incoming canonical system and current student maps.
+Different images destroy the old runtime and prepare new VM-owned shares. Leave
+the VM ready without booting and select Instructions. Missing instructions select
+VM and trigger boot. Step advancement uses the same clean preparation.
+Problems without a configured image use a synchronous exam file adapter.
 
 
 VM boot and reboot
 ------------------
 
 Selecting the VM tab boots a ready VM. Selecting the tab while the VM is
-loading, booting, or running leaves the active VM intact. Selecting it after a
-runtime failure performs a clean reboot. Selecting either terminal tab focuses
+loading, stopping, or running leaves the active VM intact. A repeated Reboot VM
+click during shutdown provides forced recovery. Selecting either terminal tab focuses
 that terminal. VM input, boot, and reboot explicitly flush the editor into the
 local filesystem before proceeding; they do not wait for TA persistence.
 
-The first boot loads `vm/runtime/riscbox.js` and `riscbox.wasm` in the page.
-The browser loads the VM configuration with `no-store`. Riscbox opens the
-existing split drive and retains session-local disk writes. The active
-problem's `Filesystem` is bound under the `workspace` key before boot.
+First selection loads the versioned `vm/runtime/riscbox.js` and matching WASM.
+The shared session prepares the configured HTTP-backed disks and named
+`workspace` share without booting. Same-image selections discard disk writes.
 The guest terminal is
 connected through its virtio console.
 
@@ -188,20 +198,20 @@ The VM cursor blinks; grade output hides its cursor. Reset clears the screen, sc
 selection without replacing the parser used by Wterm's renderer and input
 components.
 
-The Reboot VM button resets the guest in place. The runtime resets the VM and
-its device interfaces while retaining the session-local block overlay and
-the current 9p filesystem. A problem switch or step advancement performs this
-sequence:
+Reboot VM flushes the editor and requests orderly guest reboot. The button stays
+enabled and changes its label to Reset VM while terminal input is blocked.
+Boot VM, Reboot VM, and Reset VM use the same fixed width. Editing, saves,
+and 9p synchronization continue. Clicking again before a runtime halt/restart
+notification invokes forced reset without flushing editor text. After that
+notification, clicks resume normal Boot/Reboot behavior. A halted VM boots its
+retained state.
 
-1.  Halt and destroy the VM and its in-memory root-disk delta. Retain the
-    WASM instance and its per-problem filesystem handles.
-
-2.  Rebuild the 9p tree exactly from `systemOwnedFiles` and
-    `studentOwnedFiles`, removing guest-only artifacts and restoring canonical
-    paths.
-
-3.  Leave the selected problem ready to boot. Its next boot binds its
-    filesystem and starts the configured image in the retained runtime.
+Second-click reset is emergency recovery: force halt outside the selection queue, retire
+stalled selections and pending input, cold-reset the machine, discard all disk
+overlays, clear 9p, rebuild it from current official maps, and boot it.
+It preserves the dirty editor buffer and submission state. It does not flush editor text, restore originals, or
+send a Reset/save RPC. There is no separate Reset VM button. Boot/Reboot is
+disabled while loading/resetting. CodeGrinder's file Reset is independent.
 
 The current image lookup contains only `riscv`. Problems without a configured
 image do not show the VM tab.

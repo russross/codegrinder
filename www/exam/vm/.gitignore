@@ -3,4 +3,9 @@ README.md
 image/drive-*
 image/linux-*.gz
 image/fw_dynamic.bin-*.gz
-runtime
+runtime/*
+!runtime/riscbox.js
+!runtime/riscbox.d.ts
+!runtime/riscbox.wasm
+!runtime/package.json
+!runtime/SHA256SUMS

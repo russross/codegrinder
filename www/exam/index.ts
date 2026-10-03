@@ -1,5 +1,3 @@
-import * as commonmark from "commonmark";
-
 import {
     AssignmentKey,
     AssignmentProblemProgress,
@@ -26,23 +24,21 @@ import type { RpcOptions } from "@protobuf-ts/runtime-rpc";
 
 import Split from "split.js";
 
-import { EditorView, keymap, ViewUpdate } from "@codemirror/view";
-import { defaultKeymap } from "@codemirror/commands";
-import { basicSetup } from "codemirror";
-import { EditorSelection, EditorState, Compartment } from "@codemirror/state";
-import { cpp } from "@codemirror/lang-cpp";
-import { markdown } from "@codemirror/lang-markdown";
-import { python } from "@codemirror/lang-python";
-import { StreamLanguage, LanguageSupport } from "@codemirror/language";
-import { gas } from "@codemirror/legacy-modes/mode/gas";
-import { shell } from "@codemirror/legacy-modes/mode/shell";
+import { EditorSession } from "./client-core/editor-session";
+import type { SyncTrigger } from "./client-core/editor-session";
+import { renderFileTree as renderSharedFileTree } from "./client-core/workspace-view";
+import { renderInstructions } from "./client-core/instructions";
+import { changeAffectsPath } from "./client-core/workspace";
+import type { VmTarget } from "./client-core/vm-session";
 
-import { ProblemWorkspace, WorkspaceChangeSource } from "./workspace";
+import { ProblemWorkspace } from "./workspace";
 import type { WorkspaceStudentChange } from "./workspace";
 import { SaveState } from "./saving";
-import { VmController, vmImageForProblemType } from "./vm";
+import { EXAM_TRANSITION, VmController, vmImageForProblemType } from "./vm";
 import { installExamClipboard, registerClipboardTerminal } from "./clipboard";
-import { clearTerminal, TerminalKind, TerminalView } from "./terminal";
+import { clearTerminal, GradingTerminal } from "./terminal";
+import type { TerminalView } from "./client-core/terminal";
+import type { P9Change } from "@riscbox/storage";
 
 interface ProblemData {
     problemId: string;
@@ -57,17 +53,16 @@ interface ProblemData {
     instructionPaths: Set<string>;
     isComplete: boolean;
     saving: SaveState;
+    target?: ProblemTarget;
+    generation: number;
+    instructionsGeneration: number;
 }
+
+interface ProblemTarget extends VmTarget { readonly problem: ProblemData; readonly generation: number; }
 
 type DaycareCompletion =
     | { kind: "actionComplete" }
     | { kind: "graded"; bundle: SignedRuntimeBundle };
-
-interface FileTreeNode {
-    isFile: boolean;
-    fullPath: string;
-    children: Record<string, FileTreeNode>;
-}
 
 declare global {
     interface Window {
@@ -77,75 +72,30 @@ declare global {
 
 const DOC_PATH = "doc/doc.md";
 const SESSION_STORAGE_KEY = "codegrinderExamSessionKey";
-const markdownParser = new commonmark.Parser();
-const markdownRenderer = new commonmark.HtmlRenderer();
-const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
 let currentProblem: ProblemData | null = null;
-let editor: EditorView;
+let editorSession: EditorSession;
 let term: TerminalView;
 let assignment: AssignmentKey | null = null;
 let assignmentCloseAt: Timestamp | undefined;
 let userId = "";
 let sessionKey = "";
-let currentlyOpenFilePath: string | null = null;
-let isProgrammaticEditorUpdate = false;
-let editorDirty = false;
-let vmConflictPath: string | null = null;
-let vmController: VmController;
+let vmController: VmController<ProblemTarget>;
 let saveQueue: Promise<void> = Promise.resolve();
 let actionInProgress = false;
 
-const language = new Compartment();
-const editableCompartment = new Compartment();
 let resetInProgress = false;
+let selecting = false;
+let selectionReadOnly: boolean | undefined;
+let viewGeneration = 0;
+let selectionQueue: Promise<void> = Promise.resolve();
+let fileSelectionGeneration = 0;
+let vmRecoveryInProgress = false;
+let restoringEditorFocus = 0;
+let unregisterVmClipboard = (): void => {};
 
 window.problemSet = [];
-
-function softTab(view: EditorView): boolean {
-    if (view.state.readOnly) {
-        return false;
-    }
-    const tabSize = 4;
-    const transaction = view.state.changeByRange((range) => {
-        const line = view.state.doc.lineAt(range.from);
-        const column = range.from - line.from;
-        let spacesToInsert = tabSize - (column % tabSize);
-        if (spacesToInsert === 0) {
-            spacesToInsert = tabSize;
-        }
-        const insert = " ".repeat(spacesToInsert);
-        return {
-            changes: { from: range.from, to: range.to, insert },
-            range: EditorSelection.cursor(range.from + insert.length),
-        };
-    });
-    view.dispatch(transaction);
-    return true;
-}
-
-function getLanguageExtension(filename: string): LanguageSupport | null {
-    const ext = filename.split(".").pop();
-    switch (ext) {
-        case "c":
-        case "h":
-            return cpp();
-        case "s":
-        case "S":
-            return new LanguageSupport(StreamLanguage.define(gas));
-        case "md":
-            return markdown();
-        case "py":
-            return python();
-        default:
-            break;
-    }
-    if (filename.endsWith("Makefile")) {
-        return new LanguageSupport(StreamLanguage.define(shell));
-    }
-    return null;
-}
 
 function createMainClient(): CodeGrinderServiceClient {
     return new CodeGrinderServiceClient(
@@ -297,59 +247,6 @@ function assignmentStepFileMap(entries: Record<string, Uint8Array>): Map<string,
     return result;
 }
 
-function bytesToBase64(content: Uint8Array): string {
-    const chunks: string[] = [];
-    for (let offset = 0; offset < content.length; offset += 32768) {
-        chunks.push(String.fromCharCode(...content.subarray(offset, offset + 32768)));
-    }
-    return btoa(chunks.join(""));
-}
-
-function imageMimeType(path: string): string | null {
-    const parts = path.split(".");
-    const extension = parts[parts.length - 1]?.toLowerCase();
-    switch (extension) {
-        case "gif": return "image/gif";
-        case "jpg":
-        case "jpeg": return "image/jpeg";
-        case "png": return "image/png";
-        case "svg": return "image/svg+xml";
-        default: return null;
-    }
-}
-
-function renderInstructionsMarkdown(workspace: ProblemWorkspace, dependencies: Set<string>): string {
-    const file = workspace.readVisibleFile(DOC_PATH);
-    if (file === undefined) {
-        return "";
-    }
-    const source = textDecoder.decode(file);
-    const document = markdownParser.parse(source);
-    const documentUrl = new URL(DOC_PATH, "https://workspace.invalid/");
-    const walker = document.walker();
-    let event = walker.next();
-    while (event !== null) {
-        if (event.entering && event.node.type === "image" && event.node.destination !== null) {
-            const url = new URL(event.node.destination, documentUrl);
-            if (url.origin === documentUrl.origin) {
-                const path = decodeURIComponent(url.pathname.replace(/^\//, ""));
-                dependencies.add(path);
-                const content = workspace.readVisibleFile(path);
-                const mimeType = imageMimeType(path);
-                if (content === undefined) {
-                    throw new Error(`Instruction image not found: ${path}`);
-                }
-                if (mimeType === null) {
-                    throw new Error(`Instruction image has an unsupported type: ${path}`);
-                }
-                event.node.destination = `data:${mimeType};base64,${bytesToBase64(content)}`;
-            }
-        }
-        event = walker.next();
-    }
-    return markdownRenderer.render(document);
-}
-
 function buildProblemData(summary: AssignmentProblemProgress, workspace: {
     problemId: string;
     problemNote: string;
@@ -374,42 +271,21 @@ function buildProblemData(summary: AssignmentProblemProgress, workspace: {
         problemType: workspace.problemType,
         actions: [...workspace.actions].sort((left, right) => left.localeCompare(right)),
         workspace: problemWorkspace,
-        instructionsHtml: renderInstructionsMarkdown(problemWorkspace, instructionPaths),
+        instructionsHtml: "",
         instructionPaths,
         isComplete: summary.completed,
         saving: new SaveState(problemWorkspace.revision(), (): void => requestAutomaticSave(problem)),
+        generation: 0,
+        instructionsGeneration: 0,
     };
     problemWorkspace.subscribe((change: WorkspaceStudentChange): void => {
-        if (change.source !== WorkspaceChangeSource.Editor && problemWorkspace.isStudentOwned(change.path)) {
+        if (problemWorkspace.isStudentOwned(change.path)) {
             problem.saving.changed();
         }
-        if (currentProblem !== problem) {
-            return;
-        }
-        updateSaveButton();
-        if (problem.instructionPaths.has(change.path)) {
-            refreshInstructions(problem);
-            renderInstructionsPane();
-            updateInstructionsTabVisibility();
-        }
-        if (change.source === WorkspaceChangeSource.Guest && currentlyOpenFilePath === change.path && editorDirty) {
-            if (vmConflictPath === change.path) {
-                return;
-            }
-            if (window.confirm("The VM changed this file while you have unsaved edits. Use the VM version and discard your edits?")) {
-                editorDirty = false;
-                vmConflictPath = null;
-                problem.saving.cancelTimer();
-                reloadOpenFileFromState();
-            } else {
-                vmConflictPath = change.path;
-            }
-            return;
-        }
-        if (change.source !== WorkspaceChangeSource.Editor && currentlyOpenFilePath === change.path) {
-            reloadOpenFileFromState();
-        }
+        if (currentProblem === problem) updateSaveButton();
     });
+    problemWorkspace.onFilesystemChange = change => handleWorkspaceChange(problem, change);
+    installProblemTarget(problem);
     return problem;
 }
 
@@ -417,20 +293,11 @@ function actionLabel(action: string): string {
     return action.length === 0 ? "" : action.charAt(0).toUpperCase() + action.slice(1);
 }
 
-function isBinaryFile(content: Uint8Array): boolean {
-    for (const value of content) {
-        if (value === 0) {
-            return true;
-        }
-    }
-    return false;
-}
-
 function updateSaveButton(): void {
     const saveButton = document.getElementById("save-button");
     if (saveButton instanceof HTMLButtonElement) {
-        saveButton.disabled = actionInProgress || currentProblem === null
-            || (!editorDirty && !currentProblem.saving.isDirty(currentProblem.workspace.revision()));
+        saveButton.disabled = actionInProgress || selecting || vmRecoveryInProgress || currentProblem === null
+            || (!editorSession.dirty && !currentProblem.saving.isDirty(currentProblem.workspace.revision()));
     }
 }
 
@@ -452,7 +319,7 @@ async function applyWorkspaceRefresh(problem: ProblemData, workspace: {
     problem.lastStepNumber = BigInt(workspace.lastStepNumber);
     problem.problemType = workspace.problemType;
     problem.actions = [...workspace.actions].sort((left, right) => left.localeCompare(right));
-    refreshInstructions(problem);
+    await refreshInstructions(problem);
 }
 
 async function replaceProblemState(problem: ProblemData, workspace: {
@@ -464,6 +331,8 @@ async function replaceProblemState(problem: ProblemData, workspace: {
     firstStepNumber: string;
     lastStepNumber: string;
 }): Promise<void> {
+    problem.generation += 1;
+    if (currentProblem === problem) editorSession.clear();
     await problem.workspace.replaceFromServer(
         assignmentStepFileMap(workspace.systemOwnedFiles),
         assignmentStepFileMap(workspace.studentOwnedFiles),
@@ -473,67 +342,43 @@ async function replaceProblemState(problem: ProblemData, workspace: {
     problem.lastStepNumber = BigInt(workspace.lastStepNumber);
     problem.problemType = workspace.problemType;
     problem.actions = [...workspace.actions].sort((left, right) => left.localeCompare(right));
-    refreshInstructions(problem);
+    installProblemTarget(problem);
+    await refreshInstructions(problem);
     problem.saving.stop();
     problem.saving = new SaveState(problem.workspace.revision(), (): void => requestAutomaticSave(problem));
 }
 
-function resetEditorContents(content: string, editable: boolean, filename: string): void {
-    const effects = [];
-    effects.push(editableCompartment.reconfigure([
-        EditorView.editable.of(editable && !actionInProgress),
-        EditorState.readOnly.of(!editable || actionInProgress),
-    ]));
-    const lang = getLanguageExtension(filename);
-    effects.push(language.reconfigure(lang ?? []));
-    isProgrammaticEditorUpdate = true;
-    editor.dispatch({
-        changes: editor.state.doc.toString() === content
-            ? undefined
-            : { from: 0, to: editor.state.doc.length, insert: content },
-        effects,
-    });
-    isProgrammaticEditorUpdate = false;
-}
-
-function editorTextFromFile(content: Uint8Array): string {
-    const text = textDecoder.decode(content);
-    return text.endsWith("\n") ? text.slice(0, -1) : text;
-}
-
-function fileContentFromEditor(): Uint8Array {
-    const text = editor.state.doc.toString();
-    return textEncoder.encode(text === "" ? "" : `${text}\n`);
-}
-
-function flushEditor(): void {
-    if (!editorDirty || currentProblem === null || currentlyOpenFilePath === null) {
-        return;
-    }
-    currentProblem.workspace.writeStudentFile(currentlyOpenFilePath, fileContentFromEditor());
-    editorDirty = false;
-    vmConflictPath = null;
-    updateSaveButton();
-}
-
 function reloadOpenFileFromState(): void {
-    if (currentlyOpenFilePath === null || currentProblem === null) {
+    const path = editorSession.path;
+    if (path === null || currentProblem === null || editorSession.dirty || selecting) return;
+    if (currentProblem.workspace.listFiles().includes(path)) {
+        const problem = currentProblem;
+        updateEditorView(() => editorSession.open(problem.workspace, path));
+        if (actionInProgress) editorSession.setReadOnly(true);
+    }
+}
+
+// Background reloads preserve console focus and leave guest autosave debounce intact.
+function updateEditorView(operation: () => void): void {
+    const previousFocus = document.activeElement;
+    operation();
+    if (!(previousFocus instanceof HTMLElement) || editorSession.view.dom.contains(previousFocus)
+        || !editorSession.view.dom.contains(document.activeElement)) return;
+    restoringEditorFocus += 1;
+    previousFocus.focus({ preventScroll: true });
+    void editorSession.flush("interaction").catch(reportError).finally(() => { restoringEditorFocus -= 1; });
+}
+
+// A read-only renamed buffer must be resolved before any destructive selection.
+async function flushEditor(trigger: SyncTrigger): Promise<void> {
+    await editorSession.flush(trigger);
+    if (!editorSession.dirty) return;
+    if ((trigger === "selection" || trigger === "transition") && editorSession.readOnly
+        && window.confirm("This file is no longer editable. Discard its buffered edits and continue?")) {
+        editorSession.clear();
         return;
     }
-    const content = currentProblem.workspace.readVisibleFile(currentlyOpenFilePath);
-    if (content === undefined) {
-        return;
-    }
-    const editable = currentProblem.workspace.isStudentOwned(currentlyOpenFilePath);
-    if (isBinaryFile(content)) {
-        resetEditorContents(
-            "This file appears to be a binary file and cannot be displayed in the editor.",
-            false,
-            currentlyOpenFilePath,
-        );
-        return;
-    }
-    resetEditorContents(editorTextFromFile(content), editable, currentlyOpenFilePath);
+    throw new Error("Editor changes could not be synchronized; resolve the current file before continuing");
 }
 
 function buildCommit(problem: ProblemData, action: string, note: string): Commit {
@@ -591,7 +436,9 @@ async function loadProblem(
     summary: AssignmentProblemProgress,
 ): Promise<ProblemData> {
     const workspace = await fetchWorkspace(client, assignmentKey, summary.problemId, 0n);
-    return buildProblemData(summary, workspace);
+    const problem = buildProblemData(summary, workspace);
+    await refreshInstructions(problem);
+    return problem;
 }
 
 async function loadAssignment(): Promise<void> {
@@ -630,18 +477,7 @@ async function loadAssignment(): Promise<void> {
         throw new Error("Assignment contains no problems");
     }
 
-    currentProblem = window.problemSet[0];
-    renderMenuBar();
-    renderFileTree();
-    renderInstructionsPane();
-    updateInstructionsTabVisibility();
-    resetVmForCurrentProblem();
-    if (currentProblem.instructionsHtml !== "") {
-        selectInstructionsTab();
-    } else {
-        selectTerminalTab();
-    }
-    loadFirstEditableFileIntoEditor();
+    await selectProblem(window.problemSet[0]);
 }
 
 function writeSaveStatus(status: CommitSaveStatus): void {
@@ -706,20 +542,7 @@ async function handleDaycare(problem: ProblemData, bundle: SignedRuntimeBundle, 
         }
         const event = response.response.event;
         if (event.event === "files") {
-            const studentOwnedPaths = problem.workspace.studentOwnedPaths();
-            for (const [rawPath, content] of Object.entries(event.files)) {
-                const path = normalizeRelativePath(rawPath);
-                if (!studentOwnedPaths.has(path)) {
-                    continue;
-                }
-                problem.workspace.writeServerStudentFile(path, content);
-                term.writeln(`downloading file ${path}`);
-            }
-            await problem.workspace.settle();
-            if (currentProblem === problem) {
-                renderFileTree();
-                reloadOpenFileFromState();
-            }
+            await applyReturnedFiles(problem, event.files);
             continue;
         }
         writeEvent(event);
@@ -731,13 +554,26 @@ async function handleDaycare(problem: ProblemData, bundle: SignedRuntimeBundle, 
     throw new Error("Daycare stream ended without returning a bundle");
 }
 
+// Returned files update the official workspace without changing VM power state.
+async function applyReturnedFiles(problem: ProblemData, files: Readonly<Record<string, Uint8Array>>): Promise<void> {
+    for (const [rawPath, content] of Object.entries(files)) {
+        const path = normalizeRelativePath(rawPath);
+        if (problem.workspace.isStudentOwned(path)) problem.workspace.writeServerStudentFile(path, content);
+    }
+    await refreshInstructions(problem);
+    if (currentProblem === problem) {
+        renderFileTree();
+        renderInstructionsPane();
+        reloadOpenFileFromState();
+    }
+}
+
 async function advanceProblem(problem: ProblemData): Promise<void> {
     term.writeln(`step ${problem.currentStepNumber.toString()} passed`);
     selectTerminalTab();
     if (problem.currentStepNumber >= problem.lastStepNumber) {
         problem.isComplete = true;
         term.writeln("you have completed all steps for this problem");
-        resetVmForCurrentProblem();
         return;
     }
     const nextStepNumber = problem.currentStepNumber + 1n;
@@ -747,8 +583,9 @@ async function advanceProblem(problem: ProblemData): Promise<void> {
         throw new Error("Assignment not loaded");
     }
     const workspace = await fetchWorkspace(client, currentAssignment, problem.problemId, nextStepNumber);
+    selectInstructionsTab();
     await replaceProblemState(problem, workspace);
-    resetVmForCurrentProblem();
+    await activateProblem(problem, () => currentProblem === problem);
     term.writeln(`moving to step ${problem.currentStepNumber.toString()}`);
 }
 
@@ -758,17 +595,20 @@ async function refreshProblem(problem: ProblemData): Promise<boolean> {
         throw new Error("Assignment not loaded");
     }
     const saving = problem.saving;
+    const generation = problem.generation;
     const client = createMainClient();
     const refreshedWorkspace = await fetchWorkspace(client, currentAssignment, problem.problemId, problem.currentStepNumber);
-    if (problem.saving !== saving) {
+    if (problem.saving !== saving || generation !== problem.generation) {
         return false;
     }
+    const activeTarget = vmController.target;
+    if (currentProblem !== problem && activeTarget?.problem !== problem) return true;
     await applyWorkspaceRefresh(problem, refreshedWorkspace);
-    if (currentProblem === problem) {
+    if (currentProblem === problem && !selecting) {
         renderFileTree();
         renderInstructionsPane();
         updateInstructionsTabVisibility();
-        if (!editorDirty) {
+        if (!editorSession.dirty) {
             reloadOpenFileFromState();
         }
     }
@@ -776,18 +616,24 @@ async function refreshProblem(problem: ProblemData): Promise<boolean> {
 }
 
 async function saveProblem(problem: ProblemData): Promise<void> {
-    const saving = problem.saving;
     if (!await refreshProblem(problem)) {
         return;
     }
-    const submittedRevision = problem.workspace.revision();
-    const commit = buildCommit(problem, "", "exam interface: save");
+    await persistCaptured(problem);
+}
+
+// Transition persistence does not wait on its enclosing selection operation.
+async function persistCaptured(problem: ProblemData, captured = {
+    saving: problem.saving,
+    generation: problem.generation,
+    revision: problem.workspace.revision(),
+    commit: buildCommit(problem, "", "exam interface: save"),
+}): Promise<void> {
+    const { saving, generation, revision, commit } = captured;
+    if (generation !== problem.generation || saving !== problem.saving) return;
     saving.submitted();
-    if (editorDirty && currentProblem === problem) {
-        saving.changed();
-    }
     const saved = await createMainClient().saveWorkspaceCommit(SaveWorkspaceCommitRequest.create({ commit }), authOptions());
-    if (problem.saving !== saving) {
+    if (problem.saving !== saving || problem.generation !== generation) {
         return;
     }
     if (saved.response.saveStatus !== CommitSaveStatus.SAVED) {
@@ -795,11 +641,23 @@ async function saveProblem(problem: ProblemData): Promise<void> {
             ? "Work was not saved because the assignment is locked"
             : "Work was not saved because you do not own this assignment");
     }
-    saving.acknowledge(submittedRevision, problem.workspace.revision());
-    if (editorDirty && currentProblem === problem) {
-        saving.changed();
-    }
+    saving.acknowledge(revision, problem.workspace.revision());
+    if (saving.isDirty(problem.workspace.revision())) saving.retry();
     updateSaveButton();
+}
+
+function enqueuePersistence(problem: ProblemData): Promise<boolean> {
+    const captured = {
+        saving: problem.saving, generation: problem.generation, revision: problem.workspace.revision(),
+        commit: buildCommit(problem, "", "exam interface: save"),
+    };
+    const operation = saveQueue.then(async () => {
+        if (!captured.saving.isDirty(captured.revision)) return true;
+        try { await persistCaptured(problem, captured); return true; }
+        catch (error: unknown) { captured.saving.retry(); reportError(error); return false; }
+    });
+    saveQueue = operation.then(() => undefined, reportError);
+    return operation;
 }
 
 async function doAction(problem: ProblemData, action: string): Promise<void> {
@@ -860,6 +718,7 @@ async function doAction(problem: ProblemData, action: string): Promise<void> {
     if (gradedCommit === undefined) {
         throw new Error("Daycare returned a runtime bundle without a commit");
     }
+    await applyReturnedFiles(problem, gradedCommit.files);
 
     const passed = gradedCommit.reportCard?.passed === true && gradedCommit.score === 1.0;
     if (passed) {
@@ -886,27 +745,30 @@ async function doAction(problem: ProblemData, action: string): Promise<void> {
 
 function setActionInProgress(inProgress: boolean): void {
     actionInProgress = inProgress;
-    if (inProgress) {
-        vmController.resetToReady();
-    }
     renderMenuBar();
-    reloadOpenFileFromState();
+    if (inProgress) editorSession.setReadOnly(true);
+    else if (editorSession.path !== null && currentProblem !== null) {
+        editorSession.setReadOnly(!currentProblem.workspace.isStudentOwned(editorSession.path)
+            || currentProblem.workspace.readFile(editorSession.path).includes(0));
+    }
     getRequiredButton("vm-tab-button").disabled = inProgress;
-    getRequiredButton("vm-boot-button").disabled = inProgress
-        || currentProblem === null
-        || vmImageForProblemType(currentProblem.problemType) === undefined;
+    updateVmControls();
 }
 
-function requestSave(problem: ProblemData | null = currentProblem, action: string = ""): Promise<boolean> {
+async function requestSave(problem: ProblemData | null = currentProblem, action: string = ""): Promise<boolean> {
     if (problem === null) {
-        return Promise.resolve(false);
+        return false;
     }
+    const generation = problem.generation;
+    await selectionQueue;
+    if (generation !== problem.generation) return false;
     if (currentProblem === problem) {
-        flushEditor();
+        try { await flushEditor("explicit"); }
+        catch (error: unknown) { reportError(error); return false; }
     }
     if (action !== "") {
         if (actionInProgress) {
-            return Promise.resolve(false);
+            return false;
         }
         setActionInProgress(true);
     }
@@ -915,8 +777,6 @@ function requestSave(problem: ProblemData | null = currentProblem, action: strin
     const operation = saveQueue.then(async (): Promise<boolean> => {
         const step = problem.currentStepNumber;
         try {
-            await vmController.settle();
-            await problem.workspace.settle();
             if (problem.saving !== saving) {
                 return false;
             }
@@ -924,7 +784,8 @@ function requestSave(problem: ProblemData | null = currentProblem, action: strin
                 return true;
             }
             if (action === "") {
-                await saveProblem(problem);
+                if (currentProblem === problem) await saveProblem(problem);
+                else await persistCaptured(problem);
             } else {
                 await doAction(problem, action);
             }
@@ -940,12 +801,14 @@ function requestSave(problem: ProblemData | null = currentProblem, action: strin
         } finally {
             if (action !== "") {
                 if (problem.currentStepNumber !== step && currentProblem === problem) {
-                    currentlyOpenFilePath = null;
-                    resetEditorContents("", false, "");
+                    editorSession.clear();
                 }
                 setActionInProgress(false);
                 if (problem.currentStepNumber !== step && currentProblem === problem) {
                     loadFirstEditableFileIntoEditor();
+                    renderInstructionsPane();
+                    updateInstructionsTabVisibility();
+                    selectDefaultTab();
                 }
             }
         }
@@ -959,7 +822,8 @@ function requestSave(problem: ProblemData | null = currentProblem, action: strin
 }
 
 function requestAutomaticSave(problem: ProblemData | null = currentProblem): void {
-    void requestSave(problem);
+    if (vmRecoveryInProgress || restoringEditorFocus > 0) return;
+    void requestSave(problem).catch(reportError);
 }
 
 async function requestReset(): Promise<void> {
@@ -970,17 +834,17 @@ async function requestReset(): Promise<void> {
     }
     resetInProgress = true;
     renderMenuBar();
-    const path = currentlyOpenFilePath;
+    const path = editorSession.path;
     const step = problem.currentStepNumber;
     try {
         const workspace = await fetchWorkspace(
             createMainClient(), currentAssignment, problem.problemId, step, WorkspaceFileState.STEP_START,
         );
         await saveQueue;
-        if (currentProblem !== problem || problem.currentStepNumber !== step || currentlyOpenFilePath !== path) {
+        if (currentProblem !== problem || problem.currentStepNumber !== step || editorSession.path !== path) {
             return;
         }
-        flushEditor();
+        await flushEditor("explicit");
         await applyWorkspaceRefresh(problem, workspace);
         renderFileTree();
         renderInstructionsPane();
@@ -1052,7 +916,6 @@ async function requestReset(): Promise<void> {
             throw new Error("Reset file is missing from the step-start workspace");
         }
         problem.workspace.writeStudentFile(path, starter);
-        await problem.workspace.settle();
         reloadOpenFileFromState();
         await requestSave(problem);
     } catch (error: unknown) {
@@ -1073,11 +936,10 @@ function loadFirstEditableFileIntoEditor(): void {
         if (!studentOwnedPaths.has(filePath)) {
             continue;
         }
-        const fileTreeElement = document.querySelector<HTMLLIElement>(`.file-tree li[data-path="${CSS.escape(filePath)}"]`);
-        if (fileTreeElement !== null) {
-            fileTreeElement.click();
-            return;
-        }
+        editorSession.open(currentProblem.workspace, filePath);
+        if (actionInProgress) editorSession.setReadOnly(true);
+        renderFileTree();
+        return;
     }
 }
 
@@ -1102,35 +964,8 @@ function renderMenuBar(): void {
             problemButton.disabled = true;
             problemButton.classList.add("active-problem");
         } else {
-            problemButton.disabled = actionInProgress || resetInProgress;
-            problemButton.addEventListener("click", async (): Promise<void> => {
-                if (actionInProgress || resetInProgress) {
-                    return;
-                }
-                vmController.resetToReady();
-                if (!await requestSave(displayedProblem)
-                    || actionInProgress
-                    || currentProblem !== displayedProblem) {
-                    return;
-                }
-                currentProblem = problem;
-                currentlyOpenFilePath = null;
-                resetVmForCurrentProblem();
-                if (term !== undefined) {
-                    clearTerminal(term);
-                }
-                renderMenuBar();
-                renderFileTree();
-                renderInstructionsPane();
-                updateInstructionsTabVisibility();
-                if (currentProblem.instructionsHtml !== "") {
-                    selectInstructionsTab();
-                } else {
-                    selectTerminalTab();
-                }
-                resetEditorContents("", false, "");
-                loadFirstEditableFileIntoEditor();
-            });
+            problemButton.disabled = actionInProgress || resetInProgress || vmRecoveryInProgress;
+            problemButton.addEventListener("click", () => { void selectProblem(problem).catch(reportError); });
         }
         menuItems.appendChild(problemButton);
     }
@@ -1143,8 +978,8 @@ function renderMenuBar(): void {
     const saveButton = document.createElement("button");
     saveButton.id = "save-button";
     saveButton.textContent = "Save";
-    saveButton.disabled = actionInProgress
-        || (!editorDirty && !currentProblem.saving.isDirty(currentProblem.workspace.revision()));
+    saveButton.disabled = actionInProgress || selecting || vmRecoveryInProgress
+        || (!editorSession.dirty && !currentProblem.saving.isDirty(currentProblem.workspace.revision()));
     saveButton.addEventListener("click", (): void => {
         requestAutomaticSave(displayedProblem);
     });
@@ -1153,7 +988,7 @@ function renderMenuBar(): void {
     const resetButton = document.createElement("button");
     resetButton.type = "button";
     resetButton.textContent = "Reset";
-    resetButton.disabled = actionInProgress || resetInProgress;
+    resetButton.disabled = actionInProgress || resetInProgress || selecting || vmRecoveryInProgress;
     resetButton.addEventListener("click", (): void => { void requestReset(); });
     menuItems.appendChild(resetButton);
 
@@ -1161,7 +996,7 @@ function renderMenuBar(): void {
         const actionButton = document.createElement("button");
         actionButton.id = `action-${action}-button`;
         actionButton.textContent = actionLabel(action);
-        actionButton.disabled = actionInProgress || resetInProgress;
+        actionButton.disabled = actionInProgress || resetInProgress || selecting || vmRecoveryInProgress;
         actionButton.addEventListener("click", (): void => {
             if (actionInProgress) {
                 return;
@@ -1172,156 +1007,31 @@ function renderMenuBar(): void {
     }
 }
 
-function buildFileTree(filePaths: readonly string[]): Record<string, FileTreeNode> {
-    const tree: Record<string, FileTreeNode> = {};
-
-    for (const rawPath of filePaths) {
-        if (rawPath.startsWith("doc/")) {
-            continue;
-        }
-        const path = normalizeRelativePath(rawPath);
-        const parts = path.split("/");
-        let currentLevel = tree;
-        for (let index = 0; index < parts.length; index += 1) {
-            const part = parts[index];
-            const isFile = index === parts.length - 1;
-            const existing = currentLevel[part];
-            if (existing === undefined) {
-                currentLevel[part] = {
-                    isFile,
-                    fullPath: path,
-                    children: {},
-                };
-            }
-            currentLevel = currentLevel[part].children;
-        }
-    }
-
-    return tree;
-}
-
-function nodeContainsEditable(node: FileTreeNode, editablePaths: ReadonlySet<string>): boolean {
-    if (node.isFile) {
-        return editablePaths.has(node.fullPath);
-    }
-    return Object.values(node.children).some((child) => nodeContainsEditable(child, editablePaths));
-}
-
-function renderTree(
-    node: Record<string, FileTreeNode>,
-    parentElement: HTMLElement,
-    workspace: ProblemWorkspace,
-    editablePaths: ReadonlySet<string>,
-    selectedPath: string | null,
-    depth: number = 0,
-): void {
-    const sortedKeys = Object.keys(node).sort((left, right) => {
-        const leftNode = node[left];
-        const rightNode = node[right];
-        const leftEditable = nodeContainsEditable(leftNode, editablePaths);
-        const rightEditable = nodeContainsEditable(rightNode, editablePaths);
-        if (leftEditable && !rightEditable) {
-            return -1;
-        }
-        if (!leftEditable && rightEditable) {
-            return 1;
-        }
-        if (leftNode.isFile === rightNode.isFile) {
-            return left.localeCompare(right);
-        }
-        return leftNode.isFile ? 1 : -1;
-    });
-
-    for (const key of sortedKeys) {
-        const item = node[key];
-        const li = document.createElement("li");
-        li.classList.add(item.isFile ? "file" : "folder");
-
-        const wrapper = document.createElement("div");
-        wrapper.classList.add("item-content-wrapper");
-        wrapper.style.setProperty("--tree-depth", String(depth));
-
-        const icon = document.createElement("span");
-        icon.classList.add("icon");
-        wrapper.appendChild(icon);
-
-        const text = document.createElement("span");
-        text.textContent = key;
-        wrapper.appendChild(text);
-
-        li.appendChild(wrapper);
-
-        if (item.isFile) {
-            li.dataset.path = item.fullPath;
-            if (item.fullPath === selectedPath) {
-                li.classList.add("selected");
-            }
-            li.addEventListener("click", async (event: MouseEvent): Promise<void> => {
-                event.stopPropagation();
-                if (actionInProgress) {
-                    return;
-                }
-                if (!await requestSave()
-                    || actionInProgress
-                    || currentProblem?.workspace !== workspace) {
-                    return;
-                }
-                const previouslySelected = document.querySelector(".file-tree li.selected");
-                if (previouslySelected instanceof HTMLElement) {
-                    previouslySelected.classList.remove("selected");
-                }
-                const selected = document.querySelector<HTMLLIElement>(`.file-tree li[data-path="${CSS.escape(item.fullPath)}"]`);
-                selected?.classList.add("selected");
-                currentlyOpenFilePath = item.fullPath;
-                const fileContent = workspace.readVisibleFile(item.fullPath);
-                if (fileContent === undefined) {
-                    return;
-                }
-                const editable = editablePaths.has(item.fullPath);
-                if (isBinaryFile(fileContent)) {
-                    resetEditorContents(
-                        "This file appears to be a binary file and cannot be displayed in the editor.",
-                        false,
-                        item.fullPath,
-                    );
-                    return;
-                }
-                resetEditorContents(editorTextFromFile(fileContent), editable, item.fullPath);
-                editor.focus();
-            });
-        }
-
-        parentElement.appendChild(li);
-
-        if (Object.keys(item.children).length > 0) {
-            const childList = document.createElement("ul");
-            li.appendChild(childList);
-            renderTree(item.children, childList, workspace, editablePaths, selectedPath, depth + 1);
-        }
-    }
-}
-
 function renderFileTree(): void {
     const fileTreePane = document.getElementById("file-tree-pane");
     if (fileTreePane === null || currentProblem === null) {
         return;
     }
-    fileTreePane.innerHTML = "";
-    const visiblePaths = currentProblem.workspace.visiblePaths();
-    const editablePaths = currentProblem.workspace.studentOwnedPaths();
-    const tree = buildFileTree(visiblePaths);
-    const root = document.createElement("ul");
-    root.classList.add("file-tree");
-    renderTree(tree, root, currentProblem.workspace, editablePaths, currentlyOpenFilePath);
-    fileTreePane.appendChild(root);
+    const problem = currentProblem;
+    renderSharedFileTree(fileTreePane, problem.workspace.visiblePaths().filter(path => !path.startsWith("doc/")), {
+        selectedPath: editorSession.path,
+        priority: path => problem.workspace.isStudentOwned(path) ? 0 : 1,
+        onSelect: path => { void selectFile(problem, path).catch(reportError); },
+    });
 }
 
-function refreshInstructions(problem: ProblemData): void {
+async function refreshInstructions(problem: ProblemData): Promise<void> {
+    const generation = ++problem.instructionsGeneration;
     const dependencies = new Set([DOC_PATH]);
     try {
-        problem.instructionsHtml = renderInstructionsMarkdown(problem.workspace, dependencies);
+        const html = await renderInstructions(problem.workspace, dependencies, DOC_PATH);
+        if (generation === problem.instructionsGeneration) problem.instructionsHtml = html;
     } finally {
-        problem.instructionPaths = dependencies;
+        if (generation === problem.instructionsGeneration) problem.instructionPaths = dependencies;
+    }
+    if (currentProblem === problem && !selecting) {
+        renderInstructionsPane();
+        updateInstructionsTabVisibility();
     }
 }
 
@@ -1342,31 +1052,184 @@ function updateInstructionsTabVisibility(): void {
     const visible = currentProblem !== null && currentProblem.instructionsHtml !== "";
     button.style.display = visible ? "" : "none";
     content.style.display = visible ? "" : "none";
-    if (!visible) {
-        selectTerminalTab();
+    if (!visible && button.classList.contains("active") && !selecting && !actionInProgress) {
+        selectDefaultTab();
     }
 }
 
-function resetVmForCurrentProblem(): void {
-    const vmTabButton = getRequiredButton("vm-tab-button");
-    const problem = currentProblem;
-    const image = problem === null ? undefined : vmImageForProblemType(problem.problemType);
-    vmTabButton.hidden = image === undefined;
-    if (problem === null || image === undefined) {
-        vmController.setTarget(undefined);
-        if (vmTabButton.classList.contains("active")) {
-            if (problem !== null && problem.instructionsHtml !== "") {
-                selectInstructionsTab();
-            } else {
-                selectTerminalTab();
-            }
-        }
-        return;
-    }
-    vmController.setTarget({
-        workspace: problem.workspace,
-        image,
+function installProblemTarget(problem: ProblemData): void {
+    const image = vmImageForProblemType(problem.problemType);
+    problem.target = image === undefined ? undefined : {
+        problem, image, generation: problem.generation,
+        loadFiles: async () => problem.workspace.currentFiles(),
+    };
+}
+
+function initializeVm(): void {
+    unregisterVmClipboard();
+    vmController = new VmController(getRequiredElement("vm-terminal"), {
+        flushEditor: () => flushEditor("interaction"),
+        canInteract: () => !selecting && !resetInProgress && !actionInProgress && !vmRecoveryInProgress,
+        beforeReplace: () => {
+            if (vmRecoveryInProgress) return;
+            editorSession.clear();
+            for (const problem of window.problemSet) problem.workspace.attach(undefined);
+        },
+        afterHalt: async target => {
+            if (target.generation !== target.problem.generation) return;
+            target.problem.workspace.attach(vmController.filesystem);
+            target.problem.workspace.captureStudentFiles();
+            if (vmRecoveryInProgress) return;
+            if (!await enqueuePersistence(target.problem)) throw new Error("Outgoing work could not be saved");
+        },
+        afterSnapshot: async () => {},
+        onFilesystemChange: change => {
+            const target = vmController.target;
+            if (target === undefined || target.generation !== target.problem.generation) return;
+            target.problem.workspace.attach(vmController.filesystem);
+            handleWorkspaceChange(target.problem, change);
+        },
+        onStateChange: updateVmControls,
+        onError: reportError,
     });
+    unregisterVmClipboard = registerClipboardTerminal(vmController.terminal);
+}
+
+function reportError(error: unknown): void {
+    console.error("Exam operation failed", error);
+    term.writeln(error instanceof Error ? error.message : String(error));
+}
+
+// Rebuilding the share must not turn reset events into editor conflicts or saves.
+function handleWorkspaceChange(problem: ProblemData, change: P9Change): void {
+    if (vmRecoveryInProgress) return;
+    problem.workspace.handleFilesystemChange(change);
+    if (currentProblem !== problem || selecting) return;
+    if (change.source !== "guest" || (editorSession.path !== null && problem.workspace.isStudentOwned(editorSession.path))) {
+        updateEditorView(() => editorSession.handleChange(change));
+    }
+    if (editorSession.path !== null && (!problem.workspace.isStudentOwned(editorSession.path) || actionInProgress)) {
+        editorSession.setReadOnly(true);
+    }
+    if ([...problem.instructionPaths].some(path => changeAffectsPath(change, path)
+        && (change.source !== "guest" || problem.workspace.isStudentOwned(path)))) {
+        void refreshInstructions(problem).catch(reportError);
+    }
+    if (change.kind !== "write" && change.kind !== "metadata") renderFileTree();
+}
+
+async function activateProblem(problem: ProblemData, isCurrent: () => boolean): Promise<boolean> {
+    const target = problem.target;
+    if (target === undefined) {
+        await vmController.forceHalt();
+        const previous = vmController.target;
+        if (previous !== undefined && previous.generation === previous.problem.generation) {
+            previous.problem.workspace.captureStudentFiles();
+            if (!await enqueuePersistence(previous.problem)) throw new Error("Outgoing work could not be saved");
+        }
+        if (!isCurrent()) return false;
+        for (const item of window.problemSet) item.workspace.attach(undefined);
+        await vmController.destroy();
+        // A new session has a fresh terminal and no stale filesystem handles.
+        initializeVm();
+        editorSession.clear();
+    } else {
+        if (!await vmController.setTarget(target, EXAM_TRANSITION, isCurrent)) return false;
+        problem.workspace.attach(vmController.filesystem);
+    }
+    return isCurrent();
+}
+
+// Selections recover their queue after failure and never display superseded targets.
+function selectProblem(problem: ProblemData): Promise<void> {
+    const generation = ++viewGeneration;
+    const isCurrent = (): boolean => generation === viewGeneration;
+    const operation = selectionQueue.then(async () => {
+        if (!isCurrent()) return;
+        const previousAccess = editorSession.readOnly;
+        await flushEditor("transition");
+        selectionReadOnly = previousAccess;
+        selecting = true;
+        selectInstructionsTab();
+        editorSession.setReadOnly(true);
+        updateVmControls();
+        try {
+            if (currentProblem?.target === undefined && currentProblem !== null
+                && !await enqueuePersistence(currentProblem)) throw new Error("Outgoing work could not be saved");
+            if (!await activateProblem(problem, isCurrent)) return;
+            currentProblem = problem;
+            editorSession.clear();
+            await refreshInstructions(problem);
+            clearTerminal(term);
+        } finally {
+            selecting = false;
+            editorSession.setReadOnly(previousAccess);
+            selectionReadOnly = undefined;
+            renderMenuBar();
+            renderFileTree();
+            renderInstructionsPane();
+            updateInstructionsTabVisibility();
+            updateVmControls();
+        }
+        if (isCurrent()) {
+            loadFirstEditableFileIntoEditor();
+            selectDefaultTab();
+        }
+    });
+    selectionQueue = operation.catch(reportError);
+    return operation;
+}
+
+async function selectFile(problem: ProblemData, path: string): Promise<void> {
+    if (actionInProgress || resetInProgress || selecting || vmRecoveryInProgress || currentProblem !== problem) return;
+    const generation = viewGeneration;
+    const fileGeneration = ++fileSelectionGeneration;
+    await flushEditor("selection");
+    if (!await requestSave(problem) || generation !== viewGeneration || currentProblem !== problem
+        || fileGeneration !== fileSelectionGeneration) return;
+    editorSession.open(problem.workspace, path);
+    renderFileTree();
+}
+
+function updateVmControls(): void {
+    const supported = currentProblem?.target !== undefined;
+    const state = vmController.state;
+    const boot = getRequiredButton("vm-boot-button");
+    boot.hidden = !supported;
+    boot.disabled = !supported || selecting || actionInProgress || resetInProgress || vmRecoveryInProgress
+        || state === "loading";
+    boot.textContent = state === "stopping" ? "Reset VM" : state === "running" ? "Reboot VM"
+        : state === "loading" ? "Preparing VM…" : "Boot VM";
+    getRequiredButton("vm-tab-button").hidden = !supported;
+}
+
+// Emergency halt bypasses the selection queue so it can release a stuck shutdown.
+async function resetVm(): Promise<void> {
+    if (actionInProgress || resetInProgress || vmRecoveryInProgress || vmController.state === "loading") return;
+    const previousAccess = selectionReadOnly ?? editorSession.readOnly;
+    vmRecoveryInProgress = true;
+    editorSession.setReadOnly(true);
+    renderMenuBar();
+    updateVmControls();
+    ++viewGeneration;
+    try {
+        await vmController.forceHalt();
+        const operation = selectionQueue.then(() => vmController.reset());
+        selectionQueue = operation.then(() => undefined, reportError);
+        await operation;
+    } finally {
+        vmRecoveryInProgress = false;
+        editorSession.setReadOnly(previousAccess);
+        if (currentProblem?.saving.isDirty(currentProblem.workspace.revision())) currentProblem.saving.retry();
+        renderMenuBar();
+        updateVmControls();
+    }
+}
+
+function selectDefaultTab(): void {
+    if (currentProblem?.instructionsHtml !== "") selectInstructionsTab();
+    else if (currentProblem?.target !== undefined) selectVmTab();
+    else selectTerminalTab();
 }
 
 function selectInstructionsTab(): void {
@@ -1413,9 +1276,8 @@ function initializeTabs(): void {
                 activeContent.classList.add("active");
             }
             if (button.id === "vm-tab-button") {
-                flushEditor();
                 vmController.fit();
-                vmController.bootIfInactive();
+                void flushEditor("interaction").then(() => vmController.bootIfInactive()).catch(reportError);
             }
             if (button.id === "terminal-tab-button") {
                 term.fit();
@@ -1426,7 +1288,7 @@ function initializeTabs(): void {
 }
 
 async function initializeTerminal(): Promise<void> {
-    term = new TerminalView(getRequiredElement("terminal"), TerminalKind.Grade);
+    term = new GradingTerminal(getRequiredElement("terminal"));
     await term.ready;
     registerClipboardTerminal(term);
 }
@@ -1451,47 +1313,33 @@ async function initialize(): Promise<void> {
 
     initializeTabs();
     await initializeTerminal();
-    const vmBootButton = getRequiredButton("vm-boot-button");
-    vmBootButton.addEventListener("click", selectVmTab);
-    vmController = new VmController(
-        getRequiredElement("vm-terminal"),
-        vmBootButton,
-        flushEditor,
-    );
+    editorSession = new EditorSession(getRequiredElement("editor-pane"), {
+        canEdit: path => !actionInProgress && !selecting && currentProblem?.workspace.isStudentOwned(path) === true,
+        onChange: () => updateSaveButton(),
+        onSynced: trigger => {
+            if (trigger === "blur" || trigger === "timer") requestAutomaticSave();
+        },
+        onError: reportError,
+        confirmDiscard: () => window.confirm("The workspace changed this file while you have unsaved edits. Use the workspace version and discard your edits?"),
+    });
+    installExamClipboard(editorSession.view);
+    initializeVm();
     await vmController.ready;
-
-    const state = EditorState.create({
-        extensions: [
-            basicSetup,
-            keymap.of([{ key: "Tab", run: softTab }, ...defaultKeymap]),
-            language.of([]),
-            editableCompartment.of(EditorView.editable.of(true)),
-            EditorView.domEventHandlers({
-                blur: (): void => {
-                    flushEditor();
-                    requestAutomaticSave();
-                },
-            }),
-            EditorView.updateListener.of((update: ViewUpdate): void => {
-                if (!update.docChanged || isProgrammaticEditorUpdate || actionInProgress
-                    || currentProblem === null || currentlyOpenFilePath === null) {
-                    return;
-                }
-                if (!currentProblem.workspace.isStudentOwned(currentlyOpenFilePath)) {
-                    return;
-                }
-                editorDirty = true;
-                currentProblem.saving.changed();
-                updateSaveButton();
-            }),
-        ],
+    getRequiredButton("vm-boot-button").addEventListener("click", () => {
+        if (vmController.state === "stopping") {
+            void resetVm().catch(reportError);
+            return;
+        }
+        void flushEditor("interaction").then(async () => {
+            const running = vmController.runtime?.started === true;
+            selectVmTab();
+            if (running) await vmController.reboot();
+        }).catch(reportError);
     });
-
-    editor = new EditorView({
-        state,
-        parent: getRequiredElement("editor-pane"),
+    getRequiredButton("vm-boot-button").addEventListener("pointerdown", event => {
+        // A second reboot click must preserve buffered edits during forced reset.
+        if (vmController.state === "stopping") event.preventDefault();
     });
-    installExamClipboard(editor);
 
     await loadAssignment();
 }

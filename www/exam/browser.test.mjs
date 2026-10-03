@@ -11,7 +11,7 @@ import config from "./webpack.config.mjs";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 
-test("Chromium verifies terminal clearing, clipboard isolation, and the real VM filesystem", { timeout: 120_000 }, async () => {
+test("Chromium verifies exam RPC integration, terminals, clipboard, and the real VM filesystem", { timeout: 180_000 }, async () => {
     const output = await mkdtemp(path.join(tmpdir(), "exam-browser-test-"));
     const compiler = webpack({ ...config, entry: "./browser.test.ts", output: {
         path: output, filename: "browser.js", library: "examBrowserTest", libraryTarget: "window",
@@ -36,7 +36,8 @@ test("Chromium verifies terminal clearing, clipboard isolation, and the real VM 
         try {
             const contents = await readFile(filename);
             const mime = filename.endsWith(".js") ? "text/javascript; charset=utf-8" : filename.endsWith(".wasm")
-                ? "application/wasm" : "application/octet-stream";
+                ? "application/wasm" : filename.endsWith(".css") ? "text/css" : filename.endsWith(".svg")
+                    ? "image/svg+xml" : "application/octet-stream";
             response.setHeader("Content-Type", mime);
             response.end(contents);
         } catch {
@@ -47,6 +48,7 @@ test("Chromium verifies terminal clearing, clipboard isolation, and the real VM 
     const address = server.address();
     assert.ok(address !== null && typeof address === "object");
     const driver = spawn("chromedriver", ["--port=9516"], { stdio: ["ignore", "pipe", "pipe"] });
+    const driverClosed = new Promise(resolve => driver.once("close", resolve));
     let driverOutput = "";
     driver.stdout.on("data", data => { driverOutput += data.toString(); });
     driver.stderr.on("data", data => { driverOutput += data.toString(); });
@@ -71,7 +73,10 @@ test("Chromium verifies terminal clearing, clipboard isolation, and the real VM 
         }
         const created = await call("POST", "/session", { capabilities: { alwaysMatch: {
             browserName: "chrome",
-            "goog:chromeOptions": { binary: "/usr/bin/chromium-browser", args: ["--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--window-size=1200,1000"] },
+            "goog:chromeOptions": { binary: "/usr/bin/chromium-browser", args: [
+                ...(process.env.DISPLAY ? [] : ["--headless=new"]), "--no-sandbox", "--disable-dev-shm-usage",
+                "--window-size=1200,1000", `--user-data-dir=${path.join(output, "chrome")}`,
+            ] },
             "goog:loggingPrefs": { browser: "ALL" },
         } } });
         session = created.sessionId;
@@ -111,9 +116,33 @@ test("Chromium verifies terminal clearing, clipboard isolation, and the real VM 
             script: 'const done = arguments[arguments.length - 1]; window.examBrowserTest.verifyPixels(arguments[0]).then(() => done({}), error => done({error: error.stack}));', args: [screenshot],
         });
         assert.equal(pixels.error, undefined);
+        await call("POST", `/session/${session}/url`, { url: `http://127.0.0.1:${address.port}/test.html` });
+        await call("POST", `/session/${session}/execute/sync`, {
+            script: 'window.examBrowserTest.startExamAcceptance();', args: [],
+        });
+        let acceptance;
+        const deadline = Date.now() + 80_000;
+        while (!acceptance && Date.now() < deadline) {
+            const progress = await call("POST", `/session/${session}/execute/sync`, {
+                script: 'return { result: window.examBrowserTest.examAcceptanceResult(), reset: window.examBrowserTest.examAcceptanceNeedsRebootClick() };', args: [],
+            });
+            acceptance = progress.result;
+            if (progress.reset) {
+                const element = await call("POST", `/session/${session}/element`, { using: "css selector", value: "#vm-boot-button" });
+                await call("POST", `/session/${session}/element/${element["element-6066-11e4-a52e-4f735466cecf"]}/click`, {});
+            }
+            if (!acceptance) await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        assert.ok(acceptance, "Exam page acceptance timed out");
+        if (acceptance.error) {
+            const logs = await call("POST", `/session/${session}/log`, { type: "browser" });
+            assert.fail(`${acceptance.error}\n${JSON.stringify(logs, null, 2)}`);
+        }
+        for (const name of acceptance.results) console.log(name);
     } finally {
         if (session) await call("DELETE", `/session/${session}`).catch(() => {});
         driver.kill();
+        await driverClosed;
         server.closeAllConnections();
         await new Promise(resolve => server.close(resolve));
         await rm(output, { recursive: true, force: true });

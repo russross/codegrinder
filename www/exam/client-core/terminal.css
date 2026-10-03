@@ -1,16 +1,15 @@
-.terminal-vm,
-.terminal-grade {
+.terminal-vm {
     padding: 4px;
     box-sizing: border-box;
 }
 
 .terminal-vm { background: #000000; }
-.terminal-grade { background: #ffffff; }
 
 .terminal-surface.wterm {
     --term-font-family: "Latin Modern Mono", monospace;
     --term-font-size: 18px;
     --term-line-height: 1.2;
+    --term-row-height: calc(var(--term-font-size) * var(--term-line-height));
     width: 100%;
     height: round(down, 100%, 1px);
     padding: 0;

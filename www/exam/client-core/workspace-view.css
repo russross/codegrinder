@@ -1,0 +1,70 @@
+.file-tree,
+.file-tree ul {
+    margin: 0;
+    padding: 0;
+    list-style-type: none;
+}
+
+.file-tree {
+    width: max-content;
+    min-width: 100%;
+}
+
+.file-tree li {
+    list-style-type: none; /* Ensure no bullet points */
+}
+
+.file-tree .item-content-wrapper {
+    display: flex;
+    align-items: center;
+    padding: 2px 8px 2px calc(8px + var(--tree-depth) * 16px);
+    white-space: nowrap;
+}
+
+.file-tree .icon {
+    flex-shrink: 0;
+    margin-right: 5px;
+    font-style: normal;
+    font-size: 1.2em;
+}
+
+.file-tree li.folder > .item-content-wrapper .icon::after {
+    content: '📁';
+    color: #ffbf00;
+}
+
+.file-tree li.file > .item-content-wrapper .icon::after {
+    content: '📄';
+    color: #007bff;
+}
+
+/* Interactive Styling */
+.file-tree li.file {
+    cursor: pointer;
+}
+
+.file-tree li.folder {
+    cursor: default;
+}
+
+.file-tree li.file:hover > .item-content-wrapper {
+    background-color: #e0f0ff; /* Hover highlight for files */
+}
+
+.file-tree li.selected > .item-content-wrapper {
+    background-color: #d0e0ff; /* Persistent highlight for selected file */
+}
+
+/* Native file buttons retain the compact tree appearance and keyboard access. */
+.file-tree button {
+    display: flex;
+    align-items: center;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    width: 100%;
+    text-align: start;
+}

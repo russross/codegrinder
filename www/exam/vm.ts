@@ -1,347 +1,53 @@
-import type { FilesystemRuntime } from "./vm/runtime/p9/index.js";
-import type { ProblemWorkspace } from "./workspace";
-import { registerClipboardTerminal } from "./clipboard";
-import { TerminalInputQueue } from "./terminal_input";
-import { clearTerminal, TerminalKind, TerminalView } from "./terminal";
+import type { Riscbox } from "@riscbox/runtime";
+import { VmSession } from "./client-core/vm-session";
+import type { VmImage, VmSessionOptions, VmTarget, VmTransition } from "./client-core/vm-session";
 
-export interface VmImageDescriptor {
-    readonly configUrl: URL;
-    readonly memoryMiB: number;
-    readonly runtimeUrl: URL;
+export const EXAM_TRANSITION: VmTransition = {
+    workspace: "files", poweroff: "force", discardDiskChanges: true, boot: false,
+};
+
+// Runtime scripts are keyed by their immutable URL, including failed-load retries.
+declare global { interface Window { Riscbox?: typeof Riscbox; } }
+const runtimes = new Map<string, Promise<typeof Riscbox>>();
+export function loadRuntime(image: VmImage): Promise<typeof Riscbox> {
+    const existing = runtimes.get(image.runtimeUrl);
+    if (existing !== undefined) return existing;
+    const loading = new Promise<typeof Riscbox>((resolve, reject) => {
+        const script = document.createElement("script");
+        script.src = image.runtimeUrl;
+        script.onload = () => {
+            const constructor = window.Riscbox;
+            if (constructor === undefined) reject(new Error("VM runtime did not expose Riscbox"));
+            else resolve(constructor);
+        };
+        script.onerror = () => { script.remove(); reject(new Error("Could not load the VM runtime")); };
+        document.body.append(script);
+    });
+    runtimes.set(image.runtimeUrl, loading);
+    void loading.catch(() => { runtimes.delete(image.runtimeUrl); });
+    return loading;
 }
 
-export interface VmTarget {
-    readonly workspace: ProblemWorkspace;
-    readonly image: VmImageDescriptor;
-}
-
-interface VmImagePaths {
-    readonly configPath: string;
-    readonly memoryMiB: number;
-    readonly runtimePath: string;
-}
-
-enum VmState {
-    Ready,
-    Loading,
-    Booting,
-    Running,
-    Halted,
-    Failed,
-}
-
-interface ResolvedVmConfig {
-    readonly version: number;
-    readonly machine: string;
-    readonly memory_size: number;
-}
-
-interface RiscboxRuntime extends FilesystemRuntime {
-    readonly started: boolean;
-    startResolved(config: ResolvedVmConfig, memoryMiB: number): number;
-    consoleInput(data: Uint8Array): number;
-    consoleResize(columns: number, rows: number): void;
-    boot(): Promise<void>;
-    reset(): Promise<void>;
-    halt(): Promise<void>;
-    destroy(): Promise<void>;
-}
-
-interface RiscboxConstructor {
-    instantiate(bytes: ArrayBuffer, options: {
-        consoleWrite(text: string | Uint8Array): void;
-        consoleReset(): void;
-        onVmStarted(): void;
-        onVmReset(cause: string): void;
-        onVmHalted(cause: string): void;
-        onError(error: unknown): void;
-    }): Promise<RiscboxRuntime>;
-    loadResolvedConfig(url: string): Promise<ResolvedVmConfig>;
-}
-
-declare global {
-    interface Window {
-        Riscbox?: RiscboxConstructor;
-    }
-}
-
-const inputEncoder = new TextEncoder();
-const vmImagePathsByProblemType: ReadonlyMap<string, VmImagePaths> = new Map([
-    ["riscv", {
-        configPath: "vm/image/risclet.cfg",
+// Exam owns image selection; shared sessions compare the complete descriptor.
+export function vmImageForProblemType(problemType: string): VmImage | undefined {
+    if (problemType !== "riscv") return undefined;
+    const location = new URL(window.location.href);
+    const last = location.pathname.split("/").pop() ?? "";
+    if (!location.pathname.endsWith("/") && !last.includes(".")) location.pathname += "/";
+    const base = new URL(".", location);
+    return Object.freeze({
+        configUrl: new URL("vm/image/risclet.cfg", base).href,
+        runtimeUrl: new URL("vm/runtime/riscbox.js?v=shared-20261002", base).href,
+        wasmUrl: new URL("vm/runtime/riscbox.wasm?v=shared-20261002", base).href,
         memoryMiB: 256,
-        runtimePath: "vm/runtime/riscbox.js",
-    }],
-]);
-
-function examBaseUrl(): URL {
-    const url = new URL(window.location.href);
-    if (url.pathname.endsWith("/")) return url;
-    const lastPathPart = url.pathname.split("/").pop() ?? "";
-    if (lastPathPart.includes(".")) return new URL(".", url);
-    url.pathname += "/";
-    return url;
+        shareName: "workspace",
+    });
 }
 
-export function vmImageForProblemType(problemType: string): VmImageDescriptor | undefined {
-    const paths = vmImagePathsByProblemType.get(problemType);
-    if (paths === undefined) return undefined;
-    const baseUrl = examBaseUrl();
-    return {
-        configUrl: new URL(paths.configPath, baseUrl),
-        memoryMiB: paths.memoryMiB,
-        runtimeUrl: new URL(paths.runtimePath, baseUrl),
-    };
-}
-
-export class VmController {
-    private readonly terminal: TerminalView;
-    private runtime: RiscboxRuntime | undefined;
-    private runtimeLoading: Promise<RiscboxRuntime> | undefined;
-    private lifecycle: Promise<void> = Promise.resolve();
-    private generation = 0;
-    private inputGeneration = 0;
-    private retiring = false;
-    private state = VmState.Ready;
-    private target: VmTarget | undefined;
-    private readonly input = new TerminalInputQueue((bytes: Uint8Array): number =>
-        this.state === VmState.Running ? this.runtime?.consoleInput(bytes) ?? 0 : 0);
-
-    constructor(
-        host: HTMLElement,
-        private readonly bootButton: HTMLButtonElement,
-        private readonly flushEditor: () => void,
-    ) {
-        this.terminal = new TerminalView(host, TerminalKind.Vm, {
-            onData: text => this.sendInput(text),
-            onBinary: bytes => this.sendInput(bytes),
-            onResize: (cols, rows) => { this.runtime?.consoleResize(cols, rows); },
-        });
-        registerClipboardTerminal(this.terminal);
-        this.bootButton.addEventListener("click", (): void => {
-            if (this.state === VmState.Running) this.resetVm();
-            else this.bootIfInactive();
-        });
-        this.updateControls();
+export class VmController<Target extends VmTarget> extends VmSession<Target> {
+    constructor(host: HTMLElement, options: Omit<VmSessionOptions<Target>, "loadRuntime">) {
+        super(host, { ...options, loadRuntime });
     }
-
-    setTarget(target: VmTarget | undefined): void {
-        const previous = this.target;
-        this.generation += 1;
-        this.clearInput();
-        this.target = target;
-        this.state = VmState.Ready;
-        this.resetTerminal();
-        this.bootButton.hidden = target === undefined;
-        this.updateControls();
-        this.enqueue(async (): Promise<void> => {
-            await this.stopRuntime();
-            await previous?.workspace.rebuildFilesystem();
-            if (target !== previous) await target?.workspace.rebuildFilesystem();
-        });
-    }
-
-    async settle(): Promise<void> {
-        let pending: Promise<void>;
-        do {
-            pending = this.lifecycle;
-            await pending;
-        } while (pending !== this.lifecycle);
-    }
-
-    fit(): void { this.terminal.fit(); }
-
     get ready(): Promise<void> { return this.terminal.ready; }
 
-    bootIfInactive(): void {
-        this.terminal.focus();
-        if (this.state === VmState.Loading || this.state === VmState.Booting || this.state === VmState.Running) return;
-        const retained = this.state === VmState.Halted;
-        const failed = this.state === VmState.Failed;
-        const target = this.target;
-        if (target === undefined) return;
-        this.flushEditor();
-        const generation = this.generation;
-        this.state = VmState.Loading;
-        this.updateControls();
-        this.enqueue(async (): Promise<void> => {
-            await this.terminal.ready;
-            if (generation !== this.generation) return;
-            if (retained && this.runtime !== undefined) {
-                await target.workspace.settle();
-                this.state = VmState.Booting;
-                await this.runtime.boot();
-                return;
-            }
-            if (failed) {
-                await this.stopRuntime();
-                await target.workspace.rebuildFilesystem();
-            }
-            await this.start(target, generation);
-        });
-    }
-
-    reportFilesystemSyncError(error: Error): void {
-        this.fail(`VM workspace is out of sync; reboot to restore it (${error.message})`);
-    }
-
-    resetToReady(): void {
-        const target = this.target;
-        const generation = ++this.generation;
-        this.clearInput();
-        this.state = VmState.Ready;
-        this.resetTerminal();
-        this.updateControls();
-        this.enqueue(async (): Promise<void> => {
-            await this.stopRuntime();
-            if (generation === this.generation) await target?.workspace.rebuildFilesystem();
-        });
-    }
-
-    private enqueue(operation: () => Promise<void>): void {
-        const generation = this.generation;
-        this.lifecycle = this.lifecycle.then(operation).catch((error: unknown): void => {
-            if (generation !== this.generation) {
-                console.error("Retired VM operation failed", error);
-                return;
-            }
-            this.fail(error instanceof Error ? error.message : String(error));
-        });
-    }
-
-    private async stopRuntime(): Promise<void> {
-        const runtime = this.runtime;
-        if (runtime === undefined) return;
-        this.retiring = true;
-        try {
-            if (runtime.started) await runtime.halt();
-            await runtime.destroy();
-        } finally {
-            this.retiring = false;
-        }
-    }
-
-    private resetTerminal(): void {
-        this.clearInput();
-        clearTerminal(this.terminal);
-    }
-
-    private prepareRuntime(image: VmImageDescriptor): Promise<RiscboxRuntime> {
-        if (this.runtimeLoading !== undefined) return this.runtimeLoading;
-        const loading = this.loadRuntime(image);
-        this.runtimeLoading = loading;
-        void loading.catch((): void => { this.runtimeLoading = undefined; });
-        return loading;
-    }
-
-    private async loadRuntime(image: VmImageDescriptor): Promise<RiscboxRuntime> {
-        if (window.Riscbox === undefined) {
-            const script = document.createElement("script");
-            script.src = image.runtimeUrl.href;
-            await new Promise<void>((resolve, reject): void => {
-                script.addEventListener("load", (): void => resolve(), { once: true });
-                script.addEventListener("error", (): void => {
-                    script.remove();
-                    reject(new Error("Could not load the VM runtime"));
-                }, { once: true });
-                document.body.appendChild(script);
-            });
-        }
-        const Riscbox = window.Riscbox;
-        if (Riscbox === undefined) throw new Error("VM runtime did not expose Riscbox");
-        const response = await fetch(new URL("riscbox.wasm", image.runtimeUrl), { cache: "no-cache" });
-        if (!response.ok) throw new Error(`VM runtime HTTP ${response.status}`);
-        const runtime = await Riscbox.instantiate(await response.arrayBuffer(), {
-            consoleWrite: (text): void => { this.terminal.write(text); },
-            consoleReset: (): void => this.resetTerminal(),
-            onVmStarted: (): void => this.markRunning(),
-            onVmReset: (): void => this.markRunning(),
-            onVmHalted: (): void => {
-                this.clearInput();
-                if (this.retiring) return;
-                this.state = VmState.Halted;
-                this.updateControls();
-            },
-            onError: (error: unknown): void => {
-                this.fail(`The VM runtime stopped unexpectedly: ${String(error)}`);
-            },
-        });
-        this.runtime = runtime;
-        return runtime;
-    }
-
-    private async start(target: VmTarget, generation: number): Promise<void> {
-        const runtime = await this.prepareRuntime(target.image);
-        if (generation !== this.generation) return;
-        const filesystem = await target.workspace.rebuildFilesystem(runtime);
-        if (generation !== this.generation) return;
-        if (filesystem === undefined) throw new Error("VM filesystem is unavailable");
-        await filesystem.bind("workspace");
-        const Riscbox = window.Riscbox;
-        if (Riscbox === undefined) throw new Error("VM runtime is unavailable");
-        const config = await Riscbox.loadResolvedConfig(target.image.configUrl.href);
-        if (generation !== this.generation) return;
-        await target.workspace.settle();
-        this.fit();
-        this.state = VmState.Booting;
-        this.updateControls();
-        if (runtime.startResolved(config, target.image.memoryMiB) !== 0) {
-            throw new Error("Riscbox rejected the VM configuration");
-        }
-    }
-
-    private resetVm(): void {
-        this.flushEditor();
-        const generation = this.generation;
-        const target = this.target;
-        this.state = VmState.Booting;
-        this.clearInput();
-        this.updateControls();
-        this.enqueue(async (): Promise<void> => {
-            await target?.workspace.settle();
-            if (generation === this.generation) await this.runtime?.reset();
-        });
-    }
-
-    private markRunning(): void {
-        if (this.state !== VmState.Booting) return;
-        this.state = VmState.Running;
-        this.fit();
-        this.runtime?.consoleResize(this.terminal.cols, this.terminal.rows);
-        this.updateControls();
-        this.terminal.focus();
-    }
-
-    private sendInput(text: string | Uint8Array): void {
-        const target = this.target;
-        if (this.state !== VmState.Running || target === undefined) return;
-        const generation = this.inputGeneration;
-        this.flushEditor();
-        void target.workspace.settle().then((): void => {
-            if (generation === this.inputGeneration && this.state === VmState.Running) {
-                this.input.enqueue(typeof text === "string" ? inputEncoder.encode(text) : text);
-            }
-        }).catch((error: unknown): void => {
-            this.reportFilesystemSyncError(error instanceof Error ? error : new Error(String(error)));
-        });
-    }
-
-    private clearInput(): void {
-        this.inputGeneration += 1;
-        this.input.clear();
-    }
-
-    private fail(message: string): void {
-        this.clearInput();
-        this.state = VmState.Failed;
-        this.terminal.writeln(`\r\n${message}`);
-        this.updateControls();
-    }
-
-    private updateControls(): void {
-        this.bootButton.disabled = this.target === undefined
-            || this.state === VmState.Loading || this.state === VmState.Booting;
-        this.bootButton.textContent = this.state === VmState.Running || this.state === VmState.Failed
-            ? "Reboot VM" : "Boot VM";
-    }
 }

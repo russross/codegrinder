@@ -1,3 +1,4 @@
+// Input remains copied host memory until the browser FIFO accepts each byte.
 export class TerminalInputQueue {
     private readonly chunks: Uint8Array[] = [];
     private offset = 0;
@@ -18,9 +19,10 @@ export class TerminalInputQueue {
         this.offset = 0;
     }
 
+    // A browser task yields to CPU work before retrying a full input FIFO.
     private schedule(): void {
         if (this.timer !== undefined || this.chunks.length === 0) return;
-        this.timer = window.setTimeout((): void => {
+        this.timer = window.setTimeout(() => {
             this.timer = undefined;
             const chunk = this.chunks[0];
             const bytes = chunk.subarray(this.offset, this.offset + 1024);

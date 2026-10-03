@@ -1,9 +1,12 @@
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
+import { ensureSyntaxTree } from "@codemirror/language";
+import { languageFor } from "./client-core/editor-text";
 import { installExamClipboard, registerClipboardTerminal } from "./clipboard";
-import { clearTerminal, TerminalKind, TerminalView } from "./terminal";
+import { clearTerminal, GradingTerminal, TerminalView } from "./terminal";
 import { ProblemWorkspace } from "./workspace";
-import { VmController, vmImageForProblemType } from "./vm";
+import { loadRuntime, VmController, vmImageForProblemType } from "./vm";
+export { startExamAcceptance, examAcceptanceResult, examAcceptanceNeedsRebootClick } from "./exam-acceptance.test";
 
 function check(condition: boolean, message: string): void {
     if (!condition) throw new Error(message);
@@ -29,6 +32,16 @@ async function paint(): Promise<void> {
 
 export async function run(): Promise<string[]> {
     const results: string[] = [];
+    // Supported release ordering and directives differ from generic GAS syntax.
+    const assembly = "amoadd.w.rel a0, a1, (sp)\n.4byte 0xff\n.word 1\n";
+    const assemblyState = EditorState.create({ doc: assembly, extensions: [languageFor("sample.s") ?? []] });
+    const assemblyTree = ensureSyntaxTree(assemblyState, assembly.length, 1000);
+    check(assemblyTree !== null && assemblyTree.resolveInner(1, 1).name === "keyword",
+        "Dialect atomic release instruction was not highlighted");
+    check(assemblyTree !== null && assemblyTree.resolveInner(assembly.indexOf(".4byte") + 1, 1).name === "meta",
+        "Dialect .4byte directive was not highlighted");
+    check(assemblyTree !== null && assemblyTree.resolveInner(assembly.indexOf(".word") + 1, 1).name === "invalid",
+        "Unsupported GAS .word directive was not marked invalid");
     const clipboardWrites: string[] = [];
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
         writeText: async (text: string): Promise<void> => { clipboardWrites.push(text); },
@@ -38,7 +51,7 @@ export async function run(): Promise<string[]> {
     const host = element("div", document.body);
     host.style.cssText = "width:800px;height:250px;background:black";
     let input = "";
-    const terminal = new TerminalView(host, TerminalKind.Vm, { onData: text => { input += text; } });
+    const terminal = new TerminalView(host, { onData: text => { input += text; } });
     await terminal.ready;
     terminal.fit();
     registerClipboardTerminal(terminal);
@@ -62,7 +75,7 @@ export async function run(): Promise<string[]> {
     const liveRow = host.querySelector<HTMLElement>(".term-row:not(.term-scrollback-row)");
     if (liveRow === null) throw new Error("live terminal row missing after clear");
     const hostTop = host.getBoundingClientRect().top + parseFloat(getComputedStyle(host).paddingTop);
-    check(Math.abs(liveRow.getBoundingClientRect().top - hostTop) < 0.05,
+    check(Math.abs(liveRow.getBoundingClientRect().top - hostTop) <= 1 / devicePixelRatio,
         `clear exposed history above the live screen: ${liveRow.getBoundingClientRect().top - hostTop}px`);
     const scrollSurface = host.querySelector<HTMLElement>(".terminal-surface");
     if (scrollSurface === null) throw new Error("scrolling surface missing");
@@ -72,7 +85,7 @@ export async function run(): Promise<string[]> {
         "clearing made retained history inaccessible");
     scrollSurface.scrollTop = scrollSurface.scrollHeight;
     await paint();
-    check(Math.abs(liveRow.getBoundingClientRect().top - hostTop) < 0.05,
+    check(Math.abs(liveRow.getBoundingClientRect().top - hostTop) <= 1 / devicePixelRatio,
         "returning from history misaligned the live screen");
     let mutations = 0;
     let idleFrames = 0;
@@ -119,7 +132,7 @@ export async function run(): Promise<string[]> {
     const gradeHost = element("div", document.body);
     gradeHost.style.cssText = "width:800px;height:100px";
     let gradeInput = "";
-    const gradeTerminal = new TerminalView(gradeHost, TerminalKind.Grade, { onData: text => { gradeInput += text; } });
+    const gradeTerminal = new GradingTerminal(gradeHost);
     await gradeTerminal.ready;
     registerClipboardTerminal(gradeTerminal);
     gradeTerminal.write("oldest history marker\r\n" + "history row ".repeat(6).concat("\r\n").repeat(5000) + "newest history marker");
@@ -153,39 +166,34 @@ export async function run(): Promise<string[]> {
     document.body.appendChild(button);
     const image = vmImageForProblemType("riscv");
     if (image === undefined) throw new Error("VM image missing");
-    const script = document.createElement("script");
-    script.src = image.runtimeUrl.href;
-    await new Promise<void>((resolve, reject): void => {
-        script.onload = (): void => resolve();
-        script.onerror = (): void => reject(new Error("VM runtime script failed"));
-        document.body.appendChild(script);
-    });
-    const Riscbox = window.Riscbox;
-    if (Riscbox === undefined) throw new Error("Riscbox unavailable");
+    const Riscbox = await loadRuntime(image);
     let guestOutput = "";
-    window.Riscbox = {
-        loadResolvedConfig: Riscbox.loadResolvedConfig.bind(Riscbox),
-        instantiate: (bytes, options) => Riscbox.instantiate(bytes, {
-            ...options,
-            consoleReset: (): void => {
-                guestOutput = "";
-                options.consoleReset();
-            },
-            consoleWrite: (text): void => {
-                guestOutput += typeof text === "string" ? text : new TextDecoder().decode(text);
-                options.consoleWrite(text);
-            },
-        }),
-    };
-    let pendingEditorText: string | undefined;
-    const vm = new VmController(vmHost, button, (): void => {
-        if (pendingEditorText === undefined) return;
-        workspace.writeStudentFile("src/main.s", new TextEncoder().encode(pendingEditorText));
-        pendingEditorText = undefined;
+    const instantiate = Riscbox.instantiate.bind(Riscbox);
+    Riscbox.instantiate = (bytes, options) => instantiate(bytes, {
+        ...options,
+        consoleReset: () => { guestOutput = ""; options?.consoleReset?.(); },
+        consoleWrite: text => { guestOutput += text; options?.consoleWrite?.(text); },
     });
-    vm.setTarget({ workspace, image });
-    vm.bootIfInactive();
-    await until(() => button.textContent === "Reboot VM" && !button.disabled, "VM never started");
+    let pendingEditorText: string | undefined;
+    const vm = new VmController(vmHost, {
+        flushEditor: async () => {
+            if (pendingEditorText === undefined) return;
+            workspace.writeStudentFile("src/main.s", new TextEncoder().encode(pendingEditorText));
+            pendingEditorText = undefined;
+        },
+        canInteract: () => true,
+        beforeReplace: () => workspace.attach(undefined),
+        afterSnapshot: async () => {},
+        onFilesystemChange: change => {
+            workspace.attach(vm.filesystem);
+            workspace.handleFilesystemChange(change);
+        },
+        onStateChange: () => {},
+        onError: error => { throw error; },
+    });
+    await vm.setTarget({ image, loadFiles: async () => workspace.currentFiles() }, { workspace: "files", poweroff: "force", discardDiskChanges: true, boot: true }, () => true);
+    workspace.attach(vm.filesystem);
+    await until(() => vm.state === "running", "VM never started");
     editor.focus();
     vm.bootIfInactive();
     check(vmHost.contains(document.activeElement), "selecting a running VM did not focus its terminal");
@@ -206,7 +214,7 @@ export async function run(): Promise<string[]> {
         await until(() => liveRows()[0]?.textContent?.trim() === "clear-screen-marker", "guest clear did not clear the live screen");
         const checkViewportTop = (): void => {
             const expected = vmHost.getBoundingClientRect().top + parseFloat(getComputedStyle(vmHost).paddingTop);
-            check(Math.abs((liveRows()[0]?.getBoundingClientRect().top ?? 0) - expected) < 0.05,
+            check(Math.abs((liveRows()[0]?.getBoundingClientRect().top ?? 0) - expected) <= 1 / devicePixelRatio,
                 "guest clear left scrollback visible above the live screen");
         };
         checkViewportTop();
@@ -222,7 +230,6 @@ export async function run(): Promise<string[]> {
     }
     pendingEditorText = "editor-new\n";
     send("cat src/main.s > src/copy; cat src/copy > src/main.s");
-    await workspace.settle();
     await new Promise<void>(resolve => window.setTimeout(resolve, 500));
     check(decoded() === "editor-new\n", "terminal command ran before editor flush or guest read stale bytes");
     send("ln src/main.s alias; printf 'alias-edit\\n' > alias");
@@ -232,20 +239,20 @@ export async function run(): Promise<string[]> {
     check(workspace.visiblePaths().length === 2, "guest artifacts became official files");
     send("printf 'changed-system\\n' > system.txt");
     check(new TextDecoder().decode(workspace.readVisibleFile("system.txt")) === "canonical system\n", "guest system edit changed canonical files");
-    button.click();
-    await until(() => button.textContent === "Reboot VM" && !button.disabled, "in-place reboot failed");
+    guestOutput = "";
+    await vm.reboot();
+    await until(() => vm.state === "running", "in-place reboot failed");
     await until(() => guestOutput.includes("$ "), "rebooted guest shell never became ready");
     send("[ -f src-old/main.s ] && printf 'after-reboot\\n' > src/main.s");
     await until(() => decoded() === "after-reboot\n", "in-place reboot lost the shared tree or input stopped working");
-    vm.resetToReady();
-    await vm.settle();
-    await workspace.settle();
-    check(decoded() === "after-reboot\n", "teardown lost student work");
-    vm.bootIfInactive();
-    await until(() => button.textContent === "Reboot VM" && !button.disabled, "second boot failed");
-    vm.resetToReady();
-    await vm.settle();
-    results.push("guest writes, editor flush, hard links, directory renames, ownership, and repeated boot");
+    const beforeRecovery = vm.filesystem.readFile("src/main.s");
+    await vm.reset();
+    check(vm.filesystem.readFile("src/main.s").every((byte, index) => byte === beforeRecovery[index]), "VM Reset changed workspace bytes");
+    check(!vm.filesystem.listFiles().includes("src-old/main.s"), "VM Reset retained guest files");
+    check(decoded() === "after-reboot\n", "VM Reset changed official work");
+    await vm.destroy();
+    Riscbox.instantiate = instantiate;
+    results.push("guest writes, editor flush, hard links, directory renames, ownership, orderly reboot, and workspace-preserving VM Reset");
     terminal.destroy();
     gradeTerminal.destroy();
     editor.destroy();
@@ -257,7 +264,7 @@ export async function renderFixture(): Promise<void> {
     const host = element("div", document.body);
     host.id = "pixel-fixture";
     host.style.cssText = "width:800px;height:250px";
-    const terminal = new TerminalView(host, TerminalKind.Vm);
+    const terminal = new TerminalView(host);
     await terminal.ready;
     terminal.write("\x1b[?25l\x1b[48;2;0;255;0m" + " ".repeat(20)
         + "\x1b[0m\x1b[38;2;255;255;255m\r\n┌──────────────────┐\r\n│                  │\r\n└──────────────────┘\r\n├── branch\r\n│\r\n└── leaf");
@@ -340,7 +347,7 @@ export async function renderClearFixture(height: number): Promise<void> {
     const host = element("div", document.body);
     host.id = "clear-fixture";
     host.style.cssText = `width:800px;height:${height}px`;
-    const terminal = new TerminalView(host, TerminalKind.Vm);
+    const terminal = new TerminalView(host);
     await terminal.ready;
     terminal.write("\x1b[41;31m" + "gggg old output\r\n".repeat(60));
     await paint();

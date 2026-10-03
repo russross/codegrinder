@@ -113,11 +113,11 @@ Here is the complete layout of the UI:
             or a server action
         *   Leaving the editor automatically saves unsaved changes. This
             includes selecting the VM terminal.
-        *   Each problem has its own 30-second timer. Every editor, VM,
-            or returned-file change restarts that timer, postponing autosave
-            indefinitely while editing continues. Immediate save requests
-            cancel the timer. Edits after a submitted snapshot start a new
-            deadline, and its response only acknowledges the submitted edits.
+        *   The editor flushes thirty seconds after the latest edit or on blur,
+            then immediately requests server persistence. Each problem has a
+            separate thirty-second debounce for guest and returned-file changes.
+            A response acknowledges only the submitted revision; newer edits
+            remain unsaved.
         *   Failed saves remain dirty and retry after 30 seconds unless an
             earlier timer or save request handles them.
     *   A "Reset" button immediately after "Save".
@@ -160,7 +160,7 @@ Here is the complete layout of the UI:
             "inputs/test.transcript", so they are parsed and
             organized into a hierarchy like a unix file tree
         *   Student-owned files (or folders that contain them) are
-            sorted first. Within each group, files are listed before
+            sorted first. Within each group, directories are listed before
             directories, and then all items are sorted alphabetically.
         *   It is rendered as a simple unordered list, with placeholder
             icons instead of bullet points. Specific icons are not
@@ -173,7 +173,8 @@ Here is the complete layout of the UI:
             highlight. This highlight is clear and prominent as it
             is the only indication in the UI of which file is
             currently being edited
-        *   Clicking on a file opens it in the editor
+        *   Clicking a file opens it in the editor. File buttons also support
+            Tab navigation and Enter/Space activation.
         *   System-owned files are opened read-only; student-owned
             files can be modified
         *   The `doc` directory and its files are filtered out of
@@ -193,7 +194,8 @@ Here is the complete layout of the UI:
         *   Changes made in the editor update the active problem's
             student-owned file set and its VM workspace
         *   Syntax highlighting is based on the file name extension
-            *   `*.s` or `*.S`: assembly language syntax (using GAS mode)
+            *   `*.s` or `*.S`: the teaching assembly dialect, including exact
+                directives, register aliases, and invalid-token highlighting
         *   Syntax highlighting should be implemented for:
             *   `*.c` or `*.h`: C syntax
             *   `*.s` or `*.S`: assembly language syntax
@@ -232,19 +234,35 @@ Here is the complete layout of the UI:
                 *   This tab is present only when an image is configured
                     for the active problem type. The current configuration
                     provides one image for the `riscv` problem type.
-                *   Selecting the VM tab boots the VM when it is not already
-                    active. Selecting the tab again does not reboot an active
-                    VM and focuses the terminal.
+                *   Loading or switching a problem prepares a clean VM and selects
+                    Instructions without booting. Selecting VM or Boot VM boots
+                    it. Without instructions, VM is the default tab and boots.
+                    Selecting the VM tab again does not reboot an active VM.
                 *   Both terminals use 18px Latin Modern Mono with a
                     monospace fallback. The VM uses a black background and
                     the demo's ANSI palette. The VM cursor blinks; grade
                     output hides its cursor and rejects input.
                 *   Boot VM appears at the right edge of the main action bar.
                     Once booted, the control becomes Reboot VM.
-                *   Reboot resets the guest in place and retains the VM's
+                *   Reboot requests orderly guest restart and retains the VM's
                     session-local root-disk changes and shared 9p tree.
                     It clears terminal output, scrollback, selection, and
                     pending input.
+                    During shutdown the button stays enabled, changes its label
+                    to Reset VM, and keeps the same width across Boot VM,
+                    Reboot VM, and Reset VM labels. After restart it
+                    returns to Reboot VM. During the wait,
+                    terminal input is blocked. Editing, saves, and filesystem
+                    synchronization continue. Clicking Reset VM before
+                    the halt/restart notification forces a clean VM reset.
+                    After that event, the button resumes normal behavior.
+                *   The second-click recovery force-halts and
+                    discards disk overlays, clears 9p, rebuilds canonical system
+                    files and current official student files, and boots.
+                    It preserves editor text, including unsynchronized edits.
+                    Guest-only files, links, and metadata are discarded.
+                    It sends no Reset/save RPC. There is no separate Reset VM
+                    control. Boot/Reboot is disabled while loading or resetting.
                 *   The terminal uses the guest's virtio console. The guest
                     receives terminal-size changes without rebooting. The
                     terminal uses Wterm's DOM renderer so box-drawing
@@ -252,12 +270,19 @@ Here is the complete layout of the UI:
                     at `/home/student`.
                 *   Guest writes to student-owned paths are reflected in
                     the editor and submission state. Guest changes to
-                    system-owned files remain temporary inside the VM.
+                    system-owned files remain temporary inside the VM and do
+                    not affect instructions or system-file views.
                 *   Guest-created files and build artifacts remain usable
                     in the VM but do not appear in the file tree and are not
                     submitted to the server.
-                *   Switching problems or advancing steps destroys the VM,
-                    rebuilds the shared tree, and leaves the new context
-                    ready to Boot.
+                *   Problem switches and step advancement force halt, discard
+                    disk overlays, and rebuild 9p from the official workspace.
+                    Same images reuse the runtime; different images replace it.
+                    Instructions are selected and boot waits for a user action,
+                    except when missing instructions make VM the default tab.
+                *   Save, Grade, and other actions preserve VM power state.
+                    Returned files update 9p and views. Only advancement to a
+                    new step prepares a clean VM; failed and final-step grades
+                    preserve the running session.
         *   The information pane defaults to 45% of the window
             width, but can be resized freely by the user
