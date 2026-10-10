@@ -35,7 +35,7 @@ body {
     background-color: #c0e0ff; /* Cheerful blue */
     color: #333;
     cursor: pointer;
-    font-size: 14px;
+    font-size: 0.875em;
 }
 
 #menu-bar button:hover:not(:disabled),
@@ -74,6 +74,8 @@ body {
 }
 
 .pane {
+    box-sizing: border-box;
+    min-width: 0;
     padding: 10px;
     border: 1px solid #eee;
     overflow: auto;

@@ -1,0 +1,7 @@
+
+To test your code:
+
+    risclet run         (run without testing)
+    risclet             (run the debugger)
+    make                (run with testing)
+

@@ -24,20 +24,20 @@ import type { RpcOptions } from "@protobuf-ts/runtime-rpc";
 
 import Split from "split.js";
 
-import { EditorSession } from "./client-core/editor-session";
-import type { SyncTrigger } from "./client-core/editor-session";
-import { renderFileTree as renderSharedFileTree } from "./client-core/workspace-view";
-import { renderInstructions } from "./client-core/instructions";
-import { changeAffectsPath } from "./client-core/workspace";
-import type { VmTarget } from "./client-core/vm-session";
+import { EditorSession } from "./editor-session";
+import type { SyncTrigger } from "./editor-session";
+import { renderFileTree as renderWorkspaceFileTree } from "./workspace-view";
+import { renderInstructions } from "./instructions";
+import { changeAffectsPath } from "./workspace";
+import type { VmTarget } from "./vm-session";
 
-import { ProblemWorkspace } from "./workspace";
-import type { WorkspaceStudentChange } from "./workspace";
+import { ProblemWorkspace } from "./problem-workspace";
+import type { WorkspaceStudentChange } from "./problem-workspace";
 import { SaveState } from "./saving";
 import { EXAM_TRANSITION, VmController, vmImageForProblemType } from "./vm";
 import { installExamClipboard, registerClipboardTerminal } from "./clipboard";
-import { clearTerminal, GradingTerminal } from "./terminal";
-import type { TerminalView } from "./client-core/terminal";
+import { clearTerminal, GradingTerminal } from "./grading-terminal";
+import type { TerminalView } from "./terminal";
 import type { P9Change } from "@riscbox/storage";
 
 interface ProblemData {
@@ -1013,7 +1013,7 @@ function renderFileTree(): void {
         return;
     }
     const problem = currentProblem;
-    renderSharedFileTree(fileTreePane, problem.workspace.visiblePaths().filter(path => !path.startsWith("doc/")), {
+    renderWorkspaceFileTree(fileTreePane, problem.workspace.visiblePaths().filter(path => !path.startsWith("doc/")), {
         selectedPath: editorSession.path,
         priority: path => problem.workspace.isStudentOwned(path) ? 0 : 1,
         onSelect: path => { void selectFile(problem, path).catch(reportError); },
@@ -1026,6 +1026,13 @@ async function refreshInstructions(problem: ProblemData): Promise<void> {
     try {
         const html = await renderInstructions(problem.workspace, dependencies, DOC_PATH);
         if (generation === problem.instructionsGeneration) problem.instructionsHtml = html;
+    } catch (error: unknown) {
+        if (generation === problem.instructionsGeneration) {
+            const message = document.createElement("p");
+            message.setAttribute("role", "status");
+            message.textContent = `Could not display instructions: ${error instanceof Error ? error.message : String(error)}`;
+            problem.instructionsHtml = message.outerHTML;
+        }
     } finally {
         if (generation === problem.instructionsGeneration) problem.instructionPaths = dependencies;
     }

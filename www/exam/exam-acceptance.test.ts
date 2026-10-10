@@ -1,6 +1,7 @@
 import { EditorView } from "@codemirror/view";
 import { language } from "@codemirror/language";
-import { riscletLanguage } from "./client-core/risclet";
+import { riscletLanguage } from "./risclet";
+import { TerminalView } from "./terminal";
 import type { Riscbox } from "@riscbox/runtime";
 import {
     CommitSaveStatus, DaycareResponse, EventMessage, GetAssignmentResponse, GetWorkspaceRequest, GetWorkspaceResponse,
@@ -12,9 +13,9 @@ import { loadRuntime, vmImageForProblemType } from "./vm";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 function check(condition: boolean, message: string): void { if (!condition) throw new Error(message); }
-async function until(predicate: () => boolean, message: string): Promise<void> {
+async function until(predicate: () => boolean | Promise<boolean>, message: string): Promise<void> {
     const deadline = Date.now() + 20_000;
-    while (!predicate()) {
+    while (!await predicate()) {
         if (Date.now() > deadline) throw new Error(message);
         await new Promise<void>(resolve => setTimeout(resolve, 20));
     }
@@ -84,12 +85,19 @@ export async function runExamAcceptance(): Promise<string[]> {
     let release: (() => void) | undefined;
     let machine: Riscbox | undefined;
     let guestOutput = "";
+    // Observe the actual output parser; WebGL text is not represented by DOM text nodes.
+    let gradingOutput: TerminalView | undefined;
+    const terminalWrite = TerminalView.prototype.write;
+    TerminalView.prototype.write = function (text) {
+        if (this.element.id === "terminal") gradingOutput = this;
+        terminalWrite.call(this, text);
+    };
     const image = vmImageForProblemType("riscv");
     if (image === undefined) throw new Error("Missing VM image");
     const constructor = await loadRuntime(image);
-    const instantiate = constructor.instantiate.bind(constructor);
-    constructor.instantiate = async (bytes, options) => {
-        machine = await instantiate(bytes, {
+    const prepare = constructor.prepare.bind(constructor);
+    constructor.prepare = async options => {
+        machine = await prepare({
             ...options,
             consoleReset: () => { guestOutput = ""; options?.consoleReset?.(); },
             consoleWrite: text => { guestOutput += text; options?.consoleWrite?.(text); },
@@ -161,6 +169,25 @@ export async function runExamAcceptance(): Promise<string[]> {
         document.dispatchEvent(new Event("DOMContentLoaded"));
         await until(() => document.querySelector(".file-tree button") !== null, "Exam never displayed its workspace");
         check(editor().state.doc.toString() === "first", "Initial selection opened the wrong file");
+        // Pane content cannot displace assigned widths on narrow or wide screens.
+        const main = document.getElementById("main-content");
+        if (main === null) throw new Error("Main layout is unavailable");
+        const panes = [
+            { id: "file-tree-pane", expected: 10, gutter: 4 },
+            { id: "editor-pane", expected: 45, gutter: 8 },
+            { id: "info-pane", expected: 45, gutter: 4 },
+        ];
+        for (const width of [2100, 1250, 900]) {
+            main.style.width = `${width}px`;
+            await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+            for (const { id, expected, gutter } of panes) {
+                const pane = document.getElementById(id);
+                if (pane === null) throw new Error(`Missing pane: ${id}`);
+                const percentage = 100 * (pane.getBoundingClientRect().width + gutter) / main.clientWidth;
+                check(Math.abs(percentage - expected) < 0.1, `${id} proportion at ${width}: ${percentage}`);
+            }
+        }
+        main.style.width = "";
         check(editor().state.facet(language) === riscletLanguage, "Exam .s files did not select the dialect highlighter");
         check(document.getElementById("instructions-tab-content")?.textContent?.includes("Instructions") === true, "Instructions did not render");
         check(button("instructions-tab-button").classList.contains("active") && machine?.started === false,
@@ -178,7 +205,7 @@ export async function runExamAcceptance(): Promise<string[]> {
         check(!button("save-button").disabled, "Older acknowledgement cleared newer editor edits");
         failSave = true;
         button("save-button").click();
-        await until(() => document.getElementById("terminal")?.textContent?.includes("Save failed") === true, "RPC failure was not reported");
+        await until(async () => (await gradingOutput?.readText())?.includes("Save failed") === true, "RPC failure was not reported");
         check(!button("save-button").disabled, "RPC failure cleared pending work");
         button("save-button").click();
         await until(() => saved.get("first") === "newer edit\n", "Retry did not save retained bytes");
@@ -340,7 +367,8 @@ export async function runExamAcceptance(): Promise<string[]> {
     } finally {
         window.fetch = nativeFetch;
         window.confirm = nativeConfirm;
-        constructor.instantiate = instantiate;
+        constructor.prepare = prepare;
+        TerminalView.prototype.write = terminalWrite;
         if (machine?.started) await machine.halt();
     }
 }

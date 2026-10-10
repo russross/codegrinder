@@ -1,0 +1,17 @@
+#!/bin/sh
+set -eu
+
+# The writable ext4 root holds tools and guest files for this VM session.
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+if ! mountpoint -q /dev; then
+    mount -t devtmpfs devtmpfs /dev
+fi
+mkdir -p /dev/pts /run
+mount -t devpts devpts /dev/pts
+
+# Uncached 9p makes editor updates visible to the next guest command.
+hostname riscbox
+ip link set lo up
+mount -t 9p -o trans=virtio,version=9p2000.L,cache=none,access=1000,uname=student risclet /home/student
+acpid

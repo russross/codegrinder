@@ -1,0 +1,6 @@
+#!/bin/sh
+case " $(cat /proc/cmdline) " in
+    *" console=hvc0 "*) console=hvc0 ;;
+    *) console=ttyS0 ;;
+esac
+exec /sbin/getty -n -l /etc/init.d/autologin-student -L 115200 "$console" vt100

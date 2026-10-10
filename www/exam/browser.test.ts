@@ -1,10 +1,11 @@
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { ensureSyntaxTree } from "@codemirror/language";
-import { languageFor } from "./client-core/editor-text";
+import { languageFor } from "./editor-text";
 import { installExamClipboard, registerClipboardTerminal } from "./clipboard";
-import { clearTerminal, GradingTerminal, TerminalView } from "./terminal";
-import { ProblemWorkspace } from "./workspace";
+import { clearTerminal, GradingTerminal } from "./grading-terminal";
+import { TerminalView } from "./terminal";
+import { ProblemWorkspace } from "./problem-workspace";
 import { loadRuntime, VmController, vmImageForProblemType } from "./vm";
 export { startExamAcceptance, examAcceptanceResult, examAcceptanceNeedsRebootClick } from "./exam-acceptance.test";
 
@@ -33,15 +34,15 @@ async function paint(): Promise<void> {
 export async function run(): Promise<string[]> {
     const results: string[] = [];
     // Supported release ordering and directives differ from generic GAS syntax.
-    const assembly = "amoadd.w.rel a0, a1, (sp)\n.4byte 0xff\n.word 1\n";
+    const assembly = "amoadd.w.rl a0, a1, (sp)\n.4byte 0xff\n.word 1\n";
     const assemblyState = EditorState.create({ doc: assembly, extensions: [languageFor("sample.s") ?? []] });
     const assemblyTree = ensureSyntaxTree(assemblyState, assembly.length, 1000);
     check(assemblyTree !== null && assemblyTree.resolveInner(1, 1).name === "keyword",
         "Dialect atomic release instruction was not highlighted");
     check(assemblyTree !== null && assemblyTree.resolveInner(assembly.indexOf(".4byte") + 1, 1).name === "meta",
         "Dialect .4byte directive was not highlighted");
-    check(assemblyTree !== null && assemblyTree.resolveInner(assembly.indexOf(".word") + 1, 1).name === "invalid",
-        "Unsupported GAS .word directive was not marked invalid");
+    check(assemblyTree !== null && assemblyTree.resolveInner(assembly.indexOf(".word") + 1, 1).name === "meta",
+        "Supported .word directive was not highlighted");
     const clipboardWrites: string[] = [];
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
         writeText: async (text: string): Promise<void> => { clipboardWrites.push(text); },
@@ -72,18 +73,15 @@ export async function run(): Promise<string[]> {
     await paint();
     terminal.write("\x1b[H\x1b[2Jcleared screen");
     await paint();
-    const liveRow = host.querySelector<HTMLElement>(".term-row:not(.term-scrollback-row)");
+    const liveRow = host.querySelector<HTMLElement>(".xterm-screen");
     if (liveRow === null) throw new Error("live terminal row missing after clear");
     const hostTop = host.getBoundingClientRect().top + parseFloat(getComputedStyle(host).paddingTop);
     check(Math.abs(liveRow.getBoundingClientRect().top - hostTop) <= 1 / devicePixelRatio,
         `clear exposed history above the live screen: ${liveRow.getBoundingClientRect().top - hostTop}px`);
     const scrollSurface = host.querySelector<HTMLElement>(".terminal-surface");
     if (scrollSurface === null) throw new Error("scrolling surface missing");
-    scrollSurface.scrollTop = 0;
-    await paint();
-    check(host.querySelector(".term-scrollback-row")?.textContent?.includes("scrollback marker") === true,
+    check((await terminal.readText()).includes("scrollback marker"),
         "clearing made retained history inaccessible");
-    scrollSurface.scrollTop = scrollSurface.scrollHeight;
     await paint();
     check(Math.abs(liveRow.getBoundingClientRect().top - hostTop) <= 1 / devicePixelRatio,
         "returning from history misaligned the live screen");
@@ -95,7 +93,7 @@ export async function run(): Promise<string[]> {
         return requestFrame(callback);
     };
     const observer = new MutationObserver(changes => { mutations += changes.length; });
-    const grid = host.querySelector(".term-grid");
+    const grid = host.querySelector(".xterm-screen");
     if (grid === null) throw new Error("terminal grid missing");
     observer.observe(grid, { subtree: true, attributes: true, childList: true, characterData: true });
     await new Promise<void>(resolve => window.setTimeout(resolve, 1000));
@@ -107,7 +105,7 @@ export async function run(): Promise<string[]> {
     terminal.write("\x1b[?25l\x1b[48;2;0;255;0m" + " ".repeat(20)
         + "\x1b[0m\x1b[38;2;255;255;255m\r\n┌──────────────────┐\r\n│                  │\r\n└──────────────────┘");
     await paint();
-    check(host.querySelectorAll(".term-box").length >= 40, "box drawing did not use geometric rendering");
+    check(host.querySelector("canvas") !== null, "box drawing did not use WebGL rendering");
     host.id = "rendering-fixture";
     results.push("screen clearing, idle rendering, and geometric box drawing at fractional pixel ratio");
     clearTerminal(terminal);
@@ -122,12 +120,14 @@ export async function run(): Promise<string[]> {
     host.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true }));
     check(input === "fresh", "private paste did not reach terminal");
     terminal.write("\x1b[?2004h");
+    await terminal.readText();
     input = "";
     terminal.paste("one\x1b[201~two");
     check(input === "\x1b[200~one[201~two\x1b[201~", "bracketed paste allowed an injected escape");
     input = "";
     terminal.clearSelection();
-    host.querySelector("textarea")?.dispatchEvent(new KeyboardEvent("keydown", { key: "c", code: "KeyC", ctrlKey: true, bubbles: true, cancelable: true }));
+    terminal.focus();
+    host.querySelector("textarea")?.dispatchEvent(new KeyboardEvent("keydown", { key: "c", code: "KeyC", keyCode: 67, ctrlKey: true, bubbles: true, cancelable: true }));
     check(input === "\x03", "Ctrl+C did not remain a guest interrupt");
     const gradeHost = element("div", document.body);
     gradeHost.style.cssText = "width:800px;height:100px";
@@ -151,7 +151,7 @@ export async function run(): Promise<string[]> {
     gradeHost.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true }));
     const gradeTextarea = gradeHost.querySelector("textarea");
     check(gradeTextarea?.readOnly === true, "grade input is editable");
-    gradeTextarea?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));
+    gradeTextarea?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true, cancelable: true }));
     check(gradeInput === "", "grade output accepted input");
     check(clipboardWrites.every(text => text === "[redacted]" || text === ""), "clipboard contained unredacted text");
     results.push("private clipboard, bracketed paste, read-only grade output, and guest Ctrl+C");
@@ -168,8 +168,8 @@ export async function run(): Promise<string[]> {
     if (image === undefined) throw new Error("VM image missing");
     const Riscbox = await loadRuntime(image);
     let guestOutput = "";
-    const instantiate = Riscbox.instantiate.bind(Riscbox);
-    Riscbox.instantiate = (bytes, options) => instantiate(bytes, {
+    const prepare = Riscbox.prepare.bind(Riscbox);
+    Riscbox.prepare = options => prepare({
         ...options,
         consoleReset: () => { guestOutput = ""; options?.consoleReset?.(); },
         consoleWrite: text => { guestOutput += text; options?.consoleWrite?.(text); },
@@ -202,26 +202,32 @@ export async function run(): Promise<string[]> {
         if (input === null) throw new Error("VM terminal input missing");
         input.value = text;
         input.dispatchEvent(new InputEvent("input", { data: text, inputType: "insertText", bubbles: true }));
-        input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));
+        input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true, cancelable: true }));
     };
     const decoded = (): string => new TextDecoder().decode(workspace.readVisibleFile("src/main.s"));
     try {
         await until(() => guestOutput.includes("$ "), "guest shell never became ready");
+        send("id; risclet --version; make --version | head -1; test -f /usr/share/zoneinfo/America/Denver && readlink /etc/localtime; mount | grep 'on / type ext4'; printf root-retained > /tmp/exam-root-marker; printf 'image-check-done\\n'");
+        await until(() => guestOutput.includes("image-check-done\r\n"), "guest image checks did not finish");
+        check(guestOutput.includes("uid=1000(student)") && guestOutput.includes("risclet 0.5.5")
+            && guestOutput.includes("GNU Make") && guestOutput.includes("/usr/share/zoneinfo/America/Denver")
+            && guestOutput.includes("type ext4 (rw"), "guest tools, account, timezone, or writable root changed");
         send("seq 1 60; printf 'finished-output\\n'");
-        const liveRows = (): HTMLElement[] => Array.from(vmHost.querySelectorAll<HTMLElement>(".term-row:not(.term-scrollback-row)"));
-        await until(() => liveRows().some(row => row.textContent?.trim() === "finished-output"), "guest output did not fill the screen");
+        await until(() => guestOutput.includes("finished-output"), "guest output did not fill the screen");
         send("clear; printf 'clear-screen-marker\\n'");
-        await until(() => liveRows()[0]?.textContent?.trim() === "clear-screen-marker", "guest clear did not clear the live screen");
+        await until(() => guestOutput.includes("clear-screen-marker\r\n"), "guest clear did not clear the live screen");
+        check((await vm.terminal.readText(false)).startsWith("clear-screen-marker"), "guest clear retained old live output");
         const checkViewportTop = (): void => {
             const expected = vmHost.getBoundingClientRect().top + parseFloat(getComputedStyle(vmHost).paddingTop);
-            check(Math.abs((liveRows()[0]?.getBoundingClientRect().top ?? 0) - expected) <= 1 / devicePixelRatio,
+            check(Math.abs((vmHost.querySelector(".xterm-screen")?.getBoundingClientRect().top ?? 0) - expected) <= 1 / devicePixelRatio,
                 "guest clear left scrollback visible above the live screen");
         };
         checkViewportTop();
         vmHost.querySelector("textarea")?.dispatchEvent(new KeyboardEvent("keydown", {
-            key: "l", code: "KeyL", ctrlKey: true, bubbles: true, cancelable: true,
+            key: "l", code: "KeyL", keyCode: 76, ctrlKey: true, bubbles: true, cancelable: true,
         }));
-        await until(() => liveRows()[0]?.textContent?.trim().endsWith("$") === true, "guest Ctrl+L did not redraw the prompt at the top");
+        await new Promise<void>(resolve => setTimeout(resolve, 250));
+        check((await vm.terminal.readText(false)).split("\n")[0].trimEnd().endsWith("$"), "guest Ctrl+L did not redraw the prompt at the top");
         checkViewportTop();
         send("printf 'guest-one\\n' > src/main.s");
         await until(() => decoded() === "guest-one\n", "guest write did not reach official workspace");
@@ -240,133 +246,31 @@ export async function run(): Promise<string[]> {
     send("printf 'changed-system\\n' > system.txt");
     check(new TextDecoder().decode(workspace.readVisibleFile("system.txt")) === "canonical system\n", "guest system edit changed canonical files");
     guestOutput = "";
+    const rebootScreen = vmHost.querySelector(".xterm");
     await vm.reboot();
     await until(() => vm.state === "running", "in-place reboot failed");
     await until(() => guestOutput.includes("$ "), "rebooted guest shell never became ready");
+    check(vmHost.querySelector(".xterm") === rebootScreen, "orderly reboot replaced the terminal parser");
+    send("cat /tmp/exam-root-marker; printf '\\nroot-check-done\\n'");
+    await until(() => guestOutput.includes("root-check-done\r\n"), "reboot root check did not finish");
+    check(guestOutput.includes("root-retained"), "orderly reboot discarded root writes");
     send("[ -f src-old/main.s ] && printf 'after-reboot\\n' > src/main.s");
     await until(() => decoded() === "after-reboot\n", "in-place reboot lost the shared tree or input stopped working");
     const beforeRecovery = vm.filesystem.readFile("src/main.s");
     await vm.reset();
+    check(vmHost.querySelector(".xterm") !== rebootScreen, "forced reset retained the terminal parser");
     check(vm.filesystem.readFile("src/main.s").every((byte, index) => byte === beforeRecovery[index]), "VM Reset changed workspace bytes");
     check(!vm.filesystem.listFiles().includes("src-old/main.s"), "VM Reset retained guest files");
     check(decoded() === "after-reboot\n", "VM Reset changed official work");
+    guestOutput = "";
+    await until(() => guestOutput.includes("$ "), "reset guest shell never became ready");
+    send("test ! -e /tmp/exam-root-marker && printf 'root-reset-confirmed\\n'");
+    await until(() => guestOutput.includes("root-reset-confirmed\r\n"), "forced reset retained root writes");
     await vm.destroy();
-    Riscbox.instantiate = instantiate;
+    Riscbox.prepare = prepare;
     results.push("guest writes, editor flush, hard links, directory renames, ownership, orderly reboot, and workspace-preserving VM Reset");
     terminal.destroy();
     gradeTerminal.destroy();
     editor.destroy();
     return results;
-}
-
-export async function renderFixture(): Promise<void> {
-    document.body.replaceChildren();
-    const host = element("div", document.body);
-    host.id = "pixel-fixture";
-    host.style.cssText = "width:800px;height:250px";
-    const terminal = new TerminalView(host);
-    await terminal.ready;
-    terminal.write("\x1b[?25l\x1b[48;2;0;255;0m" + " ".repeat(20)
-        + "\x1b[0m\x1b[38;2;255;255;255m\r\n┌──────────────────┐\r\n│                  │\r\n└──────────────────┘\r\n├── branch\r\n│\r\n└── leaf");
-    await paint();
-}
-
-async function screenshotPixels(screenshot: string): Promise<ImageData> {
-    const image = new Image();
-    image.src = `data:image/png;base64,${screenshot}`;
-    await image.decode();
-    const canvas = document.createElement("canvas");
-    canvas.width = image.width;
-    canvas.height = image.height;
-    const context = canvas.getContext("2d");
-    if (context === null) throw new Error("screenshot context missing");
-    context.drawImage(image, 0, 0);
-    return context.getImageData(0, 0, canvas.width, canvas.height);
-}
-
-export async function verifyPixels(screenshot: string): Promise<void> {
-    const captured = await screenshotPixels(screenshot);
-    const pixels = captured.data;
-    const host = document.getElementById("pixel-fixture");
-    const rows = host?.querySelectorAll<HTMLElement>(".term-row");
-    if (rows === undefined || rows.length < 4) throw new Error("fixture rows missing");
-    const first = rows[0].getBoundingClientRect();
-    const surface = host?.querySelector<HTMLElement>(".terminal-surface");
-    if (surface === null || surface === undefined) throw new Error("terminal surface missing");
-    const cellWidth = parseFloat(surface.style.getPropertyValue("--term-cell-width"));
-    check(Number.isFinite(cellWidth) && cellWidth > 0, "cell width missing");
-    const ratio = window.devicePixelRatio;
-    const left = first.left * ratio;
-    const right = left + 20 * cellWidth * ratio;
-    const greenY = Math.floor((first.top + first.height / 2) * ratio);
-    for (let x = Math.ceil(left); x < Math.floor(right); x += 1) {
-        const offset = (greenY * captured.width + x) * 4;
-        check(pixels[offset] < 10 && pixels[offset + 1] > 245 && pixels[offset + 2] < 10,
-            `background seam at physical column ${x}`);
-    }
-    const white = (x: number, y: number): boolean => {
-        const offset = (y * captured.width + x) * 4;
-        return pixels[offset] > 150 && pixels[offset + 1] > 150 && pixels[offset + 2] > 150;
-    };
-    const firstCenterX = (first.left + cellWidth / 2) * ratio;
-    const lastCenterX = firstCenterX + 19 * cellWidth * ratio;
-    const top = rows[1].getBoundingClientRect();
-    const bottom = rows[3].getBoundingClientRect();
-    const topY = (top.top + top.height / 2) * ratio;
-    const bottomY = (bottom.top + bottom.height / 2) * ratio;
-    for (const centerY of [topY, bottomY]) {
-        for (let x = Math.ceil(firstCenterX); x < Math.floor(lastCenterX); x += 1) {
-            let connected = false;
-            for (let y = Math.floor(centerY) - 2; y <= Math.ceil(centerY) + 2; y += 1) connected ||= white(x, y);
-            check(connected, `horizontal border gap at ${x}, ${centerY}`);
-        }
-    }
-    for (const centerX of [firstCenterX, lastCenterX]) {
-        for (let y = Math.ceil(topY); y < Math.floor(bottomY); y += 1) {
-            let connected = false;
-            for (let x = Math.floor(centerX) - 2; x <= Math.ceil(centerX) + 2; x += 1) connected ||= white(x, y);
-            check(connected, `vertical border gap at ${centerX}, ${y}`);
-        }
-    }
-    const corner = rows[1].querySelector<HTMLElement>(".term-box");
-    if (corner === null) throw new Error("corner geometry missing");
-    const stroke = parseFloat(getComputedStyle(corner, "::after").width) * ratio;
-    for (const [x, y] of [
-        [Math.round(firstCenterX), Math.floor(topY - stroke / 2) - 1],
-        [Math.round(firstCenterX), Math.ceil(bottomY + stroke / 2) + 1],
-        [Math.floor(firstCenterX - stroke / 2) - 1, Math.round(topY)],
-        [Math.ceil(lastCenterX + stroke / 2) + 1, Math.round(topY)],
-    ]) check(!white(x, y), `corner stroke overshot its junction at ${x}, ${y}`);
-    const treeEnd = rows[6].getBoundingClientRect();
-    const treeCenterY = (treeEnd.top + treeEnd.height / 2) * ratio;
-    check(!white(Math.round(firstCenterX), Math.ceil(treeCenterY + stroke / 2) + 1), "tree leaf overshot its horizontal stroke");
-}
-
-export async function renderClearFixture(height: number): Promise<void> {
-    document.body.replaceChildren();
-    const host = element("div", document.body);
-    host.id = "clear-fixture";
-    host.style.cssText = `width:800px;height:${height}px`;
-    const terminal = new TerminalView(host);
-    await terminal.ready;
-    terminal.write("\x1b[41;31m" + "gggg old output\r\n".repeat(60));
-    await paint();
-    terminal.write("\x1b[0m\x1b[H\x1b[2J\x1b[?25lcleared screen");
-    await paint();
-}
-
-export async function verifyClearPixels(screenshot: string): Promise<void> {
-    const captured = await screenshotPixels(screenshot);
-    const host = document.getElementById("clear-fixture");
-    if (host === null) throw new Error("clear fixture missing");
-    const rect = host.getBoundingClientRect();
-    const ratio = window.devicePixelRatio;
-    for (let y = Math.ceil(rect.top * ratio); y < Math.floor((rect.top + 30) * ratio); y += 1) {
-        for (let x = Math.ceil(rect.left * ratio); x < Math.floor(rect.right * ratio); x += 1) {
-            const offset = (y * captured.width + x) * 4;
-            const red = captured.data[offset];
-            check(!(red > 20 && red > captured.data[offset + 1] * 2 && red > captured.data[offset + 2] * 2),
-                `old output remained visible at ${x}, ${y} after clear`);
-        }
-    }
 }

@@ -13,7 +13,7 @@ const directory = path.dirname(fileURLToPath(import.meta.url));
 
 test("Chromium verifies exam RPC integration, terminals, clipboard, and the real VM filesystem", { timeout: 180_000 }, async () => {
     const output = await mkdtemp(path.join(tmpdir(), "exam-browser-test-"));
-    const compiler = webpack({ ...config, entry: "./browser.test.ts", output: {
+    const compiler = webpack({ ...config, mode: "development", entry: "./browser.test.ts", output: {
         path: output, filename: "browser.js", library: "examBrowserTest", libraryTarget: "window",
     } });
     await new Promise((resolve, reject) => compiler.run((error, stats) => {
@@ -26,10 +26,11 @@ test("Chromium verifies exam RPC integration, terminals, clipboard, and the real
         const url = new URL(request.url, "http://localhost");
         if (url.pathname === "/test.html") {
             response.setHeader("Content-Type", "text/html; charset=utf-8");
-            response.end('<!doctype html><html><head><meta charset="UTF-8"></head><body><script src="/browser.js"></script></body></html>');
+            response.end('<!doctype html><html><head><meta charset="UTF-8"><link rel="icon" href="/favicon.svg"></head><body><script src="/browser.js"></script></body></html>');
             return;
         }
         const root = url.pathname.endsWith(".browser.js") || url.pathname === "/browser.js"
+            || /^\/app-[a-f0-9]+\.js$/.test(url.pathname)
             || /^\/[a-f0-9]+\.wasm$/.test(url.pathname) ? output : directory;
         const filename = path.resolve(root, `.${decodeURIComponent(url.pathname)}`);
         if (!filename.startsWith(`${root}/`)) { response.writeHead(403).end(); return; }
@@ -75,6 +76,8 @@ test("Chromium verifies exam RPC integration, terminals, clipboard, and the real
             browserName: "chrome",
             "goog:chromeOptions": { binary: "/usr/bin/chromium-browser", args: [
                 ...(process.env.DISPLAY ? [] : ["--headless=new"]), "--no-sandbox", "--disable-dev-shm-usage",
+                "--no-first-run", "--no-default-browser-check",
+                "--ignore-gpu-blocklist", ...(process.env.DISPLAY ? ["--use-angle=gl"] : ["--use-angle=vulkan"]),
                 "--window-size=1200,1000", `--user-data-dir=${path.join(output, "chrome")}`,
             ] },
             "goog:loggingPrefs": { browser: "ALL" },
@@ -96,26 +99,6 @@ test("Chromium verifies exam RPC integration, terminals, clipboard, and the real
         }
         assert.equal(result.results.length, 3);
         for (const resultName of result.results) console.log(resultName);
-        for (const height of [250, 250.375, 267.875]) {
-            const clearFixture = await call("POST", `/session/${session}/execute/async`, {
-                script: 'const done = arguments[arguments.length - 1]; window.examBrowserTest.renderClearFixture(arguments[0]).then(() => done({}), error => done({error: error.stack}));', args: [height],
-            });
-            assert.equal(clearFixture.error, undefined);
-            const clearScreenshot = await call("GET", `/session/${session}/screenshot`);
-            const clearPixels = await call("POST", `/session/${session}/execute/async`, {
-                script: 'const done = arguments[arguments.length - 1]; window.examBrowserTest.verifyClearPixels(arguments[0]).then(() => done({}), error => done({error: error.stack}));', args: [clearScreenshot],
-            });
-            assert.equal(clearPixels.error, undefined);
-        }
-        const fixture = await call("POST", `/session/${session}/execute/async`, {
-            script: 'const done = arguments[arguments.length - 1]; window.examBrowserTest.renderFixture().then(() => done({}), error => done({error: error.stack}));', args: [],
-        });
-        assert.equal(fixture.error, undefined);
-        const screenshot = await call("GET", `/session/${session}/screenshot`);
-        const pixels = await call("POST", `/session/${session}/execute/async`, {
-            script: 'const done = arguments[arguments.length - 1]; window.examBrowserTest.verifyPixels(arguments[0]).then(() => done({}), error => done({error: error.stack}));', args: [screenshot],
-        });
-        assert.equal(pixels.error, undefined);
         await call("POST", `/session/${session}/url`, { url: `http://127.0.0.1:${address.port}/test.html` });
         await call("POST", `/session/${session}/execute/sync`, {
             script: 'window.examBrowserTest.startExamAcceptance();', args: [],

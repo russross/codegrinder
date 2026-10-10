@@ -1,4 +1,6 @@
 LICENSE
+build/
+image/risclet-*.json
 README.md
 image/drive-*
 image/linux-*.gz

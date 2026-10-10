@@ -5,7 +5,7 @@ This is a simple, single-page app with minimal dependencies. The
 primary external libraries are:
 
 * CodeMirror editor widget
-* Wterm terminal widget, using its Ghostty backend
+* xterm 6 terminal widget with Fit and WebGL addons, bundled locally
 * split.js split window panes with draggable gutters
 
 The app is launched on the same server and port as a gRPC server
@@ -58,27 +58,20 @@ shortcuts are also supported. Native context-menu Paste availability depends
 on whether the browser permitted the system marker to be written.
 
 Middle-button copying/pasting and HTML drag/drop are blocked inside the app.
-Wterm's clipboard events are intercepted by the document policy before its
+xterm's clipboard events are intercepted by the document policy before its
 own handlers. Private terminal paste respects bracketed-paste mode and removes
 escape characters inside a bracketed payload. Grade output rejects input.
 Application clipboard requests do not access the system clipboard.
 
-Both terminals use separate Ghostty cores with 64 KiB history budgets.
-Wterm renders text and backgrounds in the DOM, with geometric CSS drawing for
-supported box characters. Painting is scheduled when output changes rather
-than continuously polling the terminal. Fractional display scaling and browser
-zoom are covered by browser rendering checks. Straight box strokes overlap
-only at connected cell edges and stop at their junction boundaries. A build
-integration supplies each box character's arm directions to CSS and requires
-review if Wterm changes that renderer. The terminal grid fills partial-row
-space below the live screen so bottom alignment does not expose scrollback
-above the screen after clearing. Padding belongs to the outer host, while a
-separate inner surface owns scrolling and clips history at the viewport edge.
-Its height uses whole CSS pixels to match browser scroll-height measurements.
-The viewport integration uses the live-screen boundary when following output
-and omits off-screen history overscan at the bottom. This prevents history
-paint from bleeding across fractional physical-pixel edges. Scrolling up
-retains the usual history window and overscan.
+Both terminals use separate xterm parsers with 1,000 scrollback lines.
+WebGL draws connected box characters at device-pixel cell boundaries; the DOM
+renderer remains available when WebGL is unavailable. Painting follows output
+changes. Fractional scaling, scrolling, and repeated resets have browser tests.
+Padding belongs to the outer host, and the screen remains top-aligned with
+unused fractional rows below it. Forced reset replaces the entire parser and
+renderer, retiring queued output, protocol replies, and incomplete UTF-8.
+Orderly reboot preserves the parser and history. Guest OSC 52 requests are
+consumed without accessing the system clipboard.
 Pane resizing remains available. Browser restrictions can prevent system
 clipboard writes, and the page cannot control Linux PRIMARY selection
 export or clipboard operations performed outside the page.
@@ -214,7 +207,7 @@ Here is the complete layout of the UI:
                     images refresh the rendered instructions.
                 *   This tab is selected by default when the page
                     first renders or the active problem is changed
-            *   Grade output: the Ghostty instance fills the space
+            *   Grade output: the xterm instance fills the space
                 *   The terminal is readonly for the user. It shows
                     output and status info but accepts no user input
                 *   The cursor does not blink.
@@ -228,8 +221,8 @@ Here is the complete layout of the UI:
                     time there is any output to the terminal
                 *   The terminal fits its container and resizes
                     dynamically.
-                *   The terminal has a 64 KiB scrollback budget.
-            *   VM: an interactive Ghostty instance connected to a
+                *   The terminal retains 1,000 scrollback lines.
+            *   VM: an interactive xterm instance connected to a
                 browser-hosted Alpine RISC-V virtual machine
                 *   This tab is present only when an image is configured
                     for the active problem type. The current configuration
@@ -238,16 +231,17 @@ Here is the complete layout of the UI:
                     Instructions without booting. Selecting VM or Boot VM boots
                     it. Without instructions, VM is the default tab and boots.
                     Selecting the VM tab again does not reboot an active VM.
-                *   Both terminals use 18px Latin Modern Mono with a
-                    monospace fallback. The VM uses a black background and
+                *   Both terminals and the editor use Latin Modern Mono with a
+                    monospace fallback and the browser's initial preferred font size.
+                    The VM uses a black background and
                     the demo's ANSI palette. The VM cursor blinks; grade
                     output hides its cursor and rejects input.
                 *   Boot VM appears at the right edge of the main action bar.
                     Once booted, the control becomes Reboot VM.
                 *   Reboot requests orderly guest restart and retains the VM's
                     session-local root-disk changes and shared 9p tree.
-                    It clears terminal output, scrollback, selection, and
-                    pending input.
+                    It preserves terminal output, scrollback, and parser state
+                    while retiring pending input.
                     During shutdown the button stays enabled, changes its label
                     to Reset VM, and keeps the same width across Boot VM,
                     Reboot VM, and Reset VM labels. After restart it
@@ -265,7 +259,7 @@ Here is the complete layout of the UI:
                     control. Boot/Reboot is disabled while loading or resetting.
                 *   The terminal uses the guest's virtio console. The guest
                     receives terminal-size changes without rebooting. The
-                    terminal uses Wterm's DOM renderer so box-drawing
+                    terminal uses xterm's WebGL renderer so box-drawing
                     lines remain connected. The guest mounts the shared tree
                     at `/home/student`.
                 *   Guest writes to student-owned paths are reflected in

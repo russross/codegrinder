@@ -1,0 +1,4 @@
+::sysinit:/etc/init.d/rcS
+::respawn:/etc/init.d/getty-console
+::ctrlaltdel:/sbin/reboot
+::shutdown:/bin/umount -a -r

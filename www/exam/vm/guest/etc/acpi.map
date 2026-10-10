@@ -1,0 +1,2 @@
+EV_KEY 0x01 KEY_POWER 116 1 shutdown
+EV_KEY 0x01 KEY_RESTART 408 1 reboot

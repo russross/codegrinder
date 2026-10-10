@@ -6,10 +6,11 @@
   "main": "codegrinder_grpc_web_pb.js",
   "scripts": {
     "proto:generate": "./proto-gen.sh",
-    "build": "npm run proto:generate && webpack",
-    "test": "node --experimental-transform-types --test saving.test.mjs workspace.test.mjs",
-    "typecheck": "./client-core/node_modules/.bin/tsc -p tsconfig.json --noEmit",
-    "test:browser": "node --test browser.test.mjs"
+    "build": "make",
+    "test": "node --experimental-transform-types --test saving.test.mjs workspace.test.mjs tests/input.test.mjs tests/workspace.test.mjs tests/publication.test.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:browser": "node --test browser.test.mjs",
+    "test:widgets": "node --test --test-concurrency=1 tests/session.test.mjs tests/terminal.test.mjs tests/highlighting.test.mjs tests/instructions.test.mjs tests/fallback.test.mjs"
   },
   "keywords": [],
   "author": "",
@@ -18,16 +19,30 @@
     "@protobuf-ts/grpcweb-transport": "^2.11.1",
     "@protobuf-ts/runtime": "^2.11.1",
     "@protobuf-ts/runtime-rpc": "^2.11.1",
-    "css-loader": "^7.1.5",
     "split.js": "^1.6.5",
-    "style-loader": "^4.0.0",
-    "webpack": "^5.110.3",
-    "webpack-cli": "^7.2.3"
+    "@codemirror/commands": "^6.11.1",
+    "@codemirror/lang-cpp": "^6.0.3",
+    "@codemirror/lang-markdown": "^6.5.2",
+    "@codemirror/lang-python": "^6.2.1",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/legacy-modes": "^6.5.4",
+    "@codemirror/state": "^6.7.5",
+    "@codemirror/view": "^6.43.12",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/addon-webgl": "0.19.0",
+    "@xterm/xterm": "6.0.0",
+    "codemirror": "^6.0.2",
+    "commonmark": "^0.31.2"
   },
   "devDependencies": {
     "@protobuf-ts/plugin": "^2.11.1",
     "grpc-tools": "^1.13.1",
     "ts-loader": "^9.6.2",
-    "typescript": "^5.9.3"
-  }
+    "typescript": "^5.9.3",
+    "css-loader": "^7.1.5",
+    "style-loader": "^4.0.0",
+    "webpack": "^5.110.3",
+    "webpack-cli": "^7.2.3"
+  },
+  "private": true
 }

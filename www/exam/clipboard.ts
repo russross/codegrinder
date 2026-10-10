@@ -1,6 +1,6 @@
 import { EditorSelection } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
-import type { TerminalView } from "./client-core/terminal";
+import type { TerminalView } from "./terminal";
 
 interface ClipboardContent {
     readonly text: string;

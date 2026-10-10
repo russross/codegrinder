@@ -2,25 +2,29 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import test from "node:test";
-import ts from "./client-core/node_modules/typescript/lib/typescript.js";
+import ts from "./node_modules/typescript/lib/typescript.js";
 
 // Load the exam adapter and shared path rules without browser-only editor imports.
 const compile = async path => ts.transpileModule(await readFile(new URL(path, import.meta.url), "utf8"),
     { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 } }).outputText;
 const dataModule = source => `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
-const shared = dataModule(await compile("./client-core/workspace.ts"));
-const source = (await compile("./workspace.ts")).replace('"./client-core/workspace"', JSON.stringify(shared));
+const shared = dataModule(await compile("./workspace.ts"));
+const source = (await compile("./problem-workspace.ts")).replace('"./workspace"', JSON.stringify(shared));
 const { ProblemWorkspace } = await import(dataModule(source));
-const { Riscbox } = createRequire(import.meta.url)("./vm/runtime/riscbox.js");
+const assets = JSON.parse(await readFile(new URL("./vm/build/assets.json", import.meta.url), "utf8"));
+const { Riscbox } = createRequire(import.meta.url)(`./${assets.runtimeUrl}`);
 const encode = text => new TextEncoder().encode(text);
 
 async function createRuntime() {
-    const runtime = await Riscbox.instantiate(await readFile(new URL("./vm/runtime/riscbox.wasm", import.meta.url)), {
-        fetch: async () => new Response(Uint8Array.of(0x73, 0, 0x10, 0)),
+    const wasm = await readFile(new URL(assets.wasmUrl, import.meta.url));
+    return Riscbox.prepare({
+        wasmUrl: "https://fixture.invalid/riscbox.wasm",
+        fetch: async url => new Response(String(url).endsWith(".wasm") ? wasm : Uint8Array.of(0x73, 0, 0x10, 0),
+            { headers: { "Content-Type": "application/wasm" } }),
+        config: { value: { version: 1, machine: "riscv64", memory_size: 32,
+            bios: "firmware.bin", console: "uart", fs0: { server: "workspace", tag: "workspace" } },
+            baseUrl: "https://fixture.invalid/" },
     });
-    await runtime.prepareResolved({ version: 1, machine: "riscv64", memory_size: 32,
-        bios: "firmware.bin", console: "uart", fs0: { server: "workspace", tag: "workspace" } });
-    return runtime;
 }
 
 // Live guest artifacts and official submission eligibility are separate policies.

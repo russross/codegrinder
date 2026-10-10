@@ -1,34 +1,41 @@
-Shared client build and checks
-==============================
+Exam build and checks
+=====================
 
-Exam owns `www/exam/client-core/` and compiles its source directly. Other clients
-mount that directory with sshfs and follow its self-contained `README.md` and
-`CHANGELOG.md`. The matching runtime artifacts and checksums live under
-`www/exam/vm/runtime/`; the existing guest image stays under `vm/image/`.
+1. Build from the repository root with `make exam`.
+2. Check types with `npm --prefix www/exam run typecheck`.
+3. Run persistence and real-WASM tests with `npm --prefix www/exam test`.
+4. Run editor, instructions, highlighter, and terminal browser tests with
+   `npm --prefix www/exam run test:widgets`.
+5. Run the complete exam and real guest checks with
+   `npm --prefix www/exam run test:browser`.
 
-From the repository root:
+Use Alpine system Node 24 and npm. The Makefile installs the locked dependencies,
+prepares the VM assets, generates protobuf bindings, checks types, and bundles
+all client libraries locally. No CDN is required. Browser tests use Chromium
+and ChromeDriver with disposable profiles, headed when DISPLAY is available.
+The terminal pixel tests also need working WebGL; DOM fallback has its own test.
+Headless pixel checks on Alpine can use Mesa's `mesa-vulkan-swrast` package.
+Pixel checks live in the widget suite; the full-page suite checks RPC and guest
+behavior without duplicating those renderer fixtures.
 
-1. Install with `npm --prefix www/exam/client-core ci` and `npm --prefix www/exam ci`.
-2. Check with `npm --prefix www/exam run typecheck` and
-    `www/exam/client-core/node_modules/.bin/tsc -p www/exam/client-core-check.json --noEmit`.
-3. Test the shared library with `RISCBOX_CLIENT_RUNTIME="$PWD/www/exam/vm/runtime/riscbox.js" RISCBOX_CLIENT_WASM="$PWD/www/exam/vm/runtime/riscbox.wasm" npm --prefix www/exam/client-core test`.
-4. Run exam checks with `npm --prefix www/exam test` and, from `www/exam/`,
-    `npm run test:browser`. The latter checks a real guest and the complete exam
-    page with a deterministic protobuf RPC peer; it does not alter server data.
-5. Build with `make exam`. Serve the entire `www/exam/dist/` directory, including
-    generated JavaScript chunks and WASM, along with the runtime and guest assets.
+The app owns its editor, terminal, workspace, and VM modules directly.
+`problem-workspace.ts` maintains official files and submission revisions;
+`workspace.ts` handles filesystem population and snapshots. Compare these
+modules with the Risclet demo manually when considering future updates.
 
-Use the Alpine system Node 24 and npm. Browser tests use a temporary profile and
-close their browser processes. Shared tests invoke `google-chrome`; an installed
-Chromium can be exposed under that name with a temporary PATH wrapper. Exam
-browser tests use Chromedriver and `/usr/bin/chromium-browser`.
+Image preparation requires QEMU for RISC-V, fakeroot, cpio, and e2fsprogs.
+The `vm/Makefile` caches downloads and rebuilds the ext4 image only when its
+release versions, guest files, or image preparation inputs change. UI edits do
+not rerun package installation or disk splitting. See `vm/README.md`.
 
-Make shared improvements directly in `client-core`, record API and policy
-changes in its changelog, and rerun these checks. The other client adapts its
-host integration from that changelog. Keep runtime aliases in host TypeScript
-configs; mounted consumers need no CodeGrinder sources or distributed bundle.
+`index.template.html` is the entry-page source; the build replaces `index.html`
+after publishing its assets. Deploy that entry, the complete `dist/` directory,
+`vm/runtime/`, and `vm/image/` together. Keep existing immutable assets when
+copying a new deployment so cached pages and open tabs can load their original
+bytes. HTML should revalidate; content-named files and release directories may
+use long-lived immutable caching.
 
-Clicking Reboot VM again during shutdown uses the shared reset operation with
-Exam's current official files; there is no separate VM reset control.
-It discards disk overlays and guest-only namespace entries without flushing
-editor text or sending RPCs. CodeGrinder file Reset remains independent.
+Reboot preserves terminal history and the guest disk overlay. Clicking Reset VM
+during shutdown force-halts, replaces the terminal parser, discards the overlay,
+and restores official workspace files without flushing editor text or sending
+RPCs. CodeGrinder file Reset remains independent.

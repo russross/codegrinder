@@ -1,0 +1,17 @@
+.terminal-vm {
+    padding: 4px;
+    box-sizing: border-box;
+    background: #000000;
+}
+
+/* The screen starts at the top; unused fractional rows remain black below it. */
+.terminal-surface {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+}
+
+.terminal-surface .xterm {
+    height: 100%;
+    padding: 0;
+}

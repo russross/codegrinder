@@ -1,4 +1,0 @@
-{
-  "extends": "./tsconfig.json",
-  "include": ["client-core/*.ts", "client-core/*.d.ts", "client-core/tests/*.ts"]
-}

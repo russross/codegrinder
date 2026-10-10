@@ -1,0 +1,36 @@
+#!/bin/sh
+set -eu
+
+# QEMU provides networking only while preparing the disposable runtime image.
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+mkdir -p /mnt/output
+mount -t 9p -o trans=virtio,version=9p2000.L output /mnt/output
+trap 'echo "guest preparation failed" > /mnt/output/failed; poweroff -f' EXIT
+ip link set eth0 up
+udhcpc -q -n -i eth0
+apk add --no-cache make tzdata
+
+# The exam account autologins into the host-owned workspace with local course time.
+addgroup -g 1000 student
+adduser -D -u 1000 -G student -h /home/student -g Student student
+passwd -d student
+passwd -l root
+mkdir -p /dev/pts /run /proc /sys /tmp /mnt /home/student
+chown student:student /home/student
+chmod 1777 /tmp
+ln -sf /usr/share/zoneinfo/America/Denver /etc/localtime
+printf '/dev/vda / ext4 rw,noatime 0 0\n' > /etc/fstab
+
+# Export filesystem bytes without transient mounts or the preparation program.
+rm -rf /var/cache/apk/*
+rm /sbin/exam-prepare
+tar -C / -cf /mnt/output/rootfs.tar \
+    --exclude='./dev/*' --exclude='./proc/*' --exclude='./sys/*' \
+    --exclude='./tmp/*' --exclude='./run/*' --exclude='./mnt/*' \
+    ./bin ./dev ./etc ./home ./lib ./mnt ./proc ./root ./run ./sbin ./sys ./tmp ./usr ./var
+touch /mnt/output/complete
+trap - EXIT
+sync
+poweroff -f

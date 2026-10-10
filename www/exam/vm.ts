@@ -1,6 +1,7 @@
 import type { Riscbox } from "@riscbox/runtime";
-import { VmSession } from "./client-core/vm-session";
-import type { VmImage, VmSessionOptions, VmTarget, VmTransition } from "./client-core/vm-session";
+import { VmSession } from "./vm-session";
+import type { VmImage, VmSessionOptions, VmTarget, VmTransition } from "./vm-session";
+import assets from "./vm/build/assets.json";
 
 export const EXAM_TRANSITION: VmTransition = {
     workspace: "files", poweroff: "force", discardDiskChanges: true, boot: false,
@@ -28,7 +29,7 @@ export function loadRuntime(image: VmImage): Promise<typeof Riscbox> {
     return loading;
 }
 
-// Exam owns image selection; shared sessions compare the complete descriptor.
+// Asset identity is fixed when this application bundle is built.
 export function vmImageForProblemType(problemType: string): VmImage | undefined {
     if (problemType !== "riscv") return undefined;
     const location = new URL(window.location.href);
@@ -36,9 +37,9 @@ export function vmImageForProblemType(problemType: string): VmImage | undefined 
     if (!location.pathname.endsWith("/") && !last.includes(".")) location.pathname += "/";
     const base = new URL(".", location);
     return Object.freeze({
-        configUrl: new URL("vm/image/risclet.cfg", base).href,
-        runtimeUrl: new URL("vm/runtime/riscbox.js?v=shared-20261002", base).href,
-        wasmUrl: new URL("vm/runtime/riscbox.wasm?v=shared-20261002", base).href,
+        configUrl: new URL(assets.configUrl, base).href,
+        runtimeUrl: new URL(assets.runtimeUrl, base).href,
+        wasmUrl: new URL(assets.wasmUrl, base).href,
         memoryMiB: 256,
         shareName: "workspace",
     });

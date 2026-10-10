@@ -71,7 +71,7 @@ views use canonical bytes even when the guest changes or removes those paths.
 Host reads and writes are synchronous and copy their bytes. Notifications from
 both host and guest update official paths, including hard-link aliases and
 paths below renamed directories. Identical bytes do not increment submission
-revisions. The shared editor owns its buffered revisions and write failures;
+revisions. The editor owns its buffered revisions and write failures;
 the application owns server acknowledgements and retry deadlines.
 
 The workspace maintains a monotonically increasing student revision. A Save or
@@ -89,7 +89,7 @@ queue. Each request captures its problem and step's save state. A request for a
 replaced step is ignored; a redundant workspace save becomes a no-op when it
 reaches the front of the queue.
 
-The shared editor debounces its buffered changes for thirty seconds after the
+The editor debounces its buffered changes for thirty seconds after the
 latest edit. Blur and timer flushes immediately enqueue server persistence.
 Each problem separately debounces guest and returned-file changes. Explicit
 Save and file selection flush the editor before entering the server queue.
@@ -183,8 +183,8 @@ click during shutdown provides forced recovery. Selecting either terminal tab fo
 that terminal. VM input, boot, and reboot explicitly flush the editor into the
 local filesystem before proceeding; they do not wait for TA persistence.
 
-First selection loads the versioned `vm/runtime/riscbox.js` and matching WASM.
-The shared session prepares the configured HTTP-backed disks and named
+First selection loads the release-versioned Riscbox adapter and matching WASM.
+The VM session prepares the configured HTTP-backed disk and named
 `workspace` share without booting. Same-image selections discard disk writes.
 The guest terminal is
 connected through its virtio console.
@@ -192,11 +192,11 @@ connected through its virtio console.
 Terminal input is UTF-8 encoded and copied into a queue. Each browser task
 offers at most 1024 bytes through `consoleInput` and retains bytes that the
 guest FIFO did not accept. Reset and teardown clear queued input and invalidate
-input waiting for editor writes. Console output is passed to Wterm with a
-Ghostty core. Changes to its row or column count call `consoleResize`.
+input waiting for editor writes. Console output is passed to xterm.
+Changes to its row or column count call `consoleResize`.
 The VM cursor blinks; grade output hides its cursor. Reset clears the screen, scrollback, and
-selection without replacing the parser used by Wterm's renderer and input
-components.
+selection by replacing the parser and renderer, which retires queued old output.
+Orderly reboot retains the parser and terminal history.
 
 Reboot VM flushes the editor and requests orderly guest reboot. The button stays
 enabled and changes its label to Reset VM while terminal input is blocked.
