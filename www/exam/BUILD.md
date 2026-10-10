@@ -2,12 +2,12 @@ Exam build and checks
 =====================
 
 1. Build from the repository root with `make exam`.
-2. Check types with `npm --prefix www/exam run typecheck`.
-3. Run persistence and real-WASM tests with `npm --prefix www/exam test`.
+2. Check types with `make -C www/exam check`.
+3. Run persistence and real-WASM tests with `make -C www/exam test`.
 4. Run editor, instructions, highlighter, and terminal browser tests with
-   `npm --prefix www/exam run test:widgets`.
+   `make -C www/exam test-widgets`.
 5. Run the complete exam and real guest checks with
-   `npm --prefix www/exam run test:browser`.
+   `make -C www/exam test-browser`.
 
 Use Alpine system Node 24 and npm. The Makefile installs the locked dependencies,
 prepares the VM assets, generates protobuf bindings, checks types, and bundles
@@ -17,6 +17,14 @@ The terminal pixel tests also need working WebGL; DOM fallback has its own test.
 Headless pixel checks on Alpine can use Mesa's `mesa-vulkan-swrast` package.
 Pixel checks live in the widget suite; the full-page suite checks RPC and guest
 behavior without duplicating those renderer fixtures.
+
+Select tests for the affected modules and boundaries. Do not rerun Rust tests
+for UI-only changes. Use incremental builds without cleaning first; unreliable
+incremental rules must be fixed. `make -C www/exam mostlyclean` removes build
+caches, generated protobuf sources, and npm dependencies while preserving the
+entry page, published bundles, and every deployed VM asset. `clean` also deletes
+those deployment assets. Build scripts use POSIX shell or dependency-free
+Python and do not need a virtual environment.
 
 The app owns its editor, terminal, workspace, and VM modules directly.
 `problem-workspace.ts` maintains official files and submission revisions;

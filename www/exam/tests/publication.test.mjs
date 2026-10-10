@@ -9,8 +9,8 @@ import test from "node:test";
 // Two deployments must preserve each cached entry's linked immutable bytes.
 test("publication retains assets referenced by older entries and updates the entry last", async () => {
     const directory = await mkdtemp(join(tmpdir(), "exam-publication-"));
-    const publish = fileURLToPath(new URL("../scripts/publish.mjs", import.meta.url));
-    const run = () => spawnSync(process.execPath, [publish], { cwd: directory, encoding: "utf8" });
+    const publish = fileURLToPath(new URL("../scripts/publish.py", import.meta.url));
+    const run = () => spawnSync("python3", [publish], { cwd: directory, encoding: "utf8" });
     try {
         await mkdir(join(directory, "build/ui"), { recursive: true });
         await writeFile(join(directory, "index.template.html"), '{{app}}\n{{style}}\n{{favicon}}\n');

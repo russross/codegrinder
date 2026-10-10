@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "npm run proto:generate && npm run typecheck && webpack",
-    "proto:generate": "./proto-gen.sh",
+    "build": "make",
+    "proto:generate": "make proto",
     "test": "node --test test/*.test.js",
     "test:browser": "node --test browser-test/*.test.js",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.worker.json"

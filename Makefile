@@ -1,93 +1,58 @@
 ROOT_DIR := $(CURDIR)
-PROTO_DIR := $(ROOT_DIR)/protocol
-PROTO_FILE := $(PROTO_DIR)/codegrinder.proto
 DIST_DIR ?= $(ROOT_DIR)/www
 MACOS_SDK_DIR ?= $(ROOT_DIR)/macos-minimal-sdk
-MACOS_AMD64_SDKROOT ?= $(MACOS_SDK_DIR)/sysroot-macos-x86_64
-MACOS_ARM64_SDKROOT ?= $(MACOS_SDK_DIR)/sysroot-macos-arm64
-MACOSX_DEPLOYMENT_TARGET ?= 11.0
+export DIST_DIR MACOS_SDK_DIR
 
-.PHONY: all setup build server grind web web-check exam test end2end clean \
-	grind-dist grind-linux-amd64 grind-linux-arm64 \
-	grind-macos-amd64 grind-macos-arm64
+.PHONY: all setup build server grind web web-check exam test end2end clean mostlyclean \
+	grind-dist grind-linux-amd64 grind-linux-arm64 grind-macos-amd64 grind-macos-arm64
 
 all: build
 
+# Components own their workflows; Cargo owns the shared Rust dependency graph.
 setup:
-	@missing=0; \
-	for tool in cargo protoc; do \
-		if ! command -v $$tool >/dev/null 2>&1; then \
-			echo "Missing tool: $$tool"; \
-			missing=1; \
-		fi; \
-	done; \
-	if [ $$missing -ne 0 ]; then \
-		echo "One or more required tools are missing. Skipping dependency setup."; \
-		exit 0; \
-	fi
-	cargo fetch
+	cargo fetch --locked
 
-build:
-	cargo build --release --workspace
+build: server grind
 
 server:
-	cargo build --release -p codegrinder
+	$(MAKE) -C server
 
 grind:
-	cargo build --release -p grind
+	$(MAKE) -C grind
 
 web:
-	npm --prefix www/web run build
+	$(MAKE) -C www/web
 
 web-check:
-	npm --prefix www/web run typecheck
+	$(MAKE) -C www/web check
 
 exam:
-	npm --prefix www/exam run build
+	$(MAKE) -C www/exam
 
-grind-dist: grind-linux-amd64 grind-linux-arm64 grind-macos-amd64 grind-macos-arm64
+grind-dist grind-linux-amd64 grind-linux-arm64 grind-macos-amd64 grind-macos-arm64:
+	$(MAKE) -C grind $@
 
-grind-linux-amd64: build
-	mkdir -p $(DIST_DIR)
-	cp target/release/grind $(DIST_DIR)/grind.linux_amd64
-	@if readelf -l $(DIST_DIR)/grind.linux_amd64 | grep -q INTERP; then echo "Linux AMD64 grind is dynamically linked" >&2; exit 1; fi
-
-grind-linux-arm64:
-	@command -v cargo-zigbuild >/dev/null 2>&1 || { echo "Missing cargo-zigbuild" >&2; exit 1; }
-	@command -v readelf >/dev/null 2>&1 || { echo "Missing readelf (usually provided by binutils)" >&2; exit 1; }
-	@target_libdir="$$(rustc --print target-libdir --target aarch64-unknown-linux-musl)"; ls "$$target_libdir"/libstd-*.rlib >/dev/null 2>&1 || { echo "Missing Rust target aarch64-unknown-linux-musl; run: rustup target add aarch64-unknown-linux-musl" >&2; exit 1; }
-	cargo zigbuild --release -p grind --target aarch64-unknown-linux-musl
-	mkdir -p $(DIST_DIR)
-	cp target/aarch64-unknown-linux-musl/release/grind $(DIST_DIR)/grind.linux_arm64
-	@if readelf -l $(DIST_DIR)/grind.linux_arm64 | grep -q INTERP; then echo "Linux ARM64 grind is dynamically linked" >&2; exit 1; fi
-	cargo clean --target aarch64-unknown-linux-musl
-
-grind-macos-amd64:
-	@command -v cargo-zigbuild >/dev/null 2>&1 || { echo "Missing cargo-zigbuild" >&2; exit 1; }
-	@target_libdir="$$(rustc --print target-libdir --target x86_64-apple-darwin)"; ls "$$target_libdir"/libstd-*.rlib >/dev/null 2>&1 || { echo "Missing Rust target x86_64-apple-darwin; run: rustup target add x86_64-apple-darwin" >&2; exit 1; }
-	$(MAKE) -C $(MACOS_SDK_DIR) sysroot-macos-x86_64
-	SDKROOT=$(MACOS_AMD64_SDKROOT) MACOSX_DEPLOYMENT_TARGET=$(MACOSX_DEPLOYMENT_TARGET) cargo zigbuild --release -p grind --target x86_64-apple-darwin
-	mkdir -p $(DIST_DIR)
-	cp target/x86_64-apple-darwin/release/grind $(DIST_DIR)/grind.darwin_amd64
-	cargo clean --target x86_64-apple-darwin
-
-grind-macos-arm64:
-	@command -v cargo-zigbuild >/dev/null 2>&1 || { echo "Missing cargo-zigbuild" >&2; exit 1; }
-	@target_libdir="$$(rustc --print target-libdir --target aarch64-apple-darwin)"; ls "$$target_libdir"/libstd-*.rlib >/dev/null 2>&1 || { echo "Missing Rust target aarch64-apple-darwin; run: rustup target add aarch64-apple-darwin" >&2; exit 1; }
-	$(MAKE) -C $(MACOS_SDK_DIR) sysroot-macos-arm64
-	SDKROOT=$(MACOS_ARM64_SDKROOT) MACOSX_DEPLOYMENT_TARGET=$(MACOSX_DEPLOYMENT_TARGET) cargo zigbuild --release -p grind --target aarch64-apple-darwin
-	mkdir -p $(DIST_DIR)
-	cp target/aarch64-apple-darwin/release/grind $(DIST_DIR)/grind.darwin_arm64
-	cargo clean --target aarch64-apple-darwin
-
+# Complete formatting and lint checks before either component starts its tests.
 test:
-	cargo test --release --workspace
-	cargo clippy --release --workspace -- -D warnings
-	cargo fmt --all --check
+	$(MAKE) -C server check
+	$(MAKE) -C grind check
+	$(MAKE) -C server test-only
+	$(MAKE) -C grind test-only
 
 end2end:
-	python3 tests/e2e.py
+	$(MAKE) -C tests end2end
+
+# Cleanup never reaches configuration, databases, or installed system files.
+mostlyclean:
+	$(MAKE) -C server mostlyclean
+	$(MAKE) -C grind mostlyclean
+	$(MAKE) -C www mostlyclean
+	$(MAKE) -C $(MACOS_SDK_DIR) mostlyclean
+	$(MAKE) -C tests mostlyclean
 
 clean:
-	cargo clean
+	$(MAKE) -C server clean
+	$(MAKE) -C grind clean
+	$(MAKE) -C www clean
 	$(MAKE) -C $(MACOS_SDK_DIR) clean
+	$(MAKE) -C tests clean

@@ -106,17 +106,25 @@ Building
 The protobuf sources live at `../../protocol/codegrinder.proto`. Build the API
 bundle whenever the protocol or a TypeScript entry point changes:
 
-    npm ci
-    npm run build
-    npm test
+    make -C www/web
+    make -C www/web test
 
-`npm run build` generates temporary TypeScript sources under `generated/`, type
+Run those commands from the repository root. `npm run build` also invokes Make.
+Make installs locked dependencies only when package metadata changes, generates
+temporary TypeScript sources under `generated/` only when required, type
 checks the handwritten TypeScript, and bundles the TypeScript entry points with
 webpack. The tracked JavaScript files corresponding to those entry points are
 deployable build output. Page modules and worker modules are checked with
 separate DOM and worker global environments. Existing JavaScript is accepted
 without being checked. The generated TypeScript directory and `node_modules/`
 are not deployed.
+
+Use incremental builds without cleaning first. Missing dependencies are build
+bugs to fix. `make -C www/web mostlyclean` removes generated protobuf sources,
+npm dependencies, and build records while preserving deployed JavaScript.
+`clean` also removes deployed JavaScript and emitted chunks. Neither target
+changes configuration or external runtime assets. Run only checks relevant to
+the changed browser code; UI-only changes do not require Rust tests.
 
 The human-facing version in `package.json` is combined with a hash of the web
 runtime sources. This build identity is compiled into the application and

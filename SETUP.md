@@ -7,11 +7,33 @@ Native builds
 The Rust workspace uses the host toolchain for normal development:
 
     make build
-    make test
+    make -C server test
+    make -C grind test
 
 `make server` builds only `codegrinder` for the current host.
 The production server is always a native build; promoting a checkout
 does not change source files or build flags.
+
+Use `make -C grind test TEST_ARGS=filter` or the equivalent server target for
+focused tests. Component tests run formatting checks and Clippy before tests.
+Run only checks for the code and boundaries changed; a CLI edit does not require
+server tests. `make test` checks both Rust components when both are affected.
+
+Normal development uses incremental builds. Do not precede builds or tests with
+`clean` or `mostlyclean`; missing dependencies must be fixed in the build rules.
+Cargo tracks Rust dependencies, while Make tracks generated browser and SDK
+assets, including source additions, removals, and deleted outputs. GNU Make
+4.3 or newer is required for grouped protobuf outputs.
+Validate build rules with `make -C tests build-check`; these tests use temporary
+checkouts and substituted external tools, leaving the live deployment intact.
+
+Every build component has `mostlyclean` and `clean`. `mostlyclean` removes
+intermediate assets and dependencies but preserves runnable native binaries,
+downloadable clients, and deployed browser files, including older immutable
+assets required by cached pages. Rust components share one intermediate cache.
+`clean` also deletes deployment outputs. Neither target changes configuration,
+databases, backups, or installed services. Cleanup is an explicit maintenance
+operation; the next build recreates any removed intermediates.
 
 
 Client distribution builds
@@ -34,8 +56,10 @@ Linux outputs are static musl executables, and the build rejects a
 Linux output containing an ELF interpreter. macOS does not support
 fully static executables; those outputs link only to operating-system
 libraries and do not require third-party shared libraries. A macOS SDK
-is required when building the macOS targets from Linux. Set `SDKROOT`
-to the SDK directory before running the macOS targets.
+is required when building the macOS targets from Linux. The Makefile builds
+the bundled minimal SDK using `make -C macos-minimal-sdk`; override
+`MACOS_AMD64_SDKROOT` or `MACOS_ARM64_SDKROOT` to use a different SDK.
+Cross builds retain their Cargo caches instead of cleaning after publication.
 
 
 Server configuration
@@ -79,9 +103,9 @@ the files under `www`. The server requires `curl` for standalone daycare
 registration and Canvas grade passback, and verifies that it is available
 during startup.
 
-With this layout, the deployment workflow is to build generated web assets
-and downloadable clients into the checkout, build the Rust server with
-`cargo build --release -p codegrinder`, and restart the CodeGrinder service.
+With this layout, build browser assets with `make -C www`, downloadable clients
+with `make grind-dist`, and the Rust server with `make server`, then restart
+the CodeGrinder service.
 Caddy reads static content from the checkout immediately and does not need a
 copy or synchronization step. Docker runtime images and problem type data
 remain explicit manual build and installation steps.

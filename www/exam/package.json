@@ -5,7 +5,7 @@
   "description": "",
   "main": "codegrinder_grpc_web_pb.js",
   "scripts": {
-    "proto:generate": "./proto-gen.sh",
+    "proto:generate": "make proto",
     "build": "make",
     "test": "node --experimental-transform-types --test saving.test.mjs workspace.test.mjs tests/input.test.mjs tests/workspace.test.mjs tests/publication.test.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",

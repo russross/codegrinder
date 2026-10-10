@@ -60,7 +60,7 @@ def run_riscv_single_flow(env: dict[str, str]) -> None:
     run(["grind", "get"], env=env)
     assignment_dir = WORKSPACE_DIR / RISC_SINGLE_ID
     require(assignment_dir.is_dir(), f"{assignment_dir} was not downloaded")
-    run_expect_failure(["make"], cwd=assignment_dir, env=env)
+    run_expect_failure(["make", "-C", str(assignment_dir)], env=env)
     run(["grind", "grade"], cwd=assignment_dir, env=env, check=False, expect_code=0)
     require_score(RISC_SINGLE_ID, 0.0)
 
@@ -96,7 +96,7 @@ def run_riscv_single_flow(env: dict[str, str]) -> None:
     )
 
     run(["grind", "solve"], cwd=assignment_dir, env=env)
-    run(["make"], cwd=assignment_dir, env=env)
+    run(["make", "-C", str(assignment_dir)], env=env)
     run(["grind", "grade"], cwd=assignment_dir, env=env)
     require_score(RISC_SINGLE_ID, 1.0)
 
@@ -263,7 +263,7 @@ def run_riscv_slices_flow(env: dict[str, str]) -> None:
 
     require_current_step(slice1, RISC_SLICES_ID, 1)
     run(["grind", "solve"], cwd=slice1, env=env)
-    run(["make"], cwd=slice1, env=env)
+    run(["make", "-C", str(slice1)], env=env)
     run(["grind", "grade"], cwd=slice1, env=env)
     require_current_step(slice1, RISC_SLICES_ID, 2)
     run(["grind", "get"], env=env)
@@ -273,7 +273,7 @@ def run_riscv_slices_flow(env: dict[str, str]) -> None:
     )
 
     run(["grind", "solve"], cwd=slice1, env=env)
-    run(["make"], cwd=slice1, env=env)
+    run(["make", "-C", str(slice1)], env=env)
     run(["grind", "grade"], cwd=slice1, env=env)
     require_score(f"{RISC_SLICES_ID}-1", 1.0)
     run(["grind", "get"], env=env)
@@ -293,7 +293,7 @@ def run_riscv_slices_flow(env: dict[str, str]) -> None:
     run(["grind", "reset", "value.s"], cwd=slice2, env=env)
     require(value_file.read_bytes() == original, "sliced fixture reset failed")
     run(["grind", "solve"], cwd=slice2, env=env)
-    run(["make"], cwd=slice2, env=env)
+    run(["make", "-C", str(slice2)], env=env)
     run(["grind", "grade"], cwd=slice2, env=env)
     require_score(f"{RISC_SLICES_ID}-2", 1.0)
     run(["grind", "get"], env=env)
@@ -314,6 +314,6 @@ def run_riscv_slices_flow(env: dict[str, str]) -> None:
 
     require_current_step(slice3, RISC_SLICES_ID, 4)
     run(["grind", "solve"], cwd=slice3, env=env)
-    run(["make"], cwd=slice3, env=env)
+    run(["make", "-C", str(slice3)], env=env)
     run(["grind", "grade"], cwd=slice3, env=env)
     require_score(f"{RISC_SLICES_ID}-3", 1.0)

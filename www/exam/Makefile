@@ -1,12 +1,13 @@
-UI_SOURCES := $(filter-out %.test.ts,$(wildcard *.ts *.d.ts *.css google/protobuf/*.ts)) tsconfig.json webpack.config.mjs
+.DEFAULT_GOAL := all
+PROTO_OUTPUTS := codegrinder.ts codegrinder.client.ts google/protobuf/duration.ts google/protobuf/timestamp.ts
+UI_SOURCES := $(filter-out $(PROTO_OUTPUTS) %.test.ts style.css,$(wildcard *.ts *.css)) tsconfig.json webpack.config.mjs
 
 all: index.html
+proto: $(PROTO_OUTPUTS)
 
 # Inventories capture source edits and deletions without invalidating unchanged bundles.
 build/ui-inputs: FORCE
-	@mkdir -p build
-	@sha256sum $(UI_SOURCES) > $@.part
-	@cmp -s $@.part $@ && rm $@.part || mv $@.part $@
+	sh ../../scripts/inventory.sh $@ $(UI_SOURCES)
 
 node_modules/.installed: package.json package-lock.json
 	npm ci
@@ -15,16 +16,45 @@ node_modules/.installed: package.json package-lock.json
 vm/build/assets.json: FORCE
 	$(MAKE) -C vm
 
-build/ui/.built: node_modules/.installed vm/build/assets.json build/ui-inputs
-	npm run proto:generate
+$(PROTO_OUTPUTS) &: ../../protocol/codegrinder.proto proto-gen.sh node_modules/.installed
+	./proto-gen.sh
+	touch $(PROTO_OUTPUTS)
+
+# Output inventories also recover individual bundles removed outside cleanup.
+-include build/ui-outputs.mk build/published-outputs.mk
+build/ui/.built: node_modules/.installed vm/build/assets.json build/ui-inputs $(PROTO_OUTPUTS)
 	npm run typecheck
 	node_modules/.bin/webpack
+	sh ../../scripts/outputs.sh build/ui-outputs.mk UI $@ $$(find build/ui -type f ! -name .built | sort)
 	touch $@
 
 # Keep prior immutable assets for already-open tabs and cached entry pages.
-index.html: build/ui/.built index.template.html favicon.svg scripts/publish.mjs
-	node scripts/publish.mjs
+index.html: build/ui/.built index.template.html style.css favicon.svg scripts/publish.py
+	python3 scripts/publish.py
+
+check: node_modules/.installed $(PROTO_OUTPUTS) vm/build/assets.json
+	npm run typecheck
+
+test: all
+	npm test
+
+test-widgets: node_modules/.installed $(PROTO_OUTPUTS)
+	npm run test:widgets
+
+test-browser: all
+	npm run test:browser
+
+# Keep every immutable deployed asset, including those used by cached pages.
+mostlyclean:
+	rm -rf build node_modules codegrinder.ts codegrinder.client.ts google
+	rm -f index.html.part
+	$(MAKE) -C vm mostlyclean
+
+clean: mostlyclean
+	rm -rf dist
+	rm -f index.html index.html.part
+	$(MAKE) -C vm clean
 
 FORCE:
-.PHONY: all FORCE
+.PHONY: all proto check test test-widgets test-browser mostlyclean clean FORCE
 .DELETE_ON_ERROR:
