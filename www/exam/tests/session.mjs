@@ -29,6 +29,7 @@ function filesystem(started = () => false) {
         subscribe(callback) { subscribers.add(callback); return () => subscribers.delete(callback); },
         listFiles() { return [...files.keys()]; },
         reset() { check(!started(), "namespace reset requires halt"); files.clear(); },
+        clear() { files.clear(); },
         stat(path) {
             return { kind: path === "" ? "directory" : "file", inode: BigInt(path === "" ? 1 : [...files.keys()].indexOf(path) + 2),
                 mode: 0o644, uid: 0, gid: 0, atime: { seconds: 0n, nanoseconds: 0 }, mtime: { seconds: 0n, nanoseconds: 0 } };
@@ -185,11 +186,22 @@ async function vmTests() {
     check(first.snapshot === undefined && machine.discards === 1 && machine.coldResets === 1,
         "Reset discards snapshot and disk changes");
 
+    // Live replacement keeps power, disk writes, and terminal state intact.
+    const liveScreen = host.querySelector(".xterm");
+    const liveHalts = machine.halted;
+    machine.fs.writeFile("extra", "guest-only");
+    await session.setTarget(second, { workspace: "files", poweroff: "preserve", discardDiskChanges: false, boot: false }, () => true);
+    check(machine.started && session.state === "running" && machine.discards === 1 && machine.coldResets === 1
+        && machine.halted === liveHalts && host.querySelector(".xterm") === liveScreen,
+        "live replacement changed power, disk, or terminal state");
+    check(!machine.fs.files.has("extra") && decoder.decode(machine.fs.readFile("file")) === "second",
+        "live replacement did not rebuild files");
+
     const other = { ...target("other"), image: { ...image, configUrl: "https://image.invalid/b.cfg" } };
     await session.setTarget(other, retained, () => true);
     check(machine.destroyed && machines.length === 2 && machine.shutdowns === 2,
         "different-image switch forces halt and creates a complete new VM");
-    check(first.snapshot !== undefined && decoder.decode(session.filesystem.readFile("file")) === "other",
+    check(second.snapshot !== undefined && decoder.decode(session.filesystem.readFile("file")) === "other",
         "snapshots outlive old VM handles");
     machine.callbacks.onVmStarted();
     check(session.runtime === machines[1], "retired runtime callbacks cannot replace new VM");
@@ -218,8 +230,8 @@ async function vmTests() {
     current.callbacks.consoleReset();
     current.callbacks.onVmReset("guest-reboot");
     check(session.state === "running", "restart notification releases the reboot wait");
-    check(host.querySelector(".xterm") === screen && (await session.terminal.readText()).includes("history retained"),
-        "orderly reboot replaced the parser or discarded history");
+    check(host.querySelector(".xterm") !== screen && !(await session.terminal.readText()).includes("history retained"),
+        "orderly reboot retained old output");
     await session.reset();
     check(host.querySelector(".xterm") !== screen && !(await session.terminal.readText()).includes("history retained"),
         "forced reset retained the parser or old output");

@@ -61,8 +61,8 @@ rm -rf "$stage"
 mkdir -p "$stage"
 fakeroot sh -eu -c '
     tar -xpf "$1" -C "$2"
-    truncate -s 32M "$3"
-    mkfs.ext4 -q -F -m 0 -d "$2" "$3"
+    truncate -s 12M "$3"
+    mkfs.ext4 -q -F -m 0 -O ^has_journal -d "$2" "$3"
 ' sh "$output/rootfs.tar" "$stage" "$(pwd)/build/rootfs.ext4.part"
 mv build/rootfs.ext4.part build/rootfs.ext4
-echo 'Prepared 32 MiB writable Exam image with Risclet, make, and tzdata.'
+echo 'Prepared 12 MiB writable exam image with risclet, make, and tzdata.'

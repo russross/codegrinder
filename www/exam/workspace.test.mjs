@@ -28,7 +28,7 @@ async function createRuntime() {
 }
 
 // Live guest artifacts and official submission eligibility are separate policies.
-test("refresh preserves student work and guest extras; aliases and rename-away preserve official entries", async () => {
+test("changed refresh rebuilds the tree and preserves student work; aliases and rename-away preserve official entries", async () => {
     const runtime = await createRuntime();
     try {
         const starter = encode("starter\n");
@@ -56,7 +56,8 @@ test("refresh preserves student work and guest extras; aliases and rename-away p
         filesystem.remove("Makefile");
         assert.ok(workspace.listFiles().includes("Makefile"), "canonical instructions remain visible after guest removal");
         assert.deepEqual(workspace.readFile("Makefile"), encode("new system\n"));
-        assert.deepEqual(filesystem.readFile("artifact"), encode("generated\n"));
+        assert.ok(!filesystem.listFiles().includes("artifact"), "changed server files retire guest artifacts");
+        assert.equal(workspace.revision(), revision, "tree rebuilding does not create student revisions");
         filesystem.link("src/first.c", "alias");
         filesystem.writeFile("alias", "alias work\n");
         await new Promise(resolve => setTimeout(resolve, 0));

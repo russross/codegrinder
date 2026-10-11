@@ -1,6 +1,6 @@
 import type { Filesystem, P9Change } from "@riscbox/storage";
 import type { EditorFilesystem } from "./editor-session";
-import { changeAffectsPath } from "./workspace";
+import { changeAffectsPath, populateWorkspace } from "./workspace";
 
 export enum WorkspaceChangeSource { Editor = "editor", Guest = "guest", Server = "server" }
 export interface WorkspaceStudentChange { readonly path: string; readonly source: WorkspaceChangeSource; }
@@ -16,6 +16,7 @@ function equalBytes(left: Uint8Array | undefined, right: Uint8Array): boolean {
 
 // Official submission entries survive guest removals and renames away from them.
 export class ProblemWorkspace implements EditorFilesystem {
+    rebuilding = false;
     private filesystem: Filesystem | undefined;
     private systemFiles: Map<string, Uint8Array>;
     private studentFiles: Map<string, Uint8Array>;
@@ -78,7 +79,7 @@ export class ProblemWorkspace implements EditorFilesystem {
     // Reads are synchronous; all origins contribute to submission revisions.
     handleFilesystemChange(change: P9Change): void {
         const filesystem = this.filesystem;
-        if (filesystem === undefined || change.kind === "metadata") return;
+        if (this.rebuilding || filesystem === undefined || change.kind === "metadata") return;
         const existing = new Set(filesystem.listFiles());
         for (const path of this.studentFiles.keys()) {
             if (!existing.has(path) || !changeAffectsPath(change, path)) continue;
@@ -109,17 +110,18 @@ export class ProblemWorkspace implements EditorFilesystem {
 
     // Refresh updates system files while retaining the student's working bytes.
     async refreshFromServer(system: ReadonlyMap<string, Uint8Array>, student: ReadonlyMap<string, Uint8Array>): Promise<void> {
+        const before = this.currentFiles();
         this.systemFiles = copyFiles(system);
         const previous = this.studentFiles;
         this.studentFiles = copyFiles(student);
         for (const [path, bytes] of previous) if (this.studentFiles.has(path)) this.studentFiles.set(path, bytes);
-        for (const [path, bytes] of new Map([...system, ...student])) {
-            if (previous.has(path) && !system.has(path)) continue;
-            if (this.filesystem !== undefined) {
-                this.ensureParents(path);
-                this.filesystem.writeFile(path, bytes, SERVER_ORIGIN);
-            }
-        }
+        const files = this.currentFiles();
+        if (before.size === files.size && [...files].every(([path, bytes]) => equalBytes(before.get(path), bytes))) return;
+        // Refresh removes obsolete and guest-only paths while retaining official edits.
+        this.rebuilding = true;
+        try {
+            if (this.filesystem !== undefined) populateWorkspace(this.filesystem, files);
+        } finally { this.rebuilding = false; }
     }
     async replaceFromServer(system: ReadonlyMap<string, Uint8Array>, student: ReadonlyMap<string, Uint8Array>): Promise<void> {
         this.attach(undefined);

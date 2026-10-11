@@ -212,6 +212,9 @@ export async function run(): Promise<string[]> {
         check(guestOutput.includes("uid=1000(student)") && guestOutput.includes("risclet 0.5.5")
             && guestOutput.includes("GNU Make") && guestOutput.includes("/usr/share/zoneinfo/America/Denver")
             && guestOutput.includes("type ext4 (rw"), "guest tools, account, timezone, or writable root changed");
+        send("update-grind risclet latest; printf 'updater-check-done\\n'");
+        await until(() => guestOutput.includes("updater-check-done\r\n"), "guest updater stub did not finish");
+        check(guestOutput.includes("Tools are supplied by the exam image."), "guest updater stub missing");
         send("seq 1 60; printf 'finished-output\\n'");
         await until(() => guestOutput.includes("finished-output"), "guest output did not fill the screen");
         send("clear; printf 'clear-screen-marker\\n'");
@@ -250,12 +253,22 @@ export async function run(): Promise<string[]> {
     await vm.reboot();
     await until(() => vm.state === "running", "in-place reboot failed");
     await until(() => guestOutput.includes("$ "), "rebooted guest shell never became ready");
-    check(vmHost.querySelector(".xterm") === rebootScreen, "orderly reboot replaced the terminal parser");
+    check(vmHost.querySelector(".xterm") !== rebootScreen, "orderly reboot retained the terminal parser");
     send("cat /tmp/exam-root-marker; printf '\\nroot-check-done\\n'");
     await until(() => guestOutput.includes("root-check-done\r\n"), "reboot root check did not finish");
     check(guestOutput.includes("root-retained"), "orderly reboot discarded root writes");
     send("[ -f src-old/main.s ] && printf 'after-reboot\\n' > src/main.s");
     await until(() => decoded() === "after-reboot\n", "in-place reboot lost the shared tree or input stopped working");
+
+    // Rebuild a mounted share while the shell retains its root working directory.
+    const liveScreen = vmHost.querySelector(".xterm");
+    await vm.setTarget({ image, loadFiles: async () => workspace.currentFiles() },
+        { workspace: "files", poweroff: "preserve", discardDiskChanges: false, boot: false }, () => true);
+    workspace.attach(vm.filesystem);
+    check(vm.state === "running" && vmHost.querySelector(".xterm") === liveScreen, "live switch rebooted the guest");
+    send("test ! -e src-old && cat src/main.s; cat /tmp/exam-root-marker; printf 'live-switch-done\\n'");
+    await until(() => guestOutput.includes("live-switch-done\r\n"), "live share replacement broke the shell");
+    check(guestOutput.includes("after-reboot\r\n") && guestOutput.includes("root-retained"), "live switch lost workspace or disk state");
     const beforeRecovery = vm.filesystem.readFile("src/main.s");
     await vm.reset();
     check(vmHost.querySelector(".xterm") !== rebootScreen, "forced reset retained the terminal parser");

@@ -6,6 +6,9 @@ import assets from "./vm/build/assets.json";
 export const EXAM_TRANSITION: VmTransition = {
     workspace: "files", poweroff: "force", discardDiskChanges: true, boot: false,
 };
+export const EXAM_FILE_TRANSITION: VmTransition = {
+    workspace: "files", poweroff: "preserve", discardDiskChanges: false, boot: false,
+};
 
 // Runtime scripts are keyed by their immutable URL, including failed-load retries.
 declare global { interface Window { Riscbox?: typeof Riscbox; } }

@@ -279,8 +279,8 @@ export async function runExamAcceptance(): Promise<string[]> {
         check(!active.filesystem("workspace").listFiles().includes("extra"), "Second problem received first problem namespace");
         select("first");
         await until(() => editor().state.doc.toString() === "buffer before reset", "Returning to first problem failed");
-        check(!active.started && button("instructions-tab-button").classList.contains("active"),
-            "Returning to an instructed problem booted automatically");
+        check(active.started && button("instructions-tab-button").classList.contains("active"),
+            "Returning to a same-type problem stopped the running VM or changed the selected tab");
         const restored = active.filesystem("workspace");
         check(!restored.listFiles().includes("extra") && !restored.listFiles().includes("alias"),
             "Returning to a problem restored guest-only files");
@@ -321,10 +321,9 @@ export async function runExamAcceptance(): Promise<string[]> {
             "Passing grade did not replace the step workspace");
         check(!window.problemSet[0].workspace.listFiles().includes("extra"), "Step advance restored an old namespace snapshot");
         check(calls.includes("SaveGradedCommit"), "Grade did not use its final persistence RPC");
-        check(!latest.started && button("instructions-tab-button").classList.contains("active") && machine === latest,
-            "Step advancement must reuse the same image and wait on instructions");
-        button("vm-boot-button").click();
-        await until(() => guestOutput.includes("$ "), "New step did not boot on demand");
+        check(latest.started && button("instructions-tab-button").classList.contains("active") && machine === latest
+            && guestOutput.startsWith(bootsBeforeGrade),
+            "Same-type step advancement must preserve the running VM and select instructions");
         const bootsBeforeFinalGrade = guestOutput;
         button("action-grade-button").click();
         await until(() => !button("action-grade-button").disabled && window.problemSet[0].isComplete,

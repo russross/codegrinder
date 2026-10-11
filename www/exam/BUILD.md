@@ -29,7 +29,7 @@ Python and do not need a virtual environment.
 The app owns its editor, terminal, workspace, and VM modules directly.
 `problem-workspace.ts` maintains official files and submission revisions;
 `workspace.ts` handles filesystem population and snapshots. Compare these
-modules with the Risclet demo manually when considering future updates.
+modules with the risclet demo manually when considering future updates.
 
 Image preparation requires QEMU for RISC-V, fakeroot, cpio, and e2fsprogs.
 The `vm/Makefile` caches downloads and rebuilds the ext4 image only when its
@@ -43,7 +43,7 @@ copying a new deployment so cached pages and open tabs can load their original
 bytes. HTML should revalidate; content-named files and release directories may
 use long-lived immutable caching.
 
-Reboot preserves terminal history and the guest disk overlay. Clicking Reset VM
+Reboot clears terminal history and preserves the guest disk overlay. Same-type problem and step changes replace the live 9p tree without resetting the VM. Clicking Reset VM
 during shutdown force-halts, replaces the terminal parser, discards the overlay,
 and restores official workspace files without flushing editor text or sending
 RPCs. CodeGrinder file Reset remains independent.

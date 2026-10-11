@@ -20,7 +20,7 @@ export interface VmTarget {
 export type VmState = "ready" | "loading" | "stopping" | "running" | "halted" | "failed";
 export interface VmTransition {
     readonly workspace: "snapshot" | "files";
-    readonly poweroff: "orderly" | "force";
+    readonly poweroff: "orderly" | "force" | "preserve";
     readonly discardDiskChanges: boolean;
     readonly boot: boolean;
 }
@@ -106,8 +106,8 @@ export class VmSession<Target extends VmTarget> {
         const active = (): boolean => generation === this.runtimeGeneration;
         const callbacks: RiscboxOptions = {
             consoleWrite: text => { if (active()) this.terminal.write(text); },
-            // Orderly reboots retain the parser and history; workspace resets replace it explicitly.
-            consoleReset: () => { if (active()) this.clearInput(); },
+            // Retire queued output and terminal modes before the new boot writes.
+            consoleReset: () => { if (active()) this.clearTerminal(); },
             onVmStarted: () => { if (active() && this.state !== "running") this.markRunning(); },
             onVmReset: () => { if (active()) this.markRunning(); },
             onVmHalted: () => {
@@ -128,9 +128,9 @@ export class VmSession<Target extends VmTarget> {
             });
             this.machine = runtime;
             this.share = runtime.filesystem(image.shareName);
-            // Exam images contain one HTTP root disk; its overlay retires on workspace replacement.
+            // Exam images contain one HTTP root disk; type changes and recovery discard its overlay.
             this.disks = [runtime.block(0)];
-            this.unsubscribe = this.share.subscribe(change => { if (active()) this.options.onFilesystemChange(change); });
+            this.unsubscribe = this.share.subscribe(change => { if (active() && this.loaded) this.options.onFilesystemChange(change); });
             this.image = image;
             return runtime;
         } catch (error: unknown) {
@@ -148,7 +148,7 @@ export class VmSession<Target extends VmTarget> {
             const restoreSnapshot = transition.workspace === "snapshot";
             const changedImage = this.image !== undefined && !sameImage(this.image, target.image);
             if (transition.poweroff === "force" || changedImage) await this.forceHalt();
-            else await this.shutdown();
+            else if (transition.poweroff === "orderly") await this.shutdown();
             if (!isCurrent()) return false;
             if (previous !== undefined && this.loaded) {
                 await this.options.afterHalt?.(previous);
@@ -180,8 +180,11 @@ export class VmSession<Target extends VmTarget> {
             else if (files !== undefined) populateWorkspace(this.filesystem, files);
             else throw new Error("Workspace files are unavailable");
             this.loaded = true;
-            this.clearTerminal();
-            this.setState("ready");
+            if (runtime.started) this.setState("running");
+            else {
+                this.clearTerminal();
+                this.setState("ready");
+            }
             if (transition.boot) await this.boot();
             return isCurrent();
         } catch (error: unknown) {

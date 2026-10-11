@@ -49,7 +49,7 @@ export function snapshotWorkspace(filesystem: Filesystem): WorkspaceSnapshot {
 
 // Parent directories and link targets precede their children and aliases.
 export function restoreWorkspace(filesystem: Filesystem, snapshot: WorkspaceSnapshot): void {
-    filesystem.reset();
+    filesystem.clear();
     for (const entry of snapshot.entries) {
         switch (entry.kind) {
             case "directory": if (entry.path !== "") filesystem.mkdir(entry.path); break;
@@ -65,7 +65,7 @@ export function restoreWorkspace(filesystem: Filesystem, snapshot: WorkspaceSnap
 }
 
 export function populateWorkspace(filesystem: Filesystem, files: ReadonlyMap<string, Uint8Array>): void {
-    filesystem.reset();
+    filesystem.clear();
     const directories = new Set<string>();
     for (const [path, bytes] of files) {
         const parts = path.split("/");

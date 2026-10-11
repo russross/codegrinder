@@ -34,7 +34,7 @@ import type { VmTarget } from "./vm-session";
 import { ProblemWorkspace } from "./problem-workspace";
 import type { WorkspaceStudentChange } from "./problem-workspace";
 import { SaveState } from "./saving";
-import { EXAM_TRANSITION, VmController, vmImageForProblemType } from "./vm";
+import { EXAM_FILE_TRANSITION, EXAM_TRANSITION, VmController, vmImageForProblemType } from "./vm";
 import { installExamClipboard, registerClipboardTerminal } from "./clipboard";
 import { clearTerminal, GradingTerminal } from "./grading-terminal";
 import type { TerminalView } from "./terminal";
@@ -58,7 +58,7 @@ interface ProblemData {
     instructionsGeneration: number;
 }
 
-interface ProblemTarget extends VmTarget { readonly problem: ProblemData; readonly generation: number; }
+interface ProblemTarget extends VmTarget { readonly problem: ProblemData; readonly generation: number; readonly problemType: string; }
 
 type DaycareCompletion =
     | { kind: "actionComplete" }
@@ -1067,7 +1067,7 @@ function updateInstructionsTabVisibility(): void {
 function installProblemTarget(problem: ProblemData): void {
     const image = vmImageForProblemType(problem.problemType);
     problem.target = image === undefined ? undefined : {
-        problem, image, generation: problem.generation,
+        problem, image, generation: problem.generation, problemType: problem.problemType,
         loadFiles: async () => problem.workspace.currentFiles(),
     };
 }
@@ -1109,7 +1109,7 @@ function reportError(error: unknown): void {
 
 // Rebuilding the share must not turn reset events into editor conflicts or saves.
 function handleWorkspaceChange(problem: ProblemData, change: P9Change): void {
-    if (vmRecoveryInProgress) return;
+    if (vmRecoveryInProgress || problem.workspace.rebuilding) return;
     problem.workspace.handleFilesystemChange(change);
     if (currentProblem !== problem || selecting) return;
     if (change.source !== "guest" || (editorSession.path !== null && problem.workspace.isStudentOwned(editorSession.path))) {
@@ -1141,7 +1141,9 @@ async function activateProblem(problem: ProblemData, isCurrent: () => boolean): 
         initializeVm();
         editorSession.clear();
     } else {
-        if (!await vmController.setTarget(target, EXAM_TRANSITION, isCurrent)) return false;
+        const transition = vmController.target?.problemType === target.problemType
+            ? EXAM_FILE_TRANSITION : EXAM_TRANSITION;
+        if (!await vmController.setTarget(target, transition, isCurrent)) return false;
         problem.workspace.attach(vmController.filesystem);
     }
     return isCurrent();

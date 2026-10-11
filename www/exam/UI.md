@@ -22,7 +22,7 @@ A refresh validates and reuses the session key stored for that browser
 tab. Closing the tab ends the client-side exam session, and opening a
 fresh session requires relaunching the assignment from Canvas. The
 session and assignment key drive the "loadAssignment" operation (see
-@RPC.md) to get basic info. That sequence identifies one or more
+[SEMANTICS.md](SEMANTICS.md)) to get basic info. That sequence identifies one or more
 problems that are part of this assignment, which leads to one or more
 "loadProblem" operations to load them. We choose one of these problems
 as the "active problem".
@@ -70,7 +70,7 @@ changes. Fractional scaling, scrolling, and repeated resets have browser tests.
 Padding belongs to the outer host, and the screen remains top-aligned with
 unused fractional rows below it. Forced reset replaces the entire parser and
 renderer, retiring queued output, protocol replies, and incomplete UTF-8.
-Orderly reboot preserves the parser and history. Guest OSC 52 requests are
+Orderly reboot also clears the parser and history. Guest OSC 52 requests are
 consumed without accessing the system clipboard.
 Pane resizing remains available. Browser restrictions can prevent system
 clipboard writes, and the page cannot control Linux PRIMARY selection
@@ -227,8 +227,8 @@ Here is the complete layout of the UI:
                 *   This tab is present only when an image is configured
                     for the active problem type. The current configuration
                     provides one image for the `riscv` problem type.
-                *   Loading or switching a problem prepares a clean VM and selects
-                    Instructions without booting. Selecting VM or Boot VM boots
+                *   Loading a problem or changing its type prepares a clean VM and selects
+                    Instructions without booting. Same-type changes preserve VM power. Selecting VM or Boot VM boots
                     it. Without instructions, VM is the default tab and boots.
                     Selecting the VM tab again does not reboot an active VM.
                 *   Both terminals and the editor use Latin Modern Mono with a
@@ -240,8 +240,7 @@ Here is the complete layout of the UI:
                     Once booted, the control becomes Reboot VM.
                 *   Reboot requests orderly guest restart and retains the VM's
                     session-local root-disk changes and shared 9p tree.
-                    It preserves terminal output, scrollback, and parser state
-                    while retiring pending input.
+                    It clears terminal output, scrollback, parser state, and pending input.
                     During shutdown the button stays enabled, changes its label
                     to Reset VM, and keeps the same width across Boot VM,
                     Reboot VM, and Reset VM labels. After restart it
@@ -269,14 +268,17 @@ Here is the complete layout of the UI:
                 *   Guest-created files and build artifacts remain usable
                     in the VM but do not appear in the file tree and are not
                     submitted to the server.
-                *   Problem switches and step advancement force halt, discard
+                *   Problem type changes force halt, discard
                     disk overlays, and rebuild 9p from the official workspace.
                     Same images reuse the runtime; different images replace it.
                     Instructions are selected and boot waits for a user action,
                     except when missing instructions make VM the default tab.
+                *   Same-type problem switches clear and recopy official files
+                    into the mounted 9p tree, preserving power and disk overlays.
+                    Changed server file sets use the same live replacement.
                 *   Save, Grade, and other actions preserve VM power state.
-                    Returned files update 9p and views. Only advancement to a
-                    new step prepares a clean VM; failed and final-step grades
+                    Returned files update 9p and views. Advancement to a
+                    new step rebuilds 9p and preserves VM power when its type is unchanged. Failed and final-step grades
                     preserve the running session.
         *   The information pane defaults to 45% of the window
             width, but can be resized freely by the user
