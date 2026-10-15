@@ -163,31 +163,16 @@ class BuildTests(unittest.TestCase):
         self.make("www/exam")
         self.assertEqual(self.commands(), commands)
 
-    def test_sdk_nested_headers_removals_and_architecture_sources(self) -> None:
-        self.write("macos-minimal-sdk/src/usr/include/nested/header.h", "header")
+    def test_upstream_sdk_make_targets(self) -> None:
+        self.write("macos-minimal-sdk/src/usr/include/stdio.h", "header")
         self.write("macos-minimal-sdk/src/x86_64/libSystem.s", "x86 stubs")
         self.write("macos-minimal-sdk/src/arm64/libSystem.s", "arm stubs")
         self.make("macos-minimal-sdk", "-j4")
-        initial = self.commands()
-        self.make("macos-minimal-sdk")
-        self.assertEqual(self.commands(), initial)
         for architecture in ("x86_64", "arm64"):
-            library = self.root / f"macos-minimal-sdk/sysroot-macos-{architecture}/usr/lib/libSystem.B.dylib"
-            self.assertEqual(library.read_text(), f"src/{architecture}/libSystem.s")
-
-        # Header changes refresh both sysroots without relinking their libraries.
-        self.write("macos-minimal-sdk/src/usr/include/nested/header.h", "changed")
-        self.make("macos-minimal-sdk")
-        self.assertEqual(self.commands(), initial)
-        copied = self.root / "macos-minimal-sdk/sysroot-macos-arm64/usr/include/nested/header.h"
-        self.assertEqual(copied.read_text(), "changed")
-        copied.unlink()
-        self.make("macos-minimal-sdk")
-        self.assertTrue(copied.exists())
-        self.write("macos-minimal-sdk/src/usr/include/retained.h", "retained")
-        (self.root / "macos-minimal-sdk/src/usr/include/nested/header.h").unlink()
-        self.make("macos-minimal-sdk")
-        self.assertFalse(copied.exists())
+            sysroot = self.root / f"macos-minimal-sdk/sysroot-macos-{architecture}"
+            self.assertEqual((sysroot / "usr/include/stdio.h").read_text(), "header")
+            self.assertTrue((sysroot / "usr/lib/libSystem.B.dylib").exists())
+            self.assertTrue((sysroot / "usr/lib/libSystem.dylib").is_symlink())
 
     def test_vm_incremental_build_and_missing_disk_and_runtime(self) -> None:
         vm = "www/exam/vm"

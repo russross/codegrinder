@@ -47,7 +47,8 @@ mostlyclean:
 	$(MAKE) -C server mostlyclean
 	$(MAKE) -C grind mostlyclean
 	$(MAKE) -C www mostlyclean
-	$(MAKE) -C $(MACOS_SDK_DIR) mostlyclean
+	$(MAKE) -C $(MACOS_SDK_DIR) clean
+	rm -rf $(MACOS_SDK_DIR)/download
 	$(MAKE) -C tests mostlyclean
 
 clean:
@@ -55,4 +56,5 @@ clean:
 	$(MAKE) -C grind clean
 	$(MAKE) -C www clean
 	$(MAKE) -C $(MACOS_SDK_DIR) clean
+	rm -rf $(MACOS_SDK_DIR)/download
 	$(MAKE) -C tests clean
