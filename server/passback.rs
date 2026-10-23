@@ -318,6 +318,14 @@ pub fn spawn_grade_passback(
             match save_grade(&config, &target, &report_html).await {
                 Ok(()) => {
                     update_passback_status(&db, &target, PASSBACK_POSTED).await;
+                    crate::logging::record(
+                        "INFO",
+                        "lms_passback_posted",
+                        format_args!(
+                            "user={:?} course={:?} problem_set={:?} attempt={attempt} score={}",
+                            target.user_id, target.course_id, target.problem_set_id, target.score
+                        ),
+                    );
                     return;
                 }
                 Err(err) => {

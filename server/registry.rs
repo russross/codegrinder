@@ -85,8 +85,21 @@ impl DaycareRegistry {
             .entries
             .lock()
             .map_err(|_| AppError::Internal("registry lock poisoned".to_owned()))?;
-        entries.insert(clean.hostname.clone(), clean);
         expire_entries(&mut entries);
+        let previous = entries.get(&clean.hostname);
+        if previous.is_none_or(|old| {
+            old.capacity != clean.capacity || old.problem_types != clean.problem_types
+        }) {
+            crate::logging::record(
+                "INFO",
+                "daycare_registration_updated",
+                format_args!(
+                    "host={:?} capacity={} problem_types={:?}",
+                    clean.hostname, clean.capacity, clean.problem_types
+                ),
+            );
+        }
+        entries.insert(clean.hostname.clone(), clean);
         Ok(())
     }
 
@@ -114,6 +127,11 @@ impl DaycareRegistry {
             .collect::<Vec<_>>();
         let total_capacity = eligible.iter().map(|reg| reg.capacity).sum::<usize>();
         if total_capacity == 0 {
+            crate::logging::record(
+                "ERROR",
+                "daycare_selection_failed",
+                format_args!("problem_types={problem_types:?}"),
+            );
             return Err(AppError::Internal(
                 "no eligible daycare found for problem types".to_owned(),
             ));
@@ -131,12 +149,40 @@ impl DaycareRegistry {
 
 fn expire_entries(entries: &mut BTreeMap<String, DaycareRegistration>) {
     let now = Utc::now();
-    entries.retain(|_, reg| now - reg.time <= DAYCARE_REGISTRATION_TTL);
+    entries.retain(|host, reg| {
+        let current = now - reg.time <= DAYCARE_REGISTRATION_TTL;
+        if !current {
+            crate::logging::record(
+                "WARN",
+                "daycare_registration_expired",
+                format_args!("host={host:?}"),
+            );
+        }
+        current
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expired_remote_capacity_is_removed_before_selection() {
+        let registry = DaycareRegistry::new("secret".to_owned(), "3.0.0".to_owned());
+        registry.entries.lock().unwrap().insert(
+            "old".to_owned(),
+            DaycareRegistration {
+                hostname: "old".to_owned(),
+                problem_types: vec!["python".to_owned()],
+                capacity: 1,
+                time: Utc::now() - DAYCARE_REGISTRATION_TTL - Duration::seconds(1),
+                version: String::new(),
+                signature: String::new(),
+            },
+        );
+        assert!(registry.assign(&BTreeSet::from(["python".to_owned()])).is_err());
+        assert!(registry.snapshot().unwrap().is_empty());
+    }
 
     #[test]
     fn rejects_unsigned_stale_or_wrong_version_remote_registrations() {

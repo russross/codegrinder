@@ -5,6 +5,7 @@ mod db;
 mod error;
 mod files;
 mod ipfilter;
+mod logging;
 mod lti;
 mod mutations;
 mod passback;
@@ -205,6 +206,7 @@ async fn register_daycare(config: Arc<config::ServerConfig>, version: String) {
 
 async fn serve(app: Router, bind: SocketAddr) -> AppResult<()> {
     let listener = tokio::net::TcpListener::bind(bind).await?;
+    logging::record("INFO", "server_listening", format_args!("bind={bind}"));
     axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .await
         .map_err(|err| AppError::Internal(format!("server error: {err}")))

@@ -75,18 +75,54 @@ impl Db {
         self.call_until(deadline, move |conn| {
             // Potential writers acquire their lock before reading so another connection
             // cannot invalidate the snapshot before the first write.
-            conn.execute_batch(if write { "BEGIN IMMEDIATE" } else { "BEGIN" })?;
+            let started = Instant::now();
+            let begin = conn.execute_batch(if write { "BEGIN IMMEDIATE" } else { "BEGIN" });
+            let lock_wait = started.elapsed();
+            if let Err(err) = begin {
+                crate::logging::record(
+                    "WARN",
+                    "database_begin_failed",
+                    format_args!(
+                        "operation={:?} write={write} lock_ms={} error={:?}",
+                        std::any::type_name::<F>(),
+                        lock_wait.as_millis(),
+                        err.to_string()
+                    ),
+                );
+                return Err(err.into());
+            }
             let result = f(conn);
-            match result {
-                Ok(value) => {
-                    conn.execute_batch("COMMIT")?;
-                    Ok(value)
-                }
+            let outcome = match result {
+                Ok(value) => conn.execute_batch("COMMIT").map(|()| value).map_err(AppError::from),
                 Err(err) => {
-                    let _ = conn.execute_batch("ROLLBACK");
+                    if let Err(rollback) = conn.execute_batch("ROLLBACK") {
+                        crate::logging::record(
+                            "ERROR",
+                            "database_rollback_failed",
+                            format_args!(
+                                "operation={:?} error={:?}",
+                                std::any::type_name::<F>(),
+                                rollback.to_string()
+                            ),
+                        );
+                    }
                     Err(err)
                 }
+            };
+            if started.elapsed() >= Duration::from_millis(500) {
+                crate::logging::record(
+                    "WARN",
+                    "database_slow_transaction",
+                    format_args!(
+                        "operation={:?} write={write} lock_ms={} transaction_ms={} success={}",
+                        std::any::type_name::<F>(),
+                        lock_wait.as_millis(),
+                        started.elapsed().saturating_sub(lock_wait).as_millis(),
+                        outcome.is_ok()
+                    ),
+                );
             }
+            outcome
         })
         .await
     }

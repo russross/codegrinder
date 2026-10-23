@@ -1,7 +1,7 @@
 Web client semantics
 ====================
 
-The web client combines server-backed assignment editing with local JavaScript/Python execution and standalone embedded workspaces. This document defines operation flows and invariants across those modes. [Server semantics](../../server/SEMANTICS.md) own authorization and persistence; [exam semantics](../exam/SEMANTICS.md) describe the separate exam client. The wire contract is [codegrinder.proto](../../protocol/codegrinder.proto).
+The web client combines server-backed assignment editing with local JavaScript/Python execution and standalone embedded workspaces. This document defines operation flows and invariants across those modes. [Server semantics](../../server/NOTES.md) own authorization and persistence; [exam semantics](../exam/NOTES.md) describe the separate exam client. The wire contract is [codegrinder.proto](../../protocol/codegrinder.proto).
 
 
 Workspace identity and ownership

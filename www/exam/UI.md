@@ -22,7 +22,7 @@ A refresh validates and reuses the session key stored for that browser
 tab. Closing the tab ends the client-side exam session, and opening a
 fresh session requires relaunching the assignment from Canvas. The
 session and assignment key drive the "loadAssignment" operation (see
-[SEMANTICS.md](SEMANTICS.md)) to get basic info. That sequence identifies one or more
+[NOTES.md](NOTES.md)) to get basic info. That sequence identifies one or more
 problems that are part of this assignment, which leads to one or more
 "loadProblem" operations to load them. We choose one of these problems
 as the "active problem".

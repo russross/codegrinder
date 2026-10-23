@@ -1,7 +1,7 @@
 Exam client semantics
 =====================
 
-This document defines the exam client's operation flows, ownership rules, persistence boundaries, and VM lifecycle invariants. The [server semantics](../../server/SEMANTICS.md) define authoritative access, sequencing, and grading. The [web client](../web/SEMANTICS.md) has separate reset, save, and local-execution behavior. [UI.md](UI.md) supplies presentation details and [BUILD.md](BUILD.md) supplies build/check procedures.
+This document defines the exam client's operation flows, ownership rules, persistence boundaries, and VM lifecycle invariants. The [server semantics](../../server/NOTES.md) define authoritative access, sequencing, and grading. The [web client](../web/NOTES.md) has separate reset, save, and local-execution behavior. [UI.md](UI.md) supplies presentation details and [BUILD.md](BUILD.md) supplies build/check procedures.
 
 The protocol is defined in [codegrinder.proto](../../protocol/codegrinder.proto). The browser uses the generated protobuf-ts field names.
 

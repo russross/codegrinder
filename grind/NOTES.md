@@ -1,7 +1,7 @@
 CLI semantics
 =============
 
-`grind` is the native client. These workflows define its user-visible effects and the boundaries that refactors must preserve. The [server semantics](../server/SEMANTICS.md) define authoritative access, ownership, sequencing, and grading policy; [codegrinder.proto](../protocol/codegrinder.proto) defines the messages. Command behavior must also remain consistent with [AGENTS.md](../AGENTS.md).
+`grind` is the native client. These workflows define its user-visible effects and the boundaries that refactors must preserve. The [server semantics](../server/NOTES.md) define authoritative access, ownership, sequencing, and grading policy; [codegrinder.proto](../protocol/codegrinder.proto) defines the messages. Command behavior must also remain consistent with [AGENTS.md](../AGENTS.md).
 
 
 State and command entry

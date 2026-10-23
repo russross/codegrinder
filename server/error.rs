@@ -42,6 +42,21 @@ impl AppError {
     }
 
     pub fn grpc_status(self) -> Status {
+        self.grpc_status_for("unspecified", None)
+    }
+
+    // Request boundaries attach identity without serializing request payloads or metadata.
+    pub fn grpc_status_for(self, operation: &str, actor: Option<&str>) -> Status {
+        if matches!(self, Self::Internal(_) | Self::Io(_) | Self::Db(_) | Self::Json(_)) {
+            crate::logging::record(
+                "ERROR",
+                "rpc_failed",
+                format_args!(
+                    "operation={operation:?} actor={actor:?} error={:?}",
+                    self.to_string()
+                ),
+            );
+        }
         match self {
             AppError::BadRequest(message) => Status::new(Code::InvalidArgument, message),
             AppError::Unauthorized(message) => Status::new(Code::Unauthenticated, message),

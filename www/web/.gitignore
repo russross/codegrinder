@@ -12,4 +12,4 @@ build/
 
 # dev nodes
 *.md
-!SEMANTICS.md
+!NOTES.md

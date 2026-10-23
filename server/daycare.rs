@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
+use serde::Deserialize;
 use sha2::Digest;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
@@ -16,6 +17,7 @@ use tonic::{Response, Status};
 use crate::config::ServerConfig;
 use crate::error::{AppError, AppResult};
 use crate::files::checked_relative_path;
+use crate::logging::record;
 use crate::proto::{
     DaycareRequest, DaycareResponse, EventMessage, ReportCard, ReportCardResult, RuntimeBundle,
     RuntimeLimits, SignedRuntimeBundle, daycare_response,
@@ -66,7 +68,11 @@ impl DaycareRuntime {
         tokio::spawn(async move {
             let result = runtime.handle(request, tx.clone()).await;
             if let Err(err) = result {
-                eprintln!("daycare execution failed: {err}");
+                record(
+                    "WARN",
+                    "daycare_request_failed",
+                    format_args!("error={:?}", err.to_string()),
+                );
                 let _ = tx
                     .send(Ok(DaycareResponse {
                         response: Some(daycare_response::Response::Error(err.to_string())),
@@ -92,45 +98,120 @@ impl DaycareRuntime {
         let limits = effective_limits(&bundle)?;
         let nanny_name = format!("nanny-{}", safe_user_dir_name(&bundle.user_id));
         let run_id = self.next_run_id.fetch_add(1, Ordering::Relaxed);
+        let context = RunContext::new(run_id, &bundle);
+        let started = Instant::now();
+        context.log(
+            "INFO",
+            "daycare_accepted",
+            format_args!("image={:?} limits={limits:?}", bundle.container),
+        );
         self.mark_active(&nanny_name, run_id).await;
-        preempt_container(&self.container_command, &nanny_name).await;
-        let _slot = self
-            .container_slots
-            .acquire()
+        let result = async {
+            preempt_container(&self.container_command, &nanny_name).await;
+            let _slot = self
+                .container_slots
+                .acquire()
+                .await
+                .map_err(|_| AppError::Internal("container limiter closed".to_owned()))?;
+            self.require_active(&nanny_name, run_id).await?;
+            context.log(
+                "INFO",
+                "daycare_capacity_acquired",
+                format_args!("queue_ms={}", started.elapsed().as_millis()),
+            );
+            let execution_started = Instant::now();
+            let deadline = execution_started + action_timeout(&limits);
+            let container = match Container::create(
+                &self.container_command,
+                &self.active_runs,
+                run_id,
+                &nanny_name,
+                &bundle,
+                &limits,
+                deadline,
+            )
             .await
-            .map_err(|_| AppError::Internal("container limiter closed".to_owned()))?;
-        self.require_active(&nanny_name, run_id).await?;
-        let deadline = Instant::now() + action_timeout(&limits);
-        let container = match Container::create(
-            &self.container_command,
-            &self.active_runs,
-            run_id,
-            &nanny_name,
-            &bundle,
-            &limits,
-            deadline,
-        )
-        .await
-        {
-            Ok(container) => container,
-            Err(err) => return self.finish_run(&nanny_name, run_id, Err(err)).await,
-        };
-        if let Err(err) = self.require_active(&nanny_name, run_id).await {
-            let _ = container.shutdown().await;
-            return Err(err);
+            {
+                Ok(container) => container,
+                Err(err) => {
+                    context.log(
+                        "ERROR",
+                        "daycare_container_create_failed",
+                        format_args!("error={:?}", err.to_string()),
+                    );
+                    return Err(err);
+                }
+            };
+            context.log(
+                "INFO",
+                "daycare_container_created",
+                format_args!("container={:?}", container.id),
+            );
+            if let Err(err) = self.require_active(&nanny_name, run_id).await {
+                let shutdown = container.shutdown().await;
+                context.log(
+                    if shutdown.is_ok() { "INFO" } else { "ERROR" },
+                    "daycare_cleanup_finished",
+                    format_args!("error={:?}", shutdown.err().map(|err| err.to_string())),
+                );
+                return Err(err);
+            }
+            let result =
+                run_action(&container, &mut bundle, &self.config.daycare_secret, deadline, tx)
+                    .await;
+            context.log(
+                "INFO",
+                "daycare_execution_finished",
+                format_args!(
+                    "execution_ms={} passed={:?} score={:?} reason={:?}",
+                    execution_started.elapsed().as_millis(),
+                    bundle
+                        .commit
+                        .as_ref()
+                        .and_then(|commit| commit.report_card.as_ref())
+                        .map(|report| report.passed),
+                    bundle.commit.as_ref().map(|commit| commit.score),
+                    bundle
+                        .commit
+                        .as_ref()
+                        .and_then(|commit| commit.report_card.as_ref())
+                        .map(|report| &report.note)
+                ),
+            );
+            container.log_usage(&context).await;
+            let shutdown = container.shutdown().await;
+            context.log(
+                if shutdown.is_ok() { "INFO" } else { "ERROR" },
+                "daycare_cleanup_finished",
+                format_args!("error={:?}", shutdown.as_ref().err().map(ToString::to_string)),
+            );
+            result?;
+            shutdown?;
+            Ok(())
         }
-        let result =
-            run_action(&container, &mut bundle, &self.config.daycare_secret, deadline, tx).await;
-        let shutdown = container.shutdown().await;
+        .await;
         self.clear_active(&nanny_name, run_id).await;
-        result?;
-        shutdown?;
-        Ok(())
+        context.log(
+            if result.is_ok() { "INFO" } else { "WARN" },
+            "daycare_finished",
+            format_args!(
+                "total_ms={} error={:?}",
+                started.elapsed().as_millis(),
+                result.as_ref().err().map(ToString::to_string)
+            ),
+        );
+        result
     }
 
     async fn mark_active(&self, name: &str, run_id: u64) {
         let mut active = self.active_runs.lock().await;
-        active.insert(name.to_owned(), run_id);
+        if let Some(previous) = active.insert(name.to_owned(), run_id) {
+            record(
+                "INFO",
+                "daycare_superseded",
+                format_args!("container={name:?} previous_run={previous} run={run_id}"),
+            );
+        }
     }
 
     async fn require_active(&self, name: &str, run_id: u64) -> AppResult<()> {
@@ -150,16 +231,36 @@ impl DaycareRuntime {
             active.remove(name);
         }
     }
-
-    async fn finish_run<T>(&self, name: &str, run_id: u64, result: AppResult<T>) -> AppResult<T> {
-        self.clear_active(name, run_id).await;
-        result
-    }
 }
 
 pub type DaycareStream = std::pin::Pin<
     Box<dyn tokio_stream::Stream<Item = Result<DaycareResponse, Status>> + Send + 'static>,
 >;
+
+// Identity is copied only after signature validation and follows the run across awaits.
+struct RunContext {
+    fields: String,
+}
+
+impl RunContext {
+    fn new(run_id: u64, bundle: &RuntimeBundle) -> Self {
+        Self {
+            fields: format!(
+                "run={run_id} host={:?} user={:?} assignment={:?} problem={:?} step={} action={:?}",
+                bundle.hostname,
+                bundle.user_id,
+                bundle.assignment,
+                bundle.problem_id,
+                bundle.step_number,
+                bundle.action
+            ),
+        }
+    }
+
+    fn log(&self, level: &str, event: &str, fields: std::fmt::Arguments<'_>) {
+        record(level, event, format_args!("{} {fields}", self.fields));
+    }
+}
 
 fn validate_and_decode_action(
     envelope: &SignedRuntimeBundle,
@@ -256,7 +357,18 @@ async fn run_action(
     deadline: Instant,
     tx: mpsc::Sender<Result<DaycareResponse, Status>>,
 ) -> AppResult<()> {
-    container.put_files(&bundle.files, deadline).await?;
+    container.put_files(&bundle.files, deadline).await.inspect_err(|err| {
+        record(
+            "ERROR",
+            "daycare_upload_failed",
+            format_args!(
+                "container={:?} user={:?} error={:?}",
+                container.id,
+                bundle.user_id,
+                err.to_string()
+            ),
+        );
+    })?;
     let mut transcript = TranscriptCapture::default();
     let command = bundle.command.split_whitespace().map(ToOwned::to_owned).collect::<Vec<_>>();
     let mut report =
@@ -270,11 +382,36 @@ async fn run_action(
     let result = match container.exec(&command, deadline).await {
         Ok(result) => result,
         Err(err) => {
+            record(
+                "WARN",
+                "daycare_command_failed",
+                format_args!(
+                    "container={:?} user={:?} error={:?}",
+                    container.id,
+                    bundle.user_id,
+                    err.to_string()
+                ),
+            );
             fail_report_for_exec_error(&mut report, bundle, &command, err);
             finalize_action(bundle, secret, tx, transcript, report).await?;
             return Ok(());
         }
     };
+    record(
+        "INFO",
+        "daycare_command_finished",
+        format_args!(
+            "container={:?} user={:?} problem={:?} step={} action={:?} exit={} stdout_bytes={} stderr_bytes={}",
+            container.id,
+            bundle.user_id,
+            bundle.problem_id,
+            bundle.step_number,
+            bundle.action,
+            result.status,
+            result.stdout.len(),
+            result.stderr.len()
+        ),
+    );
     if !result.stdout.is_empty() {
         emit_event(
             &tx,
@@ -304,10 +441,7 @@ async fn run_action(
                 format!("Crashed with exit status {} while running unit tests", result.status),
             );
         } else {
-            parse_xunit(
-                &mut report,
-                &container.read_regular_file("test_detail.xml", deadline).await.unwrap_or_default(),
-            );
+            parse_xunit(&mut report, &read_report(container, bundle, deadline).await);
             if result.status != 0 {
                 report.passed = false;
             }
@@ -319,10 +453,7 @@ async fn run_action(
                 format!("Crashed with exit status {} while running unit tests", result.status),
             );
         } else {
-            parse_check(
-                &mut report,
-                &container.read_regular_file("test_detail.xml", deadline).await.unwrap_or_default(),
-            );
+            parse_check(&mut report, &read_report(container, bundle, deadline).await);
             if result.status != 0 {
                 report.passed = false;
             }
@@ -350,11 +481,42 @@ async fn run_action(
                     .await?;
                 }
                 Ok(_) => {}
-                Err(err) => eprintln!("error trying to download files from container: {err}"),
+                Err(err) => record(
+                    "WARN",
+                    "daycare_download_failed",
+                    format_args!(
+                        "container={:?} user={:?} error={:?}",
+                        container.id,
+                        bundle.user_id,
+                        err.to_string()
+                    ),
+                ),
             }
         }
     }
     finalize_action(bundle, secret, tx, transcript, report).await
+}
+
+// Preserve the retrieval error separately from the parser's invalid-input report.
+async fn read_report(container: &Container, bundle: &RuntimeBundle, deadline: Instant) -> Vec<u8> {
+    match container.read_regular_file("test_detail.xml", deadline).await {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            record(
+                "WARN",
+                "daycare_report_unavailable",
+                format_args!(
+                    "container={:?} user={:?} problem={:?} step={} error={:?}",
+                    container.id,
+                    bundle.user_id,
+                    bundle.problem_id,
+                    bundle.step_number,
+                    err.to_string()
+                ),
+            );
+            Vec::new()
+        }
+    }
 }
 
 async fn finalize_action(
@@ -364,33 +526,26 @@ async fn finalize_action(
     transcript: TranscriptCapture,
     report: ReportCard,
 ) -> AppResult<()> {
+    if transcript.discarded_events > 0 {
+        record(
+            "WARN",
+            "daycare_transcript_truncated",
+            format_args!(
+                "user={:?} problem={:?} step={} action={:?} discarded_events={} discarded_bytes={}",
+                bundle.user_id,
+                bundle.problem_id,
+                bundle.step_number,
+                bundle.action,
+                transcript.discarded_events,
+                transcript.discarded_bytes
+            ),
+        );
+    }
     if let Some(commit) = &mut bundle.commit {
         commit.transcript = transcript.events;
         commit.report_card = Some(report.clone());
         commit.score = if report.passed { 1.0 } else { score_from_report(&report) };
         commit.updated_at = Some(timestamp(Utc::now()));
-    }
-    if !report.passed && (!report.note.is_empty() || report.results.is_empty()) {
-        eprintln!(
-            "daycare action failed: user={:?} assignment={:?} problem={:?} step={} action={:?} reason={:?}",
-            bundle.user_id,
-            bundle.assignment,
-            bundle.problem_id,
-            bundle.step_number,
-            bundle.action,
-            report.note
-        );
-    }
-    if bundle.action != "grade" {
-        eprintln!(
-            "action completed: user={:?} assignment={:?} problem={:?} step={} action={:?} passed={}",
-            bundle.user_id,
-            bundle.assignment,
-            bundle.problem_id,
-            bundle.step_number,
-            bundle.action,
-            report.passed
-        );
     }
     if bundle.action == "grade" {
         let signed = encode_signed_runtime_bundle(bundle, secret)?;
@@ -419,12 +574,16 @@ fn fail_report_for_exec_error(
 struct TranscriptCapture {
     events: Vec<EventMessage>,
     stream_bytes: usize,
+    discarded_events: usize,
+    discarded_bytes: usize,
 }
 
 impl TranscriptCapture {
     fn record(&mut self, event: &EventMessage) {
         if !event.stream_data.is_empty() {
             if self.stream_bytes > TRANSCRIPT_DATA_LIMIT {
+                self.discarded_events += 1;
+                self.discarded_bytes += event.stream_data.len();
                 return;
             }
             self.stream_bytes += event.stream_data.len();
@@ -440,6 +599,9 @@ impl TranscriptCapture {
         }
         if self.events.len() < TRANSCRIPT_EVENT_COUNT_LIMIT {
             self.events.push(event.clone());
+        } else {
+            self.discarded_events += 1;
+            self.discarded_bytes += event.stream_data.len();
         }
     }
 }
@@ -747,7 +909,76 @@ struct Container {
     id: String,
 }
 
+// Docker's state document is decoded without retaining unrelated inspection data.
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct ContainerState {
+    status: String,
+    exit_code: i32,
+    #[serde(rename = "OOMKilled")]
+    oom_killed: bool,
+    error: String,
+    pid: u64,
+}
+
 impl Container {
+    // Inspect only selected state fields; environment and workspace contents stay private.
+    async fn log_usage(&self, context: &RunContext) {
+        let args = vec![
+            "inspect".to_owned(),
+            "--format".to_owned(),
+            "{{json .State}}".to_owned(),
+            self.id.clone(),
+        ];
+        let result =
+            run_command(&self.command, &args, Instant::now() + Duration::from_secs(2)).await;
+        match result {
+            Ok(result) if result.status == 0 => {
+                match serde_json::from_slice::<ContainerState>(&result.stdout) {
+                    Ok(state) => {
+                        context.log(
+                            "INFO",
+                            "daycare_container_state",
+                            format_args!(
+                                "container={:?} status={:?} container_exit={} oom_killed={} error={:?}",
+                                self.id,
+                                state.status,
+                                state.exit_code,
+                                state.oom_killed,
+                                state.error
+                            ),
+                        );
+                        let pid = state.pid;
+                        let usage = tokio::task::spawn_blocking(move || collect_usage(pid)).await;
+                        match usage {
+                            Ok(Ok(usage)) => {
+                                context.log("INFO", "daycare_usage", format_args!("{usage}"))
+                            }
+                            other => context.log(
+                                "WARN",
+                                "daycare_usage_unavailable",
+                                format_args!("error={other:?}"),
+                            ),
+                        }
+                    }
+                    Err(err) => {
+                        context.log("WARN", "daycare_inspect_failed", format_args!("error={err:?}"))
+                    }
+                }
+            }
+            Ok(result) => context.log(
+                "WARN",
+                "daycare_inspect_failed",
+                format_args!("exit={}", result.status),
+            ),
+            Err(err) => context.log(
+                "WARN",
+                "daycare_inspect_failed",
+                format_args!("error={:?}", err.to_string()),
+            ),
+        }
+    }
+
     async fn create(
         command: &Arc<Vec<String>>,
         active_runs: &Arc<Mutex<BTreeMap<String, u64>>>,
@@ -912,14 +1143,50 @@ impl Container {
             deadline,
         )
         .await;
-        let _ = run_command(
+        let removal = run_command(
             &self.command,
             &["rm".to_owned(), "-f".to_owned(), self.id.clone()],
             deadline,
         )
         .await?;
+        if removal.status != 0 {
+            return Err(AppError::Internal(format!(
+                "container removal failed: container={} exit={}",
+                self.id, removal.status
+            )));
+        }
         Ok(())
     }
+}
+
+// Cgroup v2 counters belong to the container and must be sampled before removal.
+fn collect_usage(pid: u64) -> Result<String, std::io::Error> {
+    let membership = std::fs::read_to_string(format!("/proc/{pid}/cgroup"))?;
+    let relative = membership
+        .lines()
+        .find_map(|line| line.strip_prefix("0::"))
+        .ok_or_else(|| std::io::Error::other("cgroup v2 membership unavailable"))?;
+    let root = std::path::Path::new("/sys/fs/cgroup").join(relative.trim_start_matches('/'));
+    Ok(read_usage(&root))
+}
+
+fn read_usage(root: &std::path::Path) -> String {
+    let mut fields = Vec::new();
+    for name in ["cpu.stat", "memory.peak", "pids.peak", "memory.events"] {
+        match std::fs::read_to_string(root.join(name)) {
+            Ok(value) => fields.push(format!(
+                "{}={:?}",
+                name.replace('.', "_"),
+                value.split_whitespace().collect::<Vec<_>>().join(" ")
+            )),
+            Err(err) => fields.push(format!(
+                "{}=unavailable error={:?}",
+                name.replace('.', "_"),
+                err.to_string()
+            )),
+        }
+    }
+    fields.join(" ")
 }
 
 async fn ensure_active(
@@ -1030,11 +1297,17 @@ async fn read_limited<R: AsyncReadExt + Unpin>(reader: &mut R, limit: usize) -> 
     let mut out = Vec::new();
     let mut buf = [0_u8; 8192];
     let mut truncated = false;
+    let mut discarded = 0usize;
     loop {
         let n = reader.read(&mut buf).await?;
         if n == 0 {
             if truncated {
                 out.extend_from_slice(COMMAND_OUTPUT_TRUNCATED);
+                record(
+                    "WARN",
+                    "daycare_output_truncated",
+                    format_args!("limit_bytes={limit} discarded_bytes={discarded}"),
+                );
             }
             return Ok(out);
         }
@@ -1042,6 +1315,7 @@ async fn read_limited<R: AsyncReadExt + Unpin>(reader: &mut R, limit: usize) -> 
         out.extend_from_slice(&buf[..n.min(remaining)]);
         if n > remaining {
             truncated = true;
+            discarded += n - remaining;
         }
     }
 }
@@ -1059,6 +1333,74 @@ mod tests {
     use crate::config::{IpFilterConfig, ServerConfig};
     use crate::proto::{AssignmentKey, Commit, RuntimeLimits};
     use crate::signatures::{decode_signed_runtime_bundle, encode_signed_runtime_bundle};
+
+    #[test]
+    fn usage_preserves_counters_and_reports_unavailable_files() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("cpu.stat"), "usage_usec 123\nuser_usec 100\nsystem_usec 23\n")
+            .unwrap();
+        fs::write(dir.path().join("memory.peak"), "4096\n").unwrap();
+        let usage = read_usage(dir.path());
+        assert!(usage.contains("usage_usec 123 user_usec 100 system_usec 23"));
+        assert!(usage.contains("memory_peak=\"4096\""));
+        assert!(usage.contains("pids_peak=unavailable"));
+        assert!(usage.contains("memory_events=unavailable"));
+    }
+
+    #[tokio::test]
+    async fn cleanup_reports_nonzero_container_engine_status() {
+        let container = Container {
+            command: Arc::new(vec!["false".to_owned()]),
+            id: "test-container".to_owned(),
+        };
+        let error = container.shutdown().await.unwrap_err();
+        assert!(error.to_string().contains("container removal failed"));
+    }
+
+    #[tokio::test]
+    async fn superseded_cleanup_preserves_new_run_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = DaycareRuntime::new(Arc::new(test_config(dir.path()))).unwrap();
+        runtime.mark_active("nanny-student", 1).await;
+        runtime.mark_active("nanny-student", 2).await;
+        runtime.clear_active("nanny-student", 1).await;
+        assert!(runtime.require_active("nanny-student", 1).await.is_err());
+        assert!(runtime.require_active("nanny-student", 2).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn expired_command_deadline_reports_timeout() {
+        let command = Arc::new(vec!["sleep".to_owned()]);
+        let result = run_command(&command, &["2".to_owned()], Instant::now()).await;
+        assert!(result.err().unwrap().to_string().contains("timed out"));
+    }
+
+    #[tokio::test]
+    async fn unavailable_report_still_produces_failing_grade() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = test_config(dir.path());
+        config.container_engine = fake_engine(dir.path()).display().to_string();
+        let runtime = DaycareRuntime::new(Arc::new(config.clone())).unwrap();
+        let signed = signed_runtime(&config, |bundle| bundle.parser = "check".to_owned());
+        let mut stream = runtime
+            .run(DaycareRequest { bundle: Some(signed), args: Vec::new() })
+            .await
+            .unwrap()
+            .into_inner();
+        let mut report = None;
+        while let Some(response) = stream.next().await {
+            if let Some(daycare_response::Response::Bundle(signed)) = response.unwrap().response {
+                report = decode_signed_runtime_bundle(&signed, &config.daycare_secret)
+                    .unwrap()
+                    .commit
+                    .unwrap()
+                    .report_card;
+            }
+        }
+        let report = report.unwrap();
+        assert!(!report.passed);
+        assert!(report.note.contains("parsing unit test results"));
+    }
 
     #[test]
     fn runtime_validation_rejects_wrong_host_stale_time_and_action_mismatch() {

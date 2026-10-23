@@ -1,7 +1,7 @@
 Server semantics
 ================
 
-This document defines the operation boundaries and invariants to preserve when changing the Rust TA and daycare server. The wire contract is [codegrinder.proto](../protocol/codegrinder.proto); database policy is defined in [schema.sql](../setup/schema.sql). Client obligations are documented for [grind](../grind/SEMANTICS.md), [web](../www/web/SEMANTICS.md), and [exam](../www/exam/SEMANTICS.md). Protocol changes require explicit approval.
+This document defines the operation boundaries and invariants to preserve when changing the Rust TA and daycare server. The wire contract is [codegrinder.proto](../protocol/codegrinder.proto); database policy is defined in [schema.sql](../setup/schema.sql). Client obligations are documented for [grind](../grind/NOTES.md), [web](../www/web/NOTES.md), and [exam](../www/exam/NOTES.md). Protocol changes require explicit approval.
 
 
 Identity, state, and authority
@@ -120,6 +120,18 @@ Author preparation, validation, and save
 `SaveProblemSet` saves metadata and memberships/weights with explicit create/update intent; it does not execute validation. Enforce unary slices, adjacent continuation bounds, and existing problem references. Once assigned, membership, slice bounds, and continuation shape are immutable; metadata and weights remain editable.
 
 Admin problem-type saves transactionally upsert retained metadata/actions/files and delete only omitted entries in the submitted complete replacement set. Do not delete/recreate the parent row. Canonical-file changes affect future workspace refreshes and runtime preparations; they are not student uploads.
+
+
+Operational logging
+-------------------
+
+Operational records use stderr. New lifecycle records carry a UTC timestamp, severity, stable event name, and named fields on one line. Daycare identity is attached only after signature validation; host, actor user, assignment owner/course/problem set, problem, step, action, and a process-local run number identify each accepted run. The run number is not a protocol field or a durable identifier across restarts. TA submission records include the selected daycare host. Logs never intentionally include session keys, signed envelopes, workspace contents, or routine student stdout/stderr; output is summarized with byte counts.
+
+An accepted daycare run logs admission, capacity acquisition with queue duration, container creation, execution outcome, cleanup outcome, and total duration. Execution duration includes container setup and workspace staging, and excludes queue wait and cleanup. Replacement of an active same-user run records both run numbers. Container creation, workspace upload, command execution, report retrieval, artifact download, stream closure, and cleanup failures retain their causes. A failed student report is an ordinary execution outcome, not by itself an infrastructure error. Output/transcript truncation records discarded counts while preserving existing capture limits.
+
+Before container removal, bounded Docker inspection records container state, container exit code, and OOM status separately from the student command exit code. Cgroup v2 sampling reads CPU counters in microseconds, peak memory in bytes, peak process count, and memory event counters. Sampling happens while the container still exists; unavailable counters and inspection failures are explicit and cannot prevent cleanup. Container engine removal failures are reported even when the engine exits normally with a nonzero status. Diagnostic collection does not change the one-container-per-user policy or introduce workspace mounts.
+
+The registry logs first registration, capacity/type changes, and expiry when stale entries are pruned. Unchanged renewals remain quiet. Selection failure includes requested problem types. Workspace persistence logs its returned save status; LMS bookkeeping logs locked/no-target/pending decisions and successful HTTP delivery separately from grade persistence. A decision recorded inside a transaction is provisional until commit. Unexpected gRPC errors are logged at status conversion, with operation/actor context for grade submission and persistence. Database transactions taking at least 500 milliseconds log the operation closure name, time acquiring the initial transaction lock, and subsequent transaction time; failed begin and rollback operations are explicit. Deferred read transactions can acquire later locks during SQL execution, so the initial lock duration does not measure all possible SQLite waiting.
 
 
 Audit boundaries and dependencies
