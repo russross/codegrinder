@@ -19,9 +19,9 @@ impl Db {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        // Validate the database at startup. Each transaction owns a fresh connection
-        // so independent requests can run concurrently without sharing connection state.
-        open_connection(path)?;
+        // Refresh full planner statistics, including STAT4, before serving requests.
+        // Each transaction later opens its own connection and reads the saved statistics.
+        open_connection(path)?.execute_batch("PRAGMA analysis_limit = 0; ANALYZE;")?;
         Ok(Self { path: path.to_owned() })
     }
 
@@ -109,7 +109,7 @@ impl Db {
                     Err(err)
                 }
             };
-            if started.elapsed() >= Duration::from_millis(500) {
+            if started.elapsed() >= Duration::from_millis(1000) {
                 crate::logging::record(
                     "WARN",
                     "database_slow_transaction",
@@ -196,6 +196,42 @@ mod tests {
         mpsc,
     };
     use tokio::sync::oneshot;
+
+    #[test]
+    fn startup_refreshes_full_statistics() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db.sqlite");
+        let conn = open_test_connection(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE samples (value INTEGER NOT NULL);
+             CREATE INDEX samples_value ON samples(value);
+             INSERT INTO samples VALUES (1), (2), (3);",
+        )
+        .unwrap();
+
+        // Opening the database collects histograms and persists the index row count.
+        // A later startup must replace those statistics after the data changes.
+        for expected in [3, 4] {
+            Db::open(&path).unwrap();
+            let stat: String = conn
+                .query_row("SELECT stat FROM sqlite_stat1 WHERE idx = 'samples_value'", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(stat, format!("{expected} 1"));
+            let samples: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_stat4 WHERE idx = 'samples_value'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(samples, expected);
+            if expected == 3 {
+                conn.execute("INSERT INTO samples VALUES (4)", []).unwrap();
+            }
+        }
+    }
 
     #[test]
     fn test_connection_uses_canonical_schema() {

@@ -19,7 +19,7 @@ File maps contain normalized relative paths and byte contents. Reject invalid pa
 Startup and request transactions
 --------------------------------
 
-1. Load configuration and open the existing SQLite database. Enable TA, daycare, or both; omitting both role flags enables both. The production database/schema must already be provisioned.
+1. Load configuration and open the existing SQLite database. Run full `ANALYZE` with no analysis limit on every startup, refreshing persisted planner statistics including STAT4 before accepting requests; failure aborts startup. Enable TA, daycare, or both; omitting both role flags enables both. The production database/schema must already be provisioned.
 2. Bind cleartext HTTP/h2c on `localhost:1400` by default. Caddy terminates public TLS, serves static assets, and supplies trusted forwarding information. Public HTTPS and certificates do not belong to the Rust process.
 3. Enable only the selected role's operations. TA requests perform authentication and short database work; daycare requests can run for the duration of student execution without occupying a TA transaction.
 4. Start daycare registration when configured and recover eligible pending/failed LMS passbacks when the TA starts. These activities must not block normal request handling on external services.
