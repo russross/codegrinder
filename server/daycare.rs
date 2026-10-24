@@ -1,9 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::io::{Cursor, Read};
+use std::pin::Pin;
 use std::process::Stdio;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Weak};
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
@@ -12,7 +14,7 @@ use sha2::Digest;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tokio::sync::{Mutex, OnceCell, Semaphore, mpsc, watch};
-use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::Stream;
 use tonic::{Response, Status};
 
 use crate::config::ServerConfig;
@@ -38,6 +40,11 @@ const STUDENT_GID: u64 = 1001;
 const STUDENT_DIRECTORY_MODE: u32 = 0o755;
 const STUDENT_FILE_MODE: u32 = 0o644;
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+const ENGINE_STOP_TIMEOUT: Duration = Duration::from_secs(2);
+const ENGINE_REMOVE_TIMEOUT: Duration = Duration::from_secs(5);
+const WORKSPACE_ENTRY_LIMIT: usize = 20_000;
+const WORKSPACE_PATH_LIMIT: usize = 4096;
+const REPORT_FILE_LIMIT: usize = 5_000_000;
 
 struct ActiveRun {
     id: u64,
@@ -70,7 +77,9 @@ pub struct DaycareRuntime {
     container_command: Arc<Vec<String>>,
     container_slots: Arc<Semaphore>,
     active_runs: Arc<Mutex<BTreeMap<String, ActiveRun>>>,
+    lifecycles: Arc<Mutex<BTreeMap<String, Weak<Mutex<()>>>>>,
     next_run_id: Arc<AtomicU64>,
+    instance: Arc<String>,
 }
 
 impl DaycareRuntime {
@@ -85,7 +94,9 @@ impl DaycareRuntime {
             config,
             container_command: Arc::new(command),
             active_runs: Arc::new(Mutex::new(BTreeMap::new())),
+            lifecycles: Arc::new(Mutex::new(BTreeMap::new())),
             next_run_id: Arc::new(AtomicU64::new(1)),
+            instance: Arc::new(format!("{:032x}", rand::random::<u128>())),
         })
     }
 
@@ -94,10 +105,10 @@ impl DaycareRuntime {
         request: DaycareRequest,
         deadline: Option<Instant>,
     ) -> Result<Response<DaycareStream>, Status> {
+        let deadline = deadline.unwrap_or_else(|| Instant::now() + DEFAULT_REQUEST_TIMEOUT);
         let (tx, rx) = mpsc::channel(64);
         let runtime = self.clone();
         tokio::spawn(async move {
-            let deadline = deadline.unwrap_or_else(|| Instant::now() + DEFAULT_REQUEST_TIMEOUT);
             let result = runtime.handle(request, tx.clone(), deadline).await;
             if let Err(err) = result {
                 record(
@@ -114,7 +125,11 @@ impl DaycareRuntime {
                 .await;
             }
         });
-        Ok(Response::new(Box::pin(ReceiverStream::new(rx)) as DaycareStream))
+        let stream = ResponseStream {
+            receiver: Some(rx),
+            deadline: Box::pin(tokio::time::sleep_until(deadline.into())),
+        };
+        Ok(Response::new(Box::pin(stream) as DaycareStream))
     }
 
     async fn handle(
@@ -130,25 +145,22 @@ impl DaycareRuntime {
             &self.config.daycare_secret,
             &self.config.hostname,
         )?;
-        let limits = effective_limits(&bundle)?;
+        let spec = ExecutionSpec::new(&bundle)?;
         let nanny_name = format!("nanny-{}", safe_user_dir_name(&bundle.user_id));
+        let lifecycle = self.user_lifecycle(&nanny_name).await;
         let run_id = self.next_run_id.fetch_add(1, Ordering::Relaxed);
         let context = RunContext::new(run_id, &bundle);
         let started = Instant::now();
         context.log(
             "INFO",
             "daycare_accepted",
-            format_args!("image={:?} limits={limits:?}", bundle.container),
+            format_args!("image={:?} limits={:?}", bundle.container, spec.limits),
         );
         let stop = self.mark_active(&nanny_name, run_id).await;
         let scope = RequestScope { deadline, stop, events: tx.clone() };
         let result = async {
-            scope
-                .run(async {
-                    preempt_container(&self.container_command, &nanny_name).await;
-                    Ok(())
-                })
-                .await?;
+            // Replacement signals immediately, but Docker mutations have one owner per user.
+            let _owner = scope.run(async { Ok(lifecycle.lock().await) }).await?;
             let _slot = scope
                 .run(async {
                     self.container_slots
@@ -157,36 +169,45 @@ impl DaycareRuntime {
                         .map_err(|_| AppError::Internal("container limiter closed".to_owned()))
                 })
                 .await?;
-            self.require_active(&nanny_name, run_id).await?;
+            scope.run(async { Ok(()) }).await?;
             context.log(
                 "INFO",
                 "daycare_capacity_acquired",
                 format_args!("queue_ms={}", started.elapsed().as_millis()),
             );
             let execution_started = Instant::now();
-            let container = match scope
-                .run(Container::create(
-                    &self.container_command,
-                    &self.active_runs,
-                    run_id,
-                    &nanny_name,
-                    &bundle,
-                    &limits,
-                    deadline,
-                ))
-                .await
+            reconcile_named_container(&self.container_command, &nanny_name, None, &context).await;
+            scope.run(async { Ok(()) }).await?;
+            let identity = format!("{}-{run_id}", self.instance);
+            scope.run(check_image(&self.container_command, &bundle.container, deadline)).await?;
+            // Creation stays owned until its CLI finishes, even after request cancellation.
+            let container = match Container::create(
+                &self.container_command,
+                &identity,
+                &nanny_name,
+                &bundle,
+                &spec.limits,
+                deadline,
+            )
+            .await
             {
                 Ok(container) => container,
                 Err(err) => {
-                    // A cancelled Docker create can finish in the daemon after its CLI exits.
-                    if self.require_active(&nanny_name, run_id).await.is_ok() {
-                        preempt_container(&self.container_command, &nanny_name).await;
-                    }
                     context.log(
                         "ERROR",
                         "daycare_container_create_failed",
                         format_args!("error={:?}", err.to_string()),
                     );
+                    let _ = tx.try_send(Ok(DaycareResponse {
+                        response: Some(daycare_response::Response::Error(err.to_string())),
+                    }));
+                    reconcile_named_container(
+                        &self.container_command,
+                        &nanny_name,
+                        Some(&identity),
+                        &context,
+                    )
+                    .await;
                     return Err(err);
                 }
             };
@@ -195,17 +216,20 @@ impl DaycareRuntime {
                 "daycare_container_created",
                 format_args!("container={:?}", container.id),
             );
-            if let Err(err) = self.require_active(&nanny_name, run_id).await {
-                let shutdown = container.shutdown().await;
-                context.log(
-                    if shutdown.is_ok() { "INFO" } else { "ERROR" },
-                    "daycare_cleanup_finished",
-                    format_args!("error={:?}", shutdown.err().map(|err| err.to_string())),
-                );
-                return Err(err);
-            }
             let result = scope
-                .run(run_action(&container, &mut bundle, &self.config.daycare_secret, deadline, tx))
+                .run(async {
+                    container.start(deadline).await?;
+                    run_action(
+                        &container,
+                        &mut bundle,
+                        &spec,
+                        &context,
+                        &self.config.daycare_secret,
+                        deadline,
+                        tx,
+                    )
+                    .await
+                })
                 .await;
             context.log(
                 "INFO",
@@ -226,19 +250,9 @@ impl DaycareRuntime {
                         .map(|report| &report.note)
                 ),
             );
-            // Stop abandoned student work before collecting diagnostics or releasing its slot.
-            if result.is_err() {
-                container.stop(Instant::now() + Duration::from_secs(2)).await;
-            }
-            container.log_usage(&context).await;
-            let shutdown = container.shutdown().await;
-            context.log(
-                if shutdown.is_ok() { "INFO" } else { "ERROR" },
-                "daycare_cleanup_finished",
-                format_args!("error={:?}", shutdown.as_ref().err().map(ToString::to_string)),
-            );
+            // Cleanup retains both lifecycle ownership and capacity until absence is confirmed.
+            container.reconcile(&context).await;
             result?;
-            shutdown?;
             Ok(())
         }
         .await;
@@ -255,6 +269,17 @@ impl DaycareRuntime {
         result
     }
 
+    async fn user_lifecycle(&self, name: &str) -> Arc<Mutex<()>> {
+        let mut lifecycles = self.lifecycles.lock().await;
+        lifecycles.retain(|_, owner| owner.strong_count() > 0);
+        if let Some(owner) = lifecycles.get(name).and_then(Weak::upgrade) {
+            return owner;
+        }
+        let owner = Arc::new(Mutex::new(()));
+        lifecycles.insert(name.to_owned(), Arc::downgrade(&owner));
+        owner
+    }
+
     async fn mark_active(&self, name: &str, run_id: u64) -> watch::Receiver<bool> {
         let mut active = self.active_runs.lock().await;
         let (stop, receiver) = watch::channel(false);
@@ -269,6 +294,7 @@ impl DaycareRuntime {
         receiver
     }
 
+    #[cfg(test)]
     async fn require_active(&self, name: &str, run_id: u64) -> AppResult<()> {
         let active = self.active_runs.lock().await;
         if active.get(name).map(|run| run.id) == Some(run_id) {
@@ -288,9 +314,30 @@ impl DaycareRuntime {
     }
 }
 
-pub type DaycareStream = std::pin::Pin<
-    Box<dyn tokio_stream::Stream<Item = Result<DaycareResponse, Status>> + Send + 'static>,
->;
+pub type DaycareStream =
+    Pin<Box<dyn Stream<Item = Result<DaycareResponse, Status>> + Send + 'static>>;
+
+// Transport deadlines close the receiver even while its worker owns unresolved Docker work.
+struct ResponseStream {
+    receiver: Option<mpsc::Receiver<Result<DaycareResponse, Status>>>,
+    deadline: Pin<Box<tokio::time::Sleep>>,
+}
+
+impl Stream for ResponseStream {
+    type Item = Result<DaycareResponse, Status>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        let Some(receiver) = &mut this.receiver else {
+            return Poll::Ready(None);
+        };
+        if this.deadline.as_mut().poll(cx).is_ready() {
+            this.receiver = None;
+            return Poll::Ready(Some(Err(Status::deadline_exceeded("daycare request timed out"))));
+        }
+        receiver.poll_recv(cx)
+    }
+}
 
 // Identity is copied only after signature validation and follows the run across awaits.
 struct RunContext {
@@ -397,6 +444,9 @@ fn validate_runtime_limits(limits: &RuntimeLimits) -> AppResult<()> {
     {
         return Err(AppError::BadRequest("runtime limits must be positive".to_owned()));
     }
+    if limits.max_file_size.checked_mul(1024 * 1024).is_none() {
+        return Err(AppError::BadRequest("runtime file size limit is too large".to_owned()));
+    }
     Ok(())
 }
 
@@ -405,9 +455,32 @@ fn action_timeout(limits: &RuntimeLimits) -> Duration {
     Duration::from_secs(cpu.saturating_mul(2).saturating_add(5))
 }
 
+// Resolve signed execution settings once, before admission or container allocation.
+struct ExecutionSpec {
+    command: Vec<String>,
+    limits: RuntimeLimits,
+}
+
+impl ExecutionSpec {
+    fn new(bundle: &RuntimeBundle) -> AppResult<Self> {
+        Ok(Self {
+            command: bundle.command.split_whitespace().map(ToOwned::to_owned).collect(),
+            limits: effective_limits(bundle)?,
+        })
+    }
+}
+
+enum ExecutionOutcome {
+    Exited(CommandResult),
+    TimedOut,
+    Failed(AppError),
+}
+
 async fn run_action(
     container: &Container,
     bundle: &mut RuntimeBundle,
+    spec: &ExecutionSpec,
+    context: &RunContext,
     secret: &str,
     deadline: Instant,
     tx: mpsc::Sender<Result<DaycareResponse, Status>>,
@@ -425,7 +498,7 @@ async fn run_action(
         );
     })?;
     let mut transcript = TranscriptCapture::default();
-    let command = bundle.command.split_whitespace().map(ToOwned::to_owned).collect::<Vec<_>>();
+    let command = &spec.command;
     let mut report =
         ReportCard { passed: true, note: String::new(), duration: None, results: Vec::new() };
     emit_event(
@@ -436,32 +509,20 @@ async fn run_action(
     .await?;
     // Only student execution consumes the CPU-derived wall-clock allowance.
     let execution_started = Instant::now();
-    let allowance = action_timeout(&effective_limits(bundle)?)
-        .min(deadline.saturating_duration_since(execution_started));
+    let allowance =
+        action_timeout(&spec.limits).min(deadline.saturating_duration_since(execution_started));
     let execution_deadline = execution_started + allowance;
-    let (output_tx, mut output_rx) = mpsc::channel(16);
-    let execution = container.exec(&command, execution_deadline, output_tx);
-    tokio::pin!(execution);
-    let execution_result = loop {
-        tokio::select! {
-            result = &mut execution => {
-                while let Some(output) = output_rx.recv().await {
-                    emit_event(&tx, &mut transcript, output).await?;
-                }
-                break result;
-            }
-            Some(output) = output_rx.recv() => {
-                emit_event(&tx, &mut transcript, output).await?;
-            }
-        }
-    };
+    let (execution_result, duration) =
+        execute_with_output(container, command, context, execution_deadline, &tx, &mut transcript)
+            .await?;
     report.duration = Some(
-        prost_types::Duration::try_from(execution_started.elapsed())
+        prost_types::Duration::try_from(duration)
             .map_err(|err| AppError::Internal(err.to_string()))?,
     );
     let result = match execution_result {
-        Ok(result) => result,
-        Err(err) => {
+        ExecutionOutcome::Exited(result) => result,
+        ExecutionOutcome::TimedOut => {
+            let err = AppError::DeadlineExceeded("command timed out".to_owned());
             record(
                 "WARN",
                 "daycare_command_failed",
@@ -478,10 +539,11 @@ async fn run_action(
                 event("error", Vec::new(), 0, Vec::new(), err.to_string(), BTreeMap::new()),
             )
             .await?;
-            fail_report_for_exec_error(&mut report, bundle, &command, err);
+            fail_report_for_exec_error(&mut report, bundle, command, err);
             finalize_action(bundle, secret, tx, transcript, report).await?;
             return Ok(());
         }
+        ExecutionOutcome::Failed(err) => return Err(err),
     };
     record(
         "INFO",
@@ -567,10 +629,48 @@ async fn run_action(
     finalize_action(bundle, secret, tx, transcript, report).await
 }
 
+// Both futures remain owned here; a blocked event send cannot suspend execution supervision.
+async fn execute_with_output(
+    container: &Container,
+    command: &[String],
+    context: &RunContext,
+    deadline: Instant,
+    tx: &mpsc::Sender<Result<DaycareResponse, Status>>,
+    transcript: &mut TranscriptCapture,
+) -> AppResult<(ExecutionOutcome, Duration)> {
+    let started = Instant::now();
+    let (output_tx, mut output_rx) = mpsc::channel(16);
+    let execution = async {
+        let result = container.exec(command, deadline, output_tx).await;
+        let duration = started.elapsed();
+        if matches!(result, ExecutionOutcome::Exited(_)) {
+            container.log_usage(context).await;
+        }
+        container.quiesce().await?;
+        Ok::<_, AppError>((result, duration))
+    };
+    let forwarding = async {
+        while let Some(output) = output_rx.recv().await {
+            emit_event(tx, transcript, output).await?;
+        }
+        Ok::<_, AppError>(())
+    };
+    let (result, ()) = tokio::try_join!(execution, forwarding)?;
+    Ok(result)
+}
+
 // Preserve the retrieval error separately from the parser's invalid-input report.
 async fn read_report(container: &Container, bundle: &RuntimeBundle, deadline: Instant) -> Vec<u8> {
     match container.read_regular_file("test_detail.xml", deadline).await {
-        Ok(bytes) => bytes,
+        Ok(bytes) if bytes.len() <= REPORT_FILE_LIMIT => bytes,
+        Ok(_) => {
+            record(
+                "WARN",
+                "daycare_report_unavailable",
+                format_args!("container={:?} reason=report_size_limit", container.id),
+            );
+            Vec::new()
+        }
         Err(err) => {
             record(
                 "WARN",
@@ -840,8 +940,9 @@ fn select_download_files(
     let mut files = BTreeMap::new();
     for path in raw_paths.split(',').filter(|path| !path.is_empty()) {
         if has_glob_meta(path) {
+            let pattern = GlobPattern::new(path.as_bytes());
             for (candidate, content) in all_files {
-                if glob_matches(path, candidate) && !files.contains_key(candidate) {
+                if pattern.matches(candidate.as_bytes()) && !files.contains_key(candidate) {
                     files.insert(candidate.clone(), content.clone());
                 }
             }
@@ -856,30 +957,66 @@ fn has_glob_meta(path: &str) -> bool {
     path.as_bytes().iter().any(|byte| matches!(byte, b'*' | b'?' | b'['))
 }
 
-fn glob_matches(pattern: &str, text: &str) -> bool {
-    glob_match(pattern.as_bytes(), text.as_bytes())
+enum GlobToken<'a> {
+    Literal(u8),
+    Any,
+    Star,
+    Class(&'a [u8]),
 }
 
-fn glob_match(pattern: &[u8], text: &[u8]) -> bool {
-    if pattern.is_empty() {
-        return text.is_empty();
-    }
-    match pattern[0] {
-        b'*' => {
-            glob_match(&pattern[1..], text) || (!text.is_empty() && glob_match(pattern, &text[1..]))
-        }
-        b'?' => !text.is_empty() && glob_match(&pattern[1..], &text[1..]),
-        b'[' => {
-            if text.is_empty() {
-                return false;
-            }
-            let Some(end) = pattern.iter().position(|byte| *byte == b']') else {
-                return pattern[0] == text[0] && glob_match(&pattern[1..], &text[1..]);
+struct GlobPattern<'a>(Vec<GlobToken<'a>>);
+
+impl<'a> GlobPattern<'a> {
+    fn new(mut pattern: &'a [u8]) -> Self {
+        let mut tokens = Vec::new();
+        let mut closing = pattern.iter().position(|byte| *byte == b']');
+        while let Some((&byte, rest)) = pattern.split_first() {
+            let token = match byte {
+                b'*' => GlobToken::Star,
+                b'?' => GlobToken::Any,
+                b'[' => {
+                    if let Some(end) = closing {
+                        tokens.push(GlobToken::Class(&pattern[1..end]));
+                        pattern = &pattern[end + 1..];
+                        closing = pattern.iter().position(|byte| *byte == b']');
+                        continue;
+                    }
+                    GlobToken::Literal(byte)
+                }
+                _ => GlobToken::Literal(byte),
             };
-            char_class_matches(&pattern[1..end], text[0])
-                && glob_match(&pattern[end + 1..], &text[1..])
+            tokens.push(token);
+            pattern = rest;
+            closing = if byte == b']' {
+                pattern.iter().position(|byte| *byte == b']')
+            } else {
+                closing.and_then(|index| index.checked_sub(1))
+            };
         }
-        byte => !text.is_empty() && byte == text[0] && glob_match(&pattern[1..], &text[1..]),
+        Self(tokens)
+    }
+
+    // Two rows bound matching work without recursive backtracking or stack growth.
+    fn matches(&self, text: &[u8]) -> bool {
+        let mut previous = vec![false; self.0.len() + 1];
+        let mut current = previous.clone();
+        previous[0] = true;
+        for (index, token) in self.0.iter().enumerate() {
+            previous[index + 1] = matches!(token, GlobToken::Star) && previous[index];
+        }
+        for byte in text {
+            current[0] = false;
+            for (index, token) in self.0.iter().enumerate() {
+                current[index + 1] = match token {
+                    GlobToken::Star => current[index] || previous[index + 1],
+                    GlobToken::Any => previous[index],
+                    GlobToken::Literal(value) => previous[index] && value == byte,
+                    GlobToken::Class(class) => previous[index] && char_class_matches(class, *byte),
+                };
+            }
+            std::mem::swap(&mut previous, &mut current);
+        }
+        previous[self.0.len()]
     }
 }
 
@@ -946,7 +1083,12 @@ fn read_output_tar(raw: &[u8]) -> AppResult<BTreeMap<String, Vec<u8>>> {
     let mut archive = tar::Archive::new(Cursor::new(raw));
     let mut files = BTreeMap::new();
     let mut total_bytes = 0usize;
-    for entry in archive.entries()? {
+    for (index, entry) in archive.entries()?.enumerate() {
+        if index >= WORKSPACE_ENTRY_LIMIT {
+            return Err(AppError::BadRequest(
+                "downloaded workspace has too many entries".to_owned(),
+            ));
+        }
         let mut entry = entry?;
         if !entry.header().entry_type().is_file() {
             continue;
@@ -968,6 +1110,9 @@ fn read_output_tar(raw: &[u8]) -> AppResult<BTreeMap<String, Vec<u8>>> {
 
 fn normalized_tar_path<R: std::io::Read>(entry: &tar::Entry<'_, R>) -> AppResult<String> {
     let path = entry.path()?;
+    if path.as_os_str().len() > WORKSPACE_PATH_LIMIT {
+        return Err(AppError::BadRequest("downloaded workspace path is too long".to_owned()));
+    }
     let mut parts = Vec::new();
     for component in path.components() {
         match component {
@@ -989,6 +1134,7 @@ struct Container {
     command: Arc<Vec<String>>,
     id: String,
     files: OnceCell<BTreeMap<String, Vec<u8>>>,
+    stopped: OnceCell<()>,
 }
 
 // Docker's state document is decoded without retaining unrelated inspection data.
@@ -1004,6 +1150,10 @@ struct ContainerState {
 }
 
 impl Container {
+    fn new(command: Arc<Vec<String>>, id: String) -> Self {
+        Self { command, id, files: OnceCell::new(), stopped: OnceCell::new() }
+    }
+
     // Inspect only selected state fields; environment and workspace contents stay private.
     async fn log_usage(&self, context: &RunContext) {
         let args = vec![
@@ -1063,8 +1213,7 @@ impl Container {
 
     async fn create(
         command: &Arc<Vec<String>>,
-        active_runs: &Arc<Mutex<BTreeMap<String, ActiveRun>>>,
-        run_id: u64,
+        identity: &str,
         name: &str,
         bundle: &RuntimeBundle,
         limits: &RuntimeLimits,
@@ -1075,8 +1224,7 @@ impl Container {
             AppError::BadRequest("runtime file size limit is too large".to_owned())
         })?;
         let docker_args = vec![
-            "run".to_owned(),
-            "-d".to_owned(),
+            "create".to_owned(),
             "--pull=never".to_owned(),
             "--name".to_owned(),
             name.to_owned(),
@@ -1087,6 +1235,8 @@ impl Container {
             "--net=none".to_owned(),
             "--label".to_owned(),
             DAYCARE_CONTAINER_LABEL.to_owned(),
+            "--label".to_owned(),
+            format!("codegrinder.run={identity}"),
             "--label".to_owned(),
             format!("codegrinder.user_id={}", bundle.user_id),
             "--memory".to_owned(),
@@ -1116,40 +1266,42 @@ impl Container {
                 deadline.saturating_duration_since(Instant::now()).as_secs().saturating_add(5)
             ),
         ];
-        let mut result = run_command(command, &docker_args, deadline).await?;
-        if result.status != 0 && command_output_contains(&result, "already in use") {
-            let active = active_runs.lock().await;
-            if active.get(name).map(|run| run.id) != Some(run_id) {
-                return Err(AppError::BadRequest(
-                    "daycare request was superseded by a newer request".to_owned(),
-                ));
+        let creation =
+            run_command_inner(command, &docker_args, None, None, COMMAND_OUTPUT_LIMIT, None);
+        tokio::pin!(creation);
+        let result = tokio::select! {
+            result = &mut creation => result,
+            _ = tokio::time::sleep_until(deadline.into()) => {
+                record("ERROR", "daycare_creation_quarantined", format_args!("container={name:?} run={identity:?}"));
+                creation.await
             }
-            drop(active);
-            preempt_container(command, name).await;
-            ensure_active(active_runs, name, run_id).await?;
-            result = run_command(command, &docker_args, deadline).await?;
-        }
+        }?;
         if result.status != 0 {
             return Err(AppError::Internal(format!(
-                "container run failed: exit={}; output={}",
+                "container create failed: exit={}; output={}",
                 result.status,
                 String::from_utf8_lossy(&[result.stdout, result.stderr].concat())
             )));
         }
         let id = String::from_utf8_lossy(&result.stdout).trim().to_owned();
         if id.is_empty() {
-            return Err(AppError::Internal("container run failed: empty container ID".to_owned()));
+            return Err(AppError::Internal(
+                "container create failed: empty container ID".to_owned(),
+            ));
         }
-        if let Err(err) = ensure_active(active_runs, name, run_id).await {
-            let _ = run_command(
-                command,
-                &["rm".to_owned(), "-f".to_owned(), id.clone()],
-                Instant::now() + Duration::from_secs(5),
-            )
-            .await;
-            return Err(err);
+        Ok(Self::new(command.clone(), id))
+    }
+
+    async fn start(&self, deadline: Instant) -> AppResult<()> {
+        let result =
+            run_command(&self.command, &["start".to_owned(), self.id.clone()], deadline).await?;
+        if result.status != 0 {
+            return Err(AppError::Internal(format!(
+                "container start failed: container={} exit={}",
+                self.id, result.status
+            )));
         }
-        Ok(Self { command: command.clone(), id, files: OnceCell::new() })
+        Ok(())
     }
 
     async fn put_files(
@@ -1223,40 +1375,117 @@ impl Container {
         cmd: &[String],
         deadline: Instant,
         output: mpsc::Sender<EventMessage>,
-    ) -> AppResult<CommandResult> {
+    ) -> ExecutionOutcome {
         let mut args =
             vec!["exec".to_owned(), "--user".to_owned(), container_user(), self.id.clone()];
         args.extend(cmd.iter().cloned());
-        run_command_inner(&self.command, &args, None, deadline, COMMAND_OUTPUT_LIMIT, Some(output))
-            .await
+        match run_command_inner(
+            &self.command,
+            &args,
+            None,
+            Some(deadline),
+            COMMAND_OUTPUT_LIMIT,
+            Some(output),
+        )
+        .await
+        {
+            Ok(result) => ExecutionOutcome::Exited(result),
+            Err(AppError::DeadlineExceeded(_)) => ExecutionOutcome::TimedOut,
+            Err(err) => ExecutionOutcome::Failed(err),
+        }
     }
 
-    async fn shutdown(&self) -> AppResult<()> {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        self.stop(deadline).await;
-        let removal = run_command(
+    async fn quiesce(&self) -> AppResult<()> {
+        self.stopped.get_or_try_init(|| self.confirm_stopped()).await.map(|_| ())
+    }
+
+    async fn confirm_stopped(&self) -> AppResult<()> {
+        self.stop().await?;
+        let result = run_command(
             &self.command,
-            &["rm".to_owned(), "-f".to_owned(), self.id.clone()],
-            deadline,
+            &[
+                "inspect".to_owned(),
+                "--format".to_owned(),
+                "{{.State.Running}}".to_owned(),
+                self.id.clone(),
+            ],
+            Instant::now() + ENGINE_STOP_TIMEOUT,
         )
         .await?;
-        if removal.status != 0 {
+        if result.status != 0 || result.stdout != b"false\n" {
             return Err(AppError::Internal(format!(
-                "container removal failed: container={} exit={}",
-                self.id, removal.status
+                "could not confirm container {} stopped",
+                self.id
             )));
         }
         Ok(())
     }
 
-    async fn stop(&self, deadline: Instant) {
-        // A missing or already stopped container needs no further stop operation.
-        let _ = run_command(
+    async fn shutdown(&self) -> AppResult<()> {
+        let stop = if self.stopped.get().is_some() { Ok(()) } else { self.stop().await };
+        // Forced removal always receives its own budget, including after a stalled stop.
+        let removal = run_command(
+            &self.command,
+            &["rm".to_owned(), "-f".to_owned(), self.id.clone()],
+            Instant::now() + ENGINE_REMOVE_TIMEOUT,
+        )
+        .await?;
+        if removal.status != 0 {
+            let absence = container_absent(&self.command, &self.id).await;
+            if !matches!(absence, Ok(true)) {
+                return Err(AppError::Internal(format!(
+                    "container removal failed: container={} exit={} absence={absence:?}",
+                    self.id, removal.status
+                )));
+            }
+        }
+        if let Err(err) = stop {
+            record(
+                "WARN",
+                "daycare_stop_failed",
+                format_args!("container={:?} error={:?}", self.id, err.to_string()),
+            );
+        }
+        Ok(())
+    }
+
+    async fn stop(&self) -> AppResult<()> {
+        let result = run_command(
             &self.command,
             &["stop".to_owned(), "--time".to_owned(), "1".to_owned(), self.id.clone()],
-            deadline,
+            Instant::now() + ENGINE_STOP_TIMEOUT,
         )
-        .await;
+        .await?;
+        if result.status != 0 {
+            return Err(AppError::Internal(format!(
+                "container stop failed: container={} exit={}",
+                self.id, result.status
+            )));
+        }
+        Ok(())
+    }
+
+    async fn reconcile(&self, context: &RunContext) {
+        let mut delay = Duration::from_secs(1);
+        loop {
+            match self.shutdown().await {
+                Ok(()) => {
+                    context.log(
+                        "INFO",
+                        "daycare_cleanup_finished",
+                        format_args!("container={:?}", self.id),
+                    );
+                    return;
+                }
+                Err(err) => context.log(
+                    "ERROR",
+                    "daycare_cleanup_quarantined",
+                    format_args!("container={:?} error={:?}", self.id, err.to_string()),
+                ),
+            }
+            tokio::time::sleep(delay).await;
+            delay = (delay * 2).min(Duration::from_secs(30));
+        }
     }
 }
 
@@ -1290,35 +1519,116 @@ fn read_usage(root: &std::path::Path) -> String {
     fields.join(" ")
 }
 
-async fn ensure_active(
-    active_runs: &Arc<Mutex<BTreeMap<String, ActiveRun>>>,
-    name: &str,
-    run_id: u64,
-) -> AppResult<()> {
-    let active = active_runs.lock().await;
-    if active.get(name).map(|run| run.id) == Some(run_id) {
-        Ok(())
-    } else {
-        Err(AppError::BadRequest("daycare request was superseded by a newer request".to_owned()))
-    }
-}
-
-fn command_output_contains(result: &CommandResult, needle: &str) -> bool {
-    String::from_utf8_lossy(&result.stdout).contains(needle)
-        || String::from_utf8_lossy(&result.stderr).contains(needle)
-}
-
 fn container_user() -> String {
     format!("{STUDENT_UID}:{STUDENT_GID}")
 }
 
-async fn preempt_container(command: &Arc<Vec<String>>, name: &str) {
-    let _ = run_command(
+async fn check_image(command: &Arc<Vec<String>>, image: &str, deadline: Instant) -> AppResult<()> {
+    let result = run_command(
         command,
-        &["rm".to_owned(), "-f".to_owned(), name.to_owned()],
-        Instant::now() + Duration::from_secs(5),
+        &[
+            "image".to_owned(),
+            "inspect".to_owned(),
+            "--format".to_owned(),
+            "{{.Id}}".to_owned(),
+            image.to_owned(),
+        ],
+        deadline,
     )
-    .await;
+    .await?;
+    if result.status != 0 {
+        return Err(AppError::Internal(format!("container image is unavailable: {image}")));
+    }
+    Ok(())
+}
+
+struct ListedContainer {
+    id: String,
+    name: String,
+}
+
+async fn list_containers(
+    command: &Arc<Vec<String>>,
+    filter: &str,
+) -> AppResult<Vec<ListedContainer>> {
+    let result = run_command(
+        command,
+        &[
+            "ps".to_owned(),
+            "--all".to_owned(),
+            "--no-trunc".to_owned(),
+            "--filter".to_owned(),
+            filter.to_owned(),
+            "--format".to_owned(),
+            "{{.ID}} {{.Names}}".to_owned(),
+        ],
+        Instant::now() + ENGINE_REMOVE_TIMEOUT,
+    )
+    .await?;
+    if result.status != 0 {
+        return Err(AppError::Internal(format!(
+            "container listing failed: exit={}",
+            result.status
+        )));
+    }
+    let text =
+        String::from_utf8(result.stdout).map_err(|err| AppError::Internal(err.to_string()))?;
+    text.lines()
+        .map(|line| {
+            let mut fields = line.split_whitespace();
+            match (fields.next(), fields.next(), fields.next()) {
+                (Some(id), Some(name), None) => {
+                    Ok(ListedContainer { id: id.to_owned(), name: name.to_owned() })
+                }
+                _ => Err(AppError::Internal("invalid container listing".to_owned())),
+            }
+        })
+        .collect()
+}
+
+async fn container_absent(command: &Arc<Vec<String>>, id: &str) -> AppResult<bool> {
+    let listing = list_containers(command, &format!("id={id}")).await?;
+    Ok(!listing.iter().any(|container| container.id == id))
+}
+
+// A failed create may still finish in Docker. Absence alone cannot resolve that case.
+async fn reconcile_named_container(
+    command: &Arc<Vec<String>>,
+    name: &str,
+    unresolved: Option<&str>,
+    context: &RunContext,
+) {
+    let filter = unresolved.map_or_else(
+        || format!("label={DAYCARE_CONTAINER_LABEL}"),
+        |identity| format!("label=codegrinder.run={identity}"),
+    );
+    let mut delay = Duration::from_secs(1);
+    loop {
+        match list_containers(command, &filter).await {
+            Ok(listing) => {
+                if let Some(found) = listing.into_iter().find(|container| container.name == name) {
+                    let container = Container::new(command.clone(), found.id);
+                    container.reconcile(context).await;
+                    return;
+                }
+                if unresolved.is_none() {
+                    return;
+                }
+                context.log(
+                    "ERROR",
+                    "daycare_creation_quarantined",
+                    format_args!("container={name:?} reason=creation_outcome_unknown"),
+                );
+            }
+            Err(err) => context.log(
+                "ERROR",
+                "daycare_recovery_quarantined",
+                format_args!("container={name:?} error={:?}", err.to_string()),
+            ),
+        }
+        tokio::time::sleep(delay).await;
+        delay = (delay * 2).min(Duration::from_secs(30));
+    }
 }
 
 struct CommandResult {
@@ -1341,7 +1651,7 @@ async fn run_command_with_output_limit(
     deadline: Instant,
     output_limit: usize,
 ) -> AppResult<CommandResult> {
-    run_command_inner(command, args, None, deadline, output_limit, None).await
+    run_command_inner(command, args, None, Some(deadline), output_limit, None).await
 }
 
 async fn run_command_with_input(
@@ -1350,14 +1660,14 @@ async fn run_command_with_input(
     input: Vec<u8>,
     deadline: Instant,
 ) -> AppResult<CommandResult> {
-    run_command_inner(command, args, Some(input), deadline, COMMAND_OUTPUT_LIMIT, None).await
+    run_command_inner(command, args, Some(input), Some(deadline), COMMAND_OUTPUT_LIMIT, None).await
 }
 
 async fn run_command_inner(
     command: &Arc<Vec<String>>,
     args: &[String],
     input: Option<Vec<u8>>,
-    deadline: Instant,
+    deadline: Option<Instant>,
     output_limit: usize,
     events: Option<mpsc::Sender<EventMessage>>,
 ) -> AppResult<CommandResult> {
@@ -1391,11 +1701,14 @@ async fn run_command_inner(
         )?;
         Ok(CommandResult { status: status.code().unwrap_or(128), stdout, stderr })
     };
+    let Some(deadline) = deadline else {
+        return work.await;
+    };
     match tokio::time::timeout_at(deadline.into(), work).await {
         Ok(result) => result,
         Err(_) => {
             let _ = tokio::time::timeout(Duration::from_secs(1), child.kill()).await;
-            Err(AppError::Internal("command timed out".to_owned()))
+            Err(AppError::DeadlineExceeded("command timed out".to_owned()))
         }
     }
 }
@@ -1461,6 +1774,494 @@ mod tests {
     use crate::signatures::{decode_signed_runtime_bundle, encode_signed_runtime_bundle};
 
     #[test]
+    fn download_globs_preserve_byte_and_class_semantics_without_backtracking() {
+        for (pattern, text, expected) in [
+            ("*", "nested/file", true),
+            ("a?c", "abc", true),
+            ("a?c", "ac", false),
+            ("[a-c][!0-9]", "bX", true),
+            ("[^a]", "a", false),
+            ("[", "[", true),
+            ("[]", "a", false),
+            ("[!]", "a", true),
+            ("?", "é", false),
+            ("??", "é", true),
+            ("**", "", true),
+            ("*a*b", "ab/ab", true),
+        ] {
+            assert_eq!(
+                GlobPattern::new(pattern.as_bytes()).matches(text.as_bytes()),
+                expected,
+                "{pattern:?} {text:?}"
+            );
+        }
+        let pattern = format!("{}b", "*a".repeat(80));
+        assert!(!GlobPattern::new(pattern.as_bytes()).matches(&vec![b'a'; 4096]));
+    }
+
+    #[test]
+    fn workspace_snapshot_bounds_entry_count_and_path_length() {
+        let entries = vec![("empty", b"".as_slice()); WORKSPACE_ENTRY_LIMIT + 1];
+        assert!(
+            read_output_tar(&output_tar(&entries))
+                .unwrap_err()
+                .to_string()
+                .contains("too many entries")
+        );
+        let long_path = "a/".repeat(WORKSPACE_PATH_LIMIT / 2 + 1);
+        assert!(
+            read_output_tar(&output_tar(&[(&long_path, b"")]))
+                .unwrap_err()
+                .to_string()
+                .contains("too long")
+        );
+    }
+
+    #[tokio::test]
+    async fn stalled_stop_leaves_a_fresh_opportunity_for_forced_removal() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = scripted_engine(
+            dir.path(),
+            r#"
+case "$1" in
+  stop) exec sleep 30 ;;
+  rm) touch removed ;;
+esac
+"#,
+        );
+        let container =
+            Container::new(Arc::new(vec![engine.display().to_string()]), "known-id".to_owned());
+        tokio::time::timeout(Duration::from_secs(4), container.shutdown()).await.unwrap().unwrap();
+        assert!(dir.path().join("removed").exists());
+    }
+
+    #[tokio::test]
+    async fn slow_output_receiver_does_not_suspend_execution_timeout_or_stop() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = scripted_engine(
+            dir.path(),
+            r#"
+case "$1" in
+  exec) exec yes output ;;
+  stop) touch stopped ;;
+  inspect) echo false ;;
+esac
+"#,
+        );
+        let container =
+            Container::new(Arc::new(vec![engine.display().to_string()]), "known-id".to_owned());
+        let config = test_config(dir.path());
+        let bundle =
+            decode_signed_runtime_bundle(&signed_runtime(&config, |_| {}), &config.daycare_secret)
+                .unwrap();
+        let context = RunContext::new(1, &bundle);
+        let (tx, mut rx) = mpsc::channel(1);
+        let worker = tokio::spawn(async move {
+            let mut transcript = TranscriptCapture::default();
+            execute_with_output(
+                &container,
+                &["command".to_owned()],
+                &context,
+                Instant::now() + Duration::from_millis(100),
+                &tx,
+                &mut transcript,
+            )
+            .await
+        });
+        wait_for_file(&dir.path().join("stopped")).await;
+        assert!(!worker.is_finished(), "the connected client is still blocking event delivery");
+        while rx.recv().await.is_some() {}
+        assert!(matches!(worker.await.unwrap().unwrap().0, ExecutionOutcome::TimedOut));
+    }
+
+    #[tokio::test]
+    async fn replacements_wait_for_creation_and_cleanup_even_if_pending_request_disconnects() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = scripted_engine(
+            dir.path(),
+            r#"
+case "$1" in
+  create)
+    touch creating
+    while [ ! -e release-create ] && [ -e fake-engine.sh ]; do sleep 0.01; done
+    echo known-id ;;
+  inspect) echo false ;;
+  cp) cat >/dev/null ;;
+esac
+"#,
+        );
+        let mut config = test_config(dir.path());
+        config.capacity = 2;
+        config.container_engine = engine.display().to_string();
+        let runtime = DaycareRuntime::new(Arc::new(config.clone())).unwrap();
+        let request = DaycareRequest { bundle: Some(signed_runtime(&config, |_| {})) };
+        let mut old = runtime
+            .run(request.clone(), Some(Instant::now() + Duration::from_millis(100)))
+            .await
+            .unwrap()
+            .into_inner();
+        wait_for_file(&dir.path().join("creating")).await;
+        let status = tokio::time::timeout(Duration::from_secs(1), old.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(status.code(), tonic::Code::DeadlineExceeded);
+        assert!(old.next().await.is_none());
+        drop(old);
+        let pending = runtime.run(request.clone(), None).await.unwrap();
+        tokio::task::yield_now().await;
+        drop(pending);
+        wait_for_idle(&runtime).await;
+        let mut newest = runtime.run(request, None).await.unwrap().into_inner();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert_eq!(runtime.container_slots.available_permits(), 1);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("engine.log"))
+                .unwrap()
+                .lines()
+                .filter(|line| line.starts_with("create "))
+                .count(),
+            1
+        );
+        fs::write(dir.path().join("release-create"), b"").unwrap();
+        expect_grade(&mut newest).await;
+        wait_for_idle(&runtime).await;
+        let log = fs::read_to_string(dir.path().join("engine.log")).unwrap();
+        assert!(log.find("rm -f known-id").unwrap() < log.rfind("create ").unwrap());
+        assert!(!log.contains("rm -f nanny-"));
+        assert_eq!(runtime.container_slots.available_permits(), 2);
+    }
+
+    #[tokio::test]
+    async fn failed_cli_with_late_daemon_creation_remains_owned_until_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = scripted_engine(
+            dir.path(),
+            r#"
+case "$1" in
+  create)
+    if [ ! -e attempted ]; then
+      touch attempted
+      (while [ ! -e release-daemon ] && [ -e fake-engine.sh ]; do sleep 0.01; done; touch late-created) </dev/null >/dev/null 2>&1 &
+      exit 1
+    fi
+    echo newest-id ;;
+  ps) if [ -e late-created ]; then echo 'late-id nanny-student'; fi ;;
+  rm) if [ "$3" = late-id ]; then rm -f late-created; touch late-removed; fi ;;
+  inspect) echo false ;;
+  cp) cat >/dev/null ;;
+esac
+"#,
+        );
+        let mut config = test_config(dir.path());
+        config.capacity = 2;
+        config.container_engine = engine.display().to_string();
+        let runtime = DaycareRuntime::new(Arc::new(config.clone())).unwrap();
+        let request = DaycareRequest { bundle: Some(signed_runtime(&config, |_| {})) };
+        let old = runtime.run(request.clone(), None).await.unwrap();
+        wait_for_file(&dir.path().join("attempted")).await;
+        drop(old);
+        let mut newest = runtime.run(request, None).await.unwrap().into_inner();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(runtime.container_slots.available_permits(), 1);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("engine.log"))
+                .unwrap()
+                .lines()
+                .filter(|line| line.starts_with("create "))
+                .count(),
+            1
+        );
+        fs::write(dir.path().join("release-daemon"), b"").unwrap();
+        expect_grade(&mut newest).await;
+        wait_for_idle(&runtime).await;
+        let log = fs::read_to_string(dir.path().join("engine.log")).unwrap();
+        assert!(log.find("rm -f late-id").unwrap() < log.rfind("create ").unwrap());
+        assert!(dir.path().join("late-removed").exists());
+    }
+
+    #[tokio::test]
+    async fn removal_failure_retains_capacity_after_the_grade_is_delivered() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = scripted_engine(
+            dir.path(),
+            r#"
+case "$1" in
+  create) touch created; echo known-id ;;
+  inspect) echo false ;;
+  cp) cat >/dev/null ;;
+  ps) if [ -e created ]; then echo 'known-id nanny-student'; fi ;;
+  rm)
+    touch removal-attempted
+    if [ ! -e allow-removal ]; then exit 1; fi
+    rm -f created ;;
+esac
+"#,
+        );
+        let mut config = test_config(dir.path());
+        config.container_engine = engine.display().to_string();
+        let runtime = DaycareRuntime::new(Arc::new(config.clone())).unwrap();
+        let mut stream = runtime
+            .run(DaycareRequest { bundle: Some(signed_runtime(&config, |_| {})) }, None)
+            .await
+            .unwrap()
+            .into_inner();
+        expect_grade(&mut stream).await;
+        drop(stream);
+        wait_for_file(&dir.path().join("removal-attempted")).await;
+        assert_eq!(runtime.container_slots.available_permits(), 0);
+        let mut queued = runtime
+            .run(
+                DaycareRequest {
+                    bundle: Some(signed_runtime(&config, |bundle| {
+                        bundle.user_id = "another-student".to_owned()
+                    })),
+                },
+                None,
+            )
+            .await
+            .unwrap()
+            .into_inner();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(
+            fs::read_to_string(dir.path().join("engine.log"))
+                .unwrap()
+                .lines()
+                .filter(|line| line.starts_with("create "))
+                .count(),
+            1
+        );
+        fs::write(dir.path().join("allow-removal"), b"").unwrap();
+        expect_grade(&mut queued).await;
+        wait_for_idle(&runtime).await;
+        assert_eq!(runtime.container_slots.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn unconfirmed_stop_prevents_report_extraction_and_signing() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = scripted_engine(
+            dir.path(),
+            r#"
+case "$1" in
+  create) echo known-id ;;
+  inspect) echo true ;;
+  cp) cat >/dev/null ;;
+esac
+"#,
+        );
+        let mut config = test_config(dir.path());
+        config.container_engine = engine.display().to_string();
+        let runtime = DaycareRuntime::new(Arc::new(config.clone())).unwrap();
+        let mut stream = runtime
+            .run(
+                DaycareRequest {
+                    bundle: Some(signed_runtime(&config, |bundle| {
+                        bundle.parser = "xunit".to_owned()
+                    })),
+                },
+                None,
+            )
+            .await
+            .unwrap()
+            .into_inner();
+        let mut error = false;
+        while let Some(response) = stream.next().await {
+            match response.unwrap().response.unwrap() {
+                daycare_response::Response::Error(message) => {
+                    assert!(message.contains("could not confirm"));
+                    error = true;
+                }
+                daycare_response::Response::Bundle(_) => {
+                    panic!("signed a result from a live workspace")
+                }
+                _ => {}
+            }
+        }
+        assert!(error);
+        let log = fs::read_to_string(dir.path().join("engine.log")).unwrap();
+        assert!(!log.contains("cp known-id:/home/student/."));
+        assert!(log.contains("rm -f known-id"));
+    }
+
+    #[tokio::test]
+    async fn missing_image_fails_before_creation_without_quarantining_capacity() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = scripted_engine(
+            dir.path(),
+            r#"
+case "$1" in
+  image) exit 1 ;;
+esac
+"#,
+        );
+        let mut config = test_config(dir.path());
+        config.container_engine = engine.display().to_string();
+        let runtime = DaycareRuntime::new(Arc::new(config.clone())).unwrap();
+        let mut stream = runtime
+            .run(DaycareRequest { bundle: Some(signed_runtime(&config, |_| {})) }, None)
+            .await
+            .unwrap()
+            .into_inner();
+        let message = stream.next().await.unwrap().unwrap();
+        assert!(
+            matches!(message.response, Some(daycare_response::Response::Error(error)) if error.contains("image is unavailable"))
+        );
+        assert!(stream.next().await.is_none());
+        assert_eq!(runtime.container_slots.available_permits(), 1);
+        assert!(!fs::read_to_string(dir.path().join("engine.log")).unwrap().contains("create "));
+    }
+
+    #[tokio::test]
+    async fn failed_removal_of_an_already_absent_container_is_confirmed_by_listing() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = scripted_engine(
+            dir.path(),
+            r#"
+case "$1" in
+  stop|rm) exit 1 ;;
+esac
+"#,
+        );
+        let container =
+            Container::new(Arc::new(vec![engine.display().to_string()]), "missing-id".to_owned());
+        container.shutdown().await.unwrap();
+        assert!(
+            fs::read_to_string(dir.path().join("engine.log"))
+                .unwrap()
+                .contains("ps --all --no-trunc --filter id=missing-id")
+        );
+    }
+
+    // Engine fixtures coordinate CLI completion separately from daemon-visible state.
+    fn scripted_engine(base: &Path, body: &str) -> PathBuf {
+        let engine = fake_engine(base);
+        fs::write(&engine, format!("#!/bin/sh\ncd \"$(dirname \"$0\")\" || exit 1\nprintf '%s\\n' \"$*\" >> engine.log\n{body}\nexit 0\n")).unwrap();
+        engine
+    }
+
+    async fn wait_for_file(path: &Path) {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !path.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    async fn expect_grade(stream: &mut DaycareStream) {
+        tokio::time::timeout(Duration::from_secs(4), async {
+            while let Some(response) = stream.next().await {
+                match response.unwrap().response.unwrap() {
+                    daycare_response::Response::Bundle(_) => return,
+                    daycare_response::Response::Error(message) => panic!("{message}"),
+                    _ => {}
+                }
+            }
+            panic!("grade stream ended without a bundle");
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Docker and an installed Python daycare image"]
+    async fn docker_background_writer_is_stopped_before_snapshot_and_container_is_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = scripted_engine(
+            dir.path(),
+            r#"
+if [ "$1" = cp ] && [ "$2" != --archive ]; then
+  id=${2%%:*}
+  running=$(docker inspect --format '{{.State.Running}}' "$id") || exit 1
+  printf 'snapshot-running=%s\n' "$running" >> engine.log
+fi
+exec docker "$@"
+"#,
+        );
+        let mut config = test_config(dir.path());
+        config.container_engine = engine.display().to_string();
+        let runtime = DaycareRuntime::new(Arc::new(config.clone())).unwrap();
+        let user = format!("daycare-test-{:032x}", rand::random::<u128>());
+        let signed = signed_runtime(&config, |bundle| {
+            bundle.user_id = user.clone();
+            bundle.container = std::env::var("CODEGRINDER_TEST_IMAGE")
+                .unwrap_or_else(|_| "codegrinder/python:latest".to_owned());
+            bundle.command = "python3 run.py".to_owned();
+            bundle.parser = "check".to_owned();
+            bundle.problem_options = vec!["download=artifact.txt".to_owned()];
+            bundle.limits = Some(RuntimeLimits {
+                max_cpu: 2,
+                max_fd: 64,
+                max_file_size: 10,
+                max_memory: 128,
+                max_threads: 16,
+            });
+            bundle.files = BTreeMap::from([("run.py".to_owned(), br#"import os
+import subprocess
+import sys
+import time
+
+# The detached writer closes execution pipes and outlives the command process.
+writer = "import time\nf = open('artifact.txt', 'a')\nwhile True:\n f.write('x'); f.flush(); time.sleep(0.01)\n"
+subprocess.Popen([sys.executable, '-c', writer], stdin=subprocess.DEVNULL,
+                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+for attempt in range(100):
+    if os.path.exists('artifact.txt') and os.path.getsize('artifact.txt'):
+        break
+    time.sleep(0.01)
+else:
+    sys.exit(1)
+with open('test_detail.xml', 'w') as report:
+    report.write('<suite><test result="success"><id>writer started</id></test></suite>')
+print('writer started')
+"#.to_vec())]);
+        });
+        let mut stream = runtime
+            .run(
+                DaycareRequest { bundle: Some(signed) },
+                Some(Instant::now() + Duration::from_secs(30)),
+            )
+            .await
+            .unwrap()
+            .into_inner();
+        let mut final_bundle = None;
+        let mut errors = Vec::new();
+        let mut artifact = None;
+        while let Some(response) = stream.next().await {
+            match response.unwrap().response.unwrap() {
+                daycare_response::Response::Bundle(bundle) => final_bundle = Some(bundle),
+                daycare_response::Response::Error(error) => errors.push(error),
+                daycare_response::Response::Event(event) => {
+                    if let Some(content) = event.files.get("artifact.txt") {
+                        artifact = Some(content.clone());
+                    }
+                }
+            }
+        }
+        // Stream exhaustion follows cleanup, so assertions cannot strand a running writer.
+        assert!(errors.is_empty(), "{errors:?}");
+        let bundle =
+            decode_signed_runtime_bundle(&final_bundle.unwrap(), &config.daycare_secret).unwrap();
+        assert!(bundle.commit.unwrap().report_card.unwrap().passed);
+        assert!(artifact.is_some_and(|content| !content.is_empty()));
+        let log = fs::read_to_string(dir.path().join("engine.log")).unwrap();
+        assert!(log.contains("snapshot-running=false"));
+        assert!(!log.contains("snapshot-running=true"));
+        assert!(
+            list_containers(
+                &Arc::new(vec!["docker".to_owned()]),
+                &format!("label=codegrinder.user_id={user}")
+            )
+            .await
+            .unwrap()
+            .is_empty()
+        );
+    }
+
+    #[test]
     fn usage_preserves_counters_and_reports_unavailable_files() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("cpu.stat"), "usage_usec 123\nuser_usec 100\nsystem_usec 23\n")
@@ -1475,11 +2276,8 @@ mod tests {
 
     #[tokio::test]
     async fn cleanup_reports_nonzero_container_engine_status() {
-        let container = Container {
-            command: Arc::new(vec!["false".to_owned()]),
-            id: "test-container".to_owned(),
-            files: OnceCell::new(),
-        };
+        let container =
+            Container::new(Arc::new(vec!["false".to_owned()]), "test-container".to_owned());
         let error = container.shutdown().await.unwrap_err();
         assert!(error.to_string().contains("container removal failed"));
     }
@@ -1534,15 +2332,18 @@ mod tests {
         let mut bundle =
             decode_signed_runtime_bundle(&signed_runtime(&config, |_| {}), &config.daycare_secret)
                 .unwrap();
-        let container = Container {
-            command: Arc::new(vec![engine.display().to_string()]),
-            id: "test-container".to_owned(),
-            files: OnceCell::new(),
-        };
+        let container = Container::new(
+            Arc::new(vec![engine.display().to_string()]),
+            "test-container".to_owned(),
+        );
         let (events, mut receiver) = mpsc::channel(64);
+        let spec = ExecutionSpec::new(&bundle).unwrap();
+        let context = RunContext::new(1, &bundle);
         run_action(
             &container,
             &mut bundle,
+            &spec,
+            &context,
             &config.daycare_secret,
             Instant::now() + Duration::from_millis(100),
             events,
@@ -1611,7 +2412,7 @@ mod tests {
         .unwrap();
         wait_for_idle(&runtime).await;
         drop(slot);
-        assert!(!fs::read_to_string(dir.path().join("engine.log")).unwrap().contains("run -d"));
+        assert!(!dir.path().join("engine.log").exists());
     }
 
     #[tokio::test]
@@ -1958,8 +2759,9 @@ mod tests {
 
         assert!(saw_bundle);
         let log = fs::read_to_string(dir.path().join("engine.log")).unwrap();
-        assert!(log.contains("rm -f nanny-student"));
-        assert!(log.contains("run -d"));
+        assert!(!log.contains("rm -f nanny-student"));
+        assert!(log.contains("rm -f fake-container"));
+        assert!(log.contains("create --pull=never"));
         assert!(log.contains("--user "));
         assert!(log.contains("--label codegrinder.daycare=1"));
         assert!(log.contains("--label codegrinder.user_id=student"));
@@ -2202,7 +3004,7 @@ mod tests {
         fs::write(
             &script,
             format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}/engine.log\ncase \"$1\" in\n  run) echo fake-container ;;\n  exec) exit 0 ;;\n  cp) if [ \"$2\" = \"--archive\" ]; then cat >/dev/null; else cat >/dev/null; fi ;;\n  stop) exit 0 ;;\n  rm) exit 0 ;;\n  *) exit 0 ;;\nesac\n",
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}/engine.log\ncase \"$1\" in\n  create) echo fake-container ;;\n  inspect) echo false ;;\n  exec) exit 0 ;;\n  cp) if [ \"$2\" = \"--archive\" ]; then cat >/dev/null; else cat >/dev/null; fi ;;\n  stop) exit 0 ;;\n  rm) exit 0 ;;\n  *) exit 0 ;;\nesac\n",
                 base.display(),
             ),
         )
@@ -2234,7 +3036,7 @@ mod tests {
         fs::write(
             &script,
             format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}/engine.log\ncase \"$1\" in\n  run) echo fake-container ;;\n  exec) printf 'student stdout\\n'; printf 'student stderr\\n' >&2; exit 0 ;;\n  cp) if [ \"$2\" = \"--archive\" ]; then cat >/dev/null; else cat {}; fi ;;\n  stop) exit 0 ;;\n  rm) exit 0 ;;\n  *) exit 0 ;;\nesac\n",
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}/engine.log\ncase \"$1\" in\n  create) echo fake-container ;;\n  inspect) echo false ;;\n  exec) printf 'student stdout\\n'; printf 'student stderr\\n' >&2; exit 0 ;;\n  cp) if [ \"$2\" = \"--archive\" ]; then cat >/dev/null; else cat {}; fi ;;\n  stop) exit 0 ;;\n  rm) exit 0 ;;\n  *) exit 0 ;;\nesac\n",
                 base.display(),
                 output.display(),
             ),
@@ -2264,7 +3066,7 @@ mod tests {
         fs::write(
             &script,
             format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}/engine.log\ncase \"$1\" in\n  run) echo fake-container ;;\n  exec) exit {} ;;\n  cp) if [ \"$2\" = \"--archive\" ]; then cat >/dev/null; else cat {}; fi ;;\n  stop) exit 0 ;;\n  rm) exit 0 ;;\n  *) exit 0 ;;\nesac\n",
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}/engine.log\ncase \"$1\" in\n  create) echo fake-container ;;\n  inspect) echo false ;;\n  exec) exit {} ;;\n  cp) if [ \"$2\" = \"--archive\" ]; then cat >/dev/null; else cat {}; fi ;;\n  stop) exit 0 ;;\n  rm) exit 0 ;;\n  *) exit 0 ;;\nesac\n",
                 base.display(),
                 exit_status,
                 output.display(),
