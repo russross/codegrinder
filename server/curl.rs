@@ -9,19 +9,12 @@ use tokio::process::Command;
 
 const CURL_PROGRAM: &str = "curl";
 
-#[derive(Clone, Copy, Debug)]
-pub enum CurlHttpVersion {
-    Any,
-    Http1_1,
-}
-
 #[derive(Debug)]
 pub struct CurlPostRequest<'a> {
     pub url: &'a str,
     pub headers: &'a HeaderMap,
     pub body: &'a [u8],
     pub timeout: Duration,
-    pub http_version: CurlHttpVersion,
 }
 
 #[derive(Debug)]
@@ -80,10 +73,8 @@ async fn post_with_program(
         .arg("--write-out")
         .arg("\n%{http_code}")
         .arg("--data-binary")
-        .arg("@-");
-    if matches!(request.http_version, CurlHttpVersion::Http1_1) {
-        command.arg("--http1.1");
-    }
+        .arg("@-")
+        .arg("--http1.1");
     for (name, value) in request.headers {
         command.arg("--header").arg(format!("{name}: {}", value.to_str()?));
     }
@@ -160,7 +151,6 @@ mod tests {
                 headers: &headers,
                 body,
                 timeout: Duration::from_secs(1),
-                http_version: CurlHttpVersion::Any,
             },
         )
         .await
@@ -183,7 +173,6 @@ mod tests {
                 headers: &headers,
                 body: b"request",
                 timeout: Duration::from_secs(1),
-                http_version: CurlHttpVersion::Any,
             },
         )
         .await

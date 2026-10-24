@@ -1,2 +1,2 @@
-/*! CodeGrinder web build 0.4.2+f6aacadb6700 */
-const a="0.4.2+f6aacadb6700";function r(r){return r.searchParams.set("version",a),r}export{r as versionedAssetUrl,a as webVersion};
+/*! CodeGrinder web build 0.4.2+0992fb638114 */
+const r="0.4.2+0992fb638114";function e(e){return e.searchParams.set("version",r),e}export{e as versionedAssetUrl,r as webVersion};

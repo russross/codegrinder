@@ -147,6 +147,8 @@ An error or missing signed final grade bundle prevents final grading persistence
 
 The lock date does not disable editing, saves, daycare, or progression. The server decides whether an LMS post is allowed and performs eligible passback asynchronously. A saved grade is not confirmation that the LMS has received it. This client does not obtain a passback completion acknowledgement from `SaveGradedCommit`.
 
+Ordinary RPCs have a ten-second transport timeout; daycare streams have a fixed 120-second timeout. The transport supplies the standard gRPC deadline and cancels the fetch on expiry. Starting another daycare call aborts the preceding fetch, and leaving the page aborts the active call. Grading ignores live output and replays the signed transcript only on failure; non-grade actions render output chunks as they arrive. These are output streams, without TTY input or argument negotiation. The server completes container cleanup after an early signed grade response even when the client immediately closes its stream.
+
 Tab-scoped session storage retains only the client authentication key, not a durable journal of all unsaved editor/guest state. Closing or reloading the tab can lose edits that have not reached the TA; it does not revoke the database session. Guest disk overlays and guest-only paths are disposable and never a substitute for the official student map.
 
 
@@ -160,6 +162,8 @@ Asset publication and runtime assumptions
 5. Keep `mostlyclean` limited to build caches/intermediates while preserving deployed page/bundles/VM assets. `clean` additionally removes deployment outputs. Neither operation touches server data or configuration.
 
 The browser needs same-origin TA gRPC-Web access and access to the signed daycare hostname; daycare calls omit TA credentials. VM disk fetching and WASM availability are local-execution dependencies, not reasons to relax ownership or signature checks. Problems without VM images retain editing and server workflows through the synchronous file adapter.
+
+The guest `update-grind` command is deliberately a silent successful no-op. Tools are supplied by the exam image. Browser image checks must verify its zero exit status and empty combined output, waiting for a completion marker that cannot match the terminal's echo of the submitted command.
 
 
 Audit boundaries

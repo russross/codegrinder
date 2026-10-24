@@ -85,7 +85,7 @@ Other daycare actions
 
 `grind action [action]` accepts at most one action. Reject `grade` with guidance to use `grind grade`. A missing or unavailable name lists the workspace's non-grade actions and fails.
 
-Gather the same official submission, send `SaveUngradedCommit` with the selected action and note `grind action {action}`, and run the signed daycare request in event-processing mode. Print terminal events and write normalized returned file events under the action directory. These artifacts can include paths beyond the student whitelist; a later submission still sends only official student paths. Normal stream closure completes an interactive action without a signed final grade bundle.
+Gather the same official submission, send `SaveUngradedCommit` with the selected action and note `grind action {action}`, and run the signed daycare request in event-processing mode. Print terminal events and write normalized returned file events under the action directory. These artifacts can include paths beyond the student whitelist; a later submission still sends only official student paths. Normal stream closure completes a non-grade action without a signed final grade bundle.
 
 There is no `SaveGradedCommit` call for this flow. Pre-action files may already have been saved, including after the lock date. Action output does not advance `.grind`, post a grade, or become saved simply because it was downloaded locally.
 
@@ -119,7 +119,7 @@ Create or update authored work
 
 `--update` requires an existing problem and preserves the shape of assigned problems. Default create requires absence and also creates the same-ID default problem set. Do not add a separate existence preflight to predict the final save outcome.
 
-`grind create --action ACTION` prepares source but executes only the active step interactively and does not call `SaveProblem`. Multi-step use requires a concrete step directory. `--update` and `--action` cannot be combined.
+`grind create --action ACTION` prepares source but runs the active step with live output and does not call `SaveProblem`. Multi-step use requires a concrete step directory. `--update` and `--action` cannot be combined.
 
 `grind create PSET.cfg` uploads only problem-set metadata and membership/weights to `SaveProblemSet` with explicit create/update intent. It rejects `--action` and multiple-problem slicing. It does not refresh step source or run daycare. Assigned sets retain membership, bounds, and continuation shape.
 
@@ -139,7 +139,7 @@ Installation-specific problem-type sources live under ignored `problemtypes/`, w
 Failure boundaries and audit dependencies
 -----------------------------------------
 
-Expected argument, configuration, path, authorization, and transport errors produce readable diagnostics and a failing exit, not stack traces. RPC deadlines bound calls; daycare deadlines additionally allow for signed execution limits. A failed command can have completed an earlier durable step, such as pre-action persistence or final grading before local file updates. Do not promise cross-RPC rollback or automatically replay arbitrary mutations.
+Expected argument, configuration, path, authorization, and transport errors produce readable diagnostics and a failing exit, not stack traces. RPC deadlines bound calls and connection establishment. Ordinary calls default to ten seconds (`--timeout SECONDS`); daycare calls have an independent fixed 120-second default (`--daycare-timeout SECONDS`). The signed runtime is not decoded to compute a client deadline. Daycare stream consumption also enforces the same absolute local deadline, and action output is flushed as it arrives. Grade output remains suppressed until a failing signed report can be replayed. There are no TTY input or daycare argument fields. A failed command can have completed an earlier durable step, such as pre-action persistence or final grading before local file updates. Do not promise cross-RPC rollback or automatically replay arbitrary mutations.
 
 Audit session/version gating, role-only help filtering, atomic download publication, stale metadata, missing files, cleanup preserving `.git`, reset basename matches, continuation advancement, passing non-owner inspection, interrupted daycare streams, and validation-before-author-save. Trace these through [client.rs](client.rs), [assignment.rs](assignment.rs), [student.rs](student.rs), [author.rs](author.rs), [admin.rs](admin.rs), and [daycare.rs](daycare.rs).
 

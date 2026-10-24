@@ -31,7 +31,6 @@ use crate::proto::{
     SaveWorkspaceCommitResponse, SearchProblemCatalogRequest, SearchProblemCatalogResponse,
     Version,
 };
-use crate::registry::DaycareRegistry;
 use crate::sessions::{LoginTokens, create_session, load_session_user_id};
 use crate::store::{self, UserRow};
 use crate::timeutil::now_utc;
@@ -41,24 +40,18 @@ pub struct CodeGrinderServer {
     db: Db,
     config: Arc<ServerConfig>,
     login_tokens: Arc<LoginTokens>,
-    registry: Arc<DaycareRegistry>,
-    daycare: Option<DaycareRuntime>,
+    daycare: DaycareRuntime,
     ip_filter: IpFilter,
     version: VersionPayload,
-    ta_enabled: bool,
-    daycare_enabled: bool,
 }
 
 pub struct CodeGrinderServerParts {
     pub db: Db,
     pub config: Arc<ServerConfig>,
     pub login_tokens: Arc<LoginTokens>,
-    pub registry: Arc<DaycareRegistry>,
-    pub daycare: Option<DaycareRuntime>,
+    pub daycare: DaycareRuntime,
     pub ip_filter: IpFilter,
     pub version: VersionPayload,
-    pub ta_enabled: bool,
-    pub daycare_enabled: bool,
 }
 
 impl CodeGrinderServer {
@@ -67,20 +60,9 @@ impl CodeGrinderServer {
             db: parts.db,
             config: parts.config,
             login_tokens: parts.login_tokens,
-            registry: parts.registry,
             daycare: parts.daycare,
             ip_filter: parts.ip_filter,
             version: parts.version,
-            ta_enabled: parts.ta_enabled,
-            daycare_enabled: parts.daycare_enabled,
-        }
-    }
-
-    fn require_ta_role(&self) -> AppResult<()> {
-        if self.ta_enabled {
-            Ok(())
-        } else {
-            Err(AppError::Forbidden("TA role is not enabled".to_owned()))
         }
     }
 
@@ -136,7 +118,18 @@ impl CodeGrinderServer {
     }
 
     fn select_daycare_host(&self, problem_types: &BTreeSet<String>) -> AppResult<String> {
-        self.registry.assign(problem_types)
+        // All requested types must be installed on the local execution host.
+        if !problem_types.iter().all(|name| self.config.problem_types.contains(name)) {
+            crate::logging::record(
+                "ERROR",
+                "daycare_selection_failed",
+                format_args!("problem_types={problem_types:?}"),
+            );
+            return Err(AppError::Internal(
+                "local daycare does not support the requested problem types".to_owned(),
+            ));
+        }
+        Ok(self.config.hostname.clone())
     }
 
     fn version(&self) -> Version {
@@ -156,7 +149,6 @@ impl CodeGrinderService for CodeGrinderServer {
         &self,
         request: Request<HelloRequest>,
     ) -> Result<Response<HelloResponse>, Status> {
-        self.require_ta_role().map_err(AppError::grpc_status)?;
         let config = self.config.clone();
         let version = self.version();
         let deadline = request_deadline(&request);
@@ -189,7 +181,6 @@ impl CodeGrinderService for CodeGrinderServer {
         &self,
         request: Request<ListAssignmentsRequest>,
     ) -> Result<Response<ListAssignmentsResponse>, Status> {
-        self.require_ta_role().map_err(AppError::grpc_status)?;
         let deadline = request_deadline(&request);
         let ip_allowed = self.ip_allowed(&request);
         let current_user =
@@ -215,7 +206,6 @@ impl CodeGrinderService for CodeGrinderServer {
         &self,
         request: Request<SearchProblemCatalogRequest>,
     ) -> Result<Response<SearchProblemCatalogResponse>, Status> {
-        self.require_ta_role().map_err(AppError::grpc_status)?;
         let deadline = request_deadline(&request);
         let current_user =
             self.authenticated_user(&request).await.map_err(AppError::grpc_status)?;
@@ -235,7 +225,6 @@ impl CodeGrinderService for CodeGrinderServer {
         &self,
         request: Request<GetProblemTypesRequest>,
     ) -> Result<Response<GetProblemTypesResponse>, Status> {
-        self.require_ta_role().map_err(AppError::grpc_status)?;
         let deadline = request_deadline(&request);
         let problem_types = self
             .db
@@ -249,7 +238,6 @@ impl CodeGrinderService for CodeGrinderServer {
         &self,
         request: Request<GetProblemTypeRequest>,
     ) -> Result<Response<GetProblemTypeResponse>, Status> {
-        self.require_ta_role().map_err(AppError::grpc_status)?;
         let deadline = request_deadline(&request);
         let problem_type_name = request.into_inner().problem_type;
         let problem_type = self
@@ -266,7 +254,6 @@ impl CodeGrinderService for CodeGrinderServer {
         &self,
         request: Request<SaveProblemTypeFilesRequest>,
     ) -> Result<Response<SaveProblemTypeFilesResponse>, Status> {
-        self.require_ta_role().map_err(AppError::grpc_status)?;
         let deadline = request_deadline(&request);
         let current_user =
             self.authenticated_user(&request).await.map_err(AppError::grpc_status)?;
@@ -291,7 +278,6 @@ impl CodeGrinderService for CodeGrinderServer {
         &self,
         request: Request<SaveProblemTypeRequest>,
     ) -> Result<Response<SaveProblemTypeResponse>, Status> {
-        self.require_ta_role().map_err(AppError::grpc_status)?;
         let deadline = request_deadline(&request);
         let current_user =
             self.authenticated_user(&request).await.map_err(AppError::grpc_status)?;
@@ -314,7 +300,6 @@ impl CodeGrinderService for CodeGrinderServer {
         &self,
         request: Request<GetAssignmentRequest>,
     ) -> Result<Response<GetAssignmentResponse>, Status> {
-        self.require_ta_role().map_err(AppError::grpc_status)?;
         let deadline = request_deadline(&request);
         let ip_allowed = self.ip_allowed(&request);
         let current_user =
@@ -337,7 +322,6 @@ impl CodeGrinderService for CodeGrinderServer {
         &self,
         request: Request<GetWorkspaceRequest>,
     ) -> Result<Response<GetWorkspaceResponse>, Status> {
-        self.require_ta_role().map_err(AppError::grpc_status)?;
         let deadline = request_deadline(&request);
         let ip_allowed = self.ip_allowed(&request);
         let current_user =
@@ -371,7 +355,6 @@ impl CodeGrinderService for CodeGrinderServer {
         &self,
         request: Request<PrepareProblemRequest>,
     ) -> Result<Response<PrepareProblemResponse>, Status> {
-        self.require_ta_role().map_err(AppError::grpc_status)?;
         let deadline = request_deadline(&request);
         let current_user =
             self.authenticated_user(&request).await.map_err(AppError::grpc_status)?;
@@ -401,7 +384,6 @@ impl CodeGrinderService for CodeGrinderServer {
         &self,
         request: Request<SaveProblemRequest>,
     ) -> Result<Response<SaveProblemResponse>, Status> {
-        self.require_ta_role().map_err(AppError::grpc_status)?;
         let deadline = request_deadline(&request);
         let current_user =
             self.authenticated_user(&request).await.map_err(AppError::grpc_status)?;
@@ -429,7 +411,6 @@ impl CodeGrinderService for CodeGrinderServer {
         &self,
         request: Request<SaveProblemSetRequest>,
     ) -> Result<Response<SaveProblemSetResponse>, Status> {
-        self.require_ta_role().map_err(AppError::grpc_status)?;
         let deadline = request_deadline(&request);
         let current_user =
             self.authenticated_user(&request).await.map_err(AppError::grpc_status)?;
@@ -456,7 +437,6 @@ impl CodeGrinderService for CodeGrinderServer {
         &self,
         request: Request<SaveWorkspaceCommitRequest>,
     ) -> Result<Response<SaveWorkspaceCommitResponse>, Status> {
-        self.require_ta_role().map_err(AppError::grpc_status)?;
         let deadline = request_deadline(&request);
         let ip_allowed = self.ip_allowed(&request);
         let current_user =
@@ -488,7 +468,6 @@ impl CodeGrinderService for CodeGrinderServer {
         &self,
         request: Request<SaveUngradedCommitRequest>,
     ) -> Result<Response<SaveUngradedCommitResponse>, Status> {
-        self.require_ta_role().map_err(AppError::grpc_status)?;
         let deadline = request_deadline(&request);
         let ip_allowed = self.ip_allowed(&request);
         let current_user =
@@ -549,7 +528,6 @@ impl CodeGrinderService for CodeGrinderServer {
         &self,
         request: Request<SaveGradedCommitRequest>,
     ) -> Result<Response<SaveGradedCommitResponse>, Status> {
-        self.require_ta_role().map_err(AppError::grpc_status)?;
         let deadline = request_deadline(&request);
         let ip_allowed = self.ip_allowed(&request);
         let current_user =
@@ -602,14 +580,8 @@ impl CodeGrinderService for CodeGrinderServer {
         &self,
         request: Request<DaycareRequest>,
     ) -> Result<Response<Self::DaycareStream>, Status> {
-        if !self.daycare_enabled {
-            return Err(Status::unavailable("daycare role is not enabled"));
-        }
-        let daycare = self
-            .daycare
-            .as_ref()
-            .ok_or_else(|| Status::unavailable("daycare runtime is not configured"))?;
-        daycare.run(request.into_inner()).await
+        let deadline = request_deadline(&request);
+        self.daycare.run(request.into_inner(), deadline).await
     }
 }
 
@@ -782,10 +754,11 @@ mod tests {
     use crate::db::open_test_connection;
     use crate::proto::{
         AssignmentKey, AuthorFile, AuthorProblemDraft, AuthorProblemStepDraft, Commit,
-        GetProblemTypesRequest, ListAssignmentsRequest, ProblemTypeAction, RuntimeBundle,
-        SaveProblemTypeRequest, SearchProblemCatalogRequest,
+        GetProblemTypesRequest, GradingCommit, ListAssignmentsRequest, ProblemTypeAction,
+        RuntimeBundle, SaveProblemTypeRequest, SearchProblemCatalogRequest,
     };
     use crate::sessions::create_session;
+    use crate::signatures::decode_signed_runtime_bundle;
     use crate::timeutil::db_time;
 
     #[tokio::test]
@@ -865,7 +838,77 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.code(), Code::PermissionDenied);
 
-        service.prepare_problem(auth_request(prepare_request(), &sessions.admin)).await.unwrap();
+        let bundle = service
+            .prepare_problem(auth_request(prepare_request(), &sessions.admin))
+            .await
+            .unwrap()
+            .into_inner()
+            .bundle
+            .unwrap();
+        assert_eq!(bundle.hostname, service.config.hostname);
+        let runtime = decode_signed_runtime_bundle(
+            &bundle.signed_validation_bundles[0],
+            &service.config.daycare_secret,
+        )
+        .unwrap();
+        assert_eq!(runtime.hostname, service.config.hostname);
+    }
+
+    #[tokio::test]
+    async fn ungraded_submission_uses_local_host_and_rolls_back_unsupported_types() {
+        let mut service = test_service().await;
+        let sessions = seed_service_users(&service.db, false, false).await;
+        seed_service_assignments(&service.db).await;
+        let submission = SaveUngradedCommitRequest {
+            commit: Some(GradingCommit {
+                user_id: "student".to_owned(),
+                commit: Some(Commit {
+                    assignment: Some(AssignmentKey {
+                        user_id: "student".to_owned(),
+                        course_id: "c1".to_owned(),
+                        problem_set_id: "ps1".to_owned(),
+                    }),
+                    problem_id: "p1".to_owned(),
+                    step: 1,
+                    action: "grade".to_owned(),
+                    files: BTreeMap::from([("answer.txt".to_owned(), b"submitted".to_vec())]),
+                    ..Commit::default()
+                }),
+                ..GradingCommit::default()
+            }),
+        };
+
+        // An unsupported local type fails after the provisional save and rolls it back.
+        Arc::make_mut(&mut service.config).problem_types = vec!["other-type".to_owned()];
+        let error = service
+            .save_ungraded_commit(auth_request(submission.clone(), &sessions.student))
+            .await
+            .unwrap_err();
+        assert!(error.message().contains("does not support"));
+        let count = service
+            .db
+            .transaction(false, |conn| {
+                Ok(conn.query_row("SELECT COUNT(*) FROM commits", [], |row| row.get::<_, i64>(0))?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+
+        // Supported submissions still return the envelope consumed by the legacy daycare RPC.
+        Arc::make_mut(&mut service.config).problem_types = vec!["python".to_owned()];
+        let response = service
+            .save_ungraded_commit(auth_request(submission, &sessions.student))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(response.save_status, crate::proto::CommitSaveStatus::Saved as i32);
+        let runtime =
+            decode_signed_runtime_bundle(&response.bundle.unwrap(), &service.config.daycare_secret)
+                .unwrap();
+        assert_eq!(runtime.hostname, service.config.hostname);
+        assert_eq!(runtime.files["answer.txt"], b"submitted");
+        assert_eq!(runtime.action, "grade");
+        assert!(runtime.commit.unwrap().report_card.is_none());
     }
 
     #[tokio::test]
@@ -1014,7 +1057,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap().keep();
         let config = Arc::new(ServerConfig {
             hostname: "ta.example".to_owned(),
-            ta_hostname: String::new(),
             daycare_secret: "daycare-secret".to_owned(),
             lti_secret: "lti-secret".to_owned(),
             session_secret: "session-secret".to_owned(),
@@ -1035,22 +1077,13 @@ mod tests {
             db,
             config: config.clone(),
             login_tokens: Arc::new(LoginTokens::default()),
-            registry: Arc::new(
-                DaycareRegistry::new("daycare-secret".to_owned(), "test".to_owned()).with_local(
-                    "ta.example",
-                    &["python".to_owned()],
-                    1,
-                ),
-            ),
-            daycare: Some(daycare),
+            daycare,
             ip_filter: IpFilter::default(),
             version: VersionPayload {
                 version: "test".to_owned(),
                 grind_version_required: String::new(),
                 grind_version_recommended: String::new(),
             },
-            ta_enabled: true,
-            daycare_enabled: true,
         })
     }
 

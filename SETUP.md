@@ -67,7 +67,9 @@ Server configuration
 
 The server requires an explicit configuration path:
 
-    codegrinder --config /etc/codegrinder/config.json -ta -daycare
+    codegrinder --config /etc/codegrinder/config.json
+
+The server always runs TA bookkeeping and a local daycare. `hostname` is the public host returned to execution clients; `problemTypes` lists the locally supported types, and `capacity` limits concurrent containers. All LMS, session, and daycare signing secrets are required. When updating an existing installation, remove `taHostname` from its JSON configuration and remove role flags from its service command. Unknown configuration fields are rejected.
 
 `CODEGRINDER_CONFIG` may select the path instead. The server never
 searches a user's home directory for configuration or data. Relative
@@ -92,16 +94,13 @@ be overridden in `/etc/conf.d/codegrinder`:
     codegrinder_user="codegrinder"
     codegrinder_group="codegrinder"
     codegrinder_config="/etc/codegrinder/config.json"
-    codegrinder_roles="-ta -daycare"
 
 Caddy owns public TLS and reverse-proxies to the server's default
 `localhost:1400` cleartext listener. Configure the installed Caddyfile to
 serve static files directly from `<checkout>/www`; do not maintain a copied
 web tree under `/usr/share`. The Caddy account needs directory traversal
 permission from the checkout's parent directories and read permission for
-the files under `www`. The server requires `curl` for standalone daycare
-registration and Canvas grade passback, and verifies that it is available
-during startup.
+the files under `www`. The server requires `curl` for Canvas grade passback and verifies that it is available during startup.
 
 With this layout, build browser assets with `make -C www`, downloadable clients
 with `make grind-dist`, and the Rust server with `make server`, then restart

@@ -1478,7 +1478,7 @@ mod tests {
                 commit: Some(commit),
             },
             true,
-            |_| Err(AppError::Internal("registry should not be consulted".to_owned())),
+            |_| Err(AppError::Internal("host selection should not be consulted".to_owned())),
         )
         .unwrap();
 
@@ -2266,7 +2266,6 @@ mod tests {
     fn test_config() -> ServerConfig {
         ServerConfig {
             hostname: "ta.example".to_owned(),
-            ta_hostname: String::new(),
             daycare_secret: "daycare-secret".to_owned(),
             lti_secret: "lti-secret".to_owned(),
             session_secret: "session-secret".to_owned(),

@@ -5,8 +5,8 @@ Core architecture metaphors:
 - The main server is the TA: a university course teaching assistant responsible for bookkeeping, grade management, problem sets, assignments, LMS integration, and mediation between students, instructors, and authors. The TA should be a lightweight administrative functionary, not the place for long-running work or broad execution policy. Database transactions must be short-lived and must not block on external network connections.
 - Student code is treated like an unruly toddler: usually not malicious, but often reckless and unsafe by default. The system supervising it is a nanny, focused on resource limits, damage prevention, and containment.
 - A daycare manages nannies and student-code execution. Daycares are stateless, disposable islands for sandboxing, isolation, cleanup, and crowd control. They should have few policy opinions and should not need detailed knowledge of assignments beyond the signed runtime bundle they are asked to run.
-- The TA is the real server. Daycares are add-ons that phone home to register with the TA using a shared secret and lease timeout. We support multiple daycares, and operators should be able to reset or replace them freely.
-- In the common deployment, one TA and one daycare often run as a single process on one machine. They remain logically independent: long-running daycare requests must not interfere with quick TA transactions.
+- The server runs the TA and one local daycare in a single process. There is no daycare registration or remote host selection.
+- TA bookkeeping and daycare execution remain logically independent: long-running daycare requests must not interfere with quick TA transactions.
 - Clients shuttle signed messages and file sets between the TA and daycares. Daycares and the TA do not communicate directly during grading/action execution.
 - CORS for browser clients belongs at the daycare boundary, not the TA boundary.
 - TA and daycare deployments are easy to update together, so protocol migration between them is not a major concern. Student clients are harder to update and run in the wild, so version requirements matter and clients must not be trusted.
@@ -31,8 +31,8 @@ For Rust server startup and checks:
 - The Rust server is not public-facing. Caddy is the public TLS front end and reverse-proxies to the Rust server over cleartext HTTP/h2c.
 - The Rust server binds to `localhost:1400` by default. System startup should rely on that default unless an explicit local override is required.
 - The Rust server does not load TLS certificates or manage public HTTPS. Public hostnames and certificates belong to Caddy.
-- The server supports `-ta` and `-daycare` roles. Either role may be enabled alone, both may be enabled together, and omitting both role flags means both roles are enabled.
-- TA role serves LTI, version/daycare-registration routes, and TA gRPC methods. Caddy serves static files. Daycare role serves the `Daycare` gRPC runtime path and registers the local daycare capacity when configured.
+- The server always enables TA bookkeeping and local daycare execution; there are no role flags or `taHostname` configuration field.
+- The server serves LTI, version routes, TA gRPC methods, and the `Daycare` gRPC runtime path. Caddy serves static files. Clients continue carrying signed bundles through the multi-step execution workflows.
 - The secondary test/dev combined TA+daycare instance is reached through Caddy at `https://dev.russross.com`.
 - The end-to-end test script uses the deployed server, client, and production problem types selected by its live configuration. `make end2end` builds no binaries and starts or stops no services.
 - Build the Rust server with `make -C server`; use `make -C server check` for formatting and Clippy, and `make -C server test` for those checks followed by server tests. Pass `TEST_ARGS=...` to select specific Cargo tests.
@@ -97,6 +97,7 @@ For the web interfaces under `www/exam` and `www/web`:
 - Cached instructor or author visibility additionally shows `solve` and `problem` in help.
 - `--api` and `--api-dump` report or dump API traffic. They are hidden from normal student help output but remain accepted for every role and must not change command semantics.
 - Hidden commands remain invokable by name. Local cached role flags are presentation only; server authorization is authoritative.
+- Every client RPC has a timeout. `grind --timeout SECONDS` overrides the ten-second ordinary RPC default; `grind --daycare-timeout SECONDS` overrides the independent 120-second daycare default. Both flags remain accepted when hidden from student help.
 - Commands that operate on a local assignment must discover the assignment by finding `.grind` in the current directory or an ancestor.
 - Multi-problem assignments require problem-specific author commands to run from inside a concrete problem directory; single-problem assignments use the assignment root as the problem directory.
 - Client-side workspace path handling must normalize paths before reading or writing local files. Server-side validation remains authoritative and must reject invalid submitted paths.
@@ -203,11 +204,11 @@ For the web interfaces under `www/exam` and `www/web`:
 
 # `grind action`
 
-- `grind action [action]` runs an interactive non-grade daycare action for the current problem step.
-- `grind action grade` must fail and tell the user to use `grind grade`; grade is not an interactive action alias.
+- `grind action [action]` runs a non-grade daycare action for the current problem step and displays streamed output. There is no TTY input or interactive terminal session.
+- `grind action grade` must fail and tell the user to use `grind grade`; grade is not an action alias.
 - With no action, or with an action not present in the current workspace action map, `grind` lists available non-grade actions and fails.
 - `grind` must resolve the current problem, fetch `GetWorkspace` with `WORKSPACE_FILE_STATE_CURRENT`, refresh system-owned files, and submit only student-owned files.
-- Client flow is: build `GradingCommit` with the requested action and note `grind action {action}`; call `SaveUngradedCommit`; send the returned signed runtime bundle to `Daycare` in interactive mode.
+- Client flow is: build `GradingCommit` with the requested action and note `grind action {action}`; call `SaveUngradedCommit`; send the returned signed runtime bundle to `Daycare` and display output events as they arrive.
 - `SaveUngradedCommit` may save current student files before action execution when policy allows, but action output is not finalized through `SaveGradedCommit`.
 - If the assignment is locked, `grind action` still persists pre-action student files when policy allows and still runs daycare so students can inspect behavior.
 - The server must reject unknown, unavailable, or mismatched runtime actions through signed runtime bundle validation; the client-side action check is presentation and early feedback only.
@@ -282,7 +283,7 @@ For the web interfaces under `www/exam` and `www/web`:
   - Persisted regular files must match the runtime files that were validated; persisted starter files must match the starter files carried in the signed validation bundle.
   - `SaveProblem` requires exactly one problem step, one solution commit, and one signed validation bundle per step.
   - A `SAVE_MODE_CREATE` problem save also creates a same-id problem set containing exactly that problem with weight 1 and no step slicing.
-  - `grind create --action ACTION` is validation-only/interactive; it must not persist problem data.
+  - `grind create --action ACTION` is validation-only with live output; it must not persist problem data.
 - `grind create PSET.cfg` saves only the problem set membership/weights; it does not prepare or validate problem source material.
 - `grind create PSET.cfg` may save either a complete-problem bundle or a unary step-sliced problem set. It must reject configs that mix multiple problems with slicing.
 - Author save requests must carry explicit intent:
@@ -297,7 +298,7 @@ For the web interfaces under `www/exam` and `www/web`:
 - `grind create` is hidden from normal help unless cached author mode is enabled locally. Hidden commands remain invokable; the server must enforce author permissions.
 - `grind create` with no positional argument operates on the author problem rooted at the nearest `problem.cfg`.
 - `grind create --update` changes the save mode from create to update for a problem; update mode is invalid with `--action`.
-- `grind create --action ACTION` prepares the problem and runs one interactive validation action for the active step only. It must not persist problem data.
+- `grind create --action ACTION` prepares the problem and runs one validation action with live output for the active step only. It must not persist problem data.
 - `grind create PSET.cfg` saves only problem set metadata and membership/weights. It must reject `--action` because problem-set saves do not have daycare actions.
 - Problem-set create/update calls `SaveProblemSet` with explicit `SAVE_MODE_CREATE` or `SAVE_MODE_UPDATE`; the server enforces existence semantics at save time.
 - Problem-set update must preserve membership and slice bounds when the problem set is already assigned; metadata and weights may still change.

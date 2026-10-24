@@ -212,9 +212,9 @@ export async function run(): Promise<string[]> {
         check(guestOutput.includes("uid=1000(student)") && guestOutput.includes("risclet 0.5.5")
             && guestOutput.includes("GNU Make") && guestOutput.includes("/usr/share/zoneinfo/America/Denver")
             && guestOutput.includes("type ext4 (rw"), "guest tools, account, timezone, or writable root changed");
-        send("update-grind risclet latest; printf 'updater-check-done\\n'");
+        send("updater_output=$(update-grind risclet latest 2>&1); updater_status=$?; printf 'updater-status=%s;output=[%s]\\nupdater-check-done\\n' \"$updater_status\" \"$updater_output\"");
         await until(() => guestOutput.includes("updater-check-done\r\n"), "guest updater stub did not finish");
-        check(guestOutput.includes("Tools are supplied by the exam image."), "guest updater stub missing");
+        check(guestOutput.includes("updater-status=0;output=[]\r\n"), "guest updater stub failed or produced output");
         send("seq 1 60; printf 'finished-output\\n'");
         await until(() => guestOutput.includes("finished-output"), "guest output did not fill the screen");
         send("clear; printf 'clear-screen-marker\\n'");

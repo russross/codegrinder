@@ -9,12 +9,14 @@ use std::time::Duration;
 
 pub const DOT_FILE_NAME: &str = ".grind";
 pub const DEFAULT_RPC_TIMEOUT_SECONDS: u64 = 10;
+pub const DEFAULT_DAYCARE_TIMEOUT_SECONDS: u64 = 120;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ApiTrace {
     pub report: bool,
     pub dump: bool,
     pub rpc_timeout: Duration,
+    pub daycare_timeout: Duration,
 }
 
 impl ApiTrace {
@@ -23,7 +25,12 @@ impl ApiTrace {
     }
 
     pub fn with_timeout(report: bool, dump: bool, rpc_timeout: Duration) -> Self {
-        Self { report: report || dump, dump, rpc_timeout }
+        Self {
+            report: report || dump,
+            dump,
+            rpc_timeout,
+            daycare_timeout: Duration::from_secs(DEFAULT_DAYCARE_TIMEOUT_SECONDS),
+        }
     }
 }
 

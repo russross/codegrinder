@@ -18,7 +18,6 @@ use crate::db::Db;
 use crate::error::{AppError, AppResult};
 use crate::ipfilter::{IpFilter, extract_ip};
 use crate::passback::compute_oauth_signature;
-use crate::registry::{DaycareRegistration, DaycareRegistry};
 use crate::sessions::LoginTokens;
 use crate::signatures::escape;
 use crate::timeutil::{db_time, parse_canvas_time};
@@ -66,7 +65,6 @@ pub struct LtiState {
     pub config: Arc<ServerConfig>,
     pub login_tokens: Arc<LoginTokens>,
     pub ip_filter: IpFilter,
-    pub registry: Arc<DaycareRegistry>,
     pub version: VersionPayload,
 }
 
@@ -89,10 +87,6 @@ pub fn router(state: LtiState) -> Router {
     Router::new()
         .route("/lti/config.xml", get(get_config))
         .route("/lti/problem_sets/{ui}/{unique}", post(launch))
-        .route(
-            "/daycare_registrations",
-            get(get_daycare_registrations).post(post_daycare_registration),
-        )
         .route("/version", get(get_version))
         .route("/v2/version", get(get_version))
         .with_state(state)
@@ -104,23 +98,6 @@ async fn get_config(State(state): State<LtiState>) -> Response {
 
 async fn get_version(State(state): State<LtiState>) -> impl IntoResponse {
     Json(state.version)
-}
-
-async fn get_daycare_registrations(State(state): State<LtiState>) -> Response {
-    match state.registry.snapshot() {
-        Ok(snapshot) => Json(snapshot).into_response(),
-        Err(err) => error_response(err),
-    }
-}
-
-async fn post_daycare_registration(
-    State(state): State<LtiState>,
-    Json(reg): Json<DaycareRegistration>,
-) -> Response {
-    match state.registry.insert(reg) {
-        Ok(()) => (StatusCode::OK, "").into_response(),
-        Err(err) => error_response(err),
-    }
 }
 
 async fn launch(
@@ -563,7 +540,6 @@ mod tests {
     fn test_config() -> ServerConfig {
         ServerConfig {
             hostname: "ta.example".to_owned(),
-            ta_hostname: String::new(),
             daycare_secret: "daycare-secret".to_owned(),
             lti_secret: "lti-secret".to_owned(),
             session_secret: "session-secret".to_owned(),

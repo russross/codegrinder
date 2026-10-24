@@ -5,7 +5,9 @@ use crate::proto::codegrinder::{Commit, DaycareRequest, SignedRuntimeBundle};
 use crate::transcript::dump_event;
 use prost::Message;
 use std::fs;
+use std::io::{self, Write};
 use std::path::Path;
+use tokio::time::Instant;
 use tonic::Streaming;
 
 pub fn parse_signed_runtime_bundle(
@@ -23,21 +25,25 @@ pub fn commit_passed(commit: &Commit) -> bool {
 pub async fn handle_daycare_stream(
     session: &mut Session,
     bundle: SignedRuntimeBundle,
-    args: Vec<String>,
     directory: &Path,
     process_events: bool,
 ) -> Result<Option<SignedRuntimeBundle>> {
-    let request = DaycareRequest { bundle: Some(bundle), args };
+    let request = DaycareRequest { bundle: Some(bundle) };
+    let deadline = Instant::now() + session.config.trace.daycare_timeout;
     let stream = session.daycare(request).await?;
-    consume_stream(stream, directory, process_events).await
+    consume_stream(stream, directory, process_events, deadline).await
 }
 
 async fn consume_stream(
     mut stream: Streaming<crate::proto::codegrinder::DaycareResponse>,
     directory: &Path,
     process_events: bool,
+    deadline: Instant,
 ) -> Result<Option<SignedRuntimeBundle>> {
-    while let Some(reply) = stream.message().await? {
+    while let Some(reply) = tokio::time::timeout_at(deadline, stream.message())
+        .await
+        .map_err(|_| crate::error::CliError::Message("daycare request timed out".to_owned()))??
+    {
         let Some(response) = reply.response else {
             return fail("unexpected reply from server");
         };
@@ -56,6 +62,7 @@ async fn consume_stream(
             {
                 if process_events {
                     print!("{}", dump_event(&event));
+                    io::stdout().flush()?;
                 }
             }
             crate::proto::codegrinder::daycare_response::Response::Event(event)

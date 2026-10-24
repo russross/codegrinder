@@ -266,7 +266,7 @@ pub async fn command_create(
                     )
                 },
             )?;
-        handle_daycare_stream(&mut session, signed, Vec::new(), &step_dir, true).await?;
+        handle_daycare_stream(&mut session, signed, &step_dir, true).await?;
         return Ok(());
     }
     validate_author_solution_bundle(&mut session, &mut bundle).await?;
@@ -492,7 +492,7 @@ async fn validate_author_solution_bundle(
             bundle.signed_validation_bundles.get(step_number - 1).cloned().ok_or_else(|| {
                 CliError::Message(format!("missing validation bundle for step {step_number}"))
             })?;
-        let validated = handle_daycare_stream(session, prepared, Vec::new(), Path::new(""), false)
+        let validated = handle_daycare_stream(session, prepared, Path::new(""), false)
             .await?
             .ok_or_else(|| {
                 CliError::Message(

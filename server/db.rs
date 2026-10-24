@@ -179,7 +179,7 @@ fn configure_connection(conn: &Connection, deadline: Option<Instant>) -> AppResu
         "
         PRAGMA foreign_keys = ON;
         PRAGMA journal_mode = WAL;
-        PRAGMA synchronous = FULL;
+        PRAGMA synchronous = NORMAL;
         PRAGMA temp_store = MEMORY;
         PRAGMA cache_size = -20000;
         ",

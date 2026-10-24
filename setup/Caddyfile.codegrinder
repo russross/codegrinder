@@ -33,7 +33,7 @@ codegrinder.example.edu {
 	@exam_assets path /exam/dist/app-* /exam/dist/style-* /exam/dist/favicon-* /exam/vm/runtime/riscbox-*/* /exam/vm/image/risclet-*.json /exam/vm/image/drive-*/*
 	header @exam_assets Cache-Control "public, max-age=31536000, immutable"
 
-	@dynamic path /codegrinder.CodeGrinderService/* /daycare_registrations /lti/* /v2/version /version
+	@dynamic path /codegrinder.CodeGrinderService/* /lti/* /v2/version /version
 	reverse_proxy @dynamic h2c://localhost:1400
 
 	file_server

@@ -21,10 +21,7 @@ What is here
 
 This repository currently hosts two tools:
 
-1.  The CodeGrinder server. This is further divided into two parts,
-    which can run as part of the same service, or can be hosted on
-    separate servers. A CodeGrinder installation needs exactly one
-    TA service and one or more daycare services.
+1.  The CodeGrinder server runs TA bookkeeping and one local daycare in a single process. The two parts keep database transactions separate from container execution.
 
     1.  The TA service: this manages bookkeeping and runs on top of
         SQLite 3. It interfaces with an LMS by acting as an LTI

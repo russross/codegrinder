@@ -94,6 +94,7 @@ let fileSelectionGeneration = 0;
 let vmRecoveryInProgress = false;
 let restoringEditorFocus = 0;
 let unregisterVmClipboard = (): void => {};
+let activeDaycare: AbortController | undefined;
 
 window.problemSet = [];
 
@@ -101,6 +102,7 @@ function createMainClient(): CodeGrinderServiceClient {
     return new CodeGrinderServiceClient(
         new GrpcWebFetchTransport({
             baseUrl: window.location.origin,
+            timeout: 10_000,
             fetchInit: { credentials: "same-origin" },
         }),
     );
@@ -117,6 +119,7 @@ function createDaycareClient(hostname: string): CodeGrinderServiceClient {
     return new CodeGrinderServiceClient(
         new GrpcWebFetchTransport({
             baseUrl: `${window.location.protocol}//${hostname}`,
+            timeout: 120_000,
             fetchInit: { credentials: "omit" },
         }),
     );
@@ -521,37 +524,47 @@ async function handleDaycare(problem: ProblemData, bundle: SignedRuntimeBundle, 
 
     const runtime = RuntimeBundle.fromBinary(bundle.bundle);
     const daycareClient = createDaycareClient(runtime.hostname);
-    const stream = daycareClient.daycare(DaycareRequest.create({ bundle, args: [] }), {});
+    activeDaycare?.abort();
+    const controller = new AbortController();
+    activeDaycare = controller;
+    const abort = (): void => controller.abort();
+    window.addEventListener("pagehide", abort);
+    const stream = daycareClient.daycare(DaycareRequest.create({ bundle }), { abort: controller.signal });
 
-    for await (const response of stream.responses) {
-        if (response.response.oneofKind === "error") {
-            term.writeln(`server return an error: ${response.response.error}`);
-            throw new Error(response.response.error);
-        }
-        if (response.response.oneofKind === "bundle") {
-            if (action !== "grade") {
-                throw new Error("Non-grade action returned an unexpected signed runtime bundle");
+    try {
+        for await (const response of stream.responses) {
+            if (response.response.oneofKind === "error") {
+                term.writeln(`server return an error: ${response.response.error}`);
+                throw new Error(response.response.error);
             }
-            return { kind: "graded", bundle: response.response.bundle };
+            if (response.response.oneofKind === "bundle") {
+                if (action !== "grade") {
+                    throw new Error("Non-grade action returned an unexpected signed runtime bundle");
+                }
+                return { kind: "graded", bundle: response.response.bundle };
+            }
+            if (response.response.oneofKind !== "event") {
+                continue;
+            }
+            if (action === "grade") {
+                continue;
+            }
+            const event = response.response.event;
+            if (event.event === "files") {
+                await applyReturnedFiles(problem, event.files);
+                continue;
+            }
+            writeEvent(event);
         }
-        if (response.response.oneofKind !== "event") {
-            continue;
-        }
-        if (action === "grade") {
-            continue;
-        }
-        const event = response.response.event;
-        if (event.event === "files") {
-            await applyReturnedFiles(problem, event.files);
-            continue;
-        }
-        writeEvent(event);
-    }
 
-    if (action !== "grade") {
-        return { kind: "actionComplete" };
+        if (action !== "grade") {
+            return { kind: "actionComplete" };
+        }
+        throw new Error("Daycare stream ended without returning a bundle");
+    } finally {
+        window.removeEventListener("pagehide", abort);
+        if (activeDaycare === controller) activeDaycare = undefined;
     }
-    throw new Error("Daycare stream ended without returning a bundle");
 }
 
 // Returned files update the official workspace without changing VM power state.

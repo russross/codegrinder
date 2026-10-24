@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::future::Future;
 use std::io::{Cursor, Read};
 use std::process::Stdio;
 use std::sync::Arc;
@@ -10,7 +11,7 @@ use serde::Deserialize;
 use sha2::Digest;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
-use tokio::sync::{Mutex, Semaphore, mpsc};
+use tokio::sync::{Mutex, OnceCell, Semaphore, mpsc, watch};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Response, Status};
 
@@ -36,13 +37,39 @@ const STUDENT_UID: u64 = 1001;
 const STUDENT_GID: u64 = 1001;
 const STUDENT_DIRECTORY_MODE: u32 = 0o755;
 const STUDENT_FILE_MODE: u32 = 0o644;
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+
+struct ActiveRun {
+    id: u64,
+    stop: watch::Sender<bool>,
+}
+
+// A request owns its queue wait, execution, and event delivery until cleanup begins.
+struct RequestScope {
+    deadline: Instant,
+    stop: watch::Receiver<bool>,
+    events: mpsc::Sender<Result<DaycareResponse, Status>>,
+}
+
+impl RequestScope {
+    async fn run<T>(&self, work: impl Future<Output = AppResult<T>>) -> AppResult<T> {
+        let mut stop = self.stop.clone();
+        tokio::select! {
+            biased;
+            _ = self.events.closed() => Err(AppError::BadRequest("daycare client disconnected".to_owned())),
+            _ = stop.wait_for(|cancelled| *cancelled) => Err(AppError::BadRequest("daycare request was superseded by a newer request".to_owned())),
+            _ = tokio::time::sleep_until(self.deadline.into()) => Err(AppError::DeadlineExceeded("daycare request timed out".to_owned())),
+            result = work => result,
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct DaycareRuntime {
     config: Arc<ServerConfig>,
     container_command: Arc<Vec<String>>,
     container_slots: Arc<Semaphore>,
-    active_runs: Arc<Mutex<BTreeMap<String, u64>>>,
+    active_runs: Arc<Mutex<BTreeMap<String, ActiveRun>>>,
     next_run_id: Arc<AtomicU64>,
 }
 
@@ -62,22 +89,29 @@ impl DaycareRuntime {
         })
     }
 
-    pub async fn run(&self, request: DaycareRequest) -> Result<Response<DaycareStream>, Status> {
+    pub async fn run(
+        &self,
+        request: DaycareRequest,
+        deadline: Option<Instant>,
+    ) -> Result<Response<DaycareStream>, Status> {
         let (tx, rx) = mpsc::channel(64);
         let runtime = self.clone();
         tokio::spawn(async move {
-            let result = runtime.handle(request, tx.clone()).await;
+            let deadline = deadline.unwrap_or_else(|| Instant::now() + DEFAULT_REQUEST_TIMEOUT);
+            let result = runtime.handle(request, tx.clone(), deadline).await;
             if let Err(err) = result {
                 record(
                     "WARN",
                     "daycare_request_failed",
                     format_args!("error={:?}", err.to_string()),
                 );
-                let _ = tx
-                    .send(Ok(DaycareResponse {
+                let _ = tokio::time::timeout_at(
+                    deadline.into(),
+                    tx.send(Ok(DaycareResponse {
                         response: Some(daycare_response::Response::Error(err.to_string())),
-                    }))
-                    .await;
+                    })),
+                )
+                .await;
             }
         });
         Ok(Response::new(Box::pin(ReceiverStream::new(rx)) as DaycareStream))
@@ -87,6 +121,7 @@ impl DaycareRuntime {
         &self,
         request: DaycareRequest,
         tx: mpsc::Sender<Result<DaycareResponse, Status>>,
+        deadline: Instant,
     ) -> AppResult<()> {
         let signed =
             request.bundle.ok_or_else(|| AppError::BadRequest("bundle is required".to_owned()))?;
@@ -105,14 +140,23 @@ impl DaycareRuntime {
             "daycare_accepted",
             format_args!("image={:?} limits={limits:?}", bundle.container),
         );
-        self.mark_active(&nanny_name, run_id).await;
+        let stop = self.mark_active(&nanny_name, run_id).await;
+        let scope = RequestScope { deadline, stop, events: tx.clone() };
         let result = async {
-            preempt_container(&self.container_command, &nanny_name).await;
-            let _slot = self
-                .container_slots
-                .acquire()
-                .await
-                .map_err(|_| AppError::Internal("container limiter closed".to_owned()))?;
+            scope
+                .run(async {
+                    preempt_container(&self.container_command, &nanny_name).await;
+                    Ok(())
+                })
+                .await?;
+            let _slot = scope
+                .run(async {
+                    self.container_slots
+                        .acquire()
+                        .await
+                        .map_err(|_| AppError::Internal("container limiter closed".to_owned()))
+                })
+                .await?;
             self.require_active(&nanny_name, run_id).await?;
             context.log(
                 "INFO",
@@ -120,20 +164,24 @@ impl DaycareRuntime {
                 format_args!("queue_ms={}", started.elapsed().as_millis()),
             );
             let execution_started = Instant::now();
-            let deadline = execution_started + action_timeout(&limits);
-            let container = match Container::create(
-                &self.container_command,
-                &self.active_runs,
-                run_id,
-                &nanny_name,
-                &bundle,
-                &limits,
-                deadline,
-            )
-            .await
+            let container = match scope
+                .run(Container::create(
+                    &self.container_command,
+                    &self.active_runs,
+                    run_id,
+                    &nanny_name,
+                    &bundle,
+                    &limits,
+                    deadline,
+                ))
+                .await
             {
                 Ok(container) => container,
                 Err(err) => {
+                    // A cancelled Docker create can finish in the daemon after its CLI exits.
+                    if self.require_active(&nanny_name, run_id).await.is_ok() {
+                        preempt_container(&self.container_command, &nanny_name).await;
+                    }
                     context.log(
                         "ERROR",
                         "daycare_container_create_failed",
@@ -156,9 +204,9 @@ impl DaycareRuntime {
                 );
                 return Err(err);
             }
-            let result =
-                run_action(&container, &mut bundle, &self.config.daycare_secret, deadline, tx)
-                    .await;
+            let result = scope
+                .run(run_action(&container, &mut bundle, &self.config.daycare_secret, deadline, tx))
+                .await;
             context.log(
                 "INFO",
                 "daycare_execution_finished",
@@ -178,6 +226,10 @@ impl DaycareRuntime {
                         .map(|report| &report.note)
                 ),
             );
+            // Stop abandoned student work before collecting diagnostics or releasing its slot.
+            if result.is_err() {
+                container.stop(Instant::now() + Duration::from_secs(2)).await;
+            }
             container.log_usage(&context).await;
             let shutdown = container.shutdown().await;
             context.log(
@@ -203,20 +255,23 @@ impl DaycareRuntime {
         result
     }
 
-    async fn mark_active(&self, name: &str, run_id: u64) {
+    async fn mark_active(&self, name: &str, run_id: u64) -> watch::Receiver<bool> {
         let mut active = self.active_runs.lock().await;
-        if let Some(previous) = active.insert(name.to_owned(), run_id) {
+        let (stop, receiver) = watch::channel(false);
+        if let Some(previous) = active.insert(name.to_owned(), ActiveRun { id: run_id, stop }) {
+            previous.stop.send_replace(true);
             record(
                 "INFO",
                 "daycare_superseded",
-                format_args!("container={name:?} previous_run={previous} run={run_id}"),
+                format_args!("container={name:?} previous_run={} run={run_id}", previous.id),
             );
         }
+        receiver
     }
 
     async fn require_active(&self, name: &str, run_id: u64) -> AppResult<()> {
         let active = self.active_runs.lock().await;
-        if active.get(name) == Some(&run_id) {
+        if active.get(name).map(|run| run.id) == Some(run_id) {
             Ok(())
         } else {
             Err(AppError::BadRequest(
@@ -227,7 +282,7 @@ impl DaycareRuntime {
 
     async fn clear_active(&self, name: &str, run_id: u64) {
         let mut active = self.active_runs.lock().await;
-        if active.get(name) == Some(&run_id) {
+        if active.get(name).map(|run| run.id) == Some(run_id) {
             active.remove(name);
         }
     }
@@ -346,8 +401,8 @@ fn validate_runtime_limits(limits: &RuntimeLimits) -> AppResult<()> {
 }
 
 fn action_timeout(limits: &RuntimeLimits) -> Duration {
-    let cpu = limits.max_cpu.max(1);
-    Duration::from_secs((cpu * 2 + 5) as u64)
+    let cpu = limits.max_cpu.max(1) as u64;
+    Duration::from_secs(cpu.saturating_mul(2).saturating_add(5))
 }
 
 async fn run_action(
@@ -379,7 +434,32 @@ async fn run_action(
         event("exec", command.clone(), 0, Vec::new(), String::new(), BTreeMap::new()),
     )
     .await?;
-    let result = match container.exec(&command, deadline).await {
+    // Only student execution consumes the CPU-derived wall-clock allowance.
+    let execution_started = Instant::now();
+    let allowance = action_timeout(&effective_limits(bundle)?)
+        .min(deadline.saturating_duration_since(execution_started));
+    let execution_deadline = execution_started + allowance;
+    let (output_tx, mut output_rx) = mpsc::channel(16);
+    let execution = container.exec(&command, execution_deadline, output_tx);
+    tokio::pin!(execution);
+    let execution_result = loop {
+        tokio::select! {
+            result = &mut execution => {
+                while let Some(output) = output_rx.recv().await {
+                    emit_event(&tx, &mut transcript, output).await?;
+                }
+                break result;
+            }
+            Some(output) = output_rx.recv() => {
+                emit_event(&tx, &mut transcript, output).await?;
+            }
+        }
+    };
+    report.duration = Some(
+        prost_types::Duration::try_from(execution_started.elapsed())
+            .map_err(|err| AppError::Internal(err.to_string()))?,
+    );
+    let result = match execution_result {
         Ok(result) => result,
         Err(err) => {
             record(
@@ -392,6 +472,12 @@ async fn run_action(
                     err.to_string()
                 ),
             );
+            emit_event(
+                &tx,
+                &mut transcript,
+                event("error", Vec::new(), 0, Vec::new(), err.to_string(), BTreeMap::new()),
+            )
+            .await?;
             fail_report_for_exec_error(&mut report, bundle, &command, err);
             finalize_action(bundle, secret, tx, transcript, report).await?;
             return Ok(());
@@ -412,22 +498,6 @@ async fn run_action(
             result.stderr.len()
         ),
     );
-    if !result.stdout.is_empty() {
-        emit_event(
-            &tx,
-            &mut transcript,
-            event("stdout", Vec::new(), 0, result.stdout.clone(), String::new(), BTreeMap::new()),
-        )
-        .await?;
-    }
-    if !result.stderr.is_empty() {
-        emit_event(
-            &tx,
-            &mut transcript,
-            event("stderr", Vec::new(), 0, result.stderr.clone(), String::new(), BTreeMap::new()),
-        )
-        .await?;
-    }
     emit_event(
         &tx,
         &mut transcript,
@@ -542,6 +612,13 @@ async fn finalize_action(
         );
     }
     if let Some(commit) = &mut bundle.commit {
+        let mut report = report;
+        if let Some(duration) = report.duration {
+            report.note.push_str(&format!(
+                " in {:.3}s",
+                duration.seconds as f64 + f64::from(duration.nanos) / 1_000_000_000.0
+            ));
+        }
         commit.transcript = transcript.events;
         commit.report_card = Some(report.clone());
         commit.score = if report.passed { 1.0 } else { score_from_report(&report) };
@@ -580,12 +657,15 @@ struct TranscriptCapture {
 
 impl TranscriptCapture {
     fn record(&mut self, event: &EventMessage) {
+        let mut event = event.clone();
         if !event.stream_data.is_empty() {
-            if self.stream_bytes > TRANSCRIPT_DATA_LIMIT {
+            let remaining = TRANSCRIPT_DATA_LIMIT.saturating_sub(self.stream_bytes);
+            self.discarded_bytes += event.stream_data.len().saturating_sub(remaining);
+            if remaining == 0 {
                 self.discarded_events += 1;
-                self.discarded_bytes += event.stream_data.len();
                 return;
             }
+            event.stream_data.truncate(remaining);
             self.stream_bytes += event.stream_data.len();
         }
         let stream_event = matches!(event.event.as_str(), "stdin" | "stdout" | "stderr");
@@ -598,7 +678,7 @@ impl TranscriptCapture {
             return;
         }
         if self.events.len() < TRANSCRIPT_EVENT_COUNT_LIMIT {
-            self.events.push(event.clone());
+            self.events.push(event);
         } else {
             self.discarded_events += 1;
             self.discarded_bytes += event.stream_data.len();
@@ -676,7 +756,8 @@ fn parse_xunit(report: &mut ReportCard, xml: &[u8]) {
         let failure = case.children().find(|child| {
             matches!(child.tag_name().name(), "failure" | "error" | "skipped" | "disabled")
         });
-        let failed = failure.is_some();
+        let failed =
+            failure.is_some() || !matches!(case.attribute("status"), None | Some("" | "run"));
         let details = failure.and_then(|node| node.text()).unwrap_or("").to_owned();
         let context = failure_context(&details);
         report.results.push(ReportCardResult {
@@ -907,6 +988,7 @@ fn normalized_tar_path<R: std::io::Read>(entry: &tar::Entry<'_, R>) -> AppResult
 struct Container {
     command: Arc<Vec<String>>,
     id: String,
+    files: OnceCell<BTreeMap<String, Vec<u8>>>,
 }
 
 // Docker's state document is decoded without retaining unrelated inspection data.
@@ -981,7 +1063,7 @@ impl Container {
 
     async fn create(
         command: &Arc<Vec<String>>,
-        active_runs: &Arc<Mutex<BTreeMap<String, u64>>>,
+        active_runs: &Arc<Mutex<BTreeMap<String, ActiveRun>>>,
         run_id: u64,
         name: &str,
         bundle: &RuntimeBundle,
@@ -1029,12 +1111,15 @@ impl Container {
             "nproc=-1:-1".to_owned(),
             bundle.container.clone(),
             "/bin/sleep".to_owned(),
-            format!("{}s", (limits.max_cpu * 2).max(1)),
+            format!(
+                "{}s",
+                deadline.saturating_duration_since(Instant::now()).as_secs().saturating_add(5)
+            ),
         ];
         let mut result = run_command(command, &docker_args, deadline).await?;
         if result.status != 0 && command_output_contains(&result, "already in use") {
             let active = active_runs.lock().await;
-            if active.get(name) != Some(&run_id) {
+            if active.get(name).map(|run| run.id) != Some(run_id) {
                 return Err(AppError::BadRequest(
                     "daycare request was superseded by a newer request".to_owned(),
                 ));
@@ -1064,7 +1149,7 @@ impl Container {
             .await;
             return Err(err);
         }
-        Ok(Self { command: command.clone(), id })
+        Ok(Self { command: command.clone(), id, files: OnceCell::new() })
     }
 
     async fn put_files(
@@ -1106,10 +1191,15 @@ impl Container {
         deadline: Instant,
     ) -> AppResult<BTreeMap<String, Vec<u8>>> {
         let files = self.copy_student_files(deadline).await?;
-        Ok(select_download_files(&files, raw_paths))
+        Ok(select_download_files(files, raw_paths))
     }
 
-    async fn copy_student_files(&self, deadline: Instant) -> AppResult<BTreeMap<String, Vec<u8>>> {
+    async fn copy_student_files(&self, deadline: Instant) -> AppResult<&BTreeMap<String, Vec<u8>>> {
+        // Reports and downloads share one immutable post-execution workspace snapshot.
+        self.files.get_or_try_init(|| self.fetch_student_files(deadline)).await
+    }
+
+    async fn fetch_student_files(&self, deadline: Instant) -> AppResult<BTreeMap<String, Vec<u8>>> {
         let args = vec!["cp".to_owned(), format!("{}:/home/student/.", self.id), "-".to_owned()];
         let result = run_command_with_output_limit(
             &self.command,
@@ -1128,21 +1218,22 @@ impl Container {
         read_output_tar(&result.stdout)
     }
 
-    async fn exec(&self, cmd: &[String], deadline: Instant) -> AppResult<CommandResult> {
+    async fn exec(
+        &self,
+        cmd: &[String],
+        deadline: Instant,
+        output: mpsc::Sender<EventMessage>,
+    ) -> AppResult<CommandResult> {
         let mut args =
             vec!["exec".to_owned(), "--user".to_owned(), container_user(), self.id.clone()];
         args.extend(cmd.iter().cloned());
-        run_command(&self.command, &args, deadline).await
+        run_command_inner(&self.command, &args, None, deadline, COMMAND_OUTPUT_LIMIT, Some(output))
+            .await
     }
 
     async fn shutdown(&self) -> AppResult<()> {
         let deadline = Instant::now() + Duration::from_secs(5);
-        let _ = run_command(
-            &self.command,
-            &["stop".to_owned(), "--time".to_owned(), "1".to_owned(), self.id.clone()],
-            deadline,
-        )
-        .await;
+        self.stop(deadline).await;
         let removal = run_command(
             &self.command,
             &["rm".to_owned(), "-f".to_owned(), self.id.clone()],
@@ -1156,6 +1247,16 @@ impl Container {
             )));
         }
         Ok(())
+    }
+
+    async fn stop(&self, deadline: Instant) {
+        // A missing or already stopped container needs no further stop operation.
+        let _ = run_command(
+            &self.command,
+            &["stop".to_owned(), "--time".to_owned(), "1".to_owned(), self.id.clone()],
+            deadline,
+        )
+        .await;
     }
 }
 
@@ -1190,12 +1291,12 @@ fn read_usage(root: &std::path::Path) -> String {
 }
 
 async fn ensure_active(
-    active_runs: &Arc<Mutex<BTreeMap<String, u64>>>,
+    active_runs: &Arc<Mutex<BTreeMap<String, ActiveRun>>>,
     name: &str,
     run_id: u64,
 ) -> AppResult<()> {
     let active = active_runs.lock().await;
-    if active.get(name) == Some(&run_id) {
+    if active.get(name).map(|run| run.id) == Some(run_id) {
         Ok(())
     } else {
         Err(AppError::BadRequest("daycare request was superseded by a newer request".to_owned()))
@@ -1240,7 +1341,7 @@ async fn run_command_with_output_limit(
     deadline: Instant,
     output_limit: usize,
 ) -> AppResult<CommandResult> {
-    run_command_inner(command, args, None, deadline, output_limit).await
+    run_command_inner(command, args, None, deadline, output_limit, None).await
 }
 
 async fn run_command_with_input(
@@ -1249,7 +1350,7 @@ async fn run_command_with_input(
     input: Vec<u8>,
     deadline: Instant,
 ) -> AppResult<CommandResult> {
-    run_command_inner(command, args, Some(input), deadline, COMMAND_OUTPUT_LIMIT).await
+    run_command_inner(command, args, Some(input), deadline, COMMAND_OUTPUT_LIMIT, None).await
 }
 
 async fn run_command_inner(
@@ -1258,42 +1359,53 @@ async fn run_command_inner(
     input: Option<Vec<u8>>,
     deadline: Instant,
     output_limit: usize,
+    events: Option<mpsc::Sender<EventMessage>>,
 ) -> AppResult<CommandResult> {
     let mut cmd = Command::new(&command[0]);
-    cmd.args(command.iter().skip(1)).args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.args(command.iter().skip(1))
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
     if input.is_some() {
         cmd.stdin(Stdio::piped());
     }
     let mut child = cmd.spawn()?;
-    if let Some(input) = input {
-        let mut stdin = child.stdin.take().expect("stdin piped");
-        stdin.write_all(&input).await?;
-        stdin.shutdown().await?;
-    }
+    let stdin = child.stdin.take();
     let mut stdout = child.stdout.take().expect("stdout piped");
     let mut stderr = child.stderr.take().expect("stderr piped");
-    let stdout_task = tokio::spawn(async move { read_limited(&mut stdout, output_limit).await });
-    let stderr_task =
-        tokio::spawn(async move { read_limited(&mut stderr, COMMAND_OUTPUT_LIMIT).await });
-    let wait = child.wait();
-    let status = match tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), wait).await
-    {
-        Ok(result) => result?,
-        Err(_) => {
-            let _ = child.kill().await;
-            let _ = stdout_task.await;
-            let _ = stderr_task.await;
-            return Err(AppError::Internal("command timed out".to_owned()));
-        }
+    // Own all pipe work in this future so cancellation leaves no detached readers.
+    let work = async {
+        let write_input = async {
+            if let (Some(mut stdin), Some(input)) = (stdin, input) {
+                stdin.write_all(&input).await?;
+                stdin.shutdown().await?;
+            }
+            Ok::<_, AppError>(())
+        };
+        let (status, stdout, stderr, ()) = tokio::try_join!(
+            async { child.wait().await.map_err(AppError::from) },
+            read_output(&mut stdout, output_limit, "stdout", events.clone()),
+            read_output(&mut stderr, COMMAND_OUTPUT_LIMIT, "stderr", events),
+            write_input,
+        )?;
+        Ok(CommandResult { status: status.code().unwrap_or(128), stdout, stderr })
     };
-    Ok(CommandResult {
-        status: status.code().unwrap_or(128),
-        stdout: stdout_task.await.map_err(|err| AppError::Internal(err.to_string()))??,
-        stderr: stderr_task.await.map_err(|err| AppError::Internal(err.to_string()))??,
-    })
+    match tokio::time::timeout_at(deadline.into(), work).await {
+        Ok(result) => result,
+        Err(_) => {
+            let _ = tokio::time::timeout(Duration::from_secs(1), child.kill()).await;
+            Err(AppError::Internal("command timed out".to_owned()))
+        }
+    }
 }
 
-async fn read_limited<R: AsyncReadExt + Unpin>(reader: &mut R, limit: usize) -> AppResult<Vec<u8>> {
+async fn read_output<R: AsyncReadExt + Unpin>(
+    reader: &mut R,
+    limit: usize,
+    stream: &str,
+    events: Option<mpsc::Sender<EventMessage>>,
+) -> AppResult<Vec<u8>> {
     let mut out = Vec::new();
     let mut buf = [0_u8; 8192];
     let mut truncated = false;
@@ -1311,6 +1423,20 @@ async fn read_limited<R: AsyncReadExt + Unpin>(reader: &mut R, limit: usize) -> 
             }
             return Ok(out);
         }
+        // Live output is independent of the bounded command and transcript buffers.
+        if let Some(events) = &events {
+            events
+                .send(event(
+                    stream,
+                    Vec::new(),
+                    0,
+                    buf[..n].to_vec(),
+                    String::new(),
+                    BTreeMap::new(),
+                ))
+                .await
+                .map_err(|_| AppError::Internal("output stream closed".to_owned()))?;
+        }
         let remaining = limit.saturating_sub(out.len());
         out.extend_from_slice(&buf[..n.min(remaining)]);
         if n > remaining {
@@ -1326,7 +1452,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
 
-    use chrono::{Duration, Utc};
+    use chrono::{Duration as ChronoDuration, Utc};
     use tokio_stream::StreamExt;
 
     use super::*;
@@ -1352,6 +1478,7 @@ mod tests {
         let container = Container {
             command: Arc::new(vec!["false".to_owned()]),
             id: "test-container".to_owned(),
+            files: OnceCell::new(),
         };
         let error = container.shutdown().await.unwrap_err();
         assert!(error.to_string().contains("container removal failed"));
@@ -1376,17 +1503,266 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn command_deadline_covers_a_blocked_stdin_writer() {
+        let command = Arc::new(vec!["sleep".to_owned()]);
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            run_command_with_input(
+                &command,
+                &["30".to_owned()],
+                vec![0; 1_000_000],
+                Instant::now() + Duration::from_millis(50),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(result.err().unwrap().to_string().contains("timed out"));
+    }
+
+    #[tokio::test]
+    async fn command_timeout_keeps_streamed_diagnostics_in_the_failing_grade() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = fake_engine(dir.path());
+        fs::write(
+            &engine,
+            fs::read_to_string(&engine)
+                .unwrap()
+                .replace("exec) exit 0 ;;", "exec) printf 'before timeout\\n'; exec sleep 30 ;;"),
+        )
+        .unwrap();
+        let config = test_config(dir.path());
+        let mut bundle =
+            decode_signed_runtime_bundle(&signed_runtime(&config, |_| {}), &config.daycare_secret)
+                .unwrap();
+        let container = Container {
+            command: Arc::new(vec![engine.display().to_string()]),
+            id: "test-container".to_owned(),
+            files: OnceCell::new(),
+        };
+        let (events, mut receiver) = mpsc::channel(64);
+        run_action(
+            &container,
+            &mut bundle,
+            &config.daycare_secret,
+            Instant::now() + Duration::from_millis(100),
+            events,
+        )
+        .await
+        .unwrap();
+        assert!(
+            bundle
+                .commit
+                .as_ref()
+                .unwrap()
+                .transcript
+                .iter()
+                .any(|event| event.stream_data == b"before timeout\n")
+        );
+        let report = bundle.commit.as_ref().unwrap().report_card.as_ref().unwrap();
+        assert!(!report.passed);
+        assert!(report.note.contains("timed out"));
+        assert!(
+            bundle
+                .commit
+                .as_ref()
+                .unwrap()
+                .transcript
+                .iter()
+                .any(|event| { event.event == "error" && event.error.contains("timed out") })
+        );
+        let mut signed = false;
+        while let Some(response) = receiver.recv().await {
+            if matches!(response.unwrap().response, Some(daycare_response::Response::Bundle(_))) {
+                signed = true;
+            }
+        }
+        assert!(signed);
+    }
+
+    #[tokio::test]
+    async fn queued_disconnect_and_deadline_release_request_state_without_starting_a_container() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = test_config(dir.path());
+        config.container_engine = fake_engine(dir.path()).display().to_string();
+        let runtime = DaycareRuntime::new(Arc::new(config.clone())).unwrap();
+        let slot = runtime.container_slots.acquire().await.unwrap();
+
+        // A disconnected queued request must disappear while capacity remains occupied.
+        let signed = signed_runtime(&config, |_| {});
+        let stream = runtime.run(DaycareRequest { bundle: Some(signed) }, None).await.unwrap();
+        wait_for_active(&runtime).await;
+        drop(stream);
+        wait_for_idle(&runtime).await;
+
+        // The same queue observes the client's absolute deadline without needing output.
+        let signed = signed_runtime(&config, |_| {});
+        let mut stream = runtime
+            .run(
+                DaycareRequest { bundle: Some(signed) },
+                Some(Instant::now() + Duration::from_millis(50)),
+            )
+            .await
+            .unwrap()
+            .into_inner();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while stream.next().await.is_some() {}
+        })
+        .await
+        .unwrap();
+        wait_for_idle(&runtime).await;
+        drop(slot);
+        assert!(!fs::read_to_string(dir.path().join("engine.log")).unwrap().contains("run -d"));
+    }
+
+    #[tokio::test]
+    async fn live_output_precedes_command_completion_and_disconnect_releases_capacity() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = fake_engine(dir.path());
+        let script = fs::read_to_string(&engine)
+            .unwrap()
+            .replace("exec) exit 0 ;;", "exec) printf 'working\\n'; exec sleep 30 ;;");
+        fs::write(&engine, script).unwrap();
+        let mut config = test_config(dir.path());
+        config.container_engine = engine.display().to_string();
+        let runtime = DaycareRuntime::new(Arc::new(config.clone())).unwrap();
+        let signed = signed_runtime(&config, |_| {});
+        let mut stream =
+            runtime.run(DaycareRequest { bundle: Some(signed) }, None).await.unwrap().into_inner();
+
+        // This output must arrive while the fake student command is still sleeping.
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Some(daycare_response::Response::Event(event)) =
+                    stream.next().await.unwrap().unwrap().response
+                    && event.event == "stdout"
+                {
+                    assert_eq!(event.stream_data, b"working\n");
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        drop(stream);
+        wait_for_idle(&runtime).await;
+        assert_eq!(runtime.container_slots.available_permits(), 1);
+        assert!(
+            fs::read_to_string(dir.path().join("engine.log"))
+                .unwrap()
+                .contains("rm -f fake-container")
+        );
+    }
+
+    #[tokio::test]
+    async fn replacement_cancels_a_waiting_request_before_capacity_is_available() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = DaycareRuntime::new(Arc::new(test_config(dir.path()))).unwrap();
+        let (events, _receiver) = mpsc::channel(1);
+        let stop = runtime.mark_active("nanny-student", 1).await;
+        let scope =
+            RequestScope { deadline: Instant::now() + Duration::from_secs(30), stop, events };
+        let _replacement = runtime.mark_active("nanny-student", 2).await;
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            scope.run(std::future::pending::<AppResult<()>>()),
+        )
+        .await
+        .unwrap();
+        assert!(result.unwrap_err().to_string().contains("superseded"));
+    }
+
+    #[tokio::test]
+    async fn replacement_releases_the_running_container_slot_for_the_new_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = fake_engine(dir.path());
+        let script = fs::read_to_string(&engine).unwrap().replace(
+            "exec) exit 0 ;;",
+            &format!("exec) if [ ! -e {0}/started ]; then touch {0}/started; printf 'working\\n'; exec sleep 30; fi ;;", dir.path().display()),
+        );
+        fs::write(&engine, script).unwrap();
+        let mut config = test_config(dir.path());
+        config.container_engine = engine.display().to_string();
+        let runtime = DaycareRuntime::new(Arc::new(config.clone())).unwrap();
+        let request = DaycareRequest { bundle: Some(signed_runtime(&config, |_| {})) };
+        let mut old = runtime.run(request.clone(), None).await.unwrap().into_inner();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Some(daycare_response::Response::Event(event)) =
+                    old.next().await.unwrap().unwrap().response
+                    && event.event == "stdout"
+                {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+
+        // The replacement must finish well before the old command's CPU-derived timeout.
+        let mut replacement = runtime.run(request, None).await.unwrap().into_inner();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            let mut graded = false;
+            while let Some(response) = replacement.next().await {
+                if let Some(daycare_response::Response::Bundle(_)) = response.unwrap().response {
+                    graded = true;
+                }
+            }
+            assert!(graded);
+        })
+        .await
+        .unwrap();
+        assert_eq!(runtime.container_slots.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn output_capture_limits_do_not_truncate_live_delivery() {
+        let (events, mut receiver) = mpsc::channel(2);
+        let bytes = b"all student output";
+        let captured = read_output(&mut bytes.as_slice(), 4, "stdout", Some(events)).await.unwrap();
+        assert_eq!(receiver.recv().await.unwrap().stream_data, bytes);
+        assert_eq!(&captured[..4], &bytes[..4]);
+        let mut transcript = TranscriptCapture::default();
+        transcript.record(&event(
+            "stdout",
+            Vec::new(),
+            0,
+            vec![b'x'; TRANSCRIPT_DATA_LIMIT + 100],
+            String::new(),
+            BTreeMap::new(),
+        ));
+        assert_eq!(transcript.events[0].stream_data.len(), TRANSCRIPT_DATA_LIMIT);
+        assert_eq!(transcript.discarded_bytes, 100);
+    }
+
+    async fn wait_for_active(runtime: &DaycareRuntime) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while runtime.active_runs.lock().await.is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    async fn wait_for_idle(runtime: &DaycareRuntime) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !runtime.active_runs.lock().await.is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
     async fn unavailable_report_still_produces_failing_grade() {
         let dir = tempfile::tempdir().unwrap();
         let mut config = test_config(dir.path());
         config.container_engine = fake_engine(dir.path()).display().to_string();
         let runtime = DaycareRuntime::new(Arc::new(config.clone())).unwrap();
         let signed = signed_runtime(&config, |bundle| bundle.parser = "check".to_owned());
-        let mut stream = runtime
-            .run(DaycareRequest { bundle: Some(signed), args: Vec::new() })
-            .await
-            .unwrap()
-            .into_inner();
+        let mut stream =
+            runtime.run(DaycareRequest { bundle: Some(signed) }, None).await.unwrap().into_inner();
         let mut report = None;
         while let Some(response) = stream.next().await {
             if let Some(daycare_response::Response::Bundle(signed)) = response.unwrap().response {
@@ -1416,7 +1792,7 @@ mod tests {
 
         let stale = signed_runtime(&config, |bundle| {
             bundle.commit.as_mut().unwrap().updated_at =
-                Some(crate::timeutil::timestamp(Utc::now() - Duration::hours(1)));
+                Some(crate::timeutil::timestamp(Utc::now() - ChronoDuration::hours(1)));
         });
         assert!(
             validate_and_decode_action(&stale, &config.daycare_secret, &config.hostname).is_err()
@@ -1448,6 +1824,14 @@ mod tests {
         assert!(!report.passed);
         assert_eq!(report.note, "Passed 1/2 tests");
         assert_eq!(score_from_report(&report), 0.5);
+
+        let mut report = ReportCard { passed: true, ..ReportCard::default() };
+        parse_xunit(
+            &mut report,
+            br#"<testsuite><testcase name="not executed" status="notrun"/></testsuite>"#,
+        );
+        assert!(!report.passed);
+        assert_eq!(score_from_report(&report), 0.0);
     }
 
     #[test]
@@ -1563,11 +1947,8 @@ mod tests {
         let runtime = DaycareRuntime::new(Arc::new(config.clone())).unwrap();
         let signed = signed_runtime(&config, |_| {});
 
-        let mut stream = runtime
-            .run(DaycareRequest { bundle: Some(signed), args: Vec::new() })
-            .await
-            .unwrap()
-            .into_inner();
+        let mut stream =
+            runtime.run(DaycareRequest { bundle: Some(signed) }, None).await.unwrap().into_inner();
         let mut saw_bundle = false;
         while let Some(response) = stream.next().await {
             if matches!(response.unwrap().response, Some(daycare_response::Response::Bundle(_))) {
@@ -1603,11 +1984,8 @@ mod tests {
             bundle.commit.as_mut().unwrap().action = "demo".to_owned();
         });
 
-        let mut stream = runtime
-            .run(DaycareRequest { bundle: Some(signed), args: Vec::new() })
-            .await
-            .unwrap()
-            .into_inner();
+        let mut stream =
+            runtime.run(DaycareRequest { bundle: Some(signed) }, None).await.unwrap().into_inner();
         let mut saw_event = false;
         let mut saw_bundle = false;
         while let Some(response) = stream.next().await {
@@ -1641,14 +2019,8 @@ mod tests {
             ];
         });
 
-        let mut stream = runtime
-            .run(DaycareRequest {
-                bundle: Some(signed),
-                args: vec!["ignored-container-arg".to_owned()],
-            })
-            .await
-            .unwrap()
-            .into_inner();
+        let mut stream =
+            runtime.run(DaycareRequest { bundle: Some(signed) }, None).await.unwrap().into_inner();
         let mut events = Vec::new();
         let mut final_bundle = None;
         while let Some(response) = stream.next().await {
@@ -1672,7 +2044,8 @@ mod tests {
         let commit = bundle.commit.unwrap();
         let report = commit.report_card.unwrap();
         assert!(!report.passed);
-        assert_eq!(report.note, "Passed 1/2 tests");
+        assert!(report.note.starts_with("Passed 1/2 tests in "));
+        assert!(report.duration.is_some());
         assert_eq!(commit.score, 0.5);
         assert!(commit.transcript.iter().any(|event| {
             event.event == "stdout" && event.stream_data == b"student stdout\n".to_vec()
@@ -1693,7 +2066,10 @@ mod tests {
         assert!(log.contains("--ulimit nofile=77:77"));
         assert!(log.contains("--memory 64m"));
         assert!(log.contains("--pids-limit 9"));
-        assert!(!log.contains("ignored-container-arg"));
+        assert_eq!(
+            log.lines().filter(|line| *line == "cp fake-container:/home/student/. -").count(),
+            1
+        );
     }
 
     #[tokio::test]
@@ -1707,11 +2083,8 @@ mod tests {
             bundle.parser = "check".to_owned();
         });
 
-        let mut stream = runtime
-            .run(DaycareRequest { bundle: Some(signed), args: Vec::new() })
-            .await
-            .unwrap()
-            .into_inner();
+        let mut stream =
+            runtime.run(DaycareRequest { bundle: Some(signed) }, None).await.unwrap().into_inner();
         let mut final_bundle = None;
         while let Some(response) = stream.next().await {
             match response.unwrap().response {
@@ -1725,7 +2098,7 @@ mod tests {
         let bundle = decode_signed_runtime_bundle(&signed, &config.daycare_secret).unwrap();
         let report = bundle.commit.unwrap().report_card.unwrap();
         assert!(!report.passed);
-        assert_eq!(report.note, "Passed 1/1 tests");
+        assert!(report.note.starts_with("Passed 1/1 tests in "));
     }
 
     fn output_tar(files: &[(&str, &[u8])]) -> Vec<u8> {
@@ -1911,7 +2284,6 @@ mod tests {
     fn test_config(base: &Path) -> ServerConfig {
         ServerConfig {
             hostname: "ta.example".to_owned(),
-            ta_hostname: String::new(),
             daycare_secret: "daycare-secret".to_owned(),
             lti_secret: "lti-secret".to_owned(),
             session_secret: "session-secret".to_owned(),

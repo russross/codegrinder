@@ -169,7 +169,8 @@ message SignedRuntimeBundle {
 // DaycareRequest represents a request for the daycare service.
 message DaycareRequest {
   SignedRuntimeBundle bundle = 1;
-  repeated string args = 2;
+  reserved 2;
+  reserved "args";
 }
 
 // DaycareResponse represents a response from the daycare service.

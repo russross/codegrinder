@@ -42,6 +42,9 @@ struct Cli {
         help = "per-RPC timeout in seconds"
     )]
     timeout: u64,
+    #[arg(long, global = true, default_value_t = config::DEFAULT_DAYCARE_TIMEOUT_SECONDS,
+        value_parser = clap::value_parser!(u64).range(1..), help = "daycare RPC timeout in seconds")]
+    daycare_timeout: u64,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -233,7 +236,8 @@ fn command_for_roles(roles: Roles) -> clap::Command {
         command = command
             .mut_arg("api", |arg| arg.hide(true))
             .mut_arg("api_dump", |arg| arg.hide(true))
-            .mut_arg("timeout", |arg| arg.hide(true));
+            .mut_arg("timeout", |arg| arg.hide(true))
+            .mut_arg("daycare_timeout", |arg| arg.hide(true));
     }
     if !roles.is_author {
         command = command
@@ -255,8 +259,9 @@ fn command_for_roles(roles: Roles) -> clap::Command {
 }
 
 async fn dispatch(cli: Cli, roles: Roles) -> Result<()> {
-    let trace =
+    let mut trace =
         config::ApiTrace::with_timeout(cli.api, cli.api_dump, Duration::from_secs(cli.timeout));
+    trace.daycare_timeout = Duration::from_secs(cli.daycare_timeout);
     match cli.command {
         None => {
             command_for_roles(roles).print_help()?;

@@ -18,7 +18,6 @@ pub struct IpFilterConfig {
 #[derive(Clone, Debug)]
 pub struct ServerConfig {
     pub hostname: String,
-    pub ta_hostname: String,
     pub daycare_secret: String,
     pub lti_secret: String,
     pub session_secret: String,
@@ -45,8 +44,6 @@ struct RawIpFilter {
 struct RawConfig {
     #[serde(default)]
     hostname: String,
-    #[serde(default)]
-    ta_hostname: String,
     #[serde(default)]
     daycare_secret: String,
     #[serde(default)]
@@ -99,7 +96,6 @@ pub fn load_config(path: &Path) -> AppResult<ServerConfig> {
     let whitelist = raw.ip_filter.map(|filter| filter.whitelist).unwrap_or_default();
     Ok(ServerConfig {
         hostname: raw.hostname,
-        ta_hostname: raw.ta_hostname,
         daycare_secret: decode_base64_if_needed(&raw.daycare_secret),
         lti_secret: raw.lti_secret,
         session_secret: decode_base64_if_needed(&raw.session_secret),
@@ -124,11 +120,7 @@ fn resolve_config_path(config_dir: &Path, configured: PathBuf, default: &Path) -
     if path.is_absolute() { path.to_owned() } else { config_dir.join(path) }
 }
 
-pub fn validate_config(
-    config: &ServerConfig,
-    ta_enabled: bool,
-    daycare_enabled: bool,
-) -> AppResult<()> {
+pub fn validate_config(config: &ServerConfig) -> AppResult<()> {
     if config.hostname.trim().is_empty() {
         return Err(AppError::Internal(
             "cannot run with no hostname in the config file".to_owned(),
@@ -139,19 +131,19 @@ pub fn validate_config(
             "cannot run with no daycareSecret in the config file".to_owned(),
         ));
     }
-    if ta_enabled && config.lti_secret.trim().is_empty() {
+    if config.lti_secret.trim().is_empty() {
         return Err(AppError::Internal(
-            "cannot run TA role with no ltiSecret in the config file".to_owned(),
+            "cannot run with no ltiSecret in the config file".to_owned(),
         ));
     }
-    if ta_enabled && config.session_secret.trim().is_empty() {
+    if config.session_secret.trim().is_empty() {
         return Err(AppError::Internal(
-            "cannot run TA role with no sessionSecret in the config file".to_owned(),
+            "cannot run with no sessionSecret in the config file".to_owned(),
         ));
     }
-    if daycare_enabled && config.problem_types.is_empty() {
+    if config.problem_types.is_empty() {
         return Err(AppError::Internal(
-            "cannot run Daycare role with no problemTypes in the config file".to_owned(),
+            "cannot run with no problemTypes in the config file".to_owned(),
         ));
     }
     let mut problem_types = BTreeSet::new();
@@ -165,13 +157,8 @@ pub fn validate_config(
             )));
         }
     }
-    if daycare_enabled && config.capacity == 0 {
+    if config.capacity == 0 {
         return Err(AppError::Internal("Daycare capacity must be greater than zero".to_owned()));
-    }
-    if daycare_enabled && !ta_enabled && config.ta_hostname.trim().is_empty() {
-        return Err(AppError::Internal(
-            "cannot run standalone Daycare role with no taHostname in the config file".to_owned(),
-        ));
     }
     Ok(())
 }
@@ -235,6 +222,38 @@ mod tests {
     }
 
     #[test]
+    fn requires_bookkeeping_secrets_and_local_execution_configuration() {
+        let config = config_from_json(
+            r#"{
+                "hostname": "example.test",
+                "daycareSecret": "secret",
+                "ltiSecret": "secret",
+                "sessionSecret": "secret",
+                "capacity": 1,
+                "problemTypes": ["python"]
+            }"#,
+        )
+        .unwrap();
+        validate_config(&config).unwrap();
+
+        // Every server needs both bookkeeping credentials and execution capacity.
+        let mut missing_lti = config.clone();
+        missing_lti.lti_secret.clear();
+        assert!(validate_config(&missing_lti).unwrap_err().to_string().contains("ltiSecret"));
+        let mut missing_session = config.clone();
+        missing_session.session_secret.clear();
+        assert!(
+            validate_config(&missing_session).unwrap_err().to_string().contains("sessionSecret")
+        );
+        let mut missing_types = config.clone();
+        missing_types.problem_types.clear();
+        assert!(validate_config(&missing_types).unwrap_err().to_string().contains("problemTypes"));
+        let mut no_capacity = config;
+        no_capacity.capacity = 0;
+        assert!(validate_config(&no_capacity).unwrap_err().to_string().contains("capacity"));
+    }
+
+    #[test]
     fn rejects_empty_and_duplicate_problem_type_entries() {
         let mut config = config_from_json(
             r#"{
@@ -249,11 +268,11 @@ mod tests {
         .unwrap();
 
         config.problem_types = vec!["python".to_owned(), " ".to_owned()];
-        assert!(validate_config(&config, true, true).unwrap_err().to_string().contains("empty"));
+        assert!(validate_config(&config).unwrap_err().to_string().contains("empty"));
 
         config.problem_types = vec!["python".to_owned(), "python".to_owned()];
         assert!(
-            validate_config(&config, true, true)
+            validate_config(&config)
                 .unwrap_err()
                 .to_string()
                 .contains("duplicate entry \"python\"")

@@ -13,7 +13,7 @@ use serde::Deserialize;
 use sha1::{Digest, Sha1};
 
 use crate::config::ServerConfig;
-use crate::curl::{CurlError, CurlHttpVersion, CurlPostRequest};
+use crate::curl::{CurlError, CurlPostRequest};
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
 use crate::proto::{AssignmentKey, Commit, EventMessage};
@@ -416,7 +416,6 @@ async fn save_grade(
         headers: &headers,
         body: &payload,
         timeout: GRADE_PASSBACK_TIMEOUT,
-        http_version: CurlHttpVersion::Http1_1,
     })
     .await?;
     let status = response.status;

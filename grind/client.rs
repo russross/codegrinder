@@ -263,7 +263,7 @@ impl Session {
         request: crate::proto::codegrinder::DaycareRequest,
     ) -> Result<Streaming<crate::proto::codegrinder::DaycareResponse>> {
         dump(&self.config.trace, "Daycare", true, &request);
-        let timeout = daycare_timeout(&request, self.config.rpc_timeout);
+        let timeout = self.config.trace.daycare_timeout;
         let request = authorize(timed_request(request, timeout), &self.config.session_key)?;
         let response = self
             .client
@@ -402,7 +402,8 @@ pub fn decode_runtime(
 async fn new_grpc_client(config: &Config) -> Result<CodeGrinderServiceClient<Channel>> {
     let uri = endpoint_uri(&config.host)?;
     let endpoint = Endpoint::from_shared(uri.clone())
-        .map_err(|error| CliError::Message(format!("invalid server address {uri:?}: {error}")))?;
+        .map_err(|error| CliError::Message(format!("invalid server address {uri:?}: {error}")))?
+        .connect_timeout(config.rpc_timeout);
     let channel = if uri.starts_with("http://") {
         endpoint.connect().await.map_err(|error| transport_error(&uri, error))?
     } else {
@@ -456,25 +457,6 @@ fn timed_request<T>(message: T, timeout: Duration) -> Request<T> {
     request
 }
 
-fn daycare_timeout(
-    request: &crate::proto::codegrinder::DaycareRequest,
-    rpc_timeout: Duration,
-) -> Duration {
-    request
-        .bundle
-        .as_ref()
-        .and_then(runtime_action_timeout)
-        .and_then(|action_timeout| action_timeout.checked_add(rpc_timeout))
-        .unwrap_or(rpc_timeout)
-}
-
-fn runtime_action_timeout(bundle: &SignedRuntimeBundle) -> Option<Duration> {
-    let runtime = decode_runtime(bundle).ok()?;
-    let limits = runtime.limits?;
-    let cpu = limits.max_cpu.max(1) as u64;
-    Some(Duration::from_secs(cpu.saturating_mul(2).saturating_add(5)))
-}
-
 fn dump(trace: &ApiTrace, call: &str, outgoing: bool, message: &impl Debug) {
     if !trace.report {
         return;
@@ -509,13 +491,9 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::time::Duration;
 
-    use prost::Message;
     use tempfile::tempdir;
 
-    use super::{daycare_timeout, timed_request, updater_in_paths, upgrade_grind};
-    use crate::proto::codegrinder::{
-        DaycareRequest, RuntimeBundle, RuntimeLimits, SignedRuntimeBundle,
-    };
+    use super::{timed_request, updater_in_paths, upgrade_grind};
 
     #[test]
     fn rpc_timeout_is_encoded_as_grpc_timeout_metadata() {
@@ -525,29 +503,6 @@ mod tests {
             request.metadata().get("grpc-timeout").and_then(|value| value.to_str().ok()),
             Some("10000000u")
         );
-    }
-
-    #[test]
-    fn daycare_timeout_adds_runtime_action_budget_to_rpc_budget() {
-        let bundle = RuntimeBundle {
-            limits: Some(RuntimeLimits {
-                max_cpu: 10,
-                max_fd: 100,
-                max_file_size: 10,
-                max_memory: 256,
-                max_threads: 20,
-            }),
-            ..RuntimeBundle::default()
-        };
-        let request = DaycareRequest {
-            bundle: Some(SignedRuntimeBundle {
-                bundle: bundle.encode_to_vec(),
-                signature: "not checked here".to_owned(),
-            }),
-            args: Vec::new(),
-        };
-
-        assert_eq!(daycare_timeout(&request, Duration::from_secs(10)), Duration::from_secs(35));
     }
 
     #[test]

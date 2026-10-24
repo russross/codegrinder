@@ -64,7 +64,7 @@ pub async fn command_grade(extra: Vec<String>, trace: ApiTrace) -> Result<()> {
         "submitting {} step {} for grading",
         student.workspace.problem_id, student.commit.step
     );
-    let graded = handle_daycare_stream(&mut session, signed, Vec::new(), Path::new(""), false)
+    let graded = handle_daycare_stream(&mut session, signed, Path::new(""), false)
         .await?
         .ok_or_else(|| {
             crate::error::CliError::Message(
@@ -163,11 +163,8 @@ pub async fn command_action(action_args: Vec<String>, trace: ApiTrace) -> Result
         &signed,
         "server was unable to find a suitable daycare, unable to run action",
     )?;
-    println!(
-        "starting interactive session for {} step {}",
-        student.workspace.problem_id, student.commit.step
-    );
-    handle_daycare_stream(&mut session, signed, Vec::new(), Path::new("."), true).await?;
+    println!("starting action for {} step {}", student.workspace.problem_id, student.commit.step);
+    handle_daycare_stream(&mut session, signed, Path::new("."), true).await?;
     Ok(())
 }
 

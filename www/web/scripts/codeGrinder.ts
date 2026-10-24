@@ -169,7 +169,7 @@ class CodeGrinder {
 
   #createClient(baseUrl: string, credentials: RequestCredentials): CodeGrinderServiceClient {
     return new CodeGrinderServiceClient(
-      new GrpcWebFetchTransport({ baseUrl, fetchInit: { credentials } }),
+      new GrpcWebFetchTransport({ baseUrl, timeout: 10_000, fetchInit: { credentials } }),
     );
   }
 
@@ -389,7 +389,7 @@ class CodeGrinder {
       throw new Error("The runtime bundle does not name a daycare host");
     }
     const daycare = this.#createClient(`${window.location.protocol}//${runtime.hostname}`, "omit");
-    const call = daycare.daycare(DaycareRequest.create({ bundle: signedBundle, args: [] }), {});
+    const call = daycare.daycare(DaycareRequest.create({ bundle: signedBundle }), { timeout: 120_000 });
     return call.responses;
   }
 

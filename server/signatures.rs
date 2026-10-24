@@ -10,7 +10,6 @@ use sha2::Sha256;
 
 use crate::error::{AppError, AppResult};
 use crate::proto::{RuntimeBundle, SignedRuntimeBundle};
-use crate::timeutil::db_time;
 
 const RUNTIME_BUNDLE_HMAC_CONTEXT: &[u8] = b"codegrinder:runtime-bundle:v1\0";
 
@@ -64,28 +63,6 @@ pub fn hmac_sha1_base64(secret: &str, payload: &[u8]) -> AppResult<String> {
         .map_err(|err| AppError::Internal(format!("invalid hmac key: {err}")))?;
     mac.update(payload);
     Ok(STANDARD.encode(mac.finalize().into_bytes()))
-}
-
-pub fn compute_daycare_registration_signature(
-    hostname: &str,
-    problem_types: &[String],
-    capacity: usize,
-    time: chrono::DateTime<chrono::Utc>,
-    version: &str,
-    secret: &str,
-) -> AppResult<String> {
-    let mut values = BTreeMap::from([
-        ("hostname".to_owned(), vec![hostname.to_owned()]),
-        ("capacity".to_owned(), vec![capacity.to_string()]),
-        ("time".to_owned(), vec![db_time(time)]),
-        ("version".to_owned(), vec![version.to_owned()]),
-    ]);
-    let mut sorted_problem_types = problem_types.to_vec();
-    sorted_problem_types.sort();
-    for (index, problem_type) in sorted_problem_types.into_iter().enumerate() {
-        values.insert(format!("problemType-{index}"), vec![problem_type]);
-    }
-    hmac_sha256_base64(secret, &encode_params(&values))
 }
 
 pub fn sign_runtime_bundle_blob(secret: &str, payload: &[u8]) -> AppResult<String> {
