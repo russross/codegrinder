@@ -284,6 +284,8 @@ CREATE TABLE commits (
     CHECK (commit_created_at <= commit_updated_at)
 ) WITHOUT ROWID;
 CREATE INDEX commits_problem_step ON commits (problem_id, step_number);
+-- Assignment score aggregation reads commit scores without loading grading output.
+CREATE INDEX commits_assignment_scores ON commits (user_id, course_id, problem_set_id, problem_id, step_number, score);
 
 CREATE TABLE commit_files (
     user_id                 text NOT NULL,
