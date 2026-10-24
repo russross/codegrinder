@@ -157,7 +157,7 @@ pub fn get_assignment(
         is_course_instructor,
     ) = conn
         .query_row(
-            "SELECT * FROM accessible_assignment_fields WHERE viewer_user_id = ? AND assignment_user_id = ? AND course_id = ? AND problem_set_id = ?",
+            "SELECT problem_set_note, course_name, download_status, restricted, prerequisite_problem_set_id, is_course_instructor FROM accessible_assignment_policy WHERE viewer_user_id = ? AND assignment_user_id = ? AND course_id = ? AND problem_set_id = ?",
             params![current_user.user_id, key.user_id, key.course_id, key.problem_set_id],
             |row| {
                 Ok((
@@ -301,7 +301,7 @@ pub fn get_workspace(
     };
     let context = conn
         .query_row(
-            "SELECT * FROM workspace_step_context WHERE user_id = ? AND course_id = ? AND problem_set_id = ? AND problem_id = ? AND step_number = ?",
+            "SELECT problem_note, problem_type, step_note, step_weight, first_step_number, last_step_number FROM workspace_step_context WHERE user_id = ? AND course_id = ? AND problem_set_id = ? AND problem_id = ? AND step_number = ?",
             params![
                 query.key.user_id,
                 query.key.course_id,
@@ -336,7 +336,7 @@ pub fn get_workspace(
     };
     if query.include_solution_files {
         let access = conn.query_row(
-            "SELECT is_course_instructor FROM accessible_assignment_fields WHERE viewer_user_id = ? AND assignment_user_id = ? AND course_id = ? AND problem_set_id = ?",
+            "SELECT is_course_instructor FROM accessible_assignment_policy WHERE viewer_user_id = ? AND assignment_user_id = ? AND course_id = ? AND problem_set_id = ?",
             params![
                 current_user.user_id,
                 query.key.user_id,
@@ -957,6 +957,76 @@ mod tests {
             .unwrap()
             .assignment_score;
         assert_eq!(slice_score, 1.0);
+    }
+
+    #[test]
+    fn assignment_scores_weight_problems_after_steps_and_isolate_assignments() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_test_connection(&dir.path().join("db.sqlite")).unwrap();
+        seed_store_fixture(&conn);
+        insert_assignment(&conn, "student", "base", None, None);
+        insert_assignment(&conn, "teacher", "base", None, None);
+        insert_assignment(&conn, "student", "slice1", None, None);
+        insert_commit(&conn, "student", "base", 1, true, &[("answer.txt", b"passed")]);
+        insert_commit(&conn, "student", "base", 2, false, &[("answer.txt", b"partial")]);
+
+        // A second problem has its own step denominator and contributes according
+        // to its problem weight even when this assignment has no saved work for it.
+        conn.execute_batch(
+            "INSERT INTO problems SELECT 'p2', problem_note, problem_tags, problem_options,
+                problem_created_at, problem_updated_at FROM problems WHERE problem_id = 'p1';
+             INSERT INTO problem_steps VALUES ('p2', 1, 'python', 'Other step', 10);
+             INSERT INTO problem_set_problems VALUES ('base', 'p2', 3, NULL, NULL);",
+        )
+        .unwrap();
+        let score = |owner: &str, set: &str| {
+            conn.query_row(
+                "SELECT assignment_score FROM assignment_scores
+                 WHERE user_id = ? AND course_id = 'c1' AND problem_set_id = ?",
+                params![owner, set],
+                |row| row.get::<_, f64>(0),
+            )
+            .unwrap()
+        };
+        assert!((score("student", "base") - 0.0875).abs() < 1e-12);
+        assert_eq!(score("teacher", "base"), 0.0);
+        assert_eq!(score("student", "slice1"), 0.0);
+
+        // Reweighting authored material changes the live calculation without
+        // requiring another student save or any stored-summary refresh.
+        conn.execute(
+            "UPDATE problem_set_problems SET problem_weight = 1
+             WHERE problem_set_id = 'base' AND problem_id = 'p2'",
+            [],
+        )
+        .unwrap();
+        assert!((score("student", "base") - 0.175).abs() < 1e-12);
+    }
+
+    #[test]
+    fn progress_requires_both_passing_report_and_full_score() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_test_connection(&dir.path().join("db.sqlite")).unwrap();
+        seed_store_fixture(&conn);
+        insert_assignment(&conn, "student", "base", None, None);
+        insert_commit(&conn, "student", "base", 1, true, &[("answer.txt", b"passed")]);
+        let student = user(&conn, "student");
+
+        // A full numeric score alone cannot advance the current step. A passing
+        // report alone also cannot advance it when the numeric score is partial.
+        for (report, score, expected_step) in [
+            (r#"{"passed":false}"#, Some(1.0), 1),
+            (r#"{"passed":true}"#, Some(0.5), 1),
+            (r#"{"passed":true}"#, None, 1),
+            (r#"{"passed":true}"#, Some(1.0), 2),
+        ] {
+            conn.execute("UPDATE commits SET report_card = ?, score = ?", params![report, score])
+                .unwrap();
+            let assignment =
+                get_assignment(&conn, &student, &key("student", "base"), true).unwrap();
+            assert_eq!(assignment.problems[0].current_step_number, expected_step);
+            assert!(!assignment.problems[0].completed);
+        }
     }
 
     fn status_by_problem_set(items: &[AssignmentListItem]) -> BTreeMap<String, i32> {

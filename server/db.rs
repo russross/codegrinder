@@ -109,7 +109,7 @@ impl Db {
                     Err(err)
                 }
             };
-            if started.elapsed() >= Duration::from_millis(1000) {
+            if started.elapsed() >= Duration::from_millis(500) {
                 crate::logging::record(
                     "WARN",
                     "database_slow_transaction",

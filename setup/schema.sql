@@ -402,10 +402,10 @@ CREATE VIEW passed_commit_steps AS
     SELECT user_id, course_id, problem_set_id, problem_id, step_number
     FROM commits
     WHERE json_extract(report_card, '$.passed') = 1
-        AND score = 1.0
-    GROUP BY user_id, course_id, problem_set_id, problem_id, step_number;
+        AND score = 1.0;
 
-CREATE VIEW assignment_list_fields AS
+-- Availability and assignment metadata do not depend on score aggregation.
+CREATE VIEW assignment_policy_fields AS
     SELECT
         assignments.user_id,
         assignments.course_id,
@@ -435,7 +435,6 @@ CREATE VIEW assignment_list_fields AS
         END AS prereq_ready,
         problem_sets.continues_problem_set_id AS prerequisite_problem_set_id,
         problem_sets.problem_set_note,
-        COALESCE(assignment_scores.assignment_score, 0.0) AS assignment_score,
         courses.course_name,
         users.user_name,
         users.user_login,
@@ -446,10 +445,16 @@ CREATE VIEW assignment_list_fields AS
     FROM assignments
     NATURAL JOIN courses
     NATURAL JOIN users
-    NATURAL JOIN problem_sets
+    NATURAL JOIN problem_sets;
+
+CREATE VIEW assignment_list_fields AS
+    SELECT
+        assignment_policy_fields.*,
+        COALESCE(assignment_scores.assignment_score, 0.0) AS assignment_score
+    FROM assignment_policy_fields
     NATURAL LEFT JOIN assignment_scores;
 
-CREATE VIEW accessible_assignment_fields AS
+CREATE VIEW accessible_assignment_policy AS
     SELECT
         accessible_assignments.viewer_user_id,
         accessible_assignments.assignment_user_id,
@@ -458,48 +463,58 @@ CREATE VIEW accessible_assignment_fields AS
         accessible_assignments.is_owner,
         accessible_assignments.is_course_instructor,
         accessible_assignments.restricted,
-        assignment_list_fields.assignment_title,
-        assignment_list_fields.unlock_at,
-        assignment_list_fields.due_at,
-        assignment_list_fields.lock_at,
+        assignment_policy_fields.assignment_title,
+        assignment_policy_fields.unlock_at,
+        assignment_policy_fields.due_at,
+        assignment_policy_fields.lock_at,
         CASE
             WHEN accessible_assignments.is_course_instructor THEN 0
-            WHEN NOT assignment_list_fields.download_open THEN 1
-            WHEN NOT assignment_list_fields.prereq_ready THEN 2
+            WHEN NOT assignment_policy_fields.download_open THEN 1
+            WHEN NOT assignment_policy_fields.prereq_ready THEN 2
             ELSE 0
         END AS download_status,
         CASE
             WHEN accessible_assignments.is_course_instructor THEN 1
-            WHEN assignment_list_fields.download_open AND assignment_list_fields.prereq_ready THEN 1
+            WHEN assignment_policy_fields.download_open AND assignment_policy_fields.prereq_ready THEN 1
             ELSE 0
         END AS download_available,
-        assignment_list_fields.problem_set_note,
-        assignment_list_fields.assignment_score,
-        assignment_list_fields.prerequisite_problem_set_id,
-        assignment_list_fields.course_name,
-        assignment_list_fields.user_name,
-        assignment_list_fields.user_login,
-        assignment_list_fields.search_text
+        assignment_policy_fields.problem_set_note,
+        assignment_policy_fields.prerequisite_problem_set_id,
+        assignment_policy_fields.course_name,
+        assignment_policy_fields.user_name,
+        assignment_policy_fields.user_login,
+        assignment_policy_fields.search_text
     FROM accessible_assignments
-    JOIN assignment_list_fields
-        ON assignment_list_fields.user_id = accessible_assignments.assignment_user_id
-        AND assignment_list_fields.course_id = accessible_assignments.course_id
-        AND assignment_list_fields.problem_set_id = accessible_assignments.problem_set_id;
+    JOIN assignment_policy_fields
+        ON assignment_policy_fields.user_id = accessible_assignments.assignment_user_id
+        AND assignment_policy_fields.course_id = accessible_assignments.course_id
+        AND assignment_policy_fields.problem_set_id = accessible_assignments.problem_set_id;
+
+-- List presentation adds scores after access and availability have been resolved.
+CREATE VIEW accessible_assignment_fields AS
+    SELECT
+        accessible_assignment_policy.*,
+        COALESCE(assignment_scores.assignment_score, 0.0) AS assignment_score
+    FROM accessible_assignment_policy
+    LEFT JOIN assignment_scores
+        ON assignment_scores.user_id = accessible_assignment_policy.assignment_user_id
+        AND assignment_scores.course_id = accessible_assignment_policy.course_id
+        AND assignment_scores.problem_set_id = accessible_assignment_policy.problem_set_id;
 
 CREATE VIEW accessible_assignment_rows AS
     SELECT
         assignments.*,
-        accessible_assignment_fields.viewer_user_id,
-        accessible_assignment_fields.is_owner,
-        accessible_assignment_fields.is_course_instructor,
-        accessible_assignment_fields.restricted AS viewer_restricted,
-        accessible_assignment_fields.download_status,
-        accessible_assignment_fields.download_available
-    FROM accessible_assignment_fields
+        accessible_assignment_policy.viewer_user_id,
+        accessible_assignment_policy.is_owner,
+        accessible_assignment_policy.is_course_instructor,
+        accessible_assignment_policy.restricted AS viewer_restricted,
+        accessible_assignment_policy.download_status,
+        accessible_assignment_policy.download_available
+    FROM accessible_assignment_policy
     JOIN assignments
-        ON assignments.user_id = accessible_assignment_fields.assignment_user_id
-        AND assignments.course_id = accessible_assignment_fields.course_id
-        AND assignments.problem_set_id = accessible_assignment_fields.problem_set_id;
+        ON assignments.user_id = accessible_assignment_policy.assignment_user_id
+        AND assignments.course_id = accessible_assignment_policy.course_id
+        AND assignments.problem_set_id = accessible_assignment_policy.problem_set_id;
 
 CREATE VIEW accessible_assignment_commit_policy AS
     SELECT
@@ -522,47 +537,45 @@ CREATE VIEW accessible_assignment_commit_policy AS
             WHEN NOT is_owner THEN 1
             ELSE 0
         END AS not_saved_not_owner
-    FROM accessible_assignment_fields;
+    FROM accessible_assignment_policy;
 
+-- Correlation bounds both aggregation stages to the selected assignment's scope.
 CREATE VIEW assignment_scores AS
-WITH problem_step_scores AS (
     SELECT
         assignments.user_id,
         assignments.course_id,
         assignments.problem_set_id,
-        problem_set_step_scope.problem_id,
-        CAST(problem_set_step_scope.problem_weight AS REAL) AS problem_weight,
-        problem_set_step_scope.step_number,
-        CAST(problem_set_step_scope.step_weight AS REAL) AS step_weight,
-        commits.score AS commit_score
+        (
+            SELECT
+                CASE
+                    WHEN SUM(problem_weight) <= 0 THEN 0.0
+                    ELSE SUM(problem_score * problem_weight) / CAST(SUM(problem_weight) AS REAL)
+                END
+            FROM (
+                SELECT
+                    scope.problem_id,
+                    CAST(scope.problem_weight AS REAL) AS problem_weight,
+                    CASE
+                        WHEN SUM(CAST(scope.step_weight AS REAL)) <= 0 THEN 0.0
+                        ELSE SUM(COALESCE(commits.score, 0.0) * CAST(scope.step_weight AS REAL))
+                            / SUM(CAST(scope.step_weight AS REAL))
+                    END AS problem_score
+                FROM problem_set_step_scope AS scope
+                LEFT JOIN commits
+                    ON commits.user_id = assignments.user_id
+                    AND commits.course_id = assignments.course_id
+                    AND commits.problem_set_id = assignments.problem_set_id
+                    AND commits.problem_id = scope.problem_id
+                    AND commits.step_number = scope.step_number
+                WHERE scope.problem_set_id = assignments.problem_set_id
+                GROUP BY scope.problem_id, scope.problem_weight
+            )
+        ) AS assignment_score
     FROM assignments
-    NATURAL JOIN problem_set_step_scope
-    NATURAL LEFT JOIN commits
-),
-problem_scores AS (
-    SELECT
-        user_id,
-        course_id,
-        problem_set_id,
-        problem_id,
-        problem_weight,
-        CASE
-            WHEN SUM(step_weight) <= 0 THEN 0.0
-            ELSE SUM(COALESCE(commit_score, 0.0) * step_weight) / CAST(SUM(step_weight) AS REAL)
-        END AS problem_score
-    FROM problem_step_scores
-    GROUP BY user_id, course_id, problem_set_id, problem_id, problem_weight
-)
-SELECT
-    user_id,
-    course_id,
-    problem_set_id,
-    CASE
-        WHEN SUM(problem_weight) <= 0 THEN 0.0
-        ELSE SUM(problem_score * problem_weight) / CAST(SUM(problem_weight) AS REAL)
-    END AS assignment_score
-FROM problem_scores
-GROUP BY user_id, course_id, problem_set_id;
+    WHERE EXISTS (
+        SELECT 1 FROM problem_set_step_scope
+        WHERE problem_set_step_scope.problem_set_id = assignments.problem_set_id
+    );
 
 CREATE VIEW problem_total_steps AS
     SELECT problem_id, MAX(step_number) AS total_steps

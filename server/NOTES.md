@@ -58,6 +58,10 @@ Read access to an explicit step is distinct from permission to save it. Every ow
 
 Assignment scores are weighted averages: step scores within each scoped problem, then problem scores within the set. Missing scores count as zero. Out-of-scope steps cannot affect a slice's score or completion.
 
+Assignment reads resolve availability and metadata through `assignment_policy_fields`, then viewer access through `accessible_assignment_policy`. Permission checks, assignment detail reads, and commit policy consume these unscored views. List presentation adds scores through `assignment_list_fields` or `accessible_assignment_fields`. `assignment_scores` correlates both weighting stages to each selected assignment key; single-assignment reads do not aggregate unrelated assignments. `passed_commit_steps` filters the unique current commit rows directly, allowing progression and prerequisite joins to look up individual step keys.
+
+Existing databases receive these view definitions through `setup/update-assignment-views.py DATABASE`, which reads the canonical schema and transactionally replaces the affected views, validates dependent views, and preserves tables and indexes. `make -C tests assignment-views-check` checks upgrade atomicity, data preservation, and empty-set scoring. For deployment, build the updated server first, stop it with `doas rc-service codegrinder stop`, run the view update against the configured database, then start it with `doas rc-service codegrinder start`. Startup refreshes planner statistics. Database-copy validation does not replace the live database, which continues accepting student work until shutdown.
+
 
 Workspace persistence
 ---------------------
