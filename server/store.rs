@@ -385,21 +385,37 @@ fn starter_student_files(
     step: i64,
     starter_files: BTreeMap<String, Vec<u8>>,
 ) -> AppResult<BTreeMap<String, Vec<u8>>> {
-    let mut files = if step > 1 {
-        if let Some(previous) = commit_files_if_commit_exists(conn, key, problem_id, step - 1)? {
-            previous
-        } else if let Some(previous) =
-            continuation_previous_commit(conn, key, problem_id, step, true)?
+    // Walk backward across slice boundaries until saved work supplies the base.
+    // Missing commits contribute starter overlays without creating stored work.
+    let mut previous_key = key.clone();
+    let mut previous_step = step;
+    let mut overlays = vec![starter_files];
+    let mut files = BTreeMap::new();
+    while previous_step > 1 {
+        if let Some(previous_problem_set_id) = conn
+            .query_row(
+                "SELECT prerequisite_problem_set_id FROM problem_set_continuations WHERE problem_set_id = ? AND problem_id = ? AND first_step = ?",
+                params![previous_key.problem_set_id, problem_id, previous_step],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
         {
-            previous
-        } else {
-            load_step_files(conn, problem_id, step - 1, "solution", true)?
+            previous_key.problem_set_id = previous_problem_set_id;
         }
-    } else {
-        BTreeMap::new()
-    };
-    for (path, content) in starter_files {
-        files.insert(path, content);
+        previous_step -= 1;
+        if let Some(previous) =
+            commit_files_if_commit_exists(conn, &previous_key, problem_id, previous_step)?
+        {
+            files = previous;
+            break;
+        }
+        overlays.push(load_step_files(conn, problem_id, previous_step, "starter", true)?);
+    }
+
+    // Apply overlays in chronological order so later starters replace earlier bytes.
+    // A saved file map remains authoritative, including deliberately omitted files.
+    for overlay in overlays.into_iter().rev() {
+        files.extend(overlay);
     }
     Ok(files)
 }
@@ -429,32 +445,6 @@ fn commit_files_if_commit_exists(
     } else {
         Ok(None)
     }
-}
-
-fn continuation_previous_commit(
-    conn: &Connection,
-    key: &AssignmentKey,
-    problem_id: &str,
-    step: i64,
-    include_contents: bool,
-) -> AppResult<Option<BTreeMap<String, Vec<u8>>>> {
-    let previous = conn
-        .query_row(
-            "SELECT prerequisite_problem_set_id, prerequisite_step_number FROM problem_set_continuations WHERE problem_set_id = ? AND problem_id = ? AND first_step = ?",
-            params![key.problem_set_id, problem_id, step],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
-        )
-        .optional()?;
-    previous
-        .map(|(previous_problem_set_id, previous_step)| {
-            let previous_key = AssignmentKey {
-                user_id: key.user_id.clone(),
-                course_id: key.course_id.clone(),
-                problem_set_id: previous_problem_set_id,
-            };
-            current_commit_files(conn, &previous_key, problem_id, previous_step, include_contents)
-        })
-        .transpose()
 }
 
 #[derive(Clone)]
@@ -828,7 +818,7 @@ mod tests {
         insert_assignment(&conn, "student", "base", None, None);
         let student = user(&conn, "student");
 
-        let from_solution = get_workspace(
+        let from_starters = get_workspace(
             &conn,
             &student,
             WorkspaceQuery {
@@ -842,7 +832,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(from_solution.student_owned_files["answer.txt"], b"starter2");
+        assert_eq!(from_starters.student_owned_files["answer.txt"], b"starter2");
 
         insert_commit(&conn, "student", "base", 1, true, &[("answer.txt", b"previous work")]);
         let from_commit = get_workspace(
@@ -860,6 +850,81 @@ mod tests {
         )
         .unwrap();
         assert_eq!(from_commit.student_owned_files["answer.txt"], b"starter2");
+    }
+
+    #[test]
+    fn instructor_workspace_propagates_across_missing_slice_commits() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_test_connection(&dir.path().join("db.sqlite")).unwrap();
+        seed_store_fixture(&conn);
+        conn.execute(
+            "INSERT INTO problem_sets SELECT 'slice3', 'Slice Three', '[]', 'slice2', problem_set_created_at, problem_set_updated_at FROM problem_sets WHERE problem_set_id = 'slice2'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO problem_set_problems(problem_set_id, problem_id, problem_weight, first_step, last_step) VALUES ('slice3', 'p1', 1, 3, 3)",
+            [],
+        )
+        .unwrap();
+        for slice in ["slice1", "slice2", "slice3"] {
+            insert_assignment(&conn, "teacher", slice, None, None);
+        }
+
+        // Only step one introduces this path; later slices must inherit its state.
+        conn.execute(
+            "DELETE FROM problem_step_files WHERE file_type = 'starter' AND step_number > 1",
+            [],
+        )
+        .unwrap();
+        let teacher = user(&conn, "teacher");
+        let read = |file_state| {
+            get_workspace(
+                &conn,
+                &teacher,
+                WorkspaceQuery {
+                    key: key("teacher", "slice3"),
+                    problem_id: "p1".to_owned(),
+                    requested_step: 0,
+                    file_state,
+                    include_contents: true,
+                    include_solution_files: false,
+                    ip_allowed: true,
+                },
+            )
+            .unwrap()
+            .student_owned_files
+        };
+        assert_eq!(read(WorkspaceFileState::Current as i32)["answer.txt"], b"starter1");
+        insert_commit(&conn, "teacher", "slice1", 1, true, &[("answer.txt", b"saved work")]);
+        assert_eq!(read(WorkspaceFileState::Current as i32)["answer.txt"], b"saved work");
+        assert_eq!(read(WorkspaceFileState::StepStart as i32)["answer.txt"], b"saved work");
+
+        // Intervening starters replace inherited work even without a bridge commit.
+        conn.execute(
+            "INSERT INTO problem_step_files(problem_id, step_number, file_type, path, content) VALUES ('p1', 2, 'starter', 'answer.txt', ?)",
+            params![b"intervening starter".as_slice()],
+        )
+        .unwrap();
+        assert_eq!(read(WorkspaceFileState::Current as i32)["answer.txt"], b"intervening starter");
+        conn.execute(
+            "INSERT INTO problem_step_files(problem_id, step_number, file_type, path, content) VALUES ('p1', 3, 'starter', 'answer.txt', ?)",
+            params![b"current starter".as_slice()],
+        )
+        .unwrap();
+        assert_eq!(read(WorkspaceFileState::Current as i32)["answer.txt"], b"current starter");
+
+        // An existing empty commit is authoritative; reads never fill storage gaps.
+        insert_commit(&conn, "teacher", "slice2", 2, true, &[]);
+        conn.execute(
+            "DELETE FROM problem_step_files WHERE file_type = 'starter' AND step_number = 3",
+            [],
+        )
+        .unwrap();
+        assert!(read(WorkspaceFileState::Current as i32).is_empty());
+        let saved_steps: i64 =
+            conn.query_row("SELECT count(*) FROM commits", [], |row| row.get(0)).unwrap();
+        assert_eq!(saved_steps, 2);
     }
 
     #[test]
