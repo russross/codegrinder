@@ -13,5 +13,5 @@ mount -t devpts devpts /dev/pts
 # Uncached 9p makes editor updates visible to the next guest command.
 hostname riscbox
 ip link set lo up
-mount -t 9p -o trans=virtio,version=9p2000.L,cache=none,access=1000,uname=student risclet /home/student
+mount -t 9p -o trans=virtio,version=9p2000.L,cache=none,access=1000,uname=student shared /home/student
 acpid

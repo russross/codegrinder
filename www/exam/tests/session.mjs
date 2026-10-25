@@ -107,6 +107,16 @@ async function editorTests() {
         priority: path => path.startsWith("student/") ? 0 : 1, onSelect: () => {} });
     check(tree.querySelector("li.file").dataset.path === "student/a.s", "editable subtree priority propagates");
     check(tree.querySelector("button") !== null, "file selection has native keyboard controls");
+
+    // Ownership takes precedence, then files precede alphabetically ordered folders at every level.
+    const paths = ["system/z.s", "student/nested/a.s", "student/z.s", "student/a.txt", "z.s", "a.txt", "system/a.s"];
+    renderFileTree(tree, paths, { selectedPath: "student/z.s",
+        priority: path => path.startsWith("student/") ? 0 : 1, onSelect: () => {} });
+    const displayed = [...tree.querySelectorAll("li.file")].map(item => item.dataset.path);
+    check(JSON.stringify(displayed) === JSON.stringify([
+        "student/a.txt", "student/z.s", "student/nested/a.s", "a.txt", "z.s", "system/a.s", "system/z.s",
+    ]), "tree preserves ownership priority and sorts files before folders at root and nested levels");
+    check(tree.querySelector("li.selected").dataset.path === "student/z.s", "tree preserves selected file");
     session.destroy();
     host.remove();
     check(errors.length === 0, "unexpected editor error");

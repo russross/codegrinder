@@ -152,9 +152,7 @@ Here is the complete layout of the UI:
         *   File names are paths like "start.s" and
             "inputs/test.transcript", so they are parsed and
             organized into a hierarchy like a unix file tree
-        *   Student-owned files (or folders that contain them) are
-            sorted first. Within each group, directories are listed before
-            directories, and then all items are sorted alphabetically.
+        *   Student-owned files (or folders that contain them) are sorted first. Within each group, files precede directories, and names are sorted alphabetically. This ordering applies in every directory, including the root.
         *   It is rendered as a simple unordered list, with placeholder
             icons instead of bullet points. Specific icons are not
             defined in the JavaScript, but can be added via CSS.

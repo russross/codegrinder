@@ -6,14 +6,13 @@ ALPINE_SHA256 := 9714553757e7bf645eff5dcc52bdd206f358a7bed77874842567852e8326a51
 RISCBOX_ARCHIVE := build/downloads/riscbox-$(RISCBOX_VERSION).tar.gz
 RISCLET_BINARY := build/downloads/risclet-$(RISCLET_VERSION)
 ALPINE_ARCHIVE := build/downloads/alpine-minirootfs-$(ALPINE_VERSION)-riscv64.tar.gz
-CLANG_ARCHIVE ?= $(HOME)/clang-21.1.8-alpine3.24-rv64gc.tar.gz
 IMAGES := riscv c
 riscv_SIZE := 12
-c_SIZE := 96
+c_SIZE := 16
 riscv_PACKAGES := make tzdata
-c_PACKAGES := make tzdata tcc tcc-libs-static
+c_PACKAGES := make tzdata tcc tcc-libs-static musl-dev
 riscv_TOOLS := build/riscv-tools.tar
-c_TOOLS := $(CLANG_ARCHIVE)
+c_TOOLS := -
 GUEST_SOURCES := $(shell find guest -type f | sort)
 STEPPER := ../../../stepper/dist/stepper.linux_riscv64
 
@@ -95,7 +94,7 @@ $(STEPPER): stepper
 
 build/riscv-rootfs.ext4: build/riscv-inputs build/riscv-tools.tar
 
-build/c-rootfs.ext4: build/c-inputs $(CLANG_ARCHIVE)
+build/c-rootfs.ext4: build/c-inputs
 
 # Settings changes rebuild only the image whose effective inputs changed.
 $(foreach image,$(IMAGES),build/$(image)-settings): build/%-settings: FORCE

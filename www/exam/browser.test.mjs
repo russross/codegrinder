@@ -24,10 +24,6 @@ test("Chromium verifies exam RPC integration, terminals, clipboard, and the real
     }));
     const server = createServer(async (request, response) => {
         const url = new URL(request.url, "http://localhost");
-        if (url.pathname === "/cinout-Makefile") {
-            response.end(await readFile(path.resolve(directory, "../../problemtypes/types/cinout/files/Makefile")));
-            return;
-        }
         if (url.pathname === "/test.html") {
             response.setHeader("Content-Type", "text/html; charset=utf-8");
             response.end('<!doctype html><html><head><meta charset="UTF-8"><link rel="icon" href="/favicon.svg"></head><body><script src="/browser.js"></script></body></html>');

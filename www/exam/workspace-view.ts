@@ -34,7 +34,7 @@ export function renderFileTree(host: HTMLElement, paths: readonly string[], opti
     const render = (nodes: ReadonlyMap<string, TreeNode>, depth: number): HTMLUListElement => {
         const list = document.createElement("ul");
         const sorted = [...nodes.values()].sort((left, right) => left.priority - right.priority
-            || Number(left.isFile) - Number(right.isFile) || left.name.localeCompare(right.name));
+            || Number(right.isFile) - Number(left.isFile) || left.name.localeCompare(right.name));
         for (const node of sorted) {
             const item = document.createElement("li");
             item.classList.add(node.isFile ? "file" : "folder");

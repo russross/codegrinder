@@ -8,7 +8,8 @@ fi
 name=$1
 size=$2
 archive=$(realpath "$3")
-tools=$(realpath "$4")
+tools=$4
+[ "$tools" = - ] || tools=$(realpath "$tools")
 shift 4
 case "$name" in ''|*[!a-z0-9-]*) echo "invalid image name: $name" >&2; exit 2 ;; esac
 [ -d "$name" ] || { echo "missing image overlay: $name" >&2; exit 2; }
@@ -29,10 +30,10 @@ fakeroot sh -eu -c '
     tar -xpf "$1" -C "$2"
     cp -R "$3/." "$2/"
     cp -R "$4/." "$2/"
-    tar -xpf "$5" -C "$2"
-    mkdir -p "$2/usr/local"
-    cp ../../../stepper/dist/stepper.linux_riscv64 "$2/usr/local/stepper"
-    chmod 755 "$2/usr/local/stepper"
+    [ "$5" = - ] || tar -xpf "$5" -C "$2"
+    mkdir -p "$2/usr/local/bin"
+    cp ../../../stepper/dist/stepper.linux_riscv64 "$2/usr/local/bin/stepper"
+    chmod 755 "$2/usr/local/bin/stepper"
     stage=$2
     shift 5
     printf "%s\n" "$@" > "$stage/etc/exam-packages"

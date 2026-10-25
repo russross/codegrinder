@@ -12,6 +12,9 @@ ip link set eth0 up
 udhcpc -q -n -i eth0
 apk add --no-cache $(cat /etc/exam-packages)
 
+# Guest programs link against shared musl; keep its headers but omit static libc.
+rm -f /usr/lib/libc.a
+
 # The exam account autologins into the host-owned workspace with local course time.
 addgroup -g 1000 student
 adduser -D -u 1000 -G student -h /home/student -g Student student

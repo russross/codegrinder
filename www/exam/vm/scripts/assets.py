@@ -63,7 +63,7 @@ def prepare(version: str, names: list[str]) -> None:
             "kernel": f"{release}/{kernel}",
             "cmdline": "root=/dev/vda rw rootfstype=ext4 console=hvc0 quiet loglevel=0",
             "console": "virtio", "drive0": {"file": f"{drive}/blk.txt"},
-            "fs0": {"server": "workspace", "tag": "risclet"},
+            "fs0": {"server": "workspace", "tag": "shared"},
         }
         content = json.dumps(config, indent=2) + "\n"
         digest = hashlib.sha256(content.encode()).hexdigest()[:16]

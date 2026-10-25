@@ -449,6 +449,11 @@ install_grind() {
     updater_temp=
     install_file "$grind_temp" "$BIN_DIR/grind"
     grind_temp=
+
+    # The grind executable also provides the transcript runner under this name.
+    if [ ! -e "$BIN_DIR/stepper" ] && [ ! -L "$BIN_DIR/stepper" ]; then
+        ln -s grind "$BIN_DIR/stepper" || fail "could not install $BIN_DIR/stepper"
+    fi
 }
 
 risclet_version() {

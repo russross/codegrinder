@@ -212,9 +212,9 @@ export async function run(): Promise<string[]> {
         check(guestOutput.includes("uid=1000(student)") && guestOutput.includes("risclet 0.5.5")
             && guestOutput.includes("GNU Make") && guestOutput.includes("/usr/share/zoneinfo/America/Denver")
             && guestOutput.includes("type ext4 (rw"), "guest tools, account, timezone, or writable root changed");
-        send("updater_output=$(update-grind risclet latest 2>&1); updater_status=$?; printf 'updater-status=%s;output=[%s]\\nupdater-check-done\\n' \"$updater_status\" \"$updater_output\"");
-        await until(() => guestOutput.includes("updater-check-done\r\n"), "guest updater stub did not finish");
-        check(guestOutput.includes("updater-status=0;output=[]\r\n"), "guest updater stub failed or produced output");
+        send("test ! -e /usr/local/bin/update-grind && test ! -e /usr/local/stepper && mkdir -p /tmp/stepper-inputs && printf '> stepper-ok\\n' > /tmp/stepper-inputs/check.transcript && STEPPER_DIR=/tmp/stepper-inputs stepper echo stepper-ok; status=$?; printf 'stepper-status=%s\\nstepper-check-done\\n' \"$status\"");
+        await until(() => guestOutput.includes("stepper-check-done\r\n"), "guest stepper check did not finish");
+        check(guestOutput.includes("stepper-status=0\r\n"), "guest stepper failed or updater stub remains");
         send("seq 1 60; printf 'finished-output\\n'");
         await until(() => guestOutput.includes("finished-output"), "guest output did not fill the screen");
         send("clear; printf 'clear-screen-marker\\n'");
@@ -281,15 +281,13 @@ export async function run(): Promise<string[]> {
     await until(() => guestOutput.includes("root-reset-confirmed\r\n"), "forced reset retained root writes");
     results.push("guest writes, editor flush, hard links, directory renames, ownership, orderly reboot, and workspace-preserving VM Reset");
 
-    // Exercise the C image with the canonical problem-type compiler rules.
+    // Exercise the C image with TCC and the installed transcript runner.
     const cImage = vmImageForProblemType("cinout");
     if (cImage === undefined) throw new Error("C VM image missing");
     check(cImage.configUrl !== image.configUrl && cImage.runtimeUrl === image.runtimeUrl,
         "C image must use its own disk and the shared runtime");
     check(vmImageForProblemType("cunittest") === undefined, "cunittest unexpectedly enabled");
-    const makefile = await (await fetch("/cinout-Makefile")).text();
     const files = new Map([
-        ["Makefile", new TextEncoder().encode(makefile)],
         ["main.c", new TextEncoder().encode('#include <stdio.h>\nint main(void) { puts("c-program-ok"); return 0; }\n')],
     ]);
     guestOutput = "";
@@ -300,22 +298,16 @@ export async function run(): Promise<string[]> {
         await vm.setTarget({ image: cImage, loadFiles: async () => files },
             { workspace: "files", poweroff: "force", discardDiskChanges: true, boot: true }, () => true);
         await until(() => guestOutput.includes("$ "), "C guest shell never became ready");
-        send("make a.out opt.out && ./opt.out && tcc main.c -o tiny.out && ./tiny.out && ./a.out && test ! -e /usr/local/bin/update-grind; status=$?; printf 'c-tools-status=%s\\nc-tools-done\\n' \"$status\"");
+        send("! command -v risclet && ! command -v clang && test ! -e /usr/lib/libc.a && test ! -e /usr/local/bin/update-grind && test ! -e /usr/local/stepper && tcc main.c -o tiny.out && mkdir -p /tmp/stepper-inputs && printf '> c-program-ok\\n' > /tmp/stepper-inputs/check.transcript && STEPPER_DIR=/tmp/stepper-inputs stepper ./tiny.out; status=$?; printf 'c-tools-status=%s\\nc-tools-done\\n' \"$status\"");
         await until(() => guestOutput.includes("c-tools-done\r\n"), "C compiler checks failed", 120_000);
-        check(guestOutput.includes("c-tools-status=0\r\n"), "C compiler or executable failed");
-        check(guestOutput.split("c-program-ok\r\n").length === 4, "C compiled programs failed");
-        // Deliberately invalid code tests the runtime independently of tidy's rejection.
-        send("printf '%s\\n' '#include <stdio.h>' 'int main(void) { int z; if (scanf(\"%d\", &z) != 1) return 1; return 1 / z; }' > sanitizer.c; clang -std=c18 -O0 -g -fsanitize=address,undefined -fno-omit-frame-pointer sanitizer.c -o sanitizer.out && printf '0\\n' | ./sanitizer.out; printf 'c-ubsan-done\\n'");
-        await until(() => guestOutput.includes("c-ubsan-done\r\n"), "C sanitizer check did not finish", 120_000);
-        const diagnostics = guestOutput.replace(/\x1b\[[0-9;]*m/g, "");
-        check(diagnostics.includes("runtime error: division by zero"), "UBSan did not diagnose undefined behavior");
+        check(guestOutput.includes("c-tools-status=0\r\n"), "C compiler, executable, or stepper failed");
     } catch (error: unknown) {
         throw new Error(`${String(error)}\nC guest output:\n${guestOutput}`);
     } finally {
         await vm.destroy();
         Riscbox.prepare = prepare;
     }
-    results.push("cinout image, canonical checked/optimized builds, TCC, and UBSan");
+    results.push("cinout image, TCC compilation, and stepper execution");
     terminal.destroy();
     gradeTerminal.destroy();
     editor.destroy();
