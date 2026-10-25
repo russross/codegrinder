@@ -10,7 +10,7 @@ mount -t 9p -o trans=virtio,version=9p2000.L output /mnt/output
 trap 'echo "guest preparation failed" > /mnt/output/failed; poweroff -f' EXIT
 ip link set eth0 up
 udhcpc -q -n -i eth0
-apk add --no-cache make tzdata
+apk add --no-cache $(cat /etc/exam-packages)
 
 # The exam account autologins into the host-owned workspace with local course time.
 addgroup -g 1000 student
@@ -25,7 +25,7 @@ printf '/dev/vda / ext4 rw,noatime 0 0\n' > /etc/fstab
 
 # Export filesystem bytes without transient mounts or the preparation program.
 rm -rf /var/cache/apk/*
-rm /sbin/exam-prepare
+rm /sbin/exam-prepare /etc/exam-packages
 tar -C / -cf /mnt/output/rootfs.tar \
     --exclude='./dev/*' --exclude='./proc/*' --exclude='./sys/*' \
     --exclude='./tmp/*' --exclude='./run/*' --exclude='./mnt/*' \

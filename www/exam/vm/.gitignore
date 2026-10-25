@@ -11,3 +11,6 @@ runtime/*
 !runtime/riscbox.wasm
 !runtime/package.json
 !runtime/SHA256SUMS
+
+image/*-drive-*
+image/*.cfg

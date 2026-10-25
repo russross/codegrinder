@@ -1,9 +1,33 @@
-import { StringStream } from "@codemirror/language";
+import { StringStream, syntaxHighlighting } from "@codemirror/language";
+import { EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+import { classHighlighter } from "@lezer/highlight";
+import { languageFor } from "../editor-text.ts";
 import { riscletStreamParser } from "../risclet.ts";
 
 // Exercise directive recognition alongside actual strings and fill operands.
 // Similar-looking unknown names must remain invalid rather than match prefixes.
 export async function run() {
+    // C sources and headers use the editor's actual filename-based selection.
+    for (const filename of ["main.c", "include/example.h"]) {
+        const host = document.createElement("div");
+        document.body.appendChild(host);
+        const language = languageFor(filename);
+        if (language === null) throw new Error(`Missing C highlighter for ${filename}`);
+        const view = new EditorView({ parent: host, state: EditorState.create({
+            doc: '/* C comment */\nint main(void) { puts("hello"); return 0; }',
+            extensions: [language, syntaxHighlighting(classHighlighter)],
+        }) });
+        try {
+            for (const [selector, text] of [[".tok-keyword", "return"], [".tok-string", '"hello"'],
+                [".tok-comment", "/* C comment */"]]) {
+                if (![...host.querySelectorAll(selector)].some(node => node.textContent === text)) {
+                    throw new Error(`${filename}: missing highlighted ${text}`);
+                }
+            }
+        } finally { view.destroy(); host.remove(); }
+    }
+
     for (const [line, expected] of [
         ['.word 0x1234', ['meta', 'number']],
         ['.half -1', ['meta', 'operator', 'number']],

@@ -226,7 +226,7 @@ Here is the complete layout of the UI:
                 browser-hosted Alpine RISC-V virtual machine
                 *   This tab is present only when an image is configured
                     for the active problem type. The current configuration
-                    provides one image for the `riscv` problem type.
+                    provides images for the `riscv` and `cinout` problem types.
                 *   Loading a problem or changing its type prepares a clean VM and selects
                     Instructions without booting. Same-type changes preserve VM power. Selecting VM or Boot VM boots
                     it. Without instructions, VM is the default tab and boots.

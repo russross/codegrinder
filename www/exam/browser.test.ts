@@ -13,8 +13,8 @@ function check(condition: boolean, message: string): void {
     if (!condition) throw new Error(message);
 }
 
-async function until(predicate: () => boolean, message: string): Promise<void> {
-    const deadline = Date.now() + 45_000;
+async function until(predicate: () => boolean, message: string, timeout = 45_000): Promise<void> {
+    const deadline = Date.now() + timeout;
     while (!predicate()) {
         if (Date.now() > deadline) throw new Error(message);
         await new Promise<void>(resolve => window.setTimeout(resolve, 50));
@@ -279,9 +279,43 @@ export async function run(): Promise<string[]> {
     await until(() => guestOutput.includes("$ "), "reset guest shell never became ready");
     send("test ! -e /tmp/exam-root-marker && printf 'root-reset-confirmed\\n'");
     await until(() => guestOutput.includes("root-reset-confirmed\r\n"), "forced reset retained root writes");
-    await vm.destroy();
-    Riscbox.prepare = prepare;
     results.push("guest writes, editor flush, hard links, directory renames, ownership, orderly reboot, and workspace-preserving VM Reset");
+
+    // Exercise the C image with the canonical problem-type compiler rules.
+    const cImage = vmImageForProblemType("cinout");
+    if (cImage === undefined) throw new Error("C VM image missing");
+    check(cImage.configUrl !== image.configUrl && cImage.runtimeUrl === image.runtimeUrl,
+        "C image must use its own disk and the shared runtime");
+    check(vmImageForProblemType("cunittest") === undefined, "cunittest unexpectedly enabled");
+    const makefile = await (await fetch("/cinout-Makefile")).text();
+    const files = new Map([
+        ["Makefile", new TextEncoder().encode(makefile)],
+        ["main.c", new TextEncoder().encode('#include <stdio.h>\nint main(void) { puts("c-program-ok"); return 0; }\n')],
+    ]);
+    guestOutput = "";
+    Riscbox.prepare = options => prepare({ ...options,
+        consoleWrite: text => { guestOutput += text; options?.consoleWrite?.(text); },
+    });
+    try {
+        await vm.setTarget({ image: cImage, loadFiles: async () => files },
+            { workspace: "files", poweroff: "force", discardDiskChanges: true, boot: true }, () => true);
+        await until(() => guestOutput.includes("$ "), "C guest shell never became ready");
+        send("make a.out opt.out && ./opt.out && tcc main.c -o tiny.out && ./tiny.out && ./a.out && test ! -e /usr/local/bin/update-grind; status=$?; printf 'c-tools-status=%s\\nc-tools-done\\n' \"$status\"");
+        await until(() => guestOutput.includes("c-tools-done\r\n"), "C compiler checks failed", 120_000);
+        check(guestOutput.includes("c-tools-status=0\r\n"), "C compiler or executable failed");
+        check(guestOutput.split("c-program-ok\r\n").length === 4, "C compiled programs failed");
+        // Deliberately invalid code tests the runtime independently of tidy's rejection.
+        send("printf '%s\\n' '#include <stdio.h>' 'int main(void) { int z; if (scanf(\"%d\", &z) != 1) return 1; return 1 / z; }' > sanitizer.c; clang -std=c18 -O0 -g -fsanitize=address,undefined -fno-omit-frame-pointer sanitizer.c -o sanitizer.out && printf '0\\n' | ./sanitizer.out; printf 'c-ubsan-done\\n'");
+        await until(() => guestOutput.includes("c-ubsan-done\r\n"), "C sanitizer check did not finish", 120_000);
+        const diagnostics = guestOutput.replace(/\x1b\[[0-9;]*m/g, "");
+        check(diagnostics.includes("runtime error: division by zero"), "UBSan did not diagnose undefined behavior");
+    } catch (error: unknown) {
+        throw new Error(`${String(error)}\nC guest output:\n${guestOutput}`);
+    } finally {
+        await vm.destroy();
+        Riscbox.prepare = prepare;
+    }
+    results.push("cinout image, canonical checked/optimized builds, TCC, and UBSan");
     terminal.destroy();
     gradeTerminal.destroy();
     editor.destroy();

@@ -1,0 +1,5 @@
+To test your code:
+
+    make run            (optimized build, run without testing)
+    make                (checked build, run with testing)
+

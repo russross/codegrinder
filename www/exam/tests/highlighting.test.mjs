@@ -4,7 +4,7 @@ import { compileFixture } from "./browser.mjs";
 import { runChromePage } from "./chrome.mjs";
 
 // Bundle the demo highlighter and run it in Chrome using a disposable profile.
-test("assembler directive aliases and operands are highlighted", async () => {
+test("C sources, headers, and assembler operands are highlighted", async () => {
     const directory = await compileFixture("./tests/highlighting.mjs", "highlightingTests");
     try {
         const url = `/build/${directory.split("/").pop()}/fixture.js`;

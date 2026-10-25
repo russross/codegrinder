@@ -46,36 +46,41 @@ def payload(pattern: str) -> str:
     return matches[0]
 
 
-def prepare(version: str) -> None:
+def prepare(version: str, names: list[str]) -> None:
     # All boot URLs resolve within the matching immutable runtime release.
     if re.fullmatch(r"\d+\.\d+\.\d+", version) is None:
         raise ValueError("expected Riscbox release version")
     release = f"../runtime/riscbox-{version}"
-    drive = Path(Path("build/disk-name").read_text(encoding="utf-8").strip()).name
     firmware = payload(r"fw_dynamic\.bin-.*\.gz")
     kernel = payload(r"linux-.*\.gz")
-    config: Configuration = {
-        "version": 1, "machine": "riscv64", "memory_size": 256,
-        "bios": f"{release}/{firmware}",
-        "kernel": f"{release}/{kernel}",
-        "cmdline": "root=/dev/vda rw rootfstype=ext4 console=hvc0 quiet loglevel=0",
-        "console": "virtio", "drive0": {"file": f"{drive}/blk.txt"},
-        "fs0": {"server": "workspace", "tag": "risclet"},
-    }
-    content = json.dumps(config, indent=2) + "\n"
-    digest = hashlib.sha256(content.encode()).hexdigest()[:16]
-    filename = f"risclet-{digest}.json"
-    write_changed(Path("image") / filename, content)
+    assets: dict[str, dict[str, str]] = {}
+    outputs = ["build/assets.json"]
+    for name in names:
+        drive = Path(f"build/{name}-disk-name").read_text(encoding="utf-8").strip()
+        config: Configuration = {
+            "version": 1, "machine": "riscv64", "memory_size": 256,
+            "bios": f"{release}/{firmware}",
+            "kernel": f"{release}/{kernel}",
+            "cmdline": "root=/dev/vda rw rootfstype=ext4 console=hvc0 quiet loglevel=0",
+            "console": "virtio", "drive0": {"file": f"{drive}/blk.txt"},
+            "fs0": {"server": "workspace", "tag": "risclet"},
+        }
+        content = json.dumps(config, indent=2) + "\n"
+        digest = hashlib.sha256(content.encode()).hexdigest()[:16]
+        filename = f"{name}-{digest}.cfg"
+        write_changed(Path("image") / filename, content)
+        write_changed(Path("image") / f"{name}.cfg", content)
+        assets[name] = {
+            "configUrl": f"vm/image/{filename}",
+            "runtimeUrl": f"vm/runtime/riscbox-{version}/riscbox.js",
+            "wasmUrl": f"vm/runtime/riscbox-{version}/riscbox.wasm",
+        }
+        outputs.extend([f"image/{filename}", f"image/{name}.cfg"])
 
-    # These relative URLs compile into the corresponding immutable app bundle.
-    assets = {
-        "configUrl": f"vm/image/{filename}",
-        "runtimeUrl": f"vm/runtime/riscbox-{version}/riscbox.js",
-        "wasmUrl": f"vm/runtime/riscbox-{version}/riscbox.wasm",
-    }
+    # Immutable configurations keep already-open clients on their original disk.
     write_changed(Path("build/assets.json"), json.dumps(assets, indent=2) + "\n")
     Path("build/assets-outputs.mk").write_text(
-        f"ASSETS_OUTPUTS := build/assets.json image/{filename}\n"
+        f"ASSETS_OUTPUTS := {' '.join(outputs)}\n"
         "build/assets.stamp: $(ASSETS_OUTPUTS)\n$(ASSETS_OUTPUTS):\n",
         encoding="utf-8",
     )
@@ -83,9 +88,9 @@ def prepare(version: str) -> None:
 
 def main() -> int:
     try:
-        if len(sys.argv) != 2:
+        if len(sys.argv) < 3:
             raise ValueError("expected Riscbox release version")
-        prepare(sys.argv[1])
+        prepare(sys.argv[1], sys.argv[2:])
     except (OSError, ValueError) as error:
         print(f"VM assets: {error}", file=sys.stderr)
         return 1

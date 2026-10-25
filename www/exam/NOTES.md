@@ -109,7 +109,7 @@ Reboot VM flushes the editor and requests orderly guest reboot. The button stays
 
 Second-click reset is emergency recovery: force halt outside the selection queue, retire stalled selections and pending input, cold-reset the machine, discard all disk overlays, clear 9p, rebuild it from current official maps, and boot it. It preserves the dirty editor buffer and submission state. It does not flush editor text, restore originals, or send a Reset/save RPC. There is no separate Reset VM button. Boot/Reboot is disabled while loading/resetting. CodeGrinder's file Reset is independent.
 
-The current image lookup contains only `riscv`. Problems without a configured image do not show the VM tab.
+The image lookup maps `riscv` to the RISC-V image and `cinout` to the C image. `cunittest` has no configured image. Problems without a configured image do not show the VM tab.
 
 
 File Reset
@@ -161,9 +161,17 @@ Asset publication and runtime assumptions
 4. Retain previously published immutable assets so cached pages and open tabs can fetch their original modules, WASM, and disk chunks after deployment. Revalidate HTML; immutable assets may use long-lived caching.
 5. Keep `mostlyclean` limited to build caches/intermediates while preserving deployed page/bundles/VM assets. `clean` additionally removes deployment outputs. Neither operation touches server data or configuration.
 
+VM builds share one Alpine 3.24.2 minirootfs download, a matched Riscbox release, and extracted Linux/OpenSBI preparation payloads. `vm/guest/` contains common startup and account setup; sibling `vm/riscv/` and `vm/c/` trees overlay image-specific files. `build-image.sh NAME SIZE_MIB MINIROOTFS TOOL_ARCHIVE PACKAGES...` merges these inputs under fakeroot, boots a preparation initramfs with QEMU networking to install packages, exports the prepared root, and populates ext4 without a journal or host mount. Preparation logs, initramfs files, ext4 images, input inventories, and split manifests are named per image under `vm/build/`. Guest preparation never contacts the TA.
+
+The RISC-V root is 12 MiB and adds Risclet and its silent updater stub. The C root is 96 MiB and overlays `~/clang-21.1.8-alpine3.24-rv64gc.tar.gz` (overridable with `CLANG_ARCHIVE`), then installs make, tzdata, tcc, and tcc-libs-static. The archive already supplies musl development files, compiler-rt, and Clang shared-library dependencies; no GCC or separate musl development package is needed. Alpine resolves TCC's supporting package dependencies. The C image has no updater stub. Both accounts use America/Denver and the same host workspace share.
+
+The C guest's login profile exports `ASAN_OPTIONS=detect_leaks=0` because LeakSanitizer's tracing process crashes in the browser VM at program exit. AddressSanitizer and UndefinedBehaviorSanitizer remain enabled by the canonical problem-type Makefile. This setting applies only to the C guest, not server grading.
+
+Disk chunks publish as sibling `riscv-drive-HASH/` and `c-drive-HASH/` directories. `vm/image/riscv.cfg` and `c.cfg` are current root configurations. Content-named copies of those configurations supply immutable URLs in the per-image `build/assets.json` map used by the UI. Both configurations reference the same release-versioned runtime, kernel, and firmware. Overlay inventories include deletions, and image preparation depends on its specific tool archive plus common inputs. UI changes do not rebuild roots. `mostlyclean` preserves all published configurations and chunks; `clean` removes them.
+
 The browser needs same-origin TA gRPC-Web access and access to the signed daycare hostname; daycare calls omit TA credentials. VM disk fetching and WASM availability are local-execution dependencies, not reasons to relax ownership or signature checks. Problems without VM images retain editing and server workflows through the synchronous file adapter.
 
-The guest `update-grind` command is deliberately a silent successful no-op. Tools are supplied by the exam image. Browser image checks must verify its zero exit status and empty combined output, waiting for a completion marker that cannot match the terminal's echo of the submitted command.
+The RISC-V guest `update-grind` command is deliberately a silent successful no-op. Tools are supplied by the exam image. Browser image checks must verify its zero exit status and empty combined output, waiting for a completion marker that cannot match the terminal's echo of the submitted command.
 
 
 Audit boundaries

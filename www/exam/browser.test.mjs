@@ -11,7 +11,7 @@ import config from "./webpack.config.mjs";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 
-test("Chromium verifies exam RPC integration, terminals, clipboard, and the real VM filesystem", { timeout: 180_000 }, async () => {
+test("Chromium verifies exam RPC integration, terminals, clipboard, and the real VM filesystem", { timeout: 360_000 }, async () => {
     const output = await mkdtemp(path.join(tmpdir(), "exam-browser-test-"));
     const compiler = webpack({ ...config, mode: "development", entry: "./browser.test.ts", output: {
         path: output, filename: "browser.js", library: "examBrowserTest", libraryTarget: "window",
@@ -24,6 +24,10 @@ test("Chromium verifies exam RPC integration, terminals, clipboard, and the real
     }));
     const server = createServer(async (request, response) => {
         const url = new URL(request.url, "http://localhost");
+        if (url.pathname === "/cinout-Makefile") {
+            response.end(await readFile(path.resolve(directory, "../../problemtypes/types/cinout/files/Makefile")));
+            return;
+        }
         if (url.pathname === "/test.html") {
             response.setHeader("Content-Type", "text/html; charset=utf-8");
             response.end('<!doctype html><html><head><meta charset="UTF-8"><link rel="icon" href="/favicon.svg"></head><body><script src="/browser.js"></script></body></html>');
@@ -87,7 +91,7 @@ test("Chromium verifies exam RPC integration, terminals, clipboard, and the real
             cmd: "Emulation.setDeviceMetricsOverride",
             params: { width: 1200, height: 1000, deviceScaleFactor: 1.203125, mobile: false },
         });
-        await call("POST", `/session/${session}/timeouts`, { script: 100_000 });
+        await call("POST", `/session/${session}/timeouts`, { script: 280_000 });
         await call("POST", `/session/${session}/url`, { url: `http://127.0.0.1:${address.port}/test.html` });
         const result = await call("POST", `/session/${session}/execute/async`, {
             script: 'const done = arguments[arguments.length - 1]; window.examBrowserTest.run().then(results => done({results}), error => done({error: error.stack}));',
@@ -97,7 +101,7 @@ test("Chromium verifies exam RPC integration, terminals, clipboard, and the real
             const logs = await call("POST", `/session/${session}/log`, { type: "browser" });
             assert.fail(`${result.error}\n${JSON.stringify(logs, null, 2)}`);
         }
-        assert.equal(result.results.length, 3);
+        assert.equal(result.results.length, 4);
         for (const resultName of result.results) console.log(resultName);
         await call("POST", `/session/${session}/url`, { url: `http://127.0.0.1:${address.port}/test.html` });
         await call("POST", `/session/${session}/execute/sync`, {

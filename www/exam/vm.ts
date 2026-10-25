@@ -34,15 +34,16 @@ export function loadRuntime(image: VmImage): Promise<typeof Riscbox> {
 
 // Asset identity is fixed when this application bundle is built.
 export function vmImageForProblemType(problemType: string): VmImage | undefined {
-    if (problemType !== "riscv") return undefined;
+    const image = problemType === "riscv" ? assets.riscv : problemType === "cinout" ? assets.c : undefined;
+    if (image === undefined) return undefined;
     const location = new URL(window.location.href);
     const last = location.pathname.split("/").pop() ?? "";
     if (!location.pathname.endsWith("/") && !last.includes(".")) location.pathname += "/";
     const base = new URL(".", location);
     return Object.freeze({
-        configUrl: new URL(assets.configUrl, base).href,
-        runtimeUrl: new URL(assets.runtimeUrl, base).href,
-        wasmUrl: new URL(assets.wasmUrl, base).href,
+        configUrl: new URL(image.configUrl, base).href,
+        runtimeUrl: new URL(image.runtimeUrl, base).href,
+        wasmUrl: new URL(image.wasmUrl, base).href,
         memoryMiB: 256,
         shareName: "workspace",
     });
