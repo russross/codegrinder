@@ -195,6 +195,11 @@ struct AdminFilesArgs {
 }
 
 fn main() -> ExitCode {
+    // Select the runner before client configuration or runtime initialization.
+    if env::args_os().next().is_some_and(|name| stepper::invoked_as_stepper(&name)) {
+        return stepper::main();
+    }
+
     let runtime = match Builder::new_current_thread().enable_all().build() {
         Ok(runtime) => runtime,
         Err(error) => {

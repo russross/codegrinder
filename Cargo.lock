@@ -592,6 +592,7 @@ dependencies = [
  "prost-types",
  "semver",
  "serde",
+ "stepper",
  "tempfile",
  "thiserror",
  "tokio",
@@ -1377,6 +1378,13 @@ checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "stepper"
+version = "3.0.0"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

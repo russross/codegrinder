@@ -30,6 +30,9 @@ fakeroot sh -eu -c '
     cp -R "$3/." "$2/"
     cp -R "$4/." "$2/"
     tar -xpf "$5" -C "$2"
+    mkdir -p "$2/usr/local"
+    cp ../../../stepper/dist/stepper.linux_riscv64 "$2/usr/local/stepper"
+    chmod 755 "$2/usr/local/stepper"
     stage=$2
     shift 5
     printf "%s\n" "$@" > "$stage/etc/exam-packages"

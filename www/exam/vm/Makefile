@@ -1,8 +1,8 @@
 RISCBOX_VERSION := 2026.10.7
 .DEFAULT_GOAL := all
 RISCLET_VERSION := 0.5.5
-ALPINE_VERSION := 3.24.2
-ALPINE_SHA256 := 57132e6e4f3a4ba9ffdf24e485513ce507e45471e7fd565aeed91c055cd63f7b
+ALPINE_VERSION := 3.24.3
+ALPINE_SHA256 := 9714553757e7bf645eff5dcc52bdd206f358a7bed77874842567852e8326a51d
 RISCBOX_ARCHIVE := build/downloads/riscbox-$(RISCBOX_VERSION).tar.gz
 RISCLET_BINARY := build/downloads/risclet-$(RISCLET_VERSION)
 ALPINE_ARCHIVE := build/downloads/alpine-minirootfs-$(ALPINE_VERSION)-riscv64.tar.gz
@@ -15,6 +15,7 @@ c_PACKAGES := make tzdata tcc tcc-libs-static
 riscv_TOOLS := build/riscv-tools.tar
 c_TOOLS := $(CLANG_ARCHIVE)
 GUEST_SOURCES := $(shell find guest -type f | sort)
+STEPPER := ../../../stepper/dist/stepper.linux_riscv64
 
 all: build/assets.stamp
 
@@ -85,6 +86,13 @@ build/riscv-tools.tar: $(RISCLET_BINARY) build/risclet-version
 $(foreach image,$(IMAGES),build/$(image)-inputs): build/%-inputs: FORCE
 	sh ../../../scripts/inventory.sh $@ $$(find $* -type f | sort)
 
+# Consult Cargo before comparing the published runner's timestamp.
+.PHONY: stepper
+stepper:
+	$(MAKE) -C ../../../stepper riscv64
+
+$(STEPPER): stepper
+
 build/riscv-rootfs.ext4: build/riscv-inputs build/riscv-tools.tar
 
 build/c-rootfs.ext4: build/c-inputs $(CLANG_ARCHIVE)
@@ -95,7 +103,7 @@ $(foreach image,$(IMAGES),build/$(image)-settings): build/%-settings: FORCE
 	@printf '%s\n' '$($*_SIZE)' '$($*_PACKAGES)' '$($*_TOOLS)' > $@.part
 	@cmp -s $@.part $@ && rm $@.part || mv $@.part $@
 
-$(foreach image,$(IMAGES),build/$(image)-rootfs.ext4): build/%-rootfs.ext4: build/%-settings build/guest-inputs build-image.sh $(ALPINE_ARCHIVE) build/boot.stamp
+$(foreach image,$(IMAGES),build/$(image)-rootfs.ext4): build/%-rootfs.ext4: build/%-settings build/guest-inputs build-image.sh $(ALPINE_ARCHIVE) build/boot.stamp $(STEPPER)
 	./build-image.sh '$*' '$($*_SIZE)' '$(ALPINE_ARCHIVE)' '$($*_TOOLS)' $($*_PACKAGES)
 
 # The upstream splitter hashes content; each image adds its sibling name.

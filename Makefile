@@ -12,7 +12,11 @@ all: build
 setup:
 	cargo fetch --locked
 
-build: server grind
+build: server grind stepper
+
+.PHONY: stepper
+stepper:
+	$(MAKE) -C stepper
 
 server:
 	$(MAKE) -C server
@@ -36,14 +40,17 @@ grind-dist grind-linux-amd64 grind-linux-arm64 grind-macos-amd64 grind-macos-arm
 test:
 	$(MAKE) -C server check
 	$(MAKE) -C grind check
+	$(MAKE) -C stepper check
 	$(MAKE) -C server test-only
 	$(MAKE) -C grind test-only
+	$(MAKE) -C stepper test-only
 
 end2end:
 	$(MAKE) -C tests end2end
 
 # Cleanup never reaches configuration, databases, or installed system files.
 mostlyclean:
+	$(MAKE) -C stepper mostlyclean
 	$(MAKE) -C server mostlyclean
 	$(MAKE) -C grind mostlyclean
 	$(MAKE) -C www mostlyclean
@@ -52,6 +59,7 @@ mostlyclean:
 	$(MAKE) -C tests mostlyclean
 
 clean:
+	$(MAKE) -C stepper clean
 	$(MAKE) -C server clean
 	$(MAKE) -C grind clean
 	$(MAKE) -C www clean

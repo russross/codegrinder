@@ -9,6 +9,8 @@ State and command entry
 
 Persistent client state consists of XDG TOML configuration and assignment-local `.grind` TOML metadata. Configuration is `$XDG_CONFIG_HOME/codegrinder/config.toml`, defaulting to `~/.config/codegrinder/config.toml`. It contains the server, raw session key, workspace root, and optional cached role flags. Missing role flags mean false. Legacy dotfiles are not configuration sources.
 
+Before initializing Tokio or reading configuration, the executable checks the basename of the original `argv[0]`. Invocation as `stepper` enters `stepper::main()` and returns its exit status; a symlink named `stepper` therefore runs the transcript runner without client initialization. Every other invocation follows the ordinary grind command path. The path dependency uses grind's existing build profiles and distribution rules.
+
 An assignment key is `(user_id, course_id, problem_set_id)`. `.grind` records that identity and each problem's ID/current step, without exposing the underlying problem's full step count. Workspace commands search the current directory and ancestors for `.grind`. A single-problem assignment uses the assignment root; a multi-problem assignment requires a concrete problem directory. Metadata locates work; it does not authorize access.
 
 Normal help exposes `version`, `login`, `list`, `get`, `sync`, `grade`, `action`, and `reset`. Cached roles additionally expose instructor `student`, author `create`/`type`, instructor-or-author `solve`/`problem`, and admin commands including `problemtype`. Hidden commands remain invokable by name. Hidden `--api` and `--api-dump` affect traffic reporting, not semantics. The server enforces permission on every protected operation.

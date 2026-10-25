@@ -89,6 +89,8 @@ For the web interfaces under `www/exam` and `www/web`:
 
 # `grind` Command Semantics
 
+- Invocation with an original `argv[0]` basename of `stepper` runs the embedded transcript runner before client configuration or Tokio initialization and returns its exit status. Other invocation names use the grind command interface.
+
 - The `grind` command surface is the contract. Every command should be described here before its behavior is changed.
 - Student-visible commands are `version`, `login`, `list`, `get`, `sync`, `grade`, `action`, and `reset`.
 - Cached instructor visibility additionally shows `student` in help.

@@ -1,9 +1,18 @@
 [workspace]
-members = ["server", "grind"]
+members = ["server", "grind", "stepper"]
 resolver = "3"
 
 [profile.release]
 opt-level = "s"
+
+# Standalone runners prioritize image footprint without changing host profiles.
+[profile.standalone-linux]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
 
 [workspace.package]
 version = "3.0.0"
@@ -21,6 +30,7 @@ hex = "=0.4.3"
 hmac = "=0.13.0"
 http = "=1.5.0"
 ignore = "=0.4.33"
+libc = "=0.2.191"
 prost = "=0.14.4"
 prost-types = "=0.14.4"
 rand = "=0.10.3"
