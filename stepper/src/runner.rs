@@ -395,8 +395,15 @@ impl Manager<'_> {
             Failure::Output(stream, kind) => {
                 let index = stream.index();
                 let capture = &self.live.captures[index];
-                feedback::context(&mut log, &capture.bytes[capture.matched..], stream)
-                    .expect("vector write");
+                let expected = &self.transcript.expected[index]
+                    [capture.next..self.transcript.phases[self.phase].ends[index]];
+                feedback::context(
+                    &mut log,
+                    &capture.bytes[capture.matched..],
+                    stream,
+                    expected.iter().map(|&record| self.transcript.payload(record)),
+                )
+                .expect("vector write");
                 let name = stream.name();
                 let transition = match kind {
                     OutputKind::Incorrect => {

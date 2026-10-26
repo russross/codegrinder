@@ -1,4 +1,4 @@
-use crate::config::{ApiTrace, AuthenticatedUser, Config, Roles, write_login_config};
+use crate::config::{ApiTrace, AuthenticatedUser, Config, Roles, load_config, write_login_config};
 use crate::error::{CliError, Result, fail, rpc_error, transport_error};
 use crate::proto::codegrinder::code_grinder_service_client::CodeGrinderServiceClient;
 use crate::proto::codegrinder::{
@@ -279,10 +279,7 @@ pub async fn check_version(response: &HelloResponse, host: &str) -> Result<()> {
         .map_err(|error| CliError::Message(error.to_string()))?;
     if required > current {
         if let Some(updater) = updater_in_path() {
-            if upgrade_grind(&updater, host).await {
-                fail("grind upgraded; try the command again")?;
-            }
-            fail("grind upgrade failed")?;
+            return required_upgrade(&updater, host).await;
         }
         fail(format!(
             "this is grind version {CURRENT_VERSION}, but the server requires {} or higher\n  you must upgrade to continue",
@@ -307,6 +304,26 @@ pub async fn check_version(response: &HelloResponse, host: &str) -> Result<()> {
         eprintln!("  please upgrade as soon as possible");
     }
     Ok(())
+}
+
+// Explicit upgrades use the configured host without opening a server session.
+pub async fn command_upgrade() -> Result<()> {
+    let config = load_config()?;
+    let updater = updater_in_path().ok_or_else(|| {
+        CliError::Message("update-grind not found in PATH; you must upgrade grind manually".into())
+    })?;
+    if !upgrade_grind(&updater, &config.host).await {
+        return fail("grind upgrade failed");
+    }
+    println!("grind upgraded successfully");
+    Ok(())
+}
+
+async fn required_upgrade(updater: &Path, host: &str) -> Result<()> {
+    if upgrade_grind(updater, host).await {
+        return fail("grind upgraded; try the command again");
+    }
+    fail("grind upgrade failed")
 }
 
 fn updater_in_path() -> Option<PathBuf> {

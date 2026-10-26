@@ -47,7 +47,12 @@ pub fn render(out: &mut impl Write, bytes: &[u8], action: Action, inverse: bool)
 
 // The byte limit is applied before the line limit. Cutting through a line must
 // retain its unfinished marker instead of inventing a newline at the boundary.
-pub fn context(out: &mut impl Write, bytes: &[u8], stream: Stream) -> io::Result<()> {
+pub fn context<'a>(
+    out: &mut impl Write,
+    bytes: &[u8],
+    stream: Stream,
+    mut expected: impl Iterator<Item = &'a [u8]>,
+) -> io::Result<()> {
     let limited = &bytes[..bytes.len().min(20_000)];
     let end = limited
         .iter()
@@ -55,7 +60,14 @@ pub fn context(out: &mut impl Write, bytes: &[u8], stream: Stream) -> io::Result
         .filter(|(_, b)| **b == b'\n')
         .nth(4)
         .map_or(limited.len(), |(i, _)| i + 1);
-    render(out, &limited[..end], Action::Output(stream), true)?;
+    // Compare corresponding full lines without realigning insertions or deletions.
+    // Lines beyond the phase's expected output remain highlighted as unexpected.
+    for (line, displayed) in
+        bytes.split_inclusive(|&b| b == b'\n').zip(limited[..end].split_inclusive(|&b| b == b'\n'))
+    {
+        let inverse = expected.next() != Some(line);
+        render(out, displayed, Action::Output(stream), inverse)?;
+    }
     if end < bytes.len() {
         color(out, "2", b"[output truncated]")?;
     }
@@ -93,4 +105,71 @@ pub fn command(argv: &[OsString]) -> Vec<u8> {
     }
     bytes.push(b'\n');
     bytes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::context;
+    use crate::transcript::Stream;
+
+    // Inspect each rendered line so matching context and newline differences
+    // are checked independently of the failure message and expected display.
+    #[test]
+    fn context_highlights_only_unequal_line_pairs() {
+        let mut output = Vec::new();
+        context(
+            &mut output,
+            b"wrong\nsame\nwrong again\nsame again\nunfinished",
+            Stream::Out,
+            b"right\nsame\nright again\nsame again\nunfinished\n".split_inclusive(|&b| b == b'\n'),
+        )
+        .unwrap();
+        let text = String::from_utf8(output).unwrap();
+        let highlighted: Vec<_> = text.lines().map(|line| line.starts_with("\x1b[7m")).collect();
+        assert_eq!(highlighted, [true, false, true, false, true]);
+        assert!(text.contains(" [no newline]"));
+    }
+
+    #[test]
+    fn context_does_not_realign_inserted_lines() {
+        let mut output = Vec::new();
+        context(
+            &mut output,
+            b"inserted\none\ntwo\nthree\nfour\nfive\n",
+            Stream::Out,
+            b"one\ntwo\nthree\nfour\nfive\n".split_inclusive(|&b| b == b'\n'),
+        )
+        .unwrap();
+        let text = String::from_utf8(output).unwrap();
+        assert_eq!(text.matches("\x1b[7m").count(), 5);
+        assert!(!text.contains("\x1b[7mfive"));
+        assert!(text.contains("[output truncated]"));
+    }
+
+    #[test]
+    fn context_compares_full_lines_before_display_truncation() {
+        let bytes = vec![b'x'; 20_001];
+        let mut output = Vec::new();
+        context(&mut output, &bytes, Stream::Out, std::iter::once(bytes.as_slice())).unwrap();
+        let text = String::from_utf8(output).unwrap();
+        assert!(!text.contains("\x1b[7m"));
+        assert!(text.contains("[output truncated]"));
+    }
+
+    #[test]
+    fn context_highlights_lines_beyond_expected_phase() {
+        let mut output = Vec::new();
+        context(
+            &mut output,
+            b"wrong\nsame\nextra\n",
+            Stream::Err,
+            b"right\nsame\n".split_inclusive(|&b| b == b'\n'),
+        )
+        .unwrap();
+        let text = String::from_utf8(output).unwrap();
+        assert!(text.contains("\x1b[35m\x1b[7mwrong"));
+        assert!(text.contains("\x1b[35msame"));
+        assert!(text.contains("\x1b[35m\x1b[7mextra"));
+        assert_eq!(text.matches("\x1b[7m").count(), 2);
+    }
 }

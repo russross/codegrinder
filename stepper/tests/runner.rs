@@ -299,7 +299,7 @@ fn deterministic_console_feedback_matches_the_shell_reference_byte_for_byte() {
             b"> prompt\n< a\\b\t\n! err\n> done\n",
             "printf 'prompt\\n'; IFS= read -r value; printf 'err\\n' >&2; cat >/dev/null; printf 'done\\n'",
         ),
-        (b"> right\n> more\n< unsent\n", "printf 'wrong\\nmore\\n'; cat >/dev/null"),
+        (b"> right\n> more\n< unsent\n", "printf 'wrong\\nalso wrong\\n'; cat >/dev/null"),
         (b"! missing\n", "exit 0"),
         (b"> partial\n", "printf partial"),
     ];

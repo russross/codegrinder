@@ -53,6 +53,8 @@ struct Cli {
 enum Command {
     #[command(about = "print the version number of grind")]
     Version,
+    #[command(about = "upgrade grind using update-grind")]
+    Upgrade,
     #[command(about = "login to codegrinder server")]
     Login(LoginArgs),
     #[command(about = "list all of your active assignments")]
@@ -277,6 +279,7 @@ async fn dispatch(cli: Cli, roles: Roles) -> Result<()> {
             println!("grind {CURRENT_VERSION}");
             Ok(())
         }
+        Some(Command::Upgrade) => client::command_upgrade().await,
         Some(Command::Login(args)) => author::command_login(args.login_args, trace).await,
         Some(Command::List(args)) => assignment::command_list(args.extra, trace).await,
         Some(Command::Get(args)) => assignment::command_get(args.extra, trace).await,

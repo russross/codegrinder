@@ -13,7 +13,7 @@ Before initializing Tokio or reading configuration, the executable checks the ba
 
 An assignment key is `(user_id, course_id, problem_set_id)`. `.grind` records that identity and each problem's ID/current step, without exposing the underlying problem's full step count. Workspace commands search the current directory and ancestors for `.grind`. A single-problem assignment uses the assignment root; a multi-problem assignment requires a concrete problem directory. Metadata locates work; it does not authorize access.
 
-Normal help exposes `version`, `login`, `list`, `get`, `sync`, `grade`, `action`, and `reset`. Cached roles additionally expose instructor `student`, author `create`/`type`, instructor-or-author `solve`/`problem`, and admin commands including `problemtype`. Hidden commands remain invokable by name. Hidden `--api` and `--api-dump` affect traffic reporting, not semantics. The server enforces permission on every protected operation.
+Normal help exposes `version`, `upgrade`, `login`, `list`, `get`, `sync`, `grade`, `action`, and `reset`. Cached roles additionally expose instructor `student`, author `create`/`type`, instructor-or-author `solve`/`problem`, and admin commands including `problemtype`. Hidden commands remain invokable by name. Hidden `--api` and `--api-dump` affect traffic reporting, not semantics. The server enforces permission on every protected operation.
 
 Normalize workspace paths before filesystem access. Server paths must resolve to relative files in the target workspace, and the server independently validates submitted paths. Binary contents remain bytes; text diagnostics must not rewrite contents.
 
@@ -22,6 +22,8 @@ Version and login
 -----------------
 
 `grind version` prints `grind {version}` without config reads or network access.
+
+`grind upgrade` takes no arguments and runs `update-grind grind HOSTNAME` using the configured server hostname without contacting the server, regardless of the installed version. Success prints `grind upgraded successfully` and exits with status 0; failure exits unsuccessfully. If no executable updater exists in `PATH`, report manual upgrade guidance.
 
 1. `grind login <hostname> <token>` requires exactly those two arguments; other shapes print login guidance and fail. Exchange the one-time Canvas token through `Hello` at that host.
 2. Require an authenticated user and enforce the returned version policy before writing configuration. The session key returned by this exchange becomes the configured authentication source.
