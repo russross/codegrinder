@@ -92,7 +92,7 @@ For the web interfaces under `www/exam` and `www/web`:
 - Invocation with an original `argv[0]` basename of `stepper` runs the embedded transcript runner before client configuration or Tokio initialization and returns its exit status. Other invocation names use the grind command interface.
 
 - The `grind` command surface is the contract. Every command should be described here before its behavior is changed.
-- Student-visible commands are `version`, `login`, `list`, `get`, `sync`, `grade`, `action`, and `reset`.
+- Student-visible commands are `version`, `upgrade`, `login`, `list`, `get`, `sync`, `grade`, `action`, and `reset`.
 - Cached instructor visibility additionally shows `student` in help.
 - Cached author visibility additionally shows `create` and `type` in help.
 - Cached admin visibility additionally shows admin-only commands, including `problemtype`, in help. The server must enforce admin permissions for every admin RPC.
@@ -111,6 +111,12 @@ For the web interfaces under `www/exam` and `www/web`:
 - `grind version` performs no network calls and reads no config.
 - It prints the local `grind` version as `grind {version}`.
 - It must not depend on login state or server availability.
+
+# `grind upgrade`
+
+- `grind upgrade` takes no arguments and uses the configured server hostname without contacting the server.
+- It runs executable `update-grind` from `PATH` with arguments `grind` and the server hostname, even when the current version is supported.
+- On success, it prints `grind upgraded successfully` and exits with status 0. Upgrade failure exits unsuccessfully; a missing updater produces upgrade guidance.
 
 # `grind login`
 

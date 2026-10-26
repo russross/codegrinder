@@ -322,7 +322,7 @@ pub fn spawn_grade_passback(
                         "INFO",
                         "lms_passback_posted",
                         format_args!(
-                            "user={:?} course={:?} problem_set={:?} attempt={attempt} score={}",
+                            "{names} user={:?} course={:?} problem_set={:?} attempt={attempt} score={}",
                             target.user_id, target.course_id, target.problem_set_id, target.score
                         ),
                     );
@@ -331,10 +331,6 @@ pub fn spawn_grade_passback(
                 Err(err) => {
                     let transient = err.is_transient();
                     let retry_delay = (transient && attempt < 10).then_some(delay);
-                    eprintln!(
-                        "LMS grade passback attempt failed: {names} user={:?} course={:?} problem_set={:?} attempt={attempt}/10 transient={transient} retry_in={retry_delay:?} error={err}",
-                        target.user_id, target.course_id, target.problem_set_id
-                    );
                     if let Some(retry_delay) = retry_delay {
                         tokio::time::sleep(retry_delay).await;
                         delay = (delay * 2).min(Duration::from_secs(300));
@@ -343,17 +339,17 @@ pub fn spawn_grade_passback(
                     // Only exhausted transient failures remain eligible for startup recovery.
                     if !transient {
                         update_passback_status(&db, &target, PASSBACK_FAILED_PERMANENT).await;
-                        eprintln!(
-                            "LMS grade passback permanently failed for assignment {}/{}/{} {names}: {err}",
-                            target.user_id, target.course_id, target.problem_set_id
-                        );
                     } else {
                         update_passback_status(&db, &target, PASSBACK_FAILED).await;
-                        eprintln!(
-                            "giving up posting LMS grade after attempt {attempt}/10 for assignment {}/{}/{} {names}",
-                            target.user_id, target.course_id, target.problem_set_id
-                        );
                     }
+                    crate::logging::record(
+                        "ERROR",
+                        "lms_passback_failed",
+                        format_args!(
+                            "{names} user={:?} course={:?} problem_set={:?} attempt={attempt} transient={transient} error={err}",
+                            target.user_id, target.course_id, target.problem_set_id
+                        ),
+                    );
                     return;
                 }
             }

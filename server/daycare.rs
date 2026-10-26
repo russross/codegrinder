@@ -207,11 +207,6 @@ impl DaycareRuntime {
         let run_id = self.next_run_id.fetch_add(1, Ordering::Relaxed);
         let context = RunContext::new(run_id, &bundle);
         let started = Instant::now();
-        context.log(
-            "INFO",
-            "daycare_accepted",
-            format_args!("image={:?} limits={:?}", bundle.container, spec.limits),
-        );
         let stop = self.mark_active(&nanny_name, run_id).await;
         let scope = RequestScope { deadline, stop, events: tx.clone() };
         let result = async {
@@ -226,12 +221,6 @@ impl DaycareRuntime {
                 })
                 .await?;
             scope.run(async { Ok(()) }).await?;
-            context.log(
-                "INFO",
-                "daycare_capacity_acquired",
-                format_args!("queue_ms={}", started.elapsed().as_millis()),
-            );
-            let execution_started = Instant::now();
             reconcile_named_container(&self.container_command, &nanny_name, None, &context).await;
             scope.run(async { Ok(()) }).await?;
             let identity = format!("{}-{run_id}", self.instance);
@@ -265,36 +254,12 @@ impl DaycareRuntime {
                     return Err(err);
                 }
             };
-            context.log(
-                "INFO",
-                "daycare_container_created",
-                format_args!("container={:?}", container.id),
-            );
             let result = scope
                 .run(async {
                     container.start(deadline).await?;
                     run_action(&container, &mut bundle, &spec, &context, deadline, tx).await
                 })
                 .await;
-            context.log(
-                "INFO",
-                "daycare_execution_finished",
-                format_args!(
-                    "execution_ms={} passed={:?} score={:?} reason={:?}",
-                    execution_started.elapsed().as_millis(),
-                    bundle
-                        .commit
-                        .as_ref()
-                        .and_then(|commit| commit.report_card.as_ref())
-                        .map(|report| report.passed),
-                    bundle.commit.as_ref().map(|commit| commit.score),
-                    bundle
-                        .commit
-                        .as_ref()
-                        .and_then(|commit| commit.report_card.as_ref())
-                        .map(|report| &report.note)
-                ),
-            );
             // Cleanup retains both lifecycle ownership and capacity until absence is confirmed.
             container.reconcile(&context).await;
             result?;
@@ -306,8 +271,19 @@ impl DaycareRuntime {
             if result.is_ok() { "INFO" } else { "WARN" },
             "daycare_finished",
             format_args!(
-                "total_ms={} error={:?}",
+                "total_ms={} passed={:?} score={:?} reason={:?} error={:?}",
                 started.elapsed().as_millis(),
+                bundle
+                    .commit
+                    .as_ref()
+                    .and_then(|commit| commit.report_card.as_ref())
+                    .map(|report| report.passed),
+                bundle.commit.as_ref().map(|commit| commit.score),
+                bundle
+                    .commit
+                    .as_ref()
+                    .and_then(|commit| commit.report_card.as_ref())
+                    .map(|report| &report.note),
                 result.as_ref().err().map(ToString::to_string)
             ),
         );
@@ -589,21 +565,6 @@ async fn run_action(
         }
         ExecutionOutcome::Failed(err) => return Err(err),
     };
-    record(
-        "INFO",
-        "daycare_command_finished",
-        format_args!(
-            "container={:?} user={:?} problem={:?} step={} action={:?} exit={} stdout_bytes={} stderr_bytes={}",
-            container.id,
-            bundle.user_id,
-            bundle.problem_id,
-            bundle.step_number,
-            bundle.action,
-            result.status,
-            result.stdout.len(),
-            result.stderr.len()
-        ),
-    );
     emit_event(
         &tx,
         &mut transcript,
@@ -687,8 +648,8 @@ async fn execute_with_output(
     let execution = async {
         let result = container.exec(command, deadline, output_tx).await;
         let duration = started.elapsed();
-        if matches!(result, ExecutionOutcome::Exited(_)) {
-            container.log_usage(context).await;
+        if let ExecutionOutcome::Exited(output) = &result {
+            container.log_usage(context, output.status).await;
         }
         container.quiesce().await?;
         Ok::<_, AppError>((result, duration))
@@ -1195,7 +1156,7 @@ impl Container {
     }
 
     // Inspect only selected state fields; environment and workspace contents stay private.
-    async fn log_usage(&self, context: &RunContext) {
+    async fn log_usage(&self, context: &RunContext, command_exit: i32) {
         let args = vec![
             "inspect".to_owned(),
             "--format".to_owned(),
@@ -1208,28 +1169,22 @@ impl Container {
             Ok(result) if result.status == 0 => {
                 match serde_json::from_slice::<ContainerState>(&result.stdout) {
                     Ok(state) => {
-                        context.log(
-                            "INFO",
-                            "daycare_container_state",
-                            format_args!(
-                                "container={:?} status={:?} container_exit={} oom_killed={} error={:?}",
-                                self.id,
-                                state.status,
-                                state.exit_code,
-                                state.oom_killed,
-                                state.error
-                            ),
+                        let state_fields = format!(
+                            "container={:?} command_exit={command_exit} status={:?} container_exit={} oom_killed={} error={:?}",
+                            self.id, state.status, state.exit_code, state.oom_killed, state.error
                         );
                         let pid = state.pid;
                         let usage = tokio::task::spawn_blocking(move || collect_usage(pid)).await;
                         match usage {
-                            Ok(Ok(usage)) => {
-                                context.log("INFO", "daycare_usage", format_args!("{usage}"))
-                            }
+                            Ok(Ok(usage)) => context.log(
+                                "INFO",
+                                "daycare_usage",
+                                format_args!("{state_fields} {usage}"),
+                            ),
                             other => context.log(
                                 "WARN",
                                 "daycare_usage_unavailable",
-                                format_args!("error={other:?}"),
+                                format_args!("{state_fields} error={other:?}"),
                             ),
                         }
                     }
@@ -1510,11 +1465,6 @@ impl Container {
         loop {
             match self.shutdown().await {
                 Ok(()) => {
-                    context.log(
-                        "INFO",
-                        "daycare_cleanup_finished",
-                        format_args!("container={:?}", self.id),
-                    );
                     return;
                 }
                 Err(err) => context.log(

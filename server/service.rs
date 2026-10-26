@@ -223,19 +223,6 @@ impl CodeGrinderService for CodeGrinderServer {
                                         html,
                                     );
                                 }
-                                crate::logging::record(
-                                    "INFO",
-                                    "grade_saved",
-                                    format_args!(
-                                        "user={:?} assignment={:?} problem={:?} step={} save_status={} locked={}",
-                                        saved.bundle.user_id,
-                                        saved.bundle.assignment,
-                                        saved.bundle.problem_id,
-                                        saved.bundle.step_number,
-                                        saved.save_status,
-                                        saved.locked
-                                    ),
-                                );
                                 AssignmentActionResult {
                                     save_status: saved.save_status,
                                     grade: saved.bundle.commit,
@@ -693,10 +680,6 @@ impl CodeGrinderService for CodeGrinderServer {
             .into_inner()
             .commit
             .ok_or_else(|| Status::invalid_argument("commit is required"))?;
-        let log_context = format!(
-            "actor={:?} assignment={:?} problem={:?} step={}",
-            current_user.user_id, commit.assignment, commit.problem_id, commit.step
-        );
         let (save_status, _) = self
             .db
             .transaction_until(true, deadline, move |conn| {
@@ -704,11 +687,6 @@ impl CodeGrinderService for CodeGrinderServer {
             })
             .await
             .map_err(AppError::grpc_status)?;
-        crate::logging::record(
-            "INFO",
-            "workspace_saved",
-            format_args!("{log_context} save_status={save_status}"),
-        );
         Ok(Response::new(SaveWorkspaceCommitResponse { save_status }))
     }
 
@@ -734,35 +712,6 @@ impl CodeGrinderService for CodeGrinderServer {
             })
             .await
             .map_err(|err| err.grpc_status_for("SaveUngradedCommit", Some(&actor)))?;
-        let names = match &result.bundle.assignment {
-            Some(key) => store::assignment_log_names(&self.db, key).await,
-            None => format!("actor={actor:?}"),
-        };
-        crate::logging::record(
-            "INFO",
-            "action_submitted",
-            format_args!(
-                "action submitted: {names} user={:?} assignment={:?} problem={:?} step={} action={:?} save_status={}",
-                result.bundle.user_id,
-                result.bundle.assignment,
-                result.bundle.problem_id,
-                result.bundle.step_number,
-                result.bundle.action,
-                result.save_status
-            ),
-        );
-        crate::logging::record(
-            "INFO",
-            "daycare_selected",
-            format_args!(
-                "host={:?} user={:?} problem={:?} step={} action={:?}",
-                result.bundle.hostname,
-                result.bundle.user_id,
-                result.bundle.problem_id,
-                result.bundle.step_number,
-                result.bundle.action
-            ),
-        );
         let signed =
             crate::signatures::encode_signed_runtime_bundle(&result.bundle, &config.daycare_secret)
                 .map_err(AppError::grpc_status)?;
@@ -793,26 +742,6 @@ impl CodeGrinderService for CodeGrinderServer {
             })
             .await
             .map_err(|err| err.grpc_status_for("SaveGradedCommit", Some(&actor)))?;
-        let commit = result.bundle.commit.as_ref();
-        let names = match &result.bundle.assignment {
-            Some(key) => store::assignment_log_names(&self.db, key).await,
-            None => format!("actor={actor:?}"),
-        };
-        crate::logging::record(
-            "INFO",
-            "grade_saved",
-            format_args!(
-                "grade completed: {names} user={:?} assignment={:?} problem={:?} step={} score={:?} passed={:?} save_status={} locked={}",
-                result.bundle.user_id,
-                result.bundle.assignment,
-                result.bundle.problem_id,
-                result.bundle.step_number,
-                commit.map(|commit| commit.score),
-                commit.and_then(|commit| commit.report_card.as_ref()).map(|report| report.passed),
-                result.save_status,
-                result.locked
-            ),
-        );
         if result.save_status == crate::proto::CommitSaveStatus::Saved as i32
             && let Some((target, html)) =
                 passback_work(&self.db, &result.bundle, result.locked, deadline)
@@ -1000,14 +929,6 @@ fn update_passback_status(
         "UPDATE assignments SET grade_passback_status = ? WHERE user_id = ? AND course_id = ? AND problem_set_id = ?",
         params![status, key.user_id, key.course_id, key.problem_set_id],
     )?;
-    crate::logging::record(
-        "INFO",
-        "lms_passback_decision",
-        format_args!(
-            "user={:?} course={:?} problem_set={:?} status={status:?}",
-            key.user_id, key.course_id, key.problem_set_id
-        ),
-    );
     Ok(())
 }
 

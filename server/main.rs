@@ -60,12 +60,7 @@ async fn main() -> AppResult<()> {
     let db = Db::open(&config.sqlite3_path)?;
     // Session maintenance and passback recovery finish scheduling before admission.
     db.transaction(true, |conn| delete_expired_sessions(conn, now_utc())).await?;
-    let recovery_count = spawn_startup_grade_passbacks(db.clone(), config.clone()).await?;
-    if recovery_count > 0 {
-        eprintln!(
-            "scheduled {recovery_count} unfinished LMS grade passbacks over the next 10 minutes"
-        );
-    }
+    spawn_startup_grade_passbacks(db.clone(), config.clone()).await?;
     let login_tokens = Arc::new(LoginTokens::default());
     let daycare = DaycareRuntime::new(config.clone())?;
     let version = VersionPayload {
