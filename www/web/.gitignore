@@ -10,6 +10,13 @@ generated/
 node_modules/
 build/
 
+# Generated browser bundles, workers, and emitted assets
+/scripts/*.js
+/scripts/*.wasm
+/scripts/*.LICENSE.txt
+/sw.js
+/sw.js.LICENSE.txt
+
 # dev nodes
 *.md
 !NOTES.md

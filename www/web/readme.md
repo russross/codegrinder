@@ -113,8 +113,8 @@ Run those commands from the repository root. `npm run build` also invokes Make.
 Make installs locked dependencies only when package metadata changes, generates
 temporary TypeScript sources under `generated/` only when required, type
 checks the handwritten TypeScript, and bundles the TypeScript entry points with
-webpack. The tracked JavaScript files corresponding to those entry points are
-deployable build output. Page modules and worker modules are checked with
+webpack. Generated JavaScript bundles, workers, and emitted assets are ignored
+by Git. Build them before serving or deploying a fresh checkout. Page modules and worker modules are checked with
 separate DOM and worker global environments. Existing JavaScript is accepted
 without being checked. The generated TypeScript directory and `node_modules/`
 are not deployed.

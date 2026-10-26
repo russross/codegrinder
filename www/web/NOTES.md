@@ -99,7 +99,7 @@ The `dummy` presentation hides editing/navigation controls and presents a compac
 Publication and audit boundaries
 --------------------------------
 
-Build with `make -C www/web`; use Alpine system Node 24/npm, the lockfile, generated protobuf-ts bindings, TypeScript checks, and webpack. Versioned URLs must keep page modules, runtime adapters, workers, and service-worker selection consistent. Runtime configuration and generated/deployed scripts are required alongside the page; no server request can compensate for missing browser assets.
+Build with `make -C www/web`; use Alpine system Node 24/npm, the lockfile, generated protobuf-ts bindings, TypeScript checks, and webpack. Generated browser bundles, workers, and emitted assets are ignored by Git and must be built before serving or deploying a fresh checkout. Versioned URLs must keep page modules, runtime adapters, workers, and service-worker selection consistent. Runtime configuration and generated/deployed scripts are required alongside the page; no server request can compensate for missing browser assets.
 
 `make -C www/web check`, `test`, and `test-browser` cover types, behavior, and live browser integration respectively. Audit token removal/restoration, wrong assignment/problem responses, path ownership, newer edits during a save, failed outgoing persistence, reset without implicit save, stream errors/missing grade bundles, local-vs-server Test selection, stale runtime loads, and blocked/closed stdin channels. Browser validation uses a disposable Chrome profile and closes its test processes.
 
