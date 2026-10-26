@@ -37,7 +37,7 @@ use crate::service::{CodeGrinderServer, CodeGrinderServerParts};
 use crate::sessions::{LoginTokens, delete_expired_sessions};
 use crate::timeutil::now_utc;
 
-const VERSION: &str = "3.0.0";
+const VERSION: &str = "3.1.0";
 const DEFAULT_BIND_PORT: u16 = 1400;
 
 #[tokio::main]
@@ -66,7 +66,7 @@ async fn main() -> AppResult<()> {
     let version = VersionPayload {
         version: VERSION.to_owned(),
         grind_version_required: "3.0.0".to_owned(),
-        grind_version_recommended: "3.0.0".to_owned(),
+        grind_version_recommended: "3.1.0".to_owned(),
     };
     let service = CodeGrinderServer::new(CodeGrinderServerParts {
         db: db.clone(),

@@ -289,7 +289,7 @@ checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 
 [[package]]
 name = "codegrinder"
-version = "3.0.0"
+version = "3.1.0"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -583,7 +583,7 @@ dependencies = [
 
 [[package]]
 name = "grind"
-version = "3.0.0"
+version = "3.1.0"
 dependencies = [
  "clap",
  "http",
@@ -1382,7 +1382,7 @@ dependencies = [
 
 [[package]]
 name = "stepper"
-version = "3.0.0"
+version = "3.1.0"
 dependencies = [
  "libc",
 ]
