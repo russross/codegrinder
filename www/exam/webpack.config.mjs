@@ -7,7 +7,7 @@ export default {
     entry: "./index.ts",
     output: {
         path: fileURLToPath(new URL("./build/ui", import.meta.url)),
-        filename: "app-[contenthash].js",
+        filename: "app.js",
         chunkFilename: "app-[contenthash].js",
         library: { name: "codegrinder", type: "window" },
         clean: true,

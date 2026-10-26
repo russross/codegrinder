@@ -1,36 +1,23 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import hashlib
 import json
 import shutil
 import sys
 from pathlib import Path
 
 
-def asset(path: Path, stem: str, extension: str) -> str:
-    """Publish immutable bytes and return their relative deployment path."""
-    content = path.read_bytes()
-    digest = hashlib.sha256(content).hexdigest()[:16]
-    destination = Path("dist") / f"{stem}-{digest}.{extension}"
-    destination.write_bytes(content)
-    return destination.as_posix()
-
-
 def publish() -> None:
-    # Content names keep every cached entry linked to its original asset bytes.
+    # Direct page dependencies use stable URLs; lazy chunks retain content names.
     Path("dist").mkdir(exist_ok=True)
     files = sorted(path for path in Path("build/ui").iterdir() if path.is_file() and path.name != ".built")
-    scripts = [path for path in files if path.name.startswith("app-") and path.suffix == ".js"]
-    if len(scripts) != 1:
+    if Path("build/ui/app.js") not in files:
         raise ValueError("expected one application entry bundle")
     for path in files:
         shutil.copyfile(path, Path("dist") / path.name)
-    replacements = {
-        "app": f"dist/{scripts[0].name}",
-        "style": asset(Path("style.css"), "style", "css"),
-        "favicon": asset(Path("favicon.svg"), "favicon", "svg"),
-    }
+    for name in ("style.css", "favicon.svg"):
+        shutil.copyfile(name, Path("dist") / name)
+    replacements = {"app": "dist/app.js", "style": "dist/style.css", "favicon": "dist/favicon.svg"}
 
     # Check the complete page before replacing the live entry or its dependency list.
     page = Path("index.template.html").read_text(encoding="utf-8")
@@ -58,9 +45,11 @@ def publish() -> None:
     )
 
     # Publish the entry only after every referenced asset is available.
-    temporary = Path("index.html.part")
-    temporary.write_text(page, encoding="utf-8")
-    temporary.replace("index.html")
+    entry = Path("index.html")
+    if not entry.exists() or entry.read_text(encoding="utf-8") != page:
+        temporary = Path("index.html.part")
+        temporary.write_text(page, encoding="utf-8")
+        temporary.replace(entry)
     temporary = Path(".published-assets.json.part")
     temporary.write_text(inventory, encoding="utf-8")
     temporary.replace(".published-assets.json")

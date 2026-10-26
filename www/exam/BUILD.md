@@ -37,10 +37,11 @@ release versions, guest files, or image preparation inputs change. UI edits do
 not rerun package installation or disk splitting. See `vm/README.md`.
 
 `index.template.html` is the entry-page source; the build replaces `index.html`
-after publishing its assets. Deploy that entry, the complete `dist/` directory,
+only when its contents change, after publishing its assets. Deploy that entry, the complete `dist/` directory,
 `vm/runtime/`, and `vm/image/` together. Keep existing immutable assets when
 copying a new deployment so cached pages and open tabs can load their original
-bytes. HTML should revalidate; content-named files and release directories may
+bytes. Direct page dependencies use stable `dist/app.js`, `dist/style.css`,
+and `dist/favicon.svg` URLs. HTML and these files should revalidate; content-named files and release directories may
 use long-lived immutable caching.
 
 Reboot clears terminal history and preserves the guest disk overlay. Same-type problem and step changes replace the live 9p tree without resetting the VM. Clicking Reset VM
