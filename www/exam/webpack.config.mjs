@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 
 export default {
     mode: "production",
+    performance: { hints: false },
     context: fileURLToPath(new URL(".", import.meta.url)),
     entry: "./index.ts",
     output: {

@@ -49,13 +49,14 @@ end2end:
 	$(MAKE) -C tests end2end
 
 # Cleanup never reaches configuration, databases, or installed system files.
+# SDK cleanup stays here so its checkout can track upstream without local changes.
 mostlyclean:
 	$(MAKE) -C stepper mostlyclean
 	$(MAKE) -C server mostlyclean
 	$(MAKE) -C grind mostlyclean
 	$(MAKE) -C www mostlyclean
-	$(MAKE) -C $(MACOS_SDK_DIR) clean
-	rm -rf $(MACOS_SDK_DIR)/download
+	rm -rf '$(MACOS_SDK_DIR)/sysroot-macos-x86_64' '$(MACOS_SDK_DIR)/sysroot-macos-arm64' '$(MACOS_SDK_DIR)/download'
+	rm -f '$(MACOS_SDK_DIR)/hello'
 	$(MAKE) -C tests mostlyclean
 
 clean:
@@ -63,6 +64,6 @@ clean:
 	$(MAKE) -C server clean
 	$(MAKE) -C grind clean
 	$(MAKE) -C www clean
-	$(MAKE) -C $(MACOS_SDK_DIR) clean
-	rm -rf $(MACOS_SDK_DIR)/download
+	rm -rf '$(MACOS_SDK_DIR)/sysroot-macos-x86_64' '$(MACOS_SDK_DIR)/sysroot-macos-arm64' '$(MACOS_SDK_DIR)/download'
+	rm -f '$(MACOS_SDK_DIR)/hello'
 	$(MAKE) -C tests clean

@@ -4,4 +4,6 @@ google/
 dist
 node_modules
 build
+.published-assets.json
+.published-assets.json.part
 .toolchain

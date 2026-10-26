@@ -28,6 +28,7 @@ const buildBanner = `CodeGrinder web build ${webBuildVersion}`;
 
 const browserConfig = {
   mode: "production",
+  performance: { hints: false },
   entry: {
     app: "./scripts/app.ts",
     directoryTree: "./scripts/directoryTree.ts",
@@ -72,6 +73,7 @@ const browserConfig = {
 
 const serviceWorkerConfig = {
   mode: "production",
+  performance: { hints: false },
   target: "webworker",
   entry: {
     sw: "./sw.ts",

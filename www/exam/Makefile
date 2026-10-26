@@ -44,15 +44,16 @@ test-widgets: node_modules/.installed $(PROTO_OUTPUTS)
 test-browser: all
 	npm run test:browser
 
-# Keep every immutable deployed asset, including those used by cached pages.
+# Keep only the assets used by the published page, independently of build caches.
 mostlyclean:
+	python3 scripts/prune.py
 	rm -rf build node_modules codegrinder.ts codegrinder.client.ts google
 	rm -f index.html.part
 	$(MAKE) -C vm mostlyclean
 
-clean: mostlyclean
-	rm -rf dist
-	rm -f index.html index.html.part
+clean:
+	rm -rf build node_modules codegrinder.ts codegrinder.client.ts google dist
+	rm -f index.html index.html.part .published-assets.json .published-assets.json.part
 	$(MAKE) -C vm clean
 
 FORCE:

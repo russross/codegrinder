@@ -47,10 +47,12 @@ For Rust `grind` client checks:
 For build workflows and routine validation:
 
 - Use the component Makefiles and invoke builds in other directories with `make -C ...`. Cargo owns Rust dependency tracking; Make owns component sequencing, generated web files, SDK inputs, and deployment publication.
+- Keep `macos-minimal-sdk/` synced with upstream without local changes. As an exception to component-owned cleanup, the root Makefile directly removes its generated sysroots, downloads, and `hello` test executable for both `mostlyclean` and `clean`; the upstream SDK has no `mostlyclean` target.
 - Do not routinely build from `clean` or `mostlyclean`. Use incremental Make rules. An incremental build that misses a dependency is a build bug to fix, not a reason to rebuild from scratch.
 - Run only checks relevant to the changed code and its affected boundaries. CLI-only changes do not require server tests; browser-only changes do not require Rust tests. Reserve the workspace-wide `make test` and end-to-end suite for changes that actually affect those boundaries.
 - Run Rust formatting checks and Clippy before tests. If formatting must change, finish formatting before starting the tests. Do not repeat successful tests unless subsequent changes affect the tested behavior.
 - Every build component provides `mostlyclean` and `clean`. `mostlyclean` removes intermediates while preserving native release executables and every deployed browser/client asset, including assets used by cached pages. The Rust cache is shared, so component cleanup removes shared intermediates while preserving both native executables. `clean` also removes that component's deployment assets. Neither target touches configuration, databases, backups, or installed system files.
+- For `www/exam`, `mostlyclean` preserves only the currently published page's active assets and removes stale UI bundles, VM configurations, disk images, and runtime releases. Publication records these assets in `.published-assets.json`, which survives build-cache cleanup. Previously cached exam pages are not retained by this sweep.
 - Use POSIX shell for straightforward build sequencing and decisions, with BusyBox compatibility where practical. Use dependency-free Python with `#!/usr/bin/env python3` when scripting needs more complex data processing; build scripts must not require a virtual environment or uv.
 
 For database schema and queries:

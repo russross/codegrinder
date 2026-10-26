@@ -51,9 +51,9 @@ class BuildTests(unittest.TestCase):
 
         # Only build definitions and tiny fixtures enter the disposable checkout.
         for name in (
-            "Makefile", "scripts", "server/Makefile", "grind/Makefile",
+            "Makefile", "scripts", "server/Makefile", "grind/Makefile", "stepper/Makefile",
             "www/Makefile", "www/web/Makefile", "www/exam/Makefile",
-            "www/exam/scripts/publish.py", "www/exam/vm/Makefile",
+            "www/exam/scripts/publish.py", "www/exam/scripts/prune.py", "www/exam/vm/Makefile",
             "www/exam/vm/scripts/assets.py", "tests/Makefile",
             "macos-minimal-sdk/Makefile", "macos-minimal-sdk/versions.inc",
         ):
@@ -65,7 +65,7 @@ class BuildTests(unittest.TestCase):
             else:
                 shutil.copyfile(source, destination)
         self.write("protocol/codegrinder.proto", "protocol")
-        for name in ("npm", "cargo", "clang"):
+        for name in ("npm", "cargo", "clang", "rustfmt"):
             self.write(f"tools/{name}", TOOL, executable=True)
 
     def write(self, name: str, content: str, *, executable: bool = False) -> Path:
@@ -261,10 +261,12 @@ Path("build/rootfs.ext4").write_bytes(Path(sys.argv[2]).read_bytes() + Path("gue
     def test_cleanup_preserves_deployment_and_private_data(self) -> None:
         preserved = (
             "config.json", "db/codegrinder.db", "backup/database.gz",
-            "www/exam/vm/image/risclet.cfg", "www/exam/vm/runtime/package.json",
+            "www/exam/vm/runtime/package.json",
         )
         deployed = (
             "target/release/codegrinder", "target/release/grind",
+            "stepper/dist/stepper.linux_amd64", "stepper/dist/stepper.linux_riscv64",
+            "www/exam/vm/image/risclet.cfg",
             "www/grind.linux_amd64", "www/web/scripts/app.js", "www/web/sw.js",
             "www/exam/index.html", "www/exam/dist/app-old.js",
             "www/exam/vm/runtime/riscbox-2026.10.7/riscbox.js",
@@ -274,26 +276,104 @@ Path("build/rootfs.ext4").write_bytes(Path(sys.argv[2]).read_bytes() + Path("gue
         intermediates = (
             "target/release/deps/library", "target/release/.fingerprint/package",
             "target/aarch64-unknown-linux-musl/release/grind", "target/.rustc_info.json",
+            "target/riscv64gc-unknown-linux-musl/standalone-linux/stepper",
+            "stepper/dist/stepper.linux_riscv64.part",
             "www/web/generated/codegrinder.ts", "www/web/node_modules/package/file",
             "www/exam/build/ui/app.js", "www/exam/codegrinder.ts",
             "www/exam/index.html.part", "www/grind.linux_amd64.part",
             "www/exam/vm/image/risclet-current.json.part",
             "www/exam/vm/build/rootfs.ext4", "www/exam/vm/runtime/riscbox-2026.10.7/.built",
             "macos-minimal-sdk/sysroot-macos-arm64/usr/lib/libSystem.B.dylib",
-            "macos-minimal-sdk/download/archive", "tests/__pycache__/module.pyc",
+            "macos-minimal-sdk/sysroot-macos-x86_64/usr/lib/libSystem.B.dylib",
+            "macos-minimal-sdk/download/archive", "macos-minimal-sdk/hello",
+            "tests/__pycache__/module.pyc",
         )
         for name in (*preserved, *deployed, *intermediates):
+            self.write(name, name)
+        self.write("www/exam/.published-assets.json", json.dumps([
+            "dist/app-old.js", "vm/image/risclet.cfg", "vm/image/drive-old",
+            "vm/image/risclet-old.json", "vm/runtime/riscbox-2026.10.7", "vm/runtime/riscbox.js",
+        ]))
+        stale = (
+            "www/exam/dist/app-stale.js", "www/exam/vm/image/drive-stale/blk.txt",
+            "www/exam/vm/image/stale.cfg", "www/exam/vm/runtime/riscbox-2020.1.1/riscbox.js",
+        )
+        for name in stale:
             self.write(name, name)
         self.make(".", "mostlyclean")
         for name in (*preserved, *deployed):
             self.assertEqual((self.root / name).read_text(), name)
-        for name in intermediates:
+        for name in (*intermediates, *stale):
             self.assertFalse((self.root / name).exists(), name)
+        # Repeated cleanup uses the durable inventory after build caches disappear.
+        self.make("www/exam", "mostlyclean")
         self.make(".", "clean")
         for name in preserved:
             self.assertEqual((self.root / name).read_text(), name)
         for name in deployed:
             self.assertFalse((self.root / name).exists(), name)
+
+    def test_cleanup_keeps_published_vm_instead_of_unpublished_build(self) -> None:
+        # A publication captures hashed configs, disks, runtime, and UI assets together.
+        self.write("www/exam/build/ui/app-current.js", "bundle")
+        self.write("www/exam/index.template.html", "{{app}} {{style}} {{favicon}}")
+        self.write("www/exam/style.css", "style")
+        self.write("www/exam/favicon.svg", "icon")
+        self.write("www/exam/vm/image/riscv-current.cfg", json.dumps({
+            "drive0": {"file": "riscv-drive-current/blk.txt"},
+        }))
+        self.write("www/exam/vm/build/assets.json", json.dumps({"riscv": {
+            "configUrl": "vm/image/riscv-current.cfg",
+            "runtimeUrl": "vm/runtime/riscbox-current/riscbox.js",
+        }}))
+        kept = (
+            "vm/image/riscv-current.cfg", "vm/image/riscv-drive-current/blk.txt",
+            "vm/runtime/riscbox-current/riscbox.js", "vm/runtime/riscbox-current/riscbox.wasm",
+        )
+        for name in kept[1:]:
+            self.write(f"www/exam/{name}", "active")
+        subprocess.run(
+            ["python3", "scripts/publish.py"], cwd=self.root / "www/exam", check=True,
+        )
+
+        # New build metadata does not change which assets the published UI needs.
+        self.write("www/exam/vm/build/assets.json", "{}")
+        stale = (
+            "vm/image/riscv-unpublished.cfg", "vm/image/riscv-drive-unpublished/blk.txt",
+            "vm/runtime/riscbox-unpublished/riscbox.js", "dist/app-old.js",
+        )
+        for name in stale:
+            self.write(f"www/exam/{name}", "stale")
+        self.make("www/exam/vm", "mostlyclean")
+        self.assertTrue((self.root / "www/exam/dist/app-old.js").exists())
+        self.make("www/exam", "mostlyclean")
+        self.make("www/exam", "mostlyclean")
+        for name in (*kept, "dist/app-current.js", "index.html"):
+            self.assertTrue((self.root / "www/exam" / name).exists(), name)
+        for name in stale:
+            self.assertFalse((self.root / "www/exam" / name).exists(), name)
+
+    def test_cleanup_requires_inventory_for_existing_page(self) -> None:
+        self.write("www/exam/vm/guest/startup", "guest")
+        self.write("www/exam/index.html", "existing page")
+        asset = self.write("www/exam/dist/app.js", "existing bundle")
+        cache = self.write("www/exam/build/input", "cache")
+        result = subprocess.run(
+            ["make", "--no-print-directory", "mostlyclean"],
+            cwd=self.root / "www/exam", text=True, capture_output=True, check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("rebuild the exam page", result.stderr)
+        self.assertTrue(asset.exists())
+        self.assertTrue(cache.exists())
+
+        # Full cleanup needs no inventory, and an unpublished empty tree can be swept.
+        self.make("www/exam", "clean")
+        self.assertFalse(asset.exists())
+        self.assertFalse(cache.exists())
+        self.write("www/exam/vm/runtime/stale.js", "stale")
+        self.make("www/exam", "mostlyclean")
+        self.assertFalse((self.root / "www/exam/vm/runtime/stale.js").exists())
 
     def test_rust_checks_precede_tests_and_stay_component_scoped(self) -> None:
         self.make("grind", "test", "TEST_ARGS=workspace")
@@ -305,7 +385,7 @@ Path("build/rootfs.ext4").write_bytes(Path(sys.argv[2]).read_bytes() + Path("gue
         self.log.unlink()
         self.make(".", "test", "-j4")
         commands = self.commands()
-        self.assertEqual([command[1] for command in commands], ["fmt", "clippy", "fmt", "clippy", "test", "test"])
+        self.assertEqual([command[1] for command in commands], ["fmt", "clippy", "fmt", "clippy", "fmt", "--edition", "clippy", "test", "test", "test"])
 
 
 if __name__ == "__main__":

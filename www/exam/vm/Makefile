@@ -121,16 +121,18 @@ build/assets.stamp: $(foreach image,$(IMAGES),build/$(image)-disk-name) scripts/
 	python3 scripts/assets.py '$(RISCBOX_VERSION)' $(IMAGES)
 	touch build/assets.stamp
 
-# Build caches can disappear while cached browsers retain their deployed assets.
+# The published page owns the active disks and runtime, even after a newer build.
 mostlyclean:
+	python3 ../scripts/prune.py --vm-only
 	rm -rf build
 	rm -f image/*.part
-	find runtime -name .built -type f -delete
+	if [ -d runtime ]; then find runtime -name .built -type f -delete; fi
 
-clean: mostlyclean
+clean:
+	rm -rf build
 	rm -rf runtime/riscbox-*
 	rm -f runtime/riscbox.js runtime/riscbox.wasm runtime/riscbox.d.ts runtime/SHA256SUMS
-	find image -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+	rm -rf image
 
 FORCE:
 .PHONY: all mostlyclean clean FORCE

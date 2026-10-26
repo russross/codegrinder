@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 import sys
 from pathlib import Path
@@ -39,6 +40,17 @@ def publish() -> None:
         raise ValueError("unresolved entry-page placeholder")
     outputs = [f"dist/{path.name}" for path in files]
     outputs.extend((replacements["style"], replacements["favicon"]))
+
+    # Record the VM assets embedded in this bundle, independently of later builds.
+    active = list(outputs)
+    images = json.loads(Path("vm/build/assets.json").read_text(encoding="utf-8"))
+    for image in images.values():
+        configuration = Path(image["configUrl"])
+        config = json.loads(configuration.read_text(encoding="utf-8"))
+        active.append(configuration.as_posix())
+        active.append((configuration.parent / config["drive0"]["file"]).parent.as_posix())
+        active.append(Path(image["runtimeUrl"]).parent.as_posix())
+    inventory = json.dumps(sorted(set(active)), indent=2) + "\n"
     Path("build/published-outputs.mk").write_text(
         f"PUBLISHED_OUTPUTS := {' '.join(outputs)}\n"
         "index.html: $(PUBLISHED_OUTPUTS)\n$(PUBLISHED_OUTPUTS):\n",
@@ -49,6 +61,9 @@ def publish() -> None:
     temporary = Path("index.html.part")
     temporary.write_text(page, encoding="utf-8")
     temporary.replace("index.html")
+    temporary = Path(".published-assets.json.part")
+    temporary.write_text(inventory, encoding="utf-8")
+    temporary.replace(".published-assets.json")
 
 
 def main() -> int:
