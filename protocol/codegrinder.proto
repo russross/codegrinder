@@ -494,8 +494,69 @@ message SaveGradedCommitResponse {
   CommitSaveStatus save_status = 1;
 }
 
+// RunAssignmentAction saves student files and runs an installed action locally.
+message RunAssignmentActionRequest {
+  AssignmentKey assignment = 1;
+  string problem_id = 2;
+  int64 step = 3;
+  string action = 4;
+  string note = 5;
+  map<string, bytes> files = 6;
+}
+
+message AssignmentActionResult {
+  CommitSaveStatus save_status = 1;
+  // Present for grade actions, after the result-save transaction commits.
+  Commit grade = 2;
+  bool locked_for_lms = 3;
+}
+
+message RunAssignmentActionResponse {
+  oneof response {
+    EventMessage event = 1;
+    AssignmentActionResult result = 2;
+  }
+}
+
+// Saving validates every step before one atomic problem save. An action runs
+// only the selected step and never persists author material.
+message RunAuthorProblemRequest {
+  AuthorProblemDraft draft = 1;
+  oneof operation {
+    SaveMode save = 2;
+    AuthorProblemAction action = 3;
+  }
+}
+
+message AuthorProblemAction {
+  int64 step = 1;
+  string action = 2;
+}
+
+message AuthorProblemProgress {
+  int64 step = 1;
+  oneof response {
+    EventMessage event = 2;
+    Commit validation = 3;
+  }
+}
+
+message AuthorProblemResult {
+  string problem_id = 1;
+  bool saved = 2;
+}
+
+message RunAuthorProblemResponse {
+  oneof response {
+    AuthorProblemProgress progress = 1;
+    AuthorProblemResult result = 2;
+  }
+}
+
 // CodeGrinderService provides CodeGrinder operations
 service CodeGrinderService {
+  rpc RunAssignmentAction(RunAssignmentActionRequest) returns (stream RunAssignmentActionResponse);
+  rpc RunAuthorProblem(RunAuthorProblemRequest) returns (stream RunAuthorProblemResponse);
   // Hello performs session validation/exchange and returns server info
   rpc Hello(HelloRequest) returns (HelloResponse);
   // ListAssignments retrieves assignment-focused list rows for list/student flows.

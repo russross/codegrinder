@@ -7,7 +7,7 @@ Core architecture metaphors:
 - A daycare manages nannies and student-code execution. Daycares are stateless, disposable islands for sandboxing, isolation, cleanup, and crowd control. They should have few policy opinions and should not need detailed knowledge of assignments beyond the signed runtime bundle they are asked to run.
 - The server runs the TA and one local daycare in a single process. There is no daycare registration or remote host selection.
 - TA bookkeeping and daycare execution remain logically independent: long-running daycare requests must not interfere with quick TA transactions.
-- Clients shuttle signed messages and file sets between the TA and daycares. Daycares and the TA do not communicate directly during grading/action execution.
+- `RunAssignmentAction` and `RunAuthorProblem` coordinate execution on the server using in-process runtime values. Database transactions end before execution and resume only for final persistence/passback bookkeeping. Legacy clients still shuttle signed bundles through the existing RPCs.
 - CORS for browser clients belongs at the daycare boundary, not the TA boundary.
 - TA and daycare deployments are easy to update together, so protocol migration between them is not a major concern. Student clients are harder to update and run in the wild, so version requirements matter and clients must not be trusted.
 
@@ -32,7 +32,7 @@ For Rust server startup and checks:
 - The Rust server binds to `localhost:1400` by default. System startup should rely on that default unless an explicit local override is required.
 - The Rust server does not load TLS certificates or manage public HTTPS. Public hostnames and certificates belong to Caddy.
 - The server always enables TA bookkeeping and local daycare execution; there are no role flags or `taHostname` configuration field.
-- The server serves LTI, version routes, TA gRPC methods, and the `Daycare` gRPC runtime path. Caddy serves static files. Clients continue carrying signed bundles through the multi-step execution workflows.
+- The server serves LTI, version routes, TA gRPC methods, server-coordinated execution RPCs, and the legacy `Daycare` runtime path. Caddy serves static files.
 - The secondary test/dev combined TA+daycare instance is reached through Caddy at `https://dev.russross.com`.
 - The end-to-end test script uses the deployed server, client, and production problem types selected by its live configuration. `make end2end` builds no binaries and starts or stops no services.
 - Build the Rust server with `make -C server`; use `make -C server check` for formatting and Clippy, and `make -C server test` for those checks followed by server tests. Pass `TEST_ARGS=...` to select specific Cargo tests.
@@ -66,7 +66,7 @@ For protocol changes:
 
 - Protocol changes must be explicitly approved
 - When we DO make changes:
-    * Backward compatibility of the protocol is NOT a goal--the server and all clients must be migrated together and we do not support old clients
+    * Preserve existing RPCs, message fields, and wire behavior while legacy clients migrate to server-coordinated execution. New execution RPCs do not exchange signed bundles.
     * Always clean up/remove fields that are not actually used
     * Favor flattening message data types where appropriate
     * Client does not know/care about database layout—protocol should minimize leaking relational database structure
@@ -192,6 +192,8 @@ For the web interfaces under `www/exam` and `www/web`:
 
 # `grind grade`
 
+- Current `grind` uses `RunAssignmentAction` with action `grade`, note `grind grade`, assignment/problem/step identity, and student files. The server saves/hydrates, streams execution events, saves the grade, and schedules eligible LMS passback. Completion carries the grade, save status, and authoritative LMS lock decision. The signed sequence below remains supported for legacy clients.
+
 - `grind grade` has no arguments.
 - `grind` must resolve the current problem from `.grind`, fetch `GetWorkspace` with `WORKSPACE_FILE_STATE_CURRENT`, refresh system-owned files, and submit only student-owned files.
 - Client flow is exactly: build `GradingCommit` with action `grade` and note `grind grade`; call `SaveUngradedCommit`; send returned signed runtime bundle to `Daycare`; call `SaveGradedCommit` with the signed daycare result.
@@ -205,6 +207,8 @@ For the web interfaces under `www/exam` and `www/web`:
 - If grade was locked, the final `grind` line must say the grade was not posted to the LMS because the assignment is locked.
 
 # `grind action`
+
+- Current `grind` uses `RunAssignmentAction` for non-grade actions. The server saves/hydrates and streams execution events followed by an explicit completion result; it does not persist action grading output or post to the LMS. The signed sequence below remains supported for legacy clients.
 
 - `grind action [action]` runs a non-grade daycare action for the current problem step and displays streamed output. There is no TTY input or interactive terminal session.
 - `grind action grade` must fail and tell the user to use `grind grade`; grade is not an action alias.
@@ -234,6 +238,8 @@ For the web interfaces under `www/exam` and `www/web`:
 
 
 # Authoring Semantics
+
+- Current `grind create` sends the draft and explicit create/update intent to `RunAuthorProblem`. The server prepares a trusted snapshot, validates every step through local execution without a database transaction, then saves the complete problem atomically. Failed validation saves nothing. `grind create --action ACTION` selects one step and streams output without persistence. The existing signed prepare/validate/save RPCs remain available for legacy clients; the new path performs no envelope serialization, signing, verification, or timestamp-drift checks.
 
 - Authoring requests are shaped around uploaded author source material, not around stored database rows or daycare package internals.
 - Problem sets are the LMS-visible work unit. A problem set may either bundle one or more complete problems, or represent a step slice of exactly one problem.

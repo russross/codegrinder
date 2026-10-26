@@ -5,16 +5,16 @@ use crate::author_config::{
 };
 use crate::client::{Session, login as client_login};
 use crate::config::{ApiTrace, Config, home_dir, load_config, program_name, write_login_config};
-use crate::daycare::{commit_passed, decode_signed_runtime, handle_daycare_stream};
+use crate::daycare::run_author_problem;
 use crate::error::{CliError, Result, fail};
 use crate::files::{update_files, workspace_file_map};
 use crate::presentation::{print_problem_catalog, sorted_student_assignment_items};
 use crate::proto::codegrinder::{
-    AuthorFile, AuthorProblemDraft, AuthorProblemStepDraft, ProblemBundle, ProblemSet,
-    ProblemSetBundle, ProblemSetProblem, SaveMode, WorkspaceFileState,
+    AuthorFile, AuthorProblemAction, AuthorProblemDraft, AuthorProblemStepDraft, ProblemSet,
+    ProblemSetBundle, ProblemSetProblem, RunAuthorProblemRequest, SaveMode, WorkspaceFileState,
+    run_author_problem_request,
 };
 use crate::student::resolve_student_problem;
-use crate::transcript::dump_transcript;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
@@ -249,32 +249,33 @@ pub async fn command_create(
     let prepared_steps = prepare_author_steps(&mut session, &layout).await?;
     let (draft, step_dir, step_num) =
         gather_author(&action, Path::new("."), Some(&prepared_steps))?;
-    let mut bundle = session.prepare_problem(draft, action.clone()).await?;
-    if bundle.hostname.is_empty() {
-        fail("server was unable to find a suitable daycare, unable to validate")?;
-    }
-    if !action.is_empty() {
+    let operation = if !action.is_empty() {
         if step_num < 1 {
             fail("to use --action, you must run from within a step directory")?;
         }
-        println!("running interactive session for action {action:?} on step {step_num}");
-        let signed =
-            bundle.signed_validation_bundles.get((step_num - 1) as usize).cloned().ok_or_else(
-                || {
-                    CliError::Message(
-                        "server returned no validation bundle for the active step".to_string(),
-                    )
-                },
-            )?;
-        handle_daycare_stream(&mut session, signed, &step_dir, true).await?;
+        println!("running action {action:?} on step {step_num}");
+        run_author_problem_request::Operation::Action(AuthorProblemAction {
+            step: step_num,
+            action: action.clone(),
+        })
+    } else {
+        run_author_problem_request::Operation::Save(if is_update {
+            SaveMode::Update
+        } else {
+            SaveMode::Create
+        } as i32)
+    };
+    let result = run_author_problem(
+        &mut session,
+        RunAuthorProblemRequest { draft: Some(draft), operation: Some(operation) },
+        &step_dir,
+        !action.is_empty(),
+    )
+    .await?;
+    if !result.saved {
         return Ok(());
     }
-    validate_author_solution_bundle(&mut session, &mut bundle).await?;
-    let response = session
-        .save_problem(if is_update { SaveMode::Update } else { SaveMode::Create }, bundle)
-        .await?;
-    let final_bundle = response.bundle.unwrap_or_default();
-    let problem_id = final_bundle.problem.map(|problem| problem.problem_id).unwrap_or_default();
+    let problem_id = result.problem_id;
     let verb = if is_update { "saved" } else { "created" };
     println!("problem {problem_id:?} {verb} and ready to use");
     Ok(())
@@ -477,50 +478,6 @@ pub fn active_problem_type(layout: &AuthorProblemLayout) -> Result<String> {
     } else {
         fail("you must run this from within a step directory")
     }
-}
-
-async fn validate_author_solution_bundle(
-    session: &mut Session,
-    bundle: &mut ProblemBundle,
-) -> Result<()> {
-    if bundle.hostname.is_empty() {
-        fail("server was unable to find a suitable daycare, unable to validate")?;
-    }
-    for step_number in 1..=bundle.problem_steps.len() {
-        println!("validating solution for step {step_number}");
-        let prepared =
-            bundle.signed_validation_bundles.get(step_number - 1).cloned().ok_or_else(|| {
-                CliError::Message(format!("missing validation bundle for step {step_number}"))
-            })?;
-        let validated = handle_daycare_stream(session, prepared, Path::new(""), false)
-            .await?
-            .ok_or_else(|| {
-                CliError::Message(
-                    "the server ended the connection without sending a report card".to_string(),
-                )
-            })?;
-        let validated_runtime = decode_signed_runtime(&validated)?;
-        let validated_commit = validated_runtime.commit.unwrap_or_default();
-        println!("  finished validating solution");
-        if !commit_passed(&validated_commit) {
-            let note = validated_commit
-                .report_card
-                .as_ref()
-                .map(|report| report.note.clone())
-                .unwrap_or_default();
-            println!("  solution for step {step_number} failed: {note}");
-            print!("{}", dump_transcript(&validated_commit));
-            fail("please fix solution and try again")?;
-        }
-        if let Some(slot) = bundle.solution_commits.get_mut(step_number - 1) {
-            *slot = validated_commit;
-        }
-        if let Some(slot) = bundle.signed_validation_bundles.get_mut(step_number - 1) {
-            *slot = validated;
-        }
-    }
-    println!("problem and solution confirmed successfully");
-    Ok(())
 }
 
 async fn download_student_assignment(

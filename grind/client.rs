@@ -2,19 +2,17 @@ use crate::config::{ApiTrace, AuthenticatedUser, Config, Roles, write_login_conf
 use crate::error::{CliError, Result, fail, rpc_error, transport_error};
 use crate::proto::codegrinder::code_grinder_service_client::CodeGrinderServiceClient;
 use crate::proto::codegrinder::{
-    AssignmentKey, AuthorProblemDraft, Commit, GetAssignmentRequest, GetAssignmentResponse,
-    GetProblemTypeRequest, GetProblemTypeResponse, GetProblemTypesRequest, GetProblemTypesResponse,
-    GetWorkspaceRequest, GetWorkspaceResponse, GradingCommit, HelloRequest, HelloResponse,
-    ListAssignmentsRequest, ListAssignmentsResponse, ProblemBundle, ProblemSetBundle,
-    ProblemTypeAction, SaveGradedCommitRequest, SaveGradedCommitResponse, SaveMode,
-    SaveProblemRequest, SaveProblemResponse, SaveProblemSetRequest, SaveProblemSetResponse,
-    SaveProblemTypeFilesRequest, SaveProblemTypeFilesResponse, SaveProblemTypeRequest,
-    SaveProblemTypeResponse, SaveUngradedCommitRequest, SaveUngradedCommitResponse,
+    AssignmentKey, Commit, GetAssignmentRequest, GetAssignmentResponse, GetProblemTypeRequest,
+    GetProblemTypeResponse, GetProblemTypesRequest, GetProblemTypesResponse, GetWorkspaceRequest,
+    GetWorkspaceResponse, HelloRequest, HelloResponse, ListAssignmentsRequest,
+    ListAssignmentsResponse, ProblemSetBundle, ProblemTypeAction, RunAssignmentActionRequest,
+    RunAssignmentActionResponse, RunAuthorProblemRequest, RunAuthorProblemResponse, SaveMode,
+    SaveProblemSetRequest, SaveProblemSetResponse, SaveProblemTypeFilesRequest,
+    SaveProblemTypeFilesResponse, SaveProblemTypeRequest, SaveProblemTypeResponse,
     SaveWorkspaceCommitRequest, SaveWorkspaceCommitResponse, SearchProblemCatalogRequest,
-    SearchProblemCatalogResponse, SignedRuntimeBundle, WorkspaceFileState,
+    SearchProblemCatalogResponse, WorkspaceFileState,
 };
 use crate::version::CURRENT_VERSION;
-use prost::Message;
 use semver::Version;
 use std::collections::BTreeMap;
 use std::env;
@@ -180,35 +178,6 @@ impl Session {
         )
     }
 
-    pub async fn prepare_problem(
-        &mut self,
-        draft: AuthorProblemDraft,
-        action: String,
-    ) -> Result<ProblemBundle> {
-        let response = call_rpc!(
-            self,
-            "PrepareProblem",
-            crate::proto::codegrinder::PrepareProblemRequest { draft: Some(draft), action },
-            prepare_problem
-        )?;
-        response
-            .bundle
-            .ok_or_else(|| CliError::Message("server returned no problem bundle".to_string()))
-    }
-
-    pub async fn save_problem(
-        &mut self,
-        mode: SaveMode,
-        bundle: ProblemBundle,
-    ) -> Result<SaveProblemResponse> {
-        call_rpc!(
-            self,
-            "SaveProblem",
-            SaveProblemRequest { mode: mode as i32, bundle: Some(bundle) },
-            save_problem
-        )
-    }
-
     pub async fn save_problem_set(
         &mut self,
         mode: SaveMode,
@@ -234,45 +203,42 @@ impl Session {
         )
     }
 
-    pub async fn save_ungraded_commit(
+    pub async fn run_assignment_action(
         &mut self,
-        commit: GradingCommit,
-    ) -> Result<SaveUngradedCommitResponse> {
-        call_rpc!(
-            self,
-            "SaveUngradedCommit",
-            SaveUngradedCommitRequest { commit: Some(commit) },
-            save_ungraded_commit
-        )
-    }
-
-    pub async fn save_graded_commit(
-        &mut self,
-        bundle: SignedRuntimeBundle,
-    ) -> Result<SaveGradedCommitResponse> {
-        call_rpc!(
-            self,
-            "SaveGradedCommit",
-            SaveGradedCommitRequest { bundle: Some(bundle) },
-            save_graded_commit
-        )
-    }
-
-    pub async fn daycare(
-        &mut self,
-        request: crate::proto::codegrinder::DaycareRequest,
-    ) -> Result<Streaming<crate::proto::codegrinder::DaycareResponse>> {
-        dump(&self.config.trace, "Daycare", true, &request);
-        let timeout = self.config.trace.daycare_timeout;
-        let request = authorize(timed_request(request, timeout), &self.config.session_key)?;
-        let response = self
+        request: RunAssignmentActionRequest,
+    ) -> Result<Streaming<RunAssignmentActionResponse>> {
+        dump(&self.config.trace, "RunAssignmentAction", true, &request);
+        let request = authorize(
+            timed_request(request, self.config.trace.daycare_timeout),
+            &self.config.session_key,
+        )?;
+        let stream = self
             .client
-            .daycare(request)
+            .run_assignment_action(request)
             .await
-            .map_err(|status| rpc_error("Daycare", &self.config.host, status))?
+            .map_err(|status| rpc_error("RunAssignmentAction", &self.config.host, status))?
             .into_inner();
-        dump(&self.config.trace, "Daycare", false, &"stream");
-        Ok(response)
+        dump(&self.config.trace, "RunAssignmentAction", false, &"stream");
+        Ok(stream)
+    }
+
+    pub async fn run_author_problem(
+        &mut self,
+        request: RunAuthorProblemRequest,
+    ) -> Result<Streaming<RunAuthorProblemResponse>> {
+        dump(&self.config.trace, "RunAuthorProblem", true, &request);
+        let request = authorize(
+            timed_request(request, self.config.trace.daycare_timeout),
+            &self.config.session_key,
+        )?;
+        let stream = self
+            .client
+            .run_author_problem(request)
+            .await
+            .map_err(|status| rpc_error("RunAuthorProblem", &self.config.host, status))?
+            .into_inner();
+        dump(&self.config.trace, "RunAuthorProblem", false, &"stream");
+        Ok(stream)
     }
 }
 
@@ -390,13 +356,6 @@ pub fn user_from_hello(response: &HelloResponse) -> Result<AuthenticatedUser> {
             },
         })
     }
-}
-
-pub fn decode_runtime(
-    bundle: &SignedRuntimeBundle,
-) -> Result<crate::proto::codegrinder::RuntimeBundle> {
-    crate::proto::codegrinder::RuntimeBundle::decode(bundle.bundle.as_slice())
-        .map_err(|error| CliError::Message(format!("failed to decode runtime bundle: {error}")))
 }
 
 async fn new_grpc_client(config: &Config) -> Result<CodeGrinderServiceClient<Channel>> {

@@ -54,7 +54,7 @@ For sync, grade, and action, resolve the current problem and fetch its `CURRENT`
 
 Grade and action require every expected student file to exist and report missing paths before submission. Sync instead uses the current server bytes for missing student files, then restores those files locally after a successful save. This distinction prevents sync from silently deleting missing official work while keeping execution inputs explicit.
 
-The commit carries the assignment key, problem, step, files, note, and timestamps. `GradingCommit.user_id` identifies the authenticated actor even when the assignment belongs to someone being inspected. Preserve the assignment owner; never turn instructor inspection into an owner save.
+Workspace commits carry the assignment key, problem, step, files, note, and timestamps. Execution requests carry assignment identity and editable files; actor identity and timestamps come from the server. Preserve the assignment owner during instructor inspection; never turn inspection into an owner save.
 
 
 Sync
@@ -73,13 +73,13 @@ Audit caveat: the current command does not inspect `save_status` before cleanup 
 Grade
 -----
 
-1. `grind grade` takes no arguments. Gather student work and send `SaveUngradedCommit` with action `grade` and note `grind grade`. Require a usable signed runtime bundle and named daycare.
-2. Send the envelope to that daycare without forwarding the TA session key. Consume the grade stream without applying intermediate file events. Missing final signed results and daycare error messages fail the operation.
-3. Call `SaveGradedCommit` with the exact signed result. Only this RPC can persist grading output or initiate LMS passback. The earlier files-only save remains durable if execution or final persistence fails.
+1. `grind grade` takes no arguments. Gather student work and send `RunAssignmentAction` with assignment/problem/step identity, student files, action `grade`, and note `grind grade` using normal bearer authentication.
+2. Consume the output stream without applying intermediate file events. The server coordinates files-only save, execution, final grade persistence, and eligible LMS passback. A stream error or missing completion fails the command.
+3. Require the final completion's grade. This result arrives after persistence and passback scheduling decisions. The earlier files-only save remains durable if execution or final persistence fails.
 4. Interpret pass as both `report_card.passed` and score `1.0`. On pass, report completion at the last in-scope step; otherwise fetch the next scoped workspace, update its official local files, and then write the new `.grind` step. On failure, retain the step and display the report note and transcript.
-5. Check the assignment's LMS lock date for presentation. When locked and the final save status is `SAVED`, the final output line states that the grade was not posted to the LMS because the assignment is locked. A deadline lookup failure is reported; the server still owns passback eligibility.
+5. Use the final result's authoritative LMS lock decision. When locked and the final save status is `SAVED`, the final output line states that the grade was not posted to the LMS because the assignment is locked. No separate assignment lookup or client-clock comparison is needed.
 
-The CLI currently follows a passing signed result for local advancement even for a non-owner inspection; the server's non-owner save result still prevents changes to the student's assignment. Local progress and server persistence must not be conflated. A failed local next-step update does not roll back a grade already saved at the TA.
+The CLI follows a passing result for local advancement even for a non-owner inspection; the server's non-owner save result still prevents changes to the student's assignment. Local progress and server persistence must not be conflated. A failed local next-step update does not roll back a grade already saved at the TA.
 
 
 Other daycare actions
@@ -87,9 +87,9 @@ Other daycare actions
 
 `grind action [action]` accepts at most one action. Reject `grade` with guidance to use `grind grade`. A missing or unavailable name lists the workspace's non-grade actions and fails.
 
-Gather the same official submission, send `SaveUngradedCommit` with the selected action and note `grind action {action}`, and run the signed daycare request in event-processing mode. Print terminal events and write normalized returned file events under the action directory. These artifacts can include paths beyond the student whitelist; a later submission still sends only official student paths. Normal stream closure completes a non-grade action without a signed final grade bundle.
+Gather the same official submission and send `RunAssignmentAction` with the selected action and note `grind action {action}`. Print terminal events and write normalized returned file events under the action directory. These artifacts can include paths beyond the student whitelist; a later submission still sends only official student paths. Require an explicit completion result; ordinary stream closure without a result fails.
 
-There is no `SaveGradedCommit` call for this flow. Pre-action files may already have been saved, including after the lock date. Action output does not advance `.grind`, post a grade, or become saved simply because it was downloaded locally.
+The server performs no result save for this flow. Pre-action files may already have been saved, including after the lock date. Action output does not advance `.grind`, post a grade, or become saved simply because it was downloaded locally.
 
 
 Reset
@@ -115,13 +115,13 @@ Create or update authored work
 
 1. Without a positional config, locate the nearest `problem.cfg` and resolve its ordered step directories. For each step fetch and write canonical problem-type files, then run `make clean` in that step. A clean failure stops preparation. This is part of author validation, distinct from routine incremental client builds.
 2. Gather metadata, authored main-tree files, and `_starter/` files into `AuthorProblemDraft`. Exclude `.git`, canonical type files, and files ignored by the effective hierarchical Git-style ignore rules. Client and server ignore semantics must remain aligned. Report each affected text file's whitespace problems without normalizing bytes.
-3. Call `PrepareProblem`. The server classifies solution/system files, derives cumulative ownership, validates continuity, and signs validation runtimes; the CLI must not reconstruct those policies.
-4. Run every step's validation bundle through daycare. Require a signed passing grade with score `1.0` for every step, attach the results, and only then call `SaveProblem` with explicit create/update intent. Client validation is preliminary; server verification authorizes persistence.
+3. Send the draft to `RunAuthorProblem` with explicit create/update intent. The server classifies solution/system files, derives cumulative ownership, validates continuity, and retains trusted runtime snapshots; the CLI must not reconstruct those policies.
+4. Consume step-tagged output and validation reports. Suppress successful validation transcripts and replay failing reports/transcripts. The server requires every step to pass with score `1.0` before atomically saving prepared material; the CLI sends no result bundles and makes no separate save call.
 5. Report success only after the final save. A validation failure leaves no newly saved problem. A final save failure can occur after all validations have passed, including an existence or assigned-shape conflict.
 
 `--update` requires an existing problem and preserves the shape of assigned problems. Default create requires absence and also creates the same-ID default problem set. Do not add a separate existence preflight to predict the final save outcome.
 
-`grind create --action ACTION` prepares source but runs the active step with live output and does not call `SaveProblem`. Multi-step use requires a concrete step directory. `--update` and `--action` cannot be combined.
+`grind create --action ACTION` sends the draft and selected active step/action to `RunAuthorProblem`, displays live output, and requires completion without persistence. Multi-step use requires a concrete step directory. `--update` and `--action` cannot be combined.
 
 `grind create PSET.cfg` uploads only problem-set metadata and membership/weights to `SaveProblemSet` with explicit create/update intent. It rejects `--action` and multiple-problem slicing. It does not refresh step source or run daycare. Assigned sets retain membership, bounds, and continuation shape.
 
@@ -141,7 +141,7 @@ Installation-specific problem-type sources live under ignored `problemtypes/`, w
 Failure boundaries and audit dependencies
 -----------------------------------------
 
-Expected argument, configuration, path, authorization, and transport errors produce readable diagnostics and a failing exit, not stack traces. RPC deadlines bound calls and connection establishment. Ordinary calls default to ten seconds (`--timeout SECONDS`); daycare calls have an independent fixed 120-second default (`--daycare-timeout SECONDS`). The signed runtime is not decoded to compute a client deadline. Daycare stream consumption also enforces the same absolute local deadline, and action output is flushed as it arrives. Grade output remains suppressed until a failing signed report can be replayed. There are no TTY input or daycare argument fields. A failed command can have completed an earlier durable step, such as pre-action persistence or final grading before local file updates. Do not promise cross-RPC rollback or automatically replay arbitrary mutations.
+Expected argument, configuration, path, authorization, and transport errors produce readable diagnostics and a failing exit, not stack traces. RPC deadlines bound calls and connection establishment. Ordinary calls default to ten seconds (`--timeout SECONDS`); execution calls have an independent fixed 120-second default (`--daycare-timeout SECONDS`). One execution deadline covers all author validation steps and persistence. Stream consumption enforces the same absolute local deadline, and action output is flushed as it arrives. Grade output remains suppressed until a failing report can be replayed. There are no TTY input or daycare argument fields. A failed command can have completed an earlier durable step, such as pre-action persistence or final grading before local file updates. Do not promise whole-operation rollback or automatically replay arbitrary mutations. Legacy RPCs remain available on the server for older clients; current `grind` does not call or decode them. The generated protocol module remains public so legacy message definitions can coexist without dead-code suppression; author progress is boxed during Rust generation without changing its wire encoding.
 
 Audit session/version gating, role-only help filtering, atomic download publication, stale metadata, missing files, cleanup preserving `.git`, reset basename matches, continuation advancement, passing non-owner inspection, interrupted daycare streams, and validation-before-author-save. Trace these through [client.rs](client.rs), [assignment.rs](assignment.rs), [student.rs](student.rs), [author.rs](author.rs), [admin.rs](admin.rs), and [daycare.rs](daycare.rs).
 

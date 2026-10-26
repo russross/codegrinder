@@ -3,16 +3,14 @@ use crate::config::{
     ApiTrace, DotFile, ProblemInfo, assignment_key_from_ref, find_dotfile, load_config,
     save_dotfile,
 };
-use crate::daycare::{
-    commit_passed, decode_signed_runtime, handle_daycare_stream, parse_signed_runtime_bundle,
-};
+use crate::daycare::{commit_passed, run_assignment_action};
 use crate::error::{Result, fail};
 use crate::files::{
     clean_relative_path, clean_workspace_tree, update_files, workspace_file_map,
     workspace_official_paths,
 };
 use crate::proto::codegrinder::{
-    AssignmentKey, Commit, CommitSaveStatus, GetWorkspaceResponse, GradingCommit,
+    AssignmentKey, Commit, CommitSaveStatus, GetWorkspaceResponse, RunAssignmentActionRequest,
     WorkspaceFileState,
 };
 use crate::transcript::dump_transcript;
@@ -52,36 +50,22 @@ pub async fn command_grade(extra: Vec<String>, trace: ApiTrace) -> Result<()> {
     }
     let mut session = connect(trace).await?;
     let mut student = gather_student_context(&mut session, Path::new(".")).await?;
-    let unsigned = build_grading_commit(&session.user.user_id, &student, "grade", "grind grade");
-    let signed_resp = session.save_ungraded_commit(unsigned).await?;
-    let signed = signed_resp.bundle.unwrap_or_default();
-    parse_signed_runtime_bundle(
-        &signed,
-        "server was unable to find a suitable daycare, unable to grade",
-    )?;
-
     println!(
         "submitting {} step {} for grading",
         student.workspace.problem_id, student.commit.step
     );
-    let graded = handle_daycare_stream(&mut session, signed, Path::new(""), false)
-        .await?
-        .ok_or_else(|| {
-            crate::error::CliError::Message(
-                "the server ended the connection without sending a report card".to_string(),
-            )
-        })?;
-    let locked_for_lms = match assignment_locked_for_lms(&mut session, &student).await {
-        Ok(locked) => locked,
-        Err(error) => {
-            eprintln!("unable to check the Canvas close deadline: {error}");
-            false
-        }
-    };
-    let saved = session.save_graded_commit(graded.clone()).await?;
-    let graded_bundle = decode_signed_runtime(&graded)?;
-    let saved_commit = graded_bundle.commit.unwrap_or_default();
-    if commit_passed(&saved_commit) {
+    let saved = run_assignment_action(
+        &mut session,
+        action_request(&student, "grade", "grind grade"),
+        Path::new(""),
+        false,
+    )
+    .await?;
+    let saved_commit = saved
+        .grade
+        .as_ref()
+        .ok_or_else(|| crate::error::CliError::Message("server returned no grade".to_owned()))?;
+    if commit_passed(saved_commit) {
         println!("step {} passed", saved_commit.step);
         if student.workspace.step_number >= student.workspace.last_step_number {
             println!("you have completed all steps for this problem");
@@ -111,13 +95,13 @@ pub async fn command_grade(extra: Vec<String>, trace: ApiTrace) -> Result<()> {
         if let Some(report_card) = &saved_commit.report_card {
             println!("  ReportCard: {}", report_card.note);
         }
-        let transcript = dump_transcript(&saved_commit);
+        let transcript = dump_transcript(saved_commit);
         print!("{transcript}");
         if !transcript.is_empty() && !transcript.ends_with('\n') && !transcript.ends_with('\r') {
             println!();
         }
     }
-    if locked_for_lms && saved.save_status == CommitSaveStatus::Saved as i32 {
+    if saved.locked_for_lms && saved.save_status == CommitSaveStatus::Saved as i32 {
         println!("grade was not posted to the LMS because the assignment is locked");
     }
     Ok(())
@@ -151,44 +135,15 @@ pub async fn command_action(action_args: Vec<String>, trace: ApiTrace) -> Result
         let program = crate::config::program_name();
         fail(format!("use '{program} action [action]' to initiate an action"))?;
     }
-    let unsigned = build_grading_commit(
-        &session.user.user_id,
-        &student,
-        &action,
-        &format!("grind action {action}"),
-    );
-    let signed_resp = session.save_ungraded_commit(unsigned).await?;
-    let signed = signed_resp.bundle.unwrap_or_default();
-    parse_signed_runtime_bundle(
-        &signed,
-        "server was unable to find a suitable daycare, unable to run action",
-    )?;
     println!("starting action for {} step {}", student.workspace.problem_id, student.commit.step);
-    handle_daycare_stream(&mut session, signed, Path::new("."), true).await?;
+    run_assignment_action(
+        &mut session,
+        action_request(&student, &action, &format!("grind action {action}")),
+        Path::new("."),
+        true,
+    )
+    .await?;
     Ok(())
-}
-
-async fn assignment_locked_for_lms(
-    session: &mut Session,
-    student: &StudentCommandContext,
-) -> Result<bool> {
-    let assignment = student.commit.assignment.clone().unwrap_or_default();
-    let response = session.list_assignments(Vec::new(), false).await?;
-    Ok(response
-        .items
-        .iter()
-        .find(|item| item.assignment.as_ref() == Some(&assignment))
-        .and_then(|item| item.lock_at.as_ref())
-        .is_some_and(timestamp_has_passed))
-}
-
-fn timestamp_has_passed(timestamp: &Timestamp) -> bool {
-    let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH) else {
-        return false;
-    };
-    timestamp.seconds < now.as_secs() as i64
-        || (timestamp.seconds == now.as_secs() as i64
-            && timestamp.nanos <= i32::try_from(now.subsec_nanos()).unwrap_or_default())
 }
 
 pub async fn command_reset(reset_args: Vec<String>, trace: ApiTrace) -> Result<()> {
@@ -382,16 +337,18 @@ pub fn build_commit_from_disk(
     })
 }
 
-pub fn build_grading_commit(
-    user_id: &str,
+fn action_request(
     student: &StudentCommandContext,
     action: &str,
     note: &str,
-) -> GradingCommit {
-    GradingCommit {
-        hostname: String::new(),
-        user_id: user_id.to_string(),
-        commit: Some(commit_with_metadata(&student.commit, action, note)),
+) -> RunAssignmentActionRequest {
+    RunAssignmentActionRequest {
+        assignment: student.commit.assignment.clone(),
+        problem_id: student.commit.problem_id.clone(),
+        step: student.commit.step,
+        files: student.commit.files.clone(),
+        action: action.to_owned(),
+        note: note.to_owned(),
     }
 }
 

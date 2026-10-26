@@ -8,6 +8,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .build_client(false)
         .build_server(true)
         .btree_map(".")
+        .boxed(".codegrinder.RunAuthorProblemResponse.response.progress")
         .compile_protos(&[proto], &includes)?;
     println!("cargo:rerun-if-changed=../protocol/codegrinder.proto");
     Ok(())

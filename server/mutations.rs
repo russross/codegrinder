@@ -29,6 +29,260 @@ pub struct CommitResult {
 
 type FileMap = BTreeMap<String, Vec<u8>>;
 
+// These values never leave the server. Prepared material remains authoritative
+// while execution runs without a database connection.
+pub struct PreparedProblem {
+    pub problem: Problem,
+    pub steps: Vec<ProblemStep>,
+    pub runtimes: Vec<RuntimeBundle>,
+}
+
+pub fn prepare_local_problem(
+    conn: &Connection,
+    actor: &UserRow,
+    draft: &AuthorProblemDraft,
+    action_name: &str,
+    selected_step: Option<i64>,
+    installed_types: &[String],
+) -> AppResult<PreparedProblem> {
+    if draft.problem_id.trim().is_empty() || draft.problem_note.trim().is_empty() {
+        return Err(AppError::BadRequest("problem id and note are required".to_owned()));
+    }
+    if draft.steps.is_empty() {
+        return Err(AppError::BadRequest("problem must contain at least one step".to_owned()));
+    }
+    let now = timestamp(now_utc());
+    let problem = Problem {
+        problem_id: draft.problem_id.clone(),
+        problem_note: draft.problem_note.clone(),
+        problem_tags: draft.problem_tags.clone(),
+        problem_options: draft.problem_options.clone(),
+        created_at: Some(now),
+        updated_at: Some(now),
+    };
+    let mut steps = Vec::new();
+    let mut runtimes = Vec::new();
+    let mut student_paths = BTreeSet::new();
+    for (index, step) in draft.steps.iter().enumerate() {
+        let number = (index + 1) as i64;
+        if step.step_number != number {
+            return Err(AppError::BadRequest(format!("expected step {number}")));
+        }
+        if !installed_types.contains(&step.problem_type) {
+            return Err(AppError::BadRequest(format!(
+                "local daycare does not support problem type {:?}",
+                step.problem_type
+            )));
+        }
+        let weight =
+            require_positive_integer_weight(step.weight, &format!("step {number} weight"))?;
+        let problem_type = load_problem_type(conn, &step.problem_type)?;
+        let (authored, starter_files) = filtered_author_files(step, &problem_type, number)?;
+        student_paths.extend(starter_files.keys().cloned());
+        let solution: FileMap = authored
+            .iter()
+            .filter(|(path, _)| student_paths.contains(*path))
+            .map(|(path, content)| (path.clone(), content.clone()))
+            .collect();
+        let missing = student_paths
+            .iter()
+            .filter(|path| !solution.contains_key(*path))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !missing.is_empty() {
+            return Err(AppError::BadRequest(format!(
+                "step {number} is missing solution files for student-owned paths: {}",
+                missing.join(", ")
+            )));
+        }
+        let regular: FileMap = authored
+            .into_iter()
+            .filter(|(path, _)| {
+                !student_paths.contains(path) && !problem_type.files.contains_key(path)
+            })
+            .collect();
+        steps.push(ProblemStep {
+            problem_id: draft.problem_id.clone(),
+            step: number,
+            problem_type: step.problem_type.clone(),
+            note: step.note.clone(),
+            weight: weight as f64,
+            files: regular.clone(),
+            whitelist: solution.keys().map(|path| (path.clone(), true)).collect(),
+            starter_files,
+        });
+        // Ownership and continuity use the complete draft. Action availability
+        // belongs only to the selected step when no problem will be saved.
+        if selected_step.is_some_and(|selected| selected != number) {
+            continue;
+        }
+        let action = problem_type.actions.get(action_name).ok_or_else(|| {
+            AppError::BadRequest(format!("problem type has no action {action_name:?}"))
+        })?;
+        let commit = Commit {
+            problem_id: draft.problem_id.clone(),
+            step: number,
+            action: action_name.to_owned(),
+            note: "author validation".to_owned(),
+            files: solution.clone(),
+            created_at: Some(now),
+            updated_at: Some(now),
+            ..Commit::default()
+        };
+        let mut files = regular.clone();
+        files.extend(problem_type.files);
+        files.extend(solution.clone());
+        runtimes.push(RuntimeBundle {
+            user_id: actor.user_id.clone(),
+            problem_id: draft.problem_id.clone(),
+            problem_note: draft.problem_note.clone(),
+            problem_options: draft.problem_options.clone(),
+            step_number: number,
+            total_steps: draft.steps.len() as i64,
+            action: action_name.to_owned(),
+            container: problem_type.container,
+            command: action.command.clone(),
+            parser: action.parser.clone(),
+            limits: Some(action_limits(action)),
+            files,
+            commit: Some(commit),
+            ..RuntimeBundle::default()
+        });
+    }
+    Ok(PreparedProblem { problem, steps, runtimes })
+}
+
+fn action_limits(action: &ProblemTypeAction) -> RuntimeLimits {
+    RuntimeLimits {
+        max_cpu: action.max_cpu,
+        max_fd: action.max_fd,
+        max_file_size: action.max_file_size,
+        max_memory: action.max_memory,
+        max_threads: action.max_threads,
+    }
+}
+
+pub fn prepare_assignment_action(
+    conn: &Connection,
+    actor: &UserRow,
+    request: crate::proto::RunAssignmentActionRequest,
+    ip_allowed: bool,
+    installed_types: &[String],
+) -> AppResult<CommitResult> {
+    // Caller input contains only editable work and execution intent. Identity,
+    // timestamps, system files, commands, and limits come from trusted state.
+    let now = timestamp(now_utc());
+    let commit = Commit {
+        assignment: request.assignment,
+        problem_id: request.problem_id,
+        step: request.step,
+        note: request.note,
+        files: request.files,
+        created_at: Some(now),
+        updated_at: Some(now),
+        ..Commit::default()
+    };
+    let result =
+        save_commit_core(conn, actor, &commit, ip_allowed, false, CommitPersistence::FilesOnly)?;
+    let key = commit
+        .assignment
+        .as_ref()
+        .ok_or_else(|| AppError::BadRequest("assignment is required".to_owned()))?;
+    let context = load_grading_context(conn, key, &commit.problem_id, commit.step)?;
+    if !installed_types.contains(&context.problem_type) {
+        return Err(AppError::BadRequest(
+            "local daycare does not support the requested problem type".to_owned(),
+        ));
+    }
+    let action = load_action(conn, &context.problem_type, &request.action)?;
+    let mut files = context.regular_files;
+    files.extend(context.problem_type_files);
+    files.extend(commit.files.clone());
+    let bundle = RuntimeBundle {
+        user_id: actor.user_id.clone(),
+        assignment: commit.assignment.clone(),
+        problem_id: commit.problem_id.clone(),
+        problem_note: context.problem_note,
+        problem_options: context.problem_options,
+        step_number: commit.step,
+        total_steps: context.total_steps,
+        action: request.action.clone(),
+        container: context.container,
+        command: action.command.clone(),
+        parser: action.parser.clone(),
+        limits: Some(action_limits(&action)),
+        files,
+        commit: Some(Commit { action: request.action, ..commit }),
+        ..RuntimeBundle::default()
+    };
+    Ok(CommitResult { bundle, save_status: result.save_status, locked: result.locked })
+}
+
+pub fn save_local_grade(
+    conn: &Connection,
+    actor: &UserRow,
+    runtime: RuntimeBundle,
+    ip_allowed: bool,
+) -> AppResult<CommitResult> {
+    let commit = runtime
+        .commit
+        .as_ref()
+        .ok_or_else(|| AppError::Internal("execution returned no commit".to_owned()))?;
+    let result = save_commit_core(conn, actor, commit, ip_allowed, true, CommitPersistence::Full)?;
+    Ok(CommitResult { bundle: runtime, save_status: result.save_status, locked: result.locked })
+}
+
+pub fn save_local_problem(
+    conn: &Connection,
+    mode: SaveMode,
+    prepared: &PreparedProblem,
+    validated: &[Commit],
+) -> AppResult<()> {
+    let problem = &prepared.problem;
+    // No caller can supply these results. Still enforce completeness before
+    // writing so a failed or interrupted validation cannot publish partial work.
+    if validated.len() != prepared.steps.len()
+        || validated.iter().zip(&prepared.runtimes).any(|(commit, runtime)| {
+            !commit.report_card.as_ref().is_some_and(|report| report.passed)
+                || commit.score != 1.0
+                || commit.action != "grade"
+                || runtime.commit.as_ref().is_none_or(|original| original.files != commit.files)
+        })
+    {
+        return Err(AppError::BadRequest("all solution steps must pass validation".to_owned()));
+    }
+    validate_save_mode(conn, mode as i32, "problems", "problem_id", &problem.problem_id)?;
+    if mode == SaveMode::Update {
+        validate_assigned_problem_shape(conn, &problem.problem_id, &prepared.steps)?;
+    }
+    let now = db_time(now_utc());
+    conn.execute(
+        "INSERT INTO problems(problem_id, problem_note, problem_tags, problem_options, problem_created_at, problem_updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(problem_id) DO UPDATE SET problem_note = excluded.problem_note, problem_tags = excluded.problem_tags, problem_options = excluded.problem_options, problem_updated_at = excluded.problem_updated_at",
+        params![problem.problem_id, problem.problem_note, serde_json::to_string(&problem.problem_tags)?, serde_json::to_string(&problem.problem_options)?, now, now],
+    )?;
+    for (step, commit) in prepared.steps.iter().zip(validated) {
+        conn.execute(
+            "INSERT INTO problem_steps(problem_id, step_number, problem_type, step_note, step_weight)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(problem_id, step_number) DO UPDATE SET problem_type = excluded.problem_type, step_note = excluded.step_note, step_weight = excluded.step_weight",
+            params![problem.problem_id, step.step, step.problem_type, step.note, step.weight as i64],
+        )?;
+        insert_step_files(conn, &problem.problem_id, step.step, "regular", &step.files)?;
+        insert_step_files(conn, &problem.problem_id, step.step, "starter", &step.starter_files)?;
+        insert_step_files(conn, &problem.problem_id, step.step, "solution", &commit.files)?;
+    }
+    conn.execute(
+        "DELETE FROM problem_steps WHERE problem_id = ? AND step_number > ?",
+        params![problem.problem_id, prepared.steps.len() as i64],
+    )?;
+    if mode == SaveMode::Create {
+        create_default_problem_set(conn, problem)?;
+    }
+    Ok(())
+}
+
 pub fn save_problem_type_files(
     conn: &Connection,
     problem_type: &str,

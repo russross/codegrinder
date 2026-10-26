@@ -14,7 +14,7 @@ use sha2::Digest;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tokio::sync::{Mutex, OnceCell, Semaphore, mpsc, watch};
-use tokio_stream::Stream;
+use tokio_stream::{Stream, StreamExt};
 use tonic::{Response, Status};
 
 use crate::config::ServerConfig;
@@ -55,7 +55,7 @@ struct ActiveRun {
 struct RequestScope {
     deadline: Instant,
     stop: watch::Receiver<bool>,
-    events: mpsc::Sender<Result<DaycareResponse, Status>>,
+    events: mpsc::Sender<Result<ExecutionUpdate, Status>>,
 }
 
 impl RequestScope {
@@ -81,6 +81,15 @@ pub struct DaycareRuntime {
     next_run_id: Arc<AtomicU64>,
     instance: Arc<String>,
 }
+
+// Execution stays in process; only the legacy transport adapter signs results.
+pub enum ExecutionUpdate {
+    Event(Box<EventMessage>),
+    Completed(Box<RuntimeBundle>),
+}
+
+pub type ExecutionStream =
+    Pin<Box<dyn Stream<Item = Result<ExecutionUpdate, Status>> + Send + 'static>>;
 
 impl DaycareRuntime {
     pub fn new(config: Arc<ServerConfig>) -> AppResult<Self> {
@@ -109,20 +118,51 @@ impl DaycareRuntime {
         let (tx, rx) = mpsc::channel(64);
         let runtime = self.clone();
         tokio::spawn(async move {
-            let result = runtime.handle(request, tx.clone(), deadline).await;
-            if let Err(err) = result {
-                record(
-                    "WARN",
-                    "daycare_request_failed",
-                    format_args!("error={:?}", err.to_string()),
-                );
-                let _ = tokio::time::timeout_at(
-                    deadline.into(),
-                    tx.send(Ok(DaycareResponse {
-                        response: Some(daycare_response::Response::Error(err.to_string())),
-                    })),
-                )
-                .await;
+            let decoded = request
+                .bundle
+                .ok_or_else(|| AppError::BadRequest("bundle is required".to_owned()))
+                .and_then(|signed| {
+                    validate_and_decode_action(
+                        &signed,
+                        &runtime.config.daycare_secret,
+                        &runtime.config.hostname,
+                    )
+                });
+            let bundle = match decoded {
+                Ok(bundle) => bundle,
+                Err(err) => {
+                    let _ = tx
+                        .send(Ok(DaycareResponse {
+                            response: Some(daycare_response::Response::Error(err.to_string())),
+                        }))
+                        .await;
+                    return;
+                }
+            };
+            let grade = bundle.action == "grade";
+            let mut execution = runtime.execute(bundle, Some(deadline));
+            loop {
+                let update = tokio::select! {
+                    biased;
+                    _ = tx.closed() => break,
+                    update = execution.next() => update,
+                };
+                let Some(update) = update else { break };
+                let response = match update {
+                    Ok(ExecutionUpdate::Event(event)) => daycare_response::Response::Event(*event),
+                    Ok(ExecutionUpdate::Completed(bundle)) if grade => {
+                        match encode_signed_runtime_bundle(&bundle, &runtime.config.daycare_secret)
+                        {
+                            Ok(signed) => daycare_response::Response::Bundle(signed),
+                            Err(err) => daycare_response::Response::Error(err.to_string()),
+                        }
+                    }
+                    Ok(ExecutionUpdate::Completed(_)) => continue,
+                    Err(status) => daycare_response::Response::Error(status.message().to_owned()),
+                };
+                if tx.send(Ok(DaycareResponse { response: Some(response) })).await.is_err() {
+                    break;
+                }
             }
         });
         let stream = ResponseStream {
@@ -132,19 +172,35 @@ impl DaycareRuntime {
         Ok(Response::new(Box::pin(stream) as DaycareStream))
     }
 
+    pub fn execute(&self, bundle: RuntimeBundle, deadline: Option<Instant>) -> ExecutionStream {
+        let deadline = deadline.unwrap_or_else(|| Instant::now() + DEFAULT_REQUEST_TIMEOUT);
+        let (tx, rx) = mpsc::channel(64);
+        let runtime = self.clone();
+        tokio::spawn(async move {
+            let result = runtime.handle(bundle, tx.clone(), deadline).await;
+            if let Err(err) = result {
+                record(
+                    "WARN",
+                    "daycare_request_failed",
+                    format_args!("error={:?}", err.to_string()),
+                );
+                let _ =
+                    tokio::time::timeout_at(deadline.into(), tx.send(Err(err.grpc_status()))).await;
+            }
+        });
+        let stream = ResponseStream {
+            receiver: Some(rx),
+            deadline: Box::pin(tokio::time::sleep_until(deadline.into())),
+        };
+        Box::pin(stream)
+    }
+
     async fn handle(
         &self,
-        request: DaycareRequest,
-        tx: mpsc::Sender<Result<DaycareResponse, Status>>,
+        mut bundle: RuntimeBundle,
+        tx: mpsc::Sender<Result<ExecutionUpdate, Status>>,
         deadline: Instant,
     ) -> AppResult<()> {
-        let signed =
-            request.bundle.ok_or_else(|| AppError::BadRequest("bundle is required".to_owned()))?;
-        let mut bundle = validate_and_decode_action(
-            &signed,
-            &self.config.daycare_secret,
-            &self.config.hostname,
-        )?;
         let spec = ExecutionSpec::new(&bundle)?;
         let nanny_name = format!("nanny-{}", safe_user_dir_name(&bundle.user_id));
         let lifecycle = self.user_lifecycle(&nanny_name).await;
@@ -198,9 +254,7 @@ impl DaycareRuntime {
                         "daycare_container_create_failed",
                         format_args!("error={:?}", err.to_string()),
                     );
-                    let _ = tx.try_send(Ok(DaycareResponse {
-                        response: Some(daycare_response::Response::Error(err.to_string())),
-                    }));
+                    let _ = tx.try_send(Err(Status::internal(err.to_string())));
                     reconcile_named_container(
                         &self.container_command,
                         &nanny_name,
@@ -219,16 +273,7 @@ impl DaycareRuntime {
             let result = scope
                 .run(async {
                     container.start(deadline).await?;
-                    run_action(
-                        &container,
-                        &mut bundle,
-                        &spec,
-                        &context,
-                        &self.config.daycare_secret,
-                        deadline,
-                        tx,
-                    )
-                    .await
+                    run_action(&container, &mut bundle, &spec, &context, deadline, tx).await
                 })
                 .await;
             context.log(
@@ -318,13 +363,13 @@ pub type DaycareStream =
     Pin<Box<dyn Stream<Item = Result<DaycareResponse, Status>> + Send + 'static>>;
 
 // Transport deadlines close the receiver even while its worker owns unresolved Docker work.
-struct ResponseStream {
-    receiver: Option<mpsc::Receiver<Result<DaycareResponse, Status>>>,
+struct ResponseStream<T> {
+    receiver: Option<mpsc::Receiver<Result<T, Status>>>,
     deadline: Pin<Box<tokio::time::Sleep>>,
 }
 
-impl Stream for ResponseStream {
-    type Item = Result<DaycareResponse, Status>;
+impl<T> Stream for ResponseStream<T> {
+    type Item = Result<T, Status>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
@@ -339,7 +384,7 @@ impl Stream for ResponseStream {
     }
 }
 
-// Identity is copied only after signature validation and follows the run across awaits.
+// Identity comes from authenticated preparation and follows the run across awaits.
 struct RunContext {
     fields: String,
 }
@@ -481,9 +526,8 @@ async fn run_action(
     bundle: &mut RuntimeBundle,
     spec: &ExecutionSpec,
     context: &RunContext,
-    secret: &str,
     deadline: Instant,
-    tx: mpsc::Sender<Result<DaycareResponse, Status>>,
+    tx: mpsc::Sender<Result<ExecutionUpdate, Status>>,
 ) -> AppResult<()> {
     container.put_files(&bundle.files, deadline).await.inspect_err(|err| {
         record(
@@ -540,7 +584,7 @@ async fn run_action(
             )
             .await?;
             fail_report_for_exec_error(&mut report, bundle, command, err);
-            finalize_action(bundle, secret, tx, transcript, report).await?;
+            finalize_action(bundle, tx, transcript, report).await?;
             return Ok(());
         }
         ExecutionOutcome::Failed(err) => return Err(err),
@@ -626,7 +670,7 @@ async fn run_action(
             }
         }
     }
-    finalize_action(bundle, secret, tx, transcript, report).await
+    finalize_action(bundle, tx, transcript, report).await
 }
 
 // Both futures remain owned here; a blocked event send cannot suspend execution supervision.
@@ -635,7 +679,7 @@ async fn execute_with_output(
     command: &[String],
     context: &RunContext,
     deadline: Instant,
-    tx: &mpsc::Sender<Result<DaycareResponse, Status>>,
+    tx: &mpsc::Sender<Result<ExecutionUpdate, Status>>,
     transcript: &mut TranscriptCapture,
 ) -> AppResult<(ExecutionOutcome, Duration)> {
     let started = Instant::now();
@@ -691,8 +735,7 @@ async fn read_report(container: &Container, bundle: &RuntimeBundle, deadline: In
 
 async fn finalize_action(
     bundle: &mut RuntimeBundle,
-    secret: &str,
-    tx: mpsc::Sender<Result<DaycareResponse, Status>>,
+    tx: mpsc::Sender<Result<ExecutionUpdate, Status>>,
     transcript: TranscriptCapture,
     report: ReportCard,
 ) -> AppResult<()> {
@@ -724,12 +767,9 @@ async fn finalize_action(
         commit.score = if report.passed { 1.0 } else { score_from_report(&report) };
         commit.updated_at = Some(timestamp(Utc::now()));
     }
-    if bundle.action == "grade" {
-        let signed = encode_signed_runtime_bundle(bundle, secret)?;
-        tx.send(Ok(DaycareResponse { response: Some(daycare_response::Response::Bundle(signed)) }))
-            .await
-            .map_err(|_| AppError::Internal("daycare stream closed".to_owned()))?;
-    }
+    tx.send(Ok(ExecutionUpdate::Completed(Box::new(bundle.clone()))))
+        .await
+        .map_err(|_| AppError::Internal("daycare stream closed".to_owned()))?;
     Ok(())
 }
 
@@ -787,12 +827,12 @@ impl TranscriptCapture {
 }
 
 async fn emit_event(
-    tx: &mpsc::Sender<Result<DaycareResponse, Status>>,
+    tx: &mpsc::Sender<Result<ExecutionUpdate, Status>>,
     transcript: &mut TranscriptCapture,
     event: EventMessage,
 ) -> AppResult<()> {
     transcript.record(&event);
-    tx.send(Ok(DaycareResponse { response: Some(daycare_response::Response::Event(event)) }))
+    tx.send(Ok(ExecutionUpdate::Event(Box::new(event))))
         .await
         .map_err(|_| AppError::Internal("daycare stream closed".to_owned()))
 }
@@ -2344,7 +2384,6 @@ print('writer started')
             &mut bundle,
             &spec,
             &context,
-            &config.daycare_secret,
             Instant::now() + Duration::from_millis(100),
             events,
         )
@@ -2371,13 +2410,13 @@ print('writer started')
                 .iter()
                 .any(|event| { event.event == "error" && event.error.contains("timed out") })
         );
-        let mut signed = false;
+        let mut completed = false;
         while let Some(response) = receiver.recv().await {
-            if matches!(response.unwrap().response, Some(daycare_response::Response::Bundle(_))) {
-                signed = true;
+            if matches!(response.unwrap(), ExecutionUpdate::Completed(_)) {
+                completed = true;
             }
         }
-        assert!(signed);
+        assert!(completed);
     }
 
     #[tokio::test]

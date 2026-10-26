@@ -11,7 +11,7 @@ const dataModule = source => `data:text/javascript;base64,${Buffer.from(source).
 const shared = dataModule(await compile("./workspace.ts"));
 const source = (await compile("./problem-workspace.ts")).replace('"./workspace"', JSON.stringify(shared));
 const { ProblemWorkspace } = await import(dataModule(source));
-const assets = JSON.parse(await readFile(new URL("./vm/build/assets.json", import.meta.url), "utf8"));
+const assets = JSON.parse(await readFile(new URL("./vm/build/assets.json", import.meta.url), "utf8")).riscv;
 const { Riscbox } = createRequire(import.meta.url)(`./${assets.runtimeUrl}`);
 const encode = text => new TextEncoder().encode(text);
 

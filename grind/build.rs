@@ -7,6 +7,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     tonic_prost_build::configure()
         .build_server(false)
         .btree_map(".")
+        .boxed(".codegrinder.RunAuthorProblemResponse.response.progress")
         .compile_protos(&[proto], &includes)?;
     println!("cargo:rerun-if-changed=../protocol/codegrinder.proto");
     Ok(())

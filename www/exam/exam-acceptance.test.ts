@@ -4,9 +4,9 @@ import { riscletLanguage } from "./risclet";
 import { TerminalView } from "./terminal";
 import type { Riscbox } from "@riscbox/runtime";
 import {
-    CommitSaveStatus, DaycareResponse, EventMessage, GetAssignmentResponse, GetWorkspaceRequest, GetWorkspaceResponse,
-    HelloResponse, ListAssignmentsResponse, RuntimeBundle, SaveGradedCommitResponse,
-    SaveUngradedCommitRequest, SaveUngradedCommitResponse, SaveWorkspaceCommitRequest, SaveWorkspaceCommitResponse,
+    Commit, CommitSaveStatus, EventMessage, GetAssignmentResponse, GetWorkspaceRequest, GetWorkspaceResponse,
+    HelloResponse, RunAssignmentActionRequest, RunAssignmentActionResponse,
+    SaveWorkspaceCommitRequest, SaveWorkspaceCommitResponse,
 } from "./codegrinder";
 import { loadRuntime, vmImageForProblemType } from "./vm";
 
@@ -42,8 +42,9 @@ function frame(bytes: Uint8Array, kind = 0): Uint8Array {
     framed.set(bytes, 5);
     return framed;
 }
-function reply(bytes: Uint8Array, status = 0): Response {
-    const body = new Uint8Array([...frame(bytes), ...frame(encoder.encode(`grpc-status: ${status}\r\n`), 128)]);
+function reply(bytes: Uint8Array, status = 0, following: Uint8Array[] = []): Response {
+    const body = new Uint8Array([...frame(bytes), ...following.flatMap(message => [...frame(message)]),
+        ...frame(encoder.encode(`grpc-status: ${status}\r\n`), 128)]);
     return new Response(body, { headers: { "content-type": "application/grpc-web+proto" } });
 }
 
@@ -75,7 +76,11 @@ export async function runExamAcceptance(): Promise<string[]> {
     const saved = new Map<string, string>();
     let currentStep = "1";
     let gradePassed = true;
-    let actionBundle = RuntimeBundle.create();
+    let lockedForLms = false;
+    let actionSaveStatus = CommitSaveStatus.SAVED;
+    let actionFailure: "none" | "missing" | "transport" | "missingGrade" = "none";
+    let holdAction = false;
+    let finishAction: (() => void) | undefined;
     const calls: string[] = [];
     const confirmations: string[] = [];
     const nativeConfirm = window.confirm;
@@ -83,6 +88,7 @@ export async function runExamAcceptance(): Promise<string[]> {
     let failSave = false;
     let blockSave = false;
     let release: (() => void) | undefined;
+    const releasePendingSave = (): void => { release?.(); release = undefined; };
     let machine: Riscbox | undefined;
     let guestOutput = "";
     // Observe the actual output parser; WebGL text is not represented by DOM text nodes.
@@ -109,15 +115,13 @@ export async function runExamAcceptance(): Promise<string[]> {
         const method = new URL(request.url).pathname.split("/").pop() ?? "";
         if (!new URL(request.url).pathname.includes("codegrinder.CodeGrinderService")) return nativeFetch(input, init);
         calls.push(method);
-        if (method === "Daycare") check(!request.headers.has("authorization"), "Daycare received TA authentication");
-        else if (method !== "Hello") check(request.headers.get("authorization") === "Bearer fixture-session", "RPC lost raw session metadata");
+        if (method !== "Hello") check(request.headers.get("authorization") === "Bearer fixture-session", "RPC lost raw session metadata");
         const body = request.headers.get("content-type")?.includes("grpc-web-text")
             ? Uint8Array.from(atob(await request.text()), character => character.charCodeAt(0))
             : new Uint8Array(await request.arrayBuffer());
         const payload = body.subarray(5);
         switch (method) {
             case "Hello": return reply(HelloResponse.toBinary(HelloResponse.create({ userId: "student", sessionKey: "fixture-session" })));
-            case "ListAssignments": return reply(ListAssignmentsResponse.toBinary(ListAssignmentsResponse.create()));
             case "GetAssignment": return reply(GetAssignmentResponse.toBinary(GetAssignmentResponse.create({ assignment: key,
                 problems: ["first", "second", "plain"].map(problemId => ({ problemId, problemNote: problemId,
                     firstStepNumber: "1", lastStepNumber: problemId === "first" ? "2" : "1", currentStepNumber: "1" })) })));
@@ -142,25 +146,49 @@ export async function runExamAcceptance(): Promise<string[]> {
                 saved.set(commit.problemId, decoder.decode(commit.files["main.s"]));
                 return reply(SaveWorkspaceCommitResponse.toBinary(SaveWorkspaceCommitResponse.create({ saveStatus: CommitSaveStatus.SAVED })));
             }
-            case "SaveUngradedCommit": {
-                const commit = SaveUngradedCommitRequest.fromBinary(payload).commit?.commit;
-                if (commit === undefined) throw new Error("Missing grading commit");
-                actionBundle = RuntimeBundle.create({ hostname: window.location.host, commit: {
-                    ...commit, score: gradePassed ? 1 : 0, reportCard: { passed: gradePassed },
-                    files: commit.action === "grade" ? { "main.s": encoder.encode("graded output\n"),
-                        "unofficial": encoder.encode("excluded") } : commit.files,
+            case "RunAssignmentAction": {
+                const action = RunAssignmentActionRequest.fromBinary(payload);
+                check(Object.keys(action.files).join() === "main.s", "Action included unofficial files");
+                check(action.assignment?.userId === key.userId && action.problemId === "first"
+                    && action.note === `exam interface: ${action.action}`, "Action lost assignment context or note");
+                check(request.headers.get("grpc-timeout") === "120000m", "Action lost its execution deadline");
+                if (actionSaveStatus === CommitSaveStatus.SAVED) saved.set(action.problemId, decoder.decode(action.files["main.s"]));
+                const commit = Commit.create({ ...action, score: gradePassed ? 1 : 0,
+                    reportCard: { passed: gradePassed },
+                    transcript: [EventMessage.create({ event: "stdout", streamData: encoder.encode("grade diagnostics\n") })],
+                    files: { "main.s": encoder.encode("graded output\n"), "unofficial": encoder.encode("excluded") },
+                });
+                const event = RunAssignmentActionResponse.create({ response: { oneofKind: "event", event:
+                    action.action === "grade"
+                        ? EventMessage.create({ event: "stdout", streamData: encoder.encode("live grade output\n") })
+                        : EventMessage.create({ event: "files", files: { "main.s": encoder.encode("action output\n"), "unofficial": encoder.encode("excluded") } }),
                 } });
-                return reply(SaveUngradedCommitResponse.toBinary(SaveUngradedCommitResponse.create({ saveStatus: CommitSaveStatus.SAVED,
-                    bundle: { bundle: RuntimeBundle.toBinary(actionBundle), signature: "fixture" } })));
+                if (actionFailure === "missing" || actionFailure === "transport") {
+                    return reply(RunAssignmentActionResponse.toBinary(event), actionFailure === "transport" ? 14 : 0);
+                }
+                if (gradePassed && action.action === "grade" && actionSaveStatus === CommitSaveStatus.SAVED
+                    && actionFailure !== "missingGrade") currentStep = "2";
+                const result = RunAssignmentActionResponse.create({ response: { oneofKind: "result", result: {
+                    saveStatus: actionSaveStatus, lockedForLms,
+                    grade: action.action === "grade" && actionFailure !== "missingGrade" ? commit : undefined,
+                } } });
+                if (holdAction) {
+                    holdAction = false;
+                    return new Response(new ReadableStream<Uint8Array>({ start(controller) {
+                        const output = RunAssignmentActionResponse.create({ response: { oneofKind: "event",
+                            event: EventMessage.create({ event: "stdout", streamData: encoder.encode("streamed action output\n") }),
+                        } });
+                        controller.enqueue(frame(RunAssignmentActionResponse.toBinary(output)));
+                        controller.enqueue(frame(RunAssignmentActionResponse.toBinary(event)));
+                        finishAction = () => {
+                            controller.enqueue(frame(RunAssignmentActionResponse.toBinary(result)));
+                            controller.enqueue(frame(encoder.encode("grpc-status: 0\r\n"), 128));
+                            controller.close();
+                        };
+                    } }), { headers: { "content-type": "application/grpc-web+proto" } });
+                }
+                return reply(RunAssignmentActionResponse.toBinary(event), 0, [RunAssignmentActionResponse.toBinary(result)]);
             }
-            case "Daycare": return actionBundle.commit?.action === "grade"
-                ? reply(DaycareResponse.toBinary(DaycareResponse.create({ response: { oneofKind: "bundle",
-                    bundle: { bundle: RuntimeBundle.toBinary(actionBundle), signature: "fixture" } } })))
-                : reply(DaycareResponse.toBinary(DaycareResponse.create({ response: { oneofKind: "event",
-                    event: EventMessage.create({ event: "files", files: { "main.s": encoder.encode("action output\n"), "unofficial": encoder.encode("excluded") } }) } })));
-            case "SaveGradedCommit":
-                if (gradePassed) currentStep = "2";
-                return reply(SaveGradedCommitResponse.toBinary(SaveGradedCommitResponse.create({ saveStatus: CommitSaveStatus.SAVED })));
             default: throw new Error(`Unexpected RPC: ${method}`);
         }
     };
@@ -296,23 +324,89 @@ export async function runExamAcceptance(): Promise<string[]> {
         const latest = machine;
         if (latest === undefined) throw new Error("VM disappeared after non-VM selection");
         check(!latest.started, "Non-VM return booted an instructed problem");
+        holdAction = true;
         button("action-write-button").click();
-        await until(() => editor().state.doc.toString() === "action output" && !button("action-write-button").disabled,
+        await until(async () => finishAction !== undefined && editor().state.doc.toString() === "action output"
+            && (await gradingOutput?.readText())?.includes("streamed action output") === true,
+            "Action did not stream output and files before completion");
+        check(editor().state.readOnly && button("action-write-button").disabled && button("vm-tab-button").disabled,
+            "Action unlocked editing or VM input before completion");
+        blockSave = true;
+        release = undefined;
+        const beforeGuestEdit = window.problemSet[0].workspace.revision();
+        latest.filesystem("workspace").writeFile("main.s", "guest edit during action\n");
+        await until(() => window.problemSet[0].workspace.revision() > beforeGuestEdit,
+            "Guest edit did not reach the official workspace revision");
+        check(window.problemSet[0].saving.isDirty(window.problemSet[0].workspace.revision()),
+            "Guest edit became clean before action completion");
+        const completeAction = finishAction;
+        if (completeAction === undefined) throw new Error("Action stream was not held");
+        completeAction();
+        await until(() => editor().state.doc.toString() === "guest edit during action" && !button("action-write-button").disabled,
             "Returned action files did not update the current editor");
+        check(window.problemSet[0].saving.isDirty(window.problemSet[0].workspace.revision()),
+            "Action completion acknowledged a newer guest revision");
+        blockSave = false;
+        releasePendingSave();
+        button("save-button").click();
+        await until(() => saved.get("first") === "guest edit during action\n", "Newer guest revision could not be saved");
         check(!window.problemSet[0].workspace.isStudentOwned("unofficial"), "Action widened the official student whitelist");
         check(!latest.started, "Action booted an unbooted VM");
+
+        // Missing completion, transport failure, and malformed grade results
+        // must release the action lock without acknowledging or advancing work.
+        for (const failure of ["missing", "transport", "missingGrade"] as const) {
+            actionFailure = failure;
+            blockSave = true;
+            release = undefined;
+            const before = calls.filter(method => method === "RunAssignmentAction").length;
+            button(failure === "missing" ? "action-write-button" : "action-grade-button").click();
+            await until(() => calls.filter(method => method === "RunAssignmentAction").length > before
+                && !button("action-grade-button").disabled, "Failed stream retained the action lock");
+            const output = await gradingOutput?.readText() ?? "";
+            check(output.includes("failed:"), "Action stream failure was not reported");
+            if (failure === "missing") {
+                check(output.includes("without a completion result"), "Missing completion was treated as success");
+                check(window.problemSet[0].saving.isDirty(window.problemSet[0].workspace.revision()),
+                    "Incomplete action acknowledged its returned file revision");
+            }
+            check(window.problemSet[0].currentStepNumber === 1n && !window.problemSet[0].isComplete,
+                "Failed stream advanced the problem");
+            blockSave = false;
+            releasePendingSave();
+            button("save-button").click();
+            await until(() => !window.problemSet[0].saving.isDirty(window.problemSet[0].workspace.revision()),
+                "Failed action's dirty work could not be retried");
+        }
+        actionFailure = "none";
+        actionSaveStatus = CommitSaveStatus.NOT_SAVED_NOT_OWNER;
+        const beforeInspection = calls.filter(method => method === "RunAssignmentAction").length;
+        button("action-grade-button").click();
+        await until(() => calls.filter(method => method === "RunAssignmentAction").length > beforeInspection
+            && !button("action-grade-button").disabled, "Non-saved grade did not finish");
+        check(window.problemSet[0].currentStepNumber === 1n
+            && (await gradingOutput?.readText())?.includes("do not own this assignment") === true,
+            "Non-saved passing grade advanced the problem or hid its save status");
+        actionSaveStatus = CommitSaveStatus.SAVED;
         button("vm-tab-button").click();
         await until(() => guestOutput.includes("$ "), "VM tab did not boot");
         const bootsBeforeGrade = guestOutput;
         gradePassed = false;
+        lockedForLms = true;
+        const beforeFailedGrade = calls.filter(method => method === "RunAssignmentAction").length;
         button("action-grade-button").click();
-        await until(() => calls.includes("SaveGradedCommit") && !button("action-grade-button").disabled,
+        await until(() => calls.filter(method => method === "RunAssignmentAction").length > beforeFailedGrade && !button("action-grade-button").disabled,
             "Failed grade did not finish");
         check(latest.started && guestOutput.startsWith(bootsBeforeGrade) && editor().state.doc.toString() === "graded output",
             "Failed grade restarted the VM or advanced the step");
-        const actionsBeforeWrite = calls.filter(method => method === "SaveUngradedCommit").length;
+        const failureOutput = await gradingOutput?.readText() ?? "";
+        check(failureOutput.includes("grade diagnostics"), `Grading lost its failure transcript: ${JSON.stringify(failureOutput)}`);
+        check(!failureOutput.includes("live grade output"), "Grading displayed intermediate output");
+        check(failureOutput.replace(/\s/g, "").endsWith("GradewasnotpostedtotheLMSbecausetheassignmentislocked"),
+            `Grading lost its final server-lock notice: ${JSON.stringify(failureOutput)}`);
+        const actionsBeforeWrite = calls.filter(method => method === "RunAssignmentAction").length;
         button("action-write-button").click();
-        await until(() => calls.filter(method => method === "SaveUngradedCommit").length > actionsBeforeWrite
+        await until(() => calls.filter(method => method === "RunAssignmentAction").length > actionsBeforeWrite
             && !button("action-write-button").disabled, "Running action did not finish");
         check(latest.started && guestOutput.startsWith(bootsBeforeGrade), "Action restarted the running VM");
         gradePassed = true;
@@ -320,7 +414,8 @@ export async function runExamAcceptance(): Promise<string[]> {
         await until(() => editor().state.doc.toString() === "step two" && !button("action-grade-button").disabled,
             "Passing grade did not replace the step workspace");
         check(!window.problemSet[0].workspace.listFiles().includes("extra"), "Step advance restored an old namespace snapshot");
-        check(calls.includes("SaveGradedCommit"), "Grade did not use its final persistence RPC");
+        check(!calls.some(method => ["SaveUngradedCommit", "Daycare", "SaveGradedCommit", "ListAssignments"].includes(method)),
+            "Exam used a legacy execution RPC or client-side lock lookup");
         check(latest.started && button("instructions-tab-button").classList.contains("active") && machine === latest
             && guestOutput.startsWith(bootsBeforeGrade),
             "Same-type step advancement must preserve the running VM and select instructions");

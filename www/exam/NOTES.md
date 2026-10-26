@@ -5,7 +5,7 @@ This document defines the exam client's operation flows, ownership rules, persis
 
 The protocol is defined in [codegrinder.proto](../../protocol/codegrinder.proto). The browser uses the generated protobuf-ts field names.
 
-The one-time login token is used only by `Hello`. The returned raw session key is stored in tab-scoped session storage, and the token is removed from the URL. All later TA requests carry the session key as `authorization: Bearer SESSION_KEY` metadata. Daycare receives its signed runtime bundle without the TA session key.
+The one-time login token is used only by `Hello`. The returned raw session key is stored in tab-scoped session storage, and the token is removed from the URL. All later requests, including `RunAssignmentAction`, carry the session key as `authorization: Bearer SESSION_KEY` metadata to the same-origin server. The browser exchanges no signed runtime bundles or separate daycare requests.
 
 
 Initial assignment load
@@ -17,7 +17,7 @@ Initial assignment load
 
 3.  When the URL does not contain a token, load the session key from `sessionStorage` and validate it by calling `Hello` with an empty token and the key as authorization metadata. A missing or invalid saved session requires the assignment to be relaunched from Canvas.
 
-4.  Call `GetAssignment` with the parsed `AssignmentKey`. Require its user ID to match the authenticated user. Read the matching `ListAssignments` item's lock date for the final LMS-lock notice; failure to fetch that presentation data is logged and does not prevent loading. Server passback policy remains authoritative.
+4.  Call `GetAssignment` with the parsed `AssignmentKey`. Require its user ID to match the authenticated user. The final action result supplies the authoritative LMS-lock decision; loading does not require an assignment-list lookup or a client-clock comparison.
 
 5.  For each `AssignmentProblemProgress`, call `GetWorkspace` with:
 
@@ -71,21 +71,19 @@ The deadline controls when a save is requested. Network latency and an operation
 Grade and other server actions
 ------------------------------
 
-The entire action, including both persistence calls and daycare execution, occupies the same queue as ordinary saves. Requesting an action makes the editor read-only and disables file/problem switching, action buttons, and VM input. The VM keeps its current boot state. Returned action files can change the workspace and start an autosave deadline; that save waits for the action to finish.
+The entire server-coordinated action occupies the same queue as ordinary saves. Requesting an action makes the editor read-only and disables file/problem switching, action buttons, and VM input. The VM keeps its current boot state. Returned action files can change the workspace and start an autosave deadline; that save waits for the action to finish.
 
 1.  Refresh the current workspace as described by Save.
 
-2.  Build a `Commit` containing only `studentOwnedFiles`, the selected action, and note `exam interface: ACTION`.
+2.  Capture the submitted workspace revision and build `RunAssignmentActionRequest` with the assignment key, problem ID, current step, selected action, note `exam interface: ACTION`, and only `studentOwnedFiles`. Actor identity, timestamps, system files, commands, and limits come from the server.
 
-    Wrap it in a `GradingCommit` and call `SaveUngradedCommit`.
+3.  Call `RunAssignmentAction` with bearer metadata and a 120-second deadline. The server performs a files-only save/hydration transaction, runs daycare outside transactions, and for grades performs the result save and eligible LMS passback scheduling. No signed bundles, runtime decoding, hostname selection, or final save request passes through the browser.
 
-3.  Send the returned `SignedRuntimeBundle` to the daycare hostname encoded in its `RuntimeBundle`.
+4.  For non-grade actions, display streamed terminal events. An `EventMessage` containing files may update only existing student-owned paths. Those bytes update both `studentOwnedFiles` and the corresponding live 9p file when its current shape permits it. A structurally incompatible path reports a write failure while retaining the returned official bytes for persistence. Require an explicit completion result for every action; ordinary stream closure is failure. A non-grade result must not contain a grade.
 
-4.  For non-grade actions, display streamed terminal events. An `EventMessage` containing files may update only existing student-owned paths. Those bytes update both `studentOwnedFiles` and the corresponding live 9p file when its current shape permits it. A structurally incompatible path reports a write failure while retaining the returned official bytes for persistence. Normal end-of-stream completes the action; non-grade actions do not return a signed final bundle.
+    For grade, ignore intermediate events and require a grade in the completion result. Acknowledge the captured revision only when the result is `SAVED`; newer editor/guest/returned-file revisions remain dirty. Apply the returned grade's commit files to the local workspace and views without changing VM power state. Failed streams acknowledge no revision, even if the server already persisted the initial snapshot; dirty work remains eligible for the ordinary save retry.
 
-    For grade, ignore intermediate events and call `SaveGradedCommit` with the signed final daycare result. Apply the signed result's commit files to the local workspace and views without changing VM power state.
-
-5.  A saved result passes when its commit has `report_card.passed` and score `1.0`. Fetch the next in-scope step with `GetWorkspace`, replace both owned maps, clear and repopulate the 9p tree, and select Instructions. Preserve VM power and disk overlays when the problem type stays the same; a type change force-halts and discards disk overlays. A halted VM waits for a user action to boot, except when instructions are absent and VM becomes the default tab. Mark the problem complete on its last in-scope step without resetting or rebooting the VM. Failed grades likewise leave power state unchanged.
+5.  A saved result passes when its commit has `report_card.passed` and score `1.0`. Fetch the next in-scope step with `GetWorkspace`, replace both owned maps, clear and repopulate the 9p tree, and select Instructions. Preserve VM power and disk overlays when the problem type stays the same; a type change force-halts and discards disk overlays. A halted VM waits for a user action to boot, except when instructions are absent and VM becomes the default tab. Mark the problem complete on its last in-scope step without resetting or rebooting the VM. Failed grades likewise leave power state unchanged. When the saved completion has `locked_for_lms`, finish output with the notice that the grade was not posted because the assignment is locked.
 
 
 Problem switching
@@ -141,13 +139,13 @@ Failure and completion boundaries
 
 The assignment URL identifies one assignment; authentication requires its user to match the logged-in user. The TA independently enforces restricted IP access, availability, ownership, file validation, and in-scope step sequencing. The client cannot make an unavailable assignment accessible by retaining an old workspace or session.
 
-A successful editor flush means bytes reached the local workspace, not the TA. Only a successful `SAVED` response acknowledges a submitted revision. `SaveUngradedCommit` can acknowledge the pre-action snapshot before daycare runs; a later execution/final-save failure does not erase that acknowledgement or the TA's saved files. Returned files and later guest edits are separate revisions requiring their own acknowledgement.
+A successful editor flush means bytes reached the local workspace, not the TA. Only a successful `SAVED` response acknowledges a submitted revision. `RunAssignmentAction` can persist the initial snapshot before daycare runs, but the browser acknowledges it only after explicit successful completion. A later execution/final-save failure does not erase the TA's saved files and leaves the browser revision eligible for retry. Returned files and later guest edits are separate revisions requiring their own acknowledgement.
 
-An error or missing signed final grade bundle prevents final grading persistence and advancement. Passing requires both the report's pass flag and score `1.0`, plus a saved result for advancement. The last in-scope step completes the problem without requesting a nonexistent next step. A failed next-step fetch leaves a grade that may already be persisted; reloading consults server progress.
+An error, missing completion, or missing grade prevents local advancement; a lost response does not prove the server failed to persist. Passing requires both the report's pass flag and score `1.0`, plus a saved result for advancement. The last in-scope step completes the problem without requesting a nonexistent next step. A failed next-step fetch leaves a grade that may already be persisted; reloading consults server progress.
 
-The lock date does not disable editing, saves, daycare, or progression. The server decides whether an LMS post is allowed and performs eligible passback asynchronously. A saved grade is not confirmation that the LMS has received it. This client does not obtain a passback completion acknowledgement from `SaveGradedCommit`.
+The lock date does not disable editing, saves, daycare, or progression. The server decides whether an LMS post is allowed and performs eligible passback asynchronously. A saved grade is not confirmation that the LMS has received it. `RunAssignmentAction` reports the lock decision, not an LMS delivery acknowledgement.
 
-Ordinary RPCs have a ten-second transport timeout; daycare streams have a fixed 120-second timeout. The transport supplies the standard gRPC deadline and cancels the fetch on expiry. Starting another daycare call aborts the preceding fetch, and leaving the page aborts the active call. Grading ignores live output and replays the signed transcript only on failure; non-grade actions render output chunks as they arrive. These are output streams, without TTY input or argument negotiation. The server completes container cleanup after an early signed grade response even when the client immediately closes its stream.
+Ordinary RPCs send a ten-second gRPC deadline; action streams send a 120-second deadline covering server preparation, queueing, execution, and result persistence. The action's abort signal combines a native 120-second browser timeout with its explicit cancellation controller. Starting another action aborts the preceding fetch, leaving the page aborts the active call, and completion or error retires its fetch and page listener. Grading ignores live output and replays the returned transcript only on failure; non-grade actions render output chunks as they arrive. These are output streams, without TTY input or argument negotiation. The server retains responsibility for container cleanup even after the browser receives completion and closes the stream.
 
 Tab-scoped session storage retains only the client authentication key, not a durable journal of all unsaved editor/guest state. Closing or reloading the tab can lose edits that have not reached the TA; it does not revoke the database session. Guest disk overlays and guest-only paths are disposable and never a substitute for the official student map.
 
@@ -169,7 +167,7 @@ The C guest uses TCC and has no Clang or sanitizer runtime. Preparation removes 
 
 Disk chunks publish as sibling `riscv-drive-HASH/` and `c-drive-HASH/` directories. `vm/image/riscv.cfg` and `c.cfg` are current root configurations. Content-named copies of those configurations supply immutable URLs in the per-image `build/assets.json` map used by the UI. Both configurations reference the same release-versioned runtime, kernel, and firmware. Overlay inventories include deletions, and image preparation depends on its specific tool archive plus common inputs. UI changes do not rebuild roots. `mostlyclean` preserves all published configurations and chunks; `clean` removes them.
 
-The browser needs same-origin TA gRPC-Web access and access to the signed daycare hostname; daycare calls omit TA credentials. VM disk fetching and WASM availability are local-execution dependencies, not reasons to relax ownership or signature checks. Problems without VM images retain editing and server workflows through the synchronous file adapter.
+The browser needs same-origin authenticated gRPC-Web access for bookkeeping and execution. VM disk fetching and WASM availability are local-execution dependencies, not reasons to relax ownership or authorization checks. Problems without VM images retain editing and server workflows through the synchronous file adapter.
 
 Tools are supplied by the exam image. Browser image checks verify that the updater stub is absent and run a transcript through stepper in both guests, waiting for a completion marker that cannot match the terminal's echo of the submitted command.
 
@@ -177,7 +175,7 @@ Tools are supplied by the exam image. Browser image checks verify that the updat
 Audit boundaries
 ----------------
 
-Preserve behavior checks for session restore/token removal; owned versus guest-only paths and hard-link/rename notifications; editor/guest changes during in-flight persistence; stale queued saves after step replacement; retry deadlines; outgoing-save failure during selection; signed grade completion and slice boundaries; selected-file reset with concurrent edits; action locking without VM reboot; and second-click emergency reset retaining dirty editor state.
+Preserve behavior checks for session restore/token removal; owned versus guest-only paths and hard-link/rename notifications; editor/guest changes during in-flight persistence; stale queued saves after step replacement; retry deadlines; outgoing-save failure during selection; explicit action completion, stream errors, saved grade progression and slice boundaries, and server lock decisions; selected-file reset with concurrent edits; action locking without VM reboot; and second-click emergency reset retaining dirty editor state.
 
 Use real runtime/guest checks for VM lifecycle, share population, input backpressure, disk-overlay disposal, and same-image/different-image switching. Use browser checks for clipboard interception, read-only editing, terminal reset/history, and instructions/default-tab boot behavior. Pixel/renderer checks belong to the widget suite rather than duplicating full-page RPC tests.
 

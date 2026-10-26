@@ -1,20 +1,15 @@
 import {
     AssignmentKey,
     AssignmentProblemProgress,
+    AssignmentActionResult,
     Commit,
     CommitSaveStatus,
-    DaycareRequest,
     EventMessage,
     GetAssignmentRequest,
     GetWorkspaceRequest,
-    GradingCommit,
     HelloRequest,
-    ListAssignmentsRequest,
-    RuntimeBundle,
-    SaveGradedCommitRequest,
-    SaveUngradedCommitRequest,
+    RunAssignmentActionRequest,
     SaveWorkspaceCommitRequest,
-    SignedRuntimeBundle,
     WorkspaceFileState,
 } from "./codegrinder";
 import { CodeGrinderServiceClient } from "./codegrinder.client";
@@ -60,10 +55,6 @@ interface ProblemData {
 
 interface ProblemTarget extends VmTarget { readonly problem: ProblemData; readonly generation: number; readonly problemType: string; }
 
-type DaycareCompletion =
-    | { kind: "actionComplete" }
-    | { kind: "graded"; bundle: SignedRuntimeBundle };
-
 declare global {
     interface Window {
         problemSet: ProblemData[];
@@ -78,8 +69,6 @@ let currentProblem: ProblemData | null = null;
 let editorSession: EditorSession;
 let term: TerminalView;
 let assignment: AssignmentKey | null = null;
-let assignmentCloseAt: Timestamp | undefined;
-let userId = "";
 let sessionKey = "";
 let vmController: VmController<ProblemTarget>;
 let saveQueue: Promise<void> = Promise.resolve();
@@ -94,7 +83,7 @@ let fileSelectionGeneration = 0;
 let vmRecoveryInProgress = false;
 let restoringEditorFocus = 0;
 let unregisterVmClipboard = (): void => {};
-let activeDaycare: AbortController | undefined;
+let activeAction: AbortController | undefined;
 
 window.problemSet = [];
 
@@ -113,16 +102,6 @@ function authOptions(): RpcOptions {
         throw new Error("Missing session key");
     }
     return { meta: { authorization: `Bearer ${sessionKey}` } };
-}
-
-function createDaycareClient(hostname: string): CodeGrinderServiceClient {
-    return new CodeGrinderServiceClient(
-        new GrpcWebFetchTransport({
-            baseUrl: `${window.location.protocol}//${hostname}`,
-            timeout: 120_000,
-            fetchInit: { credentials: "omit" },
-        }),
-    );
 }
 
 function getRequiredElement(id: string): HTMLElement {
@@ -446,7 +425,7 @@ async function loadProblem(
 
 async function loadAssignment(): Promise<void> {
     const client = createMainClient();
-    userId = await authenticate(client);
+    const userId = await authenticate(client);
 
     assignment = parseAssignmentKeyFromUrl();
     const assignmentCall = await client.getAssignment(GetAssignmentRequest.create({ assignment }), authOptions());
@@ -456,19 +435,6 @@ async function loadAssignment(): Promise<void> {
     }
     if (assignmentResponse.assignment.userId !== userId) {
         throw new Error("Assignment user does not match current user");
-    }
-
-    assignmentCloseAt = undefined;
-    try {
-        const listed = await client.listAssignments(ListAssignmentsRequest.create(), authOptions());
-        const key = assignmentResponse.assignment;
-        assignmentCloseAt = listed.response.items.find(item =>
-            item.assignment?.userId === key.userId
-            && item.assignment.courseId === key.courseId
-            && item.assignment.problemSetId === key.problemSetId
-        )?.lockAt;
-    } catch (error: unknown) {
-        console.warn("CodeGrinder: could not check the Canvas close deadline", error);
     }
 
     window.problemSet = [];
@@ -518,35 +484,36 @@ function writeEvent(event: EventMessage): void {
     }
 }
 
-async function handleDaycare(problem: ProblemData, bundle: SignedRuntimeBundle, action: string): Promise<DaycareCompletion> {
+async function handleAction(problem: ProblemData, request: RunAssignmentActionRequest): Promise<AssignmentActionResult> {
     selectTerminalTab();
     term.fit();
 
-    const runtime = RuntimeBundle.fromBinary(bundle.bundle);
-    const daycareClient = createDaycareClient(runtime.hostname);
-    activeDaycare?.abort();
+    activeAction?.abort();
     const controller = new AbortController();
-    activeDaycare = controller;
+    activeAction = controller;
     const abort = (): void => controller.abort();
     window.addEventListener("pagehide", abort);
-    const stream = daycareClient.daycare(DaycareRequest.create({ bundle }), { abort: controller.signal });
+    const stream = createMainClient().runAssignmentAction(request, {
+        ...authOptions(), timeout: 120_000,
+        abort: AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]),
+    });
 
     try {
         for await (const response of stream.responses) {
-            if (response.response.oneofKind === "error") {
-                term.writeln(`server return an error: ${response.response.error}`);
-                throw new Error(response.response.error);
-            }
-            if (response.response.oneofKind === "bundle") {
-                if (action !== "grade") {
-                    throw new Error("Non-grade action returned an unexpected signed runtime bundle");
+            if (response.response.oneofKind === "result") {
+                const result = response.response.result;
+                if (request.action === "grade" && result.grade === undefined) {
+                    throw new Error("Server returned no grade");
                 }
-                return { kind: "graded", bundle: response.response.bundle };
+                if (request.action !== "grade" && result.grade !== undefined) {
+                    throw new Error("Non-grade action returned an unexpected grade");
+                }
+                return result;
             }
             if (response.response.oneofKind !== "event") {
-                continue;
+                throw new Error("Unexpected action response from server");
             }
-            if (action === "grade") {
+            if (request.action === "grade") {
                 continue;
             }
             const event = response.response.event;
@@ -557,13 +524,11 @@ async function handleDaycare(problem: ProblemData, bundle: SignedRuntimeBundle, 
             writeEvent(event);
         }
 
-        if (action !== "grade") {
-            return { kind: "actionComplete" };
-        }
-        throw new Error("Daycare stream ended without returning a bundle");
+        throw new Error("Action stream ended without a completion result");
     } finally {
+        controller.abort();
         window.removeEventListener("pagehide", abort);
-        if (activeDaycare === controller) activeDaycare = undefined;
+        if (activeAction === controller) activeAction = undefined;
     }
 }
 
@@ -675,7 +640,6 @@ function enqueuePersistence(problem: ProblemData): Promise<boolean> {
 
 async function doAction(problem: ProblemData, action: string): Promise<void> {
     const saving = problem.saving;
-    const client = createMainClient();
     clearTerminal(term);
     if (!await refreshProblem(problem)) {
         return;
@@ -688,54 +652,35 @@ async function doAction(problem: ProblemData, action: string): Promise<void> {
     }
 
     const submittedRevision = problem.workspace.revision();
-    const ungradedCommit = buildCommit(problem, action, `exam interface: ${action}`);
+    const currentAssignment = assignment;
+    if (currentAssignment === null) throw new Error("Assignment not loaded");
+    const request = RunAssignmentActionRequest.create({
+        assignment: currentAssignment,
+        problemId: problem.problemId,
+        step: problem.currentStepNumber.toString(),
+        action,
+        note: `exam interface: ${action}`,
+        files: problem.workspace.studentSubmission(),
+    });
     saving.submitted();
-    const ungraded = await client.saveUngradedCommit(
-        SaveUngradedCommitRequest.create({
-            commit: GradingCommit.create({
-                hostname: "",
-                userId,
-                commit: ungradedCommit,
-            }),
-        }),
-        authOptions(),
-    );
-    if (ungraded.response.bundle === undefined) {
-        throw new Error("SaveUngradedCommit did not return a signed runtime bundle");
-    }
-    if (ungraded.response.saveStatus === CommitSaveStatus.SAVED) {
+    const result = await handleAction(problem, request);
+    if (result.saveStatus === CommitSaveStatus.SAVED) {
         saving.acknowledge(submittedRevision, problem.workspace.revision());
     } else {
         saving.retry();
     }
     updateSaveButton();
-    writeSaveStatus(ungraded.response.saveStatus);
+    if (action !== "grade") { writeSaveStatus(result.saveStatus); return; }
 
-    const completion = await handleDaycare(problem, ungraded.response.bundle, action);
-    if (completion.kind === "actionComplete") {
-        return;
-    }
-    const finalBundle = completion.bundle;
-    const runtime = RuntimeBundle.fromBinary(finalBundle.bundle);
-
-    const lockedForLms = assignmentCloseAt !== undefined
-        && Timestamp.toDate(assignmentCloseAt).getTime() <= Date.now();
-    const graded = await client.saveGradedCommit(
-        SaveGradedCommitRequest.create({ bundle: finalBundle }),
-        authOptions(),
-    );
-    if (graded.response.saveStatus === CommitSaveStatus.SAVED) {
-        saving.acknowledge(submittedRevision, problem.workspace.revision());
-    }
-    const gradedCommit = runtime.commit;
-    if (gradedCommit === undefined) {
-        throw new Error("Daycare returned a runtime bundle without a commit");
-    }
+    // Completion follows the server's result-save transaction. Applying its
+    // files can introduce a newer local revision that still needs persistence.
+    const gradedCommit = result.grade;
+    if (gradedCommit === undefined) throw new Error("Server returned no grade");
     await applyReturnedFiles(problem, gradedCommit.files);
 
     const passed = gradedCommit.reportCard?.passed === true && gradedCommit.score === 1.0;
     if (passed) {
-        if (graded.response.saveStatus === CommitSaveStatus.SAVED) {
+        if (result.saveStatus === CommitSaveStatus.SAVED) {
             await advanceProblem(problem);
             renderMenuBar();
             renderFileTree();
@@ -750,8 +695,8 @@ async function doAction(problem: ProblemData, action: string): Promise<void> {
             writeEvent(event);
         }
     }
-    writeSaveStatus(graded.response.saveStatus);
-    if (lockedForLms && graded.response.saveStatus === CommitSaveStatus.SAVED) {
+    writeSaveStatus(result.saveStatus);
+    if (result.lockedForLms && result.saveStatus === CommitSaveStatus.SAVED) {
         term.writeln("Grade was not posted to the LMS because the assignment is locked");
     }
 }

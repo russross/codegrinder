@@ -8,7 +8,7 @@ mod daycare;
 mod error;
 mod files;
 mod presentation;
-mod proto;
+pub mod proto;
 mod student;
 mod transcript;
 mod version;
