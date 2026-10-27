@@ -9,7 +9,11 @@ codegrinder.example.edu {
 	encode @not_grpc zstd gzip
 
 	log {
-		output file /var/log/caddy/codegrinder-access.log
+		output file /var/log/caddy/codegrinder-access.log {
+			mode 0640
+			roll_at 03:00
+			roll_keep 10
+		}
 		format console
 	}
 
@@ -27,14 +31,16 @@ codegrinder.example.edu {
 		Cross-Origin-Embedder-Policy require-corp
 	}
 
-	# Revalidate the entry page while retaining immutable assets for cached exam pages.
-	@exam_entry path /exam /exam/ /exam/index.html
+	# Revalidate the page and direct dependencies; fetched content names stay immutable.
+	@exam_entry path /exam /exam/ /exam/index.html /exam/dist/app.js /exam/dist/style.css /exam/dist/favicon.svg
 	header @exam_entry Cache-Control "no-cache"
 	@exam_assets path /exam/dist/app-* /exam/dist/style-* /exam/dist/favicon-* /exam/vm/runtime/riscbox-*/* /exam/vm/image/risclet-*.json /exam/vm/image/drive-*/*
 	header @exam_assets Cache-Control "public, max-age=31536000, immutable"
 
 	@dynamic path /codegrinder.CodeGrinderService/* /lti/* /v2/version /version
-	reverse_proxy @dynamic h2c://localhost:1400
+	reverse_proxy @dynamic h2c://127.0.0.1:1400
 
-	file_server
+	file_server {
+		precompressed br
+	}
 }

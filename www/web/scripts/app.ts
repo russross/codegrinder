@@ -791,7 +791,6 @@ function setupCodegrinder(): void {
                     files,
                     output => writeTerminal(output, "green"),
                     output => writeTerminal(output, "darkgreen"),
-                    assignment.closeAt,
                 );
                 const note = result.commit.reportCard?.note;
                 if (note) {

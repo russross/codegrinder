@@ -3,8 +3,7 @@ import test from "node:test";
 
 import {
   availableActionControls,
-  consumeGradingDaycareResponses,
-  consumeInteractiveDaycareResponses,
+  consumeActionResponses,
   formatAssignmentKey,
   normalizeRelativePath,
   parseAssignmentKey,
@@ -31,7 +30,7 @@ test("workspace actions keep dedicated controls and flatten the remaining action
 test("daycare output rejects invalid UTF-8 and workspace paths at the protocol boundary", async () => {
   const callbacks = { files: () => {}, stderr: () => {}, stdout: () => {} };
   await assert.rejects(
-    () => consumeInteractiveDaycareResponses([{
+    () => consumeActionResponses([{
       response: {
         oneofKind: "event",
         event: { event: "stdout", streamData: new Uint8Array([0xff]) },
@@ -40,7 +39,7 @@ test("daycare output rejects invalid UTF-8 and workspace paths at the protocol b
     /encoded data was not valid|UTF-8/i,
   );
   await assert.rejects(
-    () => consumeInteractiveDaycareResponses([{
+    () => consumeActionResponses([{
       response: {
         oneofKind: "event",
         event: { event: "files", files: { "../outside.txt": new Uint8Array() } },
@@ -50,10 +49,10 @@ test("daycare output rejects invalid UTF-8 and workspace paths at the protocol b
   );
 });
 
-test("a non-grade daycare action completes successfully after its event stream", async () => {
+test("a non-grade action requires an explicit completion even after a failed test", async () => {
   const stdout = [];
   const stderr = [];
-  await consumeInteractiveDaycareResponses(
+  await consumeActionResponses(
     [
       {
         response: {
@@ -70,6 +69,7 @@ test("a non-grade daycare action completes successfully after its event stream",
           event: { event: "exit", exitStatus: 1 },
         },
       },
+      { response: { oneofKind: "result", result: { saveStatus: 1 } } },
     ],
     {
       files: () => assert.fail("unexpected files event"),
@@ -86,13 +86,13 @@ test("daycare file events preserve binary workspace content", async () => {
   const binary = new Uint8Array([0xff, 0x00, 0x80]);
   let returnedFiles;
 
-  await consumeInteractiveDaycareResponses(
+  await consumeActionResponses(
     [{
       response: {
         oneofKind: "event",
         event: { event: "files", files: { "output.bin": binary } },
       },
-    }],
+    }, { response: { oneofKind: "result", result: { saveStatus: 1 } } }],
     {
       files: (files) => { returnedFiles = files; },
       stderr: () => {},
@@ -103,14 +103,38 @@ test("daycare file events preserve binary workspace content", async () => {
   assert.equal(returnedFiles["output.bin"], binary);
 });
 
-test("grading requires daycare to return a signed bundle", async () => {
+test("execution requires the server to return a completion result", async () => {
   await assert.rejects(
-    () => consumeGradingDaycareResponses([], {
+    () => consumeActionResponses([], {
       files: () => {},
       stderr: () => {},
       stdout: () => {},
     }),
-    /without returning a signed graded runtime bundle/,
+    /without a result/,
+  );
+});
+
+test("execution preserves the server grade, save outcome, and LMS lock decision", async () => {
+  const result = {
+    saveStatus: 1,
+    lockedForLms: true,
+    grade: { reportCard: { passed: true }, score: 1 },
+  };
+  assert.equal(await consumeActionResponses([
+    { response: { oneofKind: "result", result } },
+  ], { files: () => {}, stderr: () => {}, stdout: () => {} }), result);
+});
+
+test("execution propagates transport failures and rejects empty responses", async () => {
+  const callbacks = { files: () => {}, stderr: () => {}, stdout: () => {} };
+  async function* interrupted() {
+    yield { response: { oneofKind: "event", event: { event: "exit", exitStatus: 0 } } };
+    throw new Error("connection interrupted");
+  }
+  await assert.rejects(() => consumeActionResponses(interrupted(), callbacks), /connection interrupted/);
+  await assert.rejects(
+    () => consumeActionResponses([{ response: { oneofKind: undefined } }], callbacks),
+    /Unexpected execution response/,
   );
 });
 

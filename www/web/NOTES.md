@@ -23,13 +23,13 @@ Page startup and authentication
 4. Send authenticated TA calls with `authorization: Bearer SESSION_KEY`. An empty session key in a restoring `Hello` response retains the stored key. Failed restoration clears authentication. Login can also accept a pasted token through the login prompt; logout clears local session state.
 5. If `assignment` is present, require authentication and load that assignment. Startup failure clears the local session and reports the error; assignment launch mode shows Run unavailable rather than presenting an unrelated standalone runtime as ready.
 
-The TA is same-origin. Daycare transport targets the hostname inside the signed runtime envelope and omits credentials and TA authorization. Browser possession of a session or assignment URL never bypasses server access checks. Clearing tab storage/logout does not itself revoke a database session.
+The TA and server-coordinated execution transport are same-origin. Execution uses authenticated `RunAssignmentAction` with a 120-second timeout; ordinary TA calls use a ten-second timeout. The browser does not exchange signed runtime bundles or connect directly to daycare. Browser possession of a session or assignment URL never bypasses server access checks. Clearing tab storage/logout does not itself revoke a database session.
 
 
 Assignment and problem selection
 --------------------------------
 
-Assignment discovery uses `ListAssignments` with no search or student context and sorts by course/title for display. Loading a selected assignment requests `GetAssignment` and the list, verifies the returned assignment key, rejects unavailable/prerequisite-blocked/empty assignments, and obtains the matching list item's lock date for presentation.
+Assignment discovery uses `ListAssignments` with no search or student context and sorts by course/title for display. Loading a selected assignment requests `GetAssignment`, verifies the returned assignment key, rejects unavailable/prerequisite-blocked/empty assignments, and uses server-provided execution results for LMS lock presentation.
 
 1. Before a user-driven assignment or problem transition, flush tabs and persist dirty work. If it remains dirty after the response, abort the transition and retain the current workspace.
 2. Sort problem summaries by ID. Prefer the requested unfinished problem, otherwise the first unfinished problem, otherwise the first problem.
@@ -58,18 +58,18 @@ Grading
 -------
 
 1. Flush editor buffers and capture the selected workspace files. Under the server-operation guard, refresh the step, check that `grade` is an available action, and build a student-only commit with note `web grade`.
-2. Call `SaveUngradedCommit`, require its signed bundle, and send it to the named daycare. Consume output/file events; returned files can update only existing student-owned paths. A grade stream requires a signed final result.
-3. Submit that final envelope to `SaveGradedCommit`. A passing result requires both `report_card.passed` and score `1.0`. Only a `SAVED` passing result advances to the next in-scope workspace or marks the problem complete.
-4. Display the report and save outcome. When the locally cached lock date has passed and the final result was saved, display the LMS-lock notice. This is presentation based on the cached date; actual passback eligibility and completion are server-owned.
+2. Call authenticated `RunAssignmentAction` with assignment/problem/step identity, action `grade`, note `web grade`, and student files. The server saves/hydrates, executes, and finalizes grading. Consume output/file events; returned files can update only existing student-owned paths. Require an explicit final result containing the graded commit.
+3. Read the graded commit and save status from the final result. A passing result requires both `report_card.passed` and score `1.0`. Only a `SAVED` passing result advances to the next in-scope workspace or marks the problem complete.
+4. Display the report and save outcome. Display the LMS-lock notice when the final result reports `locked_for_lms`; passback eligibility and completion are server-owned.
 5. Reload the assignment summary and selected unfinished problem from the TA. The displayed workspace after grading comes from authoritative server progress; it must not rely solely on an incremented local counter.
 
-Grading can fail after pre-execution student files have persisted. A failing report does not advance progress; a local test result cannot replace the signed daycare/final-save sequence. Server persistence success does not mean the asynchronous LMS post has completed.
+Grading can fail after pre-execution student files have persisted. A failing report does not advance progress; a local test result cannot replace the server execution/final-save sequence. Server persistence success does not mean the asynchronous LMS post has completed.
 
 
 Other actions and file reset
 ----------------------------
 
-Non-grade server actions refresh the workspace, validate the selected action, send `SaveUngradedCommit` with note `web ACTION`, and consume the daycare event stream. Normal end-of-stream completes the action without requiring a final bundle. Returned files update only known student paths; then the UI rebuilds the selected problem view. Do not call `SaveGradedCommit` or advance progress for these actions. Returned event bytes are local state and do not themselves acknowledge a TA save.
+Non-grade server actions refresh the workspace, validate the selected action, call authenticated `RunAssignmentAction` with note `web ACTION`, and consume execution events followed by a required explicit completion result. Missing completion or transport failures fail the action; the completion carries the pre-execution file-save status. Returned files update only known student paths; then the UI rebuilds the selected problem view. The server does not persist action grading output or post to the LMS; these actions do not advance progress. Returned event bytes are local state and do not themselves acknowledge a TA save.
 
 Reset asks for confirmation to restore all student files to the beginning of the step. Under the server-operation guard, fetch `GetWorkspace(STEP_START)` at the current explicit step and rebuild the workspace/tabs/runtime from the returned maps. This discards current local edits across the problem. Reset itself makes no save RPC and marks the newly displayed workspace loaded; the old server commit remains until a subsequent submission. This is intentionally distinct from CLI selective reset and exam's selected-file reset with persistence.
 
@@ -101,6 +101,6 @@ Publication and audit boundaries
 
 Build with `make -C www/web`; use Alpine system Node 24/npm, the lockfile, generated protobuf-ts bindings, TypeScript checks, and webpack. Generated browser bundles, workers, and emitted assets are ignored by Git and must be built before serving or deploying a fresh checkout. Versioned URLs must keep page modules, runtime adapters, workers, and service-worker selection consistent. Runtime configuration and generated/deployed scripts are required alongside the page; no server request can compensate for missing browser assets.
 
-`make -C www/web check`, `test`, and `test-browser` cover types, behavior, and live browser integration respectively. Audit token removal/restoration, wrong assignment/problem responses, path ownership, newer edits during a save, failed outgoing persistence, reset without implicit save, stream errors/missing grade bundles, local-vs-server Test selection, stale runtime loads, and blocked/closed stdin channels. Browser validation uses a disposable Chrome profile and closes its test processes.
+`make -C www/web check`, `test`, and `test-browser` cover types, behavior, and live browser integration respectively. Audit token removal/restoration, wrong assignment/problem responses, path ownership, newer edits during a save, failed outgoing persistence, reset without implicit save, stream errors/missing completion results or graded commits, local-vs-server Test selection, stale runtime loads, and blocked/closed stdin channels. Browser validation uses a disposable Chrome profile and closes its test processes.
 
 Implementation trace points are [codeGrinder.ts](scripts/codeGrinder.ts), [app.ts](scripts/app.ts), [protocol.ts](scripts/protocol.ts), [workspaceRevision.ts](scripts/workspaceRevision.ts), [localRuntime.ts](scripts/localRuntime.ts), and [sw.ts](sw.ts). `mostlyclean` preserves deployed scripts/assets; `clean` also removes generated deployment outputs. Neither target is a workspace-data reset.

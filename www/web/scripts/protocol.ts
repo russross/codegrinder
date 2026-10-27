@@ -1,9 +1,9 @@
 import type {
   AssignmentKey,
   AssignmentProblemProgress,
-  DaycareResponse,
+  AssignmentActionResult,
+  RunAssignmentActionResponse,
   GetWorkspaceResponse,
-  SignedRuntimeBundle,
 } from "../generated/codegrinder.js";
 
 type WorkspaceFiles = GetWorkspaceResponse["studentOwnedFiles"];
@@ -28,10 +28,7 @@ interface ActionControls {
   test: boolean;
 }
 
-type DaycareResponses = AsyncIterable<DaycareResponse> | Iterable<DaycareResponse>;
-type DaycareOutcome =
-  | { readonly kind: "bundle"; readonly bundle: SignedRuntimeBundle }
-  | { readonly kind: "completed" };
+type ActionResponses = AsyncIterable<RunAssignmentActionResponse> | Iterable<RunAssignmentActionResponse>;
 
 const textDecoder = new TextDecoder("utf-8", { fatal: true });
 
@@ -106,17 +103,16 @@ function localStudentFiles(
   return studentFiles;
 }
 
-async function consumeDaycareResponseStream(
-  responses: DaycareResponses,
+// Execution events update the local view; only the final result acknowledges persistence.
+async function consumeActionResponses(
+  responses: ActionResponses,
   callbacks: DaycareResponseCallbacks,
-): Promise<DaycareOutcome> {
+): Promise<AssignmentActionResult> {
   for await (const response of responses) {
     const responseBody = response.response;
     switch (responseBody.oneofKind) {
-      case "error":
-        throw new Error(responseBody.error);
-      case "bundle":
-        return { bundle: responseBody.bundle, kind: "bundle" };
+      case "result":
+        return responseBody.result;
       case "event": {
         const event = responseBody.event;
         if (event.event === "stdout") {
@@ -132,35 +128,16 @@ async function consumeDaycareResponseStream(
         break;
       }
       default:
-        break;
+        throw new Error("Unexpected execution response from the server");
     }
   }
-  return { kind: "completed" };
-}
-
-async function consumeInteractiveDaycareResponses(
-  responses: DaycareResponses,
-  callbacks: DaycareResponseCallbacks,
-): Promise<void> {
-  await consumeDaycareResponseStream(responses, callbacks);
-}
-
-async function consumeGradingDaycareResponses(
-  responses: DaycareResponses,
-  callbacks: DaycareResponseCallbacks,
-): Promise<SignedRuntimeBundle> {
-  const outcome = await consumeDaycareResponseStream(responses, callbacks);
-  if (outcome.kind === "completed") {
-    throw new Error("Daycare ended without returning a signed graded runtime bundle");
-  }
-  return outcome.bundle;
+  throw new Error("Server ended execution without a result");
 }
 
 export {
   actionButtonLabel,
   availableActionControls,
-  consumeGradingDaycareResponses,
-  consumeInteractiveDaycareResponses,
+  consumeActionResponses,
   formatAssignmentKey,
   localStudentFiles,
   normalizeRelativePath,
@@ -172,7 +149,7 @@ export {
 export type {
   ActionControls,
   DaycareResponseCallbacks,
-  DaycareResponses,
+  ActionResponses,
   WorkspaceFiles,
   WorkspaceProblem,
   WorkspaceResponse,

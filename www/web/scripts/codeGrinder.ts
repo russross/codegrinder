@@ -4,15 +4,11 @@ import {
   AssignmentDownloadStatus,
   Commit,
   CommitSaveStatus,
-  DaycareRequest,
   GetAssignmentRequest,
   GetWorkspaceRequest,
-  GradingCommit,
   HelloRequest,
   ListAssignmentsRequest,
-  RuntimeBundle,
-  SaveGradedCommitRequest,
-  SaveUngradedCommitRequest,
+  RunAssignmentActionRequest,
   SaveWorkspaceCommitRequest,
   WorkspaceFileState,
 } from "../generated/codegrinder.js";
@@ -23,18 +19,15 @@ import type {
   Commit as CommitMessage,
   GetAssignmentResponse,
   HelloResponse,
-  SaveUngradedCommitResponse,
-  SignedRuntimeBundle,
+  AssignmentActionResult,
 } from "../generated/codegrinder.js";
 import { CodeGrinderServiceClient } from "../generated/codegrinder.client.js";
 import { Timestamp } from "../generated/google/protobuf/timestamp.js";
-import type { Timestamp as TimestampMessage } from "../generated/google/protobuf/timestamp.js";
 import { createPrompt } from "./prompt.js";
 import {
   actionButtonLabel,
   availableActionControls,
-  consumeGradingDaycareResponses,
-  consumeInteractiveDaycareResponses,
+  consumeActionResponses,
   formatAssignmentKey,
   localStudentFiles,
   normalizeRelativePath,
@@ -42,7 +35,6 @@ import {
   workspaceState,
 } from "./protocol.js";
 import type {
-  DaycareResponses,
   WorkspaceFiles,
   WorkspaceProblem,
   WorkspaceResponse,
@@ -54,7 +46,6 @@ type OutputCallback = (value: string) => void;
 type AssignmentResponse = GetAssignmentResponse & { assignment: AssignmentKey };
 
 interface LoadedAssignment {
-  readonly closeAt: TimestampMessage | undefined;
   readonly response: AssignmentResponse;
 }
 
@@ -70,10 +61,6 @@ interface GradeResult extends WorkspaceSaveResult {
   passed: boolean;
   commit: CommitMessage;
 }
-
-type PreparedAction = SaveUngradedCommitResponse & {
-  bundle: SignedRuntimeBundle;
-};
 
 type SessionHandler = (sessionKey: string) => void;
 type AssignmentHandler = (assignment: LoadedAssignment) => void | Promise<void>;
@@ -118,14 +105,6 @@ function requireAssignmentKey<T extends { assignment?: AssignmentKey }>(
   }
 }
 
-function timestampHasPassed(timestamp: TimestampMessage | undefined): boolean {
-  if (!timestamp) {
-    return false;
-  }
-  const seconds = BigInt(timestamp.seconds);
-  return seconds * 1000n + BigInt(Math.floor(timestamp.nanos / 1_000_000)) <= BigInt(Date.now());
-}
-
 function saveStatusMessage(status: CommitSaveStatus, operation: string): string {
   if (status === CommitSaveStatus.SAVED) {
     return "";
@@ -137,12 +116,6 @@ function saveStatusMessage(status: CommitSaveStatus, operation: string): string 
     return `${operation} was not saved because the assignment is locked`;
   }
   return `${operation} returned an unknown save status`;
-}
-
-function requirePreparedAction(response: SaveUngradedCommitResponse): asserts response is PreparedAction {
-  if (!response.bundle || response.bundle.bundle.length === 0) {
-    throw new Error("The server could not prepare a daycare runtime");
-  }
 }
 
 class CodeGrinder {
@@ -265,13 +238,10 @@ class CodeGrinder {
 
   async loadAssignment(key: string | AssignmentKey): Promise<LoadedAssignment> {
     const assignment = typeof key === "string" ? parseAssignmentKey(key) : key;
-    const [assignmentCall, items] = await Promise.all([
-      this.client.getAssignment(
-        GetAssignmentRequest.create({ assignment }),
-        this.#authOptions(),
-      ),
-      this.listAssignments(),
-    ]);
+    const assignmentCall = await this.client.getAssignment(
+      GetAssignmentRequest.create({ assignment }),
+      this.#authOptions(),
+    );
     const response = assignmentCall.response;
     requireAssignmentKey(response);
     if (!assignmentsEqual(response.assignment, assignment)) {
@@ -289,9 +259,7 @@ class CodeGrinder {
     if (response.problems.length === 0) {
       throw new Error("This assignment has no problems");
     }
-    const listItem = items.find((item) => assignmentsEqual(item.assignment, assignment));
     return {
-      closeAt: listItem?.lockAt,
       response,
     };
   }
@@ -357,40 +325,35 @@ class CodeGrinder {
     return problem;
   }
 
-  async #prepareAction(
+  async #runAction(
     problem: WorkspaceProblem,
     localFiles: Readonly<WorkspaceFiles>,
     action: string,
-  ): Promise<PreparedAction> {
+    stdoutCallback: OutputCallback,
+    stderrCallback: OutputCallback,
+  ): Promise<AssignmentActionResult> {
     await this.#refreshProblem(problem, localFiles);
     if (!problem.workspace.actions.includes(action)) {
       throw new Error(`Action ${JSON.stringify(action)} is not available for this step`);
     }
-    const call = await this.client.saveUngradedCommit(
-      SaveUngradedCommitRequest.create({
-        commit: GradingCommit.create({
-          hostname: "",
-          userId: this.getMe().userId,
-          commit: buildCommit(problem, action, `web ${action}`),
-        }),
+    // The server hydrates trusted runtime files, executes, and finalizes grading.
+    const workspace = problem.workspace;
+    const call = this.client.runAssignmentAction(
+      RunAssignmentActionRequest.create({
+        assignment: workspace.assignment,
+        problemId: workspace.problemId,
+        step: workspace.stepNumber,
+        action,
+        note: `web ${action}`,
+        files: workspace.studentOwnedFiles,
       }),
-      this.#authOptions(),
+      { ...this.#authOptions(), timeout: 120_000 },
     );
-    const response = call.response;
-    requirePreparedAction(response);
-    return response;
-  }
-
-  #startDaycare(
-    signedBundle: SignedRuntimeBundle,
-  ): DaycareResponses {
-    const runtime = RuntimeBundle.fromBinary(signedBundle.bundle);
-    if (runtime.hostname === "") {
-      throw new Error("The runtime bundle does not name a daycare host");
-    }
-    const daycare = this.#createClient(`${window.location.protocol}//${runtime.hostname}`, "omit");
-    const call = daycare.daycare(DaycareRequest.create({ bundle: signedBundle }), { timeout: 120_000 });
-    return call.responses;
+    return consumeActionResponses(call.responses, {
+      files: (files) => this.#applyReturnedFiles(problem, files),
+      stderr: stderrCallback,
+      stdout: stdoutCallback,
+    });
   }
 
   #applyReturnedFiles(problem: WorkspaceProblem, files: Readonly<WorkspaceFiles>): void {
@@ -408,29 +371,14 @@ class CodeGrinder {
     localFiles: Readonly<WorkspaceFiles>,
     stdoutCallback: OutputCallback,
     stderrCallback: OutputCallback,
-    closeAt?: TimestampMessage,
   ): Promise<GradeResult> {
-    const prepared = await this.#prepareAction(problem, localFiles, "grade");
-    const finalBundle = await consumeGradingDaycareResponses(
-      this.#startDaycare(prepared.bundle),
-      {
-        files: (files) => this.#applyReturnedFiles(problem, files),
-        stderr: stderrCallback,
-        stdout: stdoutCallback,
-      },
-    );
-    const runtime = RuntimeBundle.fromBinary(finalBundle.bundle);
-    if (!runtime.commit) {
-      throw new Error("Daycare returned no graded commit");
+    const result = await this.#runAction(problem, localFiles, "grade", stdoutCallback, stderrCallback);
+    if (!result.grade) {
+      throw new Error("Server returned no graded commit");
     }
-    const lockedForLms = timestampHasPassed(closeAt);
-    const saved = await this.client.saveGradedCommit(
-      SaveGradedCommitRequest.create({ bundle: finalBundle }),
-      this.#authOptions(),
-    );
-    const passed = runtime.commit.reportCard?.passed === true && runtime.commit.score === 1;
+    const passed = result.grade.reportCard?.passed === true && result.grade.score === 1;
     let completed = problem.progress.completed;
-    if (passed && saved.response.saveStatus === CommitSaveStatus.SAVED) {
+    if (passed && result.saveStatus === CommitSaveStatus.SAVED) {
       const workspace = problem.workspace;
       if (BigInt(workspace.stepNumber) < BigInt(workspace.lastStepNumber)) {
         const next = await this.#getWorkspace(
@@ -448,10 +396,10 @@ class CodeGrinder {
       problem,
       completed,
       passed,
-      commit: runtime.commit,
-      lockedForLms: lockedForLms && saved.response.saveStatus === CommitSaveStatus.SAVED,
-      saveStatus: saved.response.saveStatus,
-      message: saveStatusMessage(saved.response.saveStatus, "grade"),
+      commit: result.grade,
+      lockedForLms: result.lockedForLms,
+      saveStatus: result.saveStatus,
+      message: saveStatusMessage(result.saveStatus, "grade"),
     };
   }
 
@@ -465,19 +413,11 @@ class CodeGrinder {
     if (action === "grade") {
       throw new Error("Use Grade to submit work for grading");
     }
-    const prepared = await this.#prepareAction(problem, localFiles, action);
-    await consumeInteractiveDaycareResponses(
-      this.#startDaycare(prepared.bundle),
-      {
-        files: (files) => this.#applyReturnedFiles(problem, files),
-        stderr: stderrCallback,
-        stdout: stdoutCallback,
-      },
-    );
+    const result = await this.#runAction(problem, localFiles, action, stdoutCallback, stderrCallback);
     return {
       problem,
-      saveStatus: prepared.saveStatus,
-      message: saveStatusMessage(prepared.saveStatus, "work"),
+      saveStatus: result.saveStatus,
+      message: saveStatusMessage(result.saveStatus, "work"),
     };
   }
 }
@@ -696,8 +636,7 @@ export {
   CodeGrinder,
   CodeGrinderUI,
   CommitSaveStatus,
-  consumeGradingDaycareResponses,
-  consumeInteractiveDaycareResponses,
+  consumeActionResponses,
   formatAssignmentKey,
   localStudentFiles,
   normalizeRelativePath,

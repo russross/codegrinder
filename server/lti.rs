@@ -88,7 +88,6 @@ pub fn router(state: LtiState) -> Router {
         .route("/lti/config.xml", get(get_config))
         .route("/lti/problem_sets/{ui}/{unique}", post(launch))
         .route("/version", get(get_version))
-        .route("/v2/version", get(get_version))
         .with_state(state)
 }
 
