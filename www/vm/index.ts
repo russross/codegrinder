@@ -1063,7 +1063,7 @@ function initializeVm(): void {
 }
 
 function reportError(error: unknown): void {
-    console.error("Exam operation failed", error);
+    console.error("VM client operation failed", error);
     term.writeln(error instanceof Error ? error.message : String(error));
 }
 
@@ -1315,12 +1315,12 @@ async function initialize(): Promise<void> {
 
 document.addEventListener("DOMContentLoaded", (): void => {
     void initialize().catch((error: unknown): void => {
-        console.error("Error loading exam client:", error);
+        console.error("Error loading VM client:", error);
         const menuItems = document.getElementById("menu-items");
         if (menuItems instanceof HTMLElement) {
             const message = document.createElement("p");
             message.style.color = "red";
-            message.textContent = error instanceof Error ? error.message : "Error loading exam data";
+            message.textContent = error instanceof Error ? error.message : "Error loading VM data";
             menuItems.replaceChildren(message);
         }
     });

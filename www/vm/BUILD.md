@@ -1,13 +1,13 @@
-Exam build and checks
+VM client build and checks
 =====================
 
-1. Build from the repository root with `make exam`.
-2. Check types with `make -C www/exam check`.
-3. Run persistence and real-WASM tests with `make -C www/exam test`.
+1. Build from the repository root with `make vm`.
+2. Check types with `make -C www/vm check`.
+3. Run persistence and real-WASM tests with `make -C www/vm test`.
 4. Run editor, instructions, highlighter, and terminal browser tests with
-   `make -C www/exam test-widgets`.
-5. Run the complete exam and real guest checks with
-   `make -C www/exam test-browser`.
+   `make -C www/vm test-widgets`.
+5. Run the complete VM client and real guest checks with
+   `make -C www/vm test-browser`.
 
 Use Alpine system Node 24 and npm. The Makefile installs the locked dependencies,
 prepares the VM assets, generates protobuf bindings, checks types, and bundles
@@ -20,7 +20,7 @@ behavior without duplicating those renderer fixtures.
 
 Select tests for the affected modules and boundaries. Do not rerun Rust tests
 for UI-only changes. Use incremental builds without cleaning first; unreliable
-incremental rules must be fixed. `make -C www/exam mostlyclean` removes build
+incremental rules must be fixed. `make -C www/vm mostlyclean` removes build
 caches, generated protobuf sources, and npm dependencies while preserving the
 entry page, published bundles, and every deployed VM asset. `clean` also deletes
 those deployment assets. Build scripts use POSIX shell or dependency-free

@@ -32,10 +32,10 @@ codegrinder.example.edu {
 	}
 
 	# Revalidate the page and direct dependencies; fetched content names stay immutable.
-	@exam_entry path /exam /exam/ /exam/index.html /exam/dist/app.js /exam/dist/style.css /exam/dist/favicon.svg
-	header @exam_entry Cache-Control "no-cache"
-	@exam_assets path /exam/dist/app-* /exam/dist/style-* /exam/dist/favicon-* /exam/vm/runtime/riscbox-*/* /exam/vm/image/risclet-*.json /exam/vm/image/drive-*/*
-	header @exam_assets Cache-Control "public, max-age=31536000, immutable"
+	@vm_entry path /vm /vm/ /vm/index.html /vm/dist/app.js /vm/dist/style.css /vm/dist/favicon.svg
+	header @vm_entry Cache-Control "no-cache"
+	@vm_assets path /vm/dist/app-* /vm/dist/style-* /vm/dist/favicon-* /vm/vm/runtime/riscbox-*/* /vm/vm/image/risclet-*.json /vm/vm/image/drive-*/*
+	header @vm_assets Cache-Control "public, max-age=31536000, immutable"
 
 	@dynamic path /codegrinder.CodeGrinderService/* /lti/* /quiz/* /v2/version /version
 	reverse_proxy @dynamic h2c://127.0.0.1:1400 {

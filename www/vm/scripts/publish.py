@@ -59,7 +59,7 @@ def main() -> int:
     try:
         publish()
     except (OSError, ValueError) as error:
-        print(f"Exam publication: {error}", file=sys.stderr)
+        print(f"VM client publication: {error}", file=sys.stderr)
         return 1
     return 0
 

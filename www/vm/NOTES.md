@@ -1,7 +1,7 @@
-Exam client semantics
+VM client semantics
 =====================
 
-This document defines the exam client's operation flows, ownership rules, persistence boundaries, and VM lifecycle invariants. The [server semantics](../../server/NOTES.md) define authoritative access, sequencing, and grading. The [web client](../web/NOTES.md) has separate reset, save, and local-execution behavior. [UI.md](UI.md) supplies presentation details and [BUILD.md](BUILD.md) supplies build/check procedures.
+This document defines the VM client's operation flows, ownership rules, persistence boundaries, and VM lifecycle invariants. The [server semantics](../../server/NOTES.md) define authoritative access, sequencing, and grading. The [web client](../web/NOTES.md) has separate reset, save, and local-execution behavior. [UI.md](UI.md) supplies presentation details and [BUILD.md](BUILD.md) supplies build/check procedures.
 
 The protocol is defined in [codegrinder.proto](../../protocol/codegrinder.proto). The browser uses the generated protobuf-ts field names.
 
@@ -185,8 +185,8 @@ Trace operations through [index.ts](index.ts), [saving.ts](saving.ts), [problem-
 Quiz entry into the VM client
 -----------------------------
 
-The VM client is shared by the existing `/exam/` LTI workflow and the attended `/quiz/` connector. Server admission is described in [server notes](../../server/NOTES.md#attended-respondus-quiz-entry). The client directory and published asset URLs remain unchanged.
+The VM client is shared by the existing `/exam/` LTI workflow and the attended `/quiz/` connector. Server admission is described in [server notes](../../server/NOTES.md#attended-respondus-quiz-entry). The client is stored under `www/vm` and served at `/vm/`.
 
-A successful connector handoff opens `/exam/?assignment=...#quiz=...`. `quiz-entry.ts` immediately removes the fragment, places its raw bearer key into the existing tab-scoped session storage, and renders the supplied student/course/assignment identity using text nodes in a modal dialog. Continue is required; Escape does not dismiss it. Assignment authentication and workspace requests begin after confirmation. Ordinary `/exam/` entry and reload have no fragment and use their existing login-token/session restoration path. All grading, saving, and VM behavior stays shared. Session scope, exact station-IP checks, expiry, and revocation are enforced by the server rather than by the dialog or client URL.
+A successful connector handoff opens `/vm/?assignment=...#quiz=...`. `quiz-entry.ts` immediately removes the fragment, places its raw bearer key into the existing tab-scoped session storage, and renders the supplied student/course/assignment identity using text nodes in a modal dialog. Continue is required; Escape does not dismiss it. Assignment authentication and workspace requests begin after confirmation. Ordinary `/vm/` entry and reload have no fragment and use their existing login-token/session restoration path. All grading, saving, and VM behavior stays shared. Session scope, exact station-IP checks, expiry, and revocation are enforced by the server rather than by the dialog or client URL.
 
 Run the focused browser check with `node --test tests/quiz-entry.test.mjs` from this directory. It uses Chromium with a disposable profile and covers credential removal, tab storage, safe identity rendering, required confirmation, ordinary reload, and invalid handoffs.

@@ -52,9 +52,9 @@ class BuildTests(unittest.TestCase):
         # Only build definitions and tiny fixtures enter the disposable checkout.
         for name in (
             "Makefile", "scripts", "server/Makefile", "grind/Makefile", "stepper/Makefile",
-            "www/Makefile", "www/web/Makefile", "www/exam/Makefile",
-            "www/exam/scripts/publish.py", "www/exam/scripts/prune.py", "www/exam/vm/Makefile",
-            "www/exam/vm/scripts/assets.py", "tests/Makefile",
+            "www/Makefile", "www/web/Makefile", "www/vm/Makefile",
+            "www/vm/scripts/publish.py", "www/vm/scripts/prune.py", "www/vm/vm/Makefile",
+            "www/vm/vm/scripts/assets.py", "tests/Makefile",
             "macos-minimal-sdk/Makefile", "macos-minimal-sdk/versions.inc",
         ):
             source = ROOT / name
@@ -137,30 +137,30 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(sum(command == ["npm", "ci"] for command in self.commands()), 2)
 
     def test_exam_css_publication_and_missing_deployment(self) -> None:
-        self.browser_fixture("www/exam")
-        self.write("www/exam/index.ts", "source")
-        self.write("www/exam/index.template.html", "{{app}} {{style}} {{favicon}}")
-        self.write("www/exam/favicon.svg", "icon")
-        self.write("www/exam/vm/Makefile", "all:\n\t@mkdir -p build\n\t@test -f build/assets.json || printf '{}' > build/assets.json\n")
-        self.make("www/exam", "-j4")
+        self.browser_fixture("www/vm")
+        self.write("www/vm/index.ts", "source")
+        self.write("www/vm/index.template.html", "{{app}} {{style}} {{favicon}}")
+        self.write("www/vm/favicon.svg", "icon")
+        self.write("www/vm/vm/Makefile", "all:\n\t@mkdir -p build\n\t@test -f build/assets.json || printf '{}' > build/assets.json\n")
+        self.make("www/vm", "-j4")
         initial = self.commands()
-        first_entry = (self.root / "www/exam/index.html").read_text()
-        self.make("www/exam")
+        first_entry = (self.root / "www/vm/index.html").read_text()
+        self.make("www/vm")
         self.assertEqual(self.commands(), initial)
-        self.write("www/exam/style.css", "changed style")
-        self.make("www/exam")
+        self.write("www/vm/style.css", "changed style")
+        self.make("www/vm")
         self.assertEqual(self.commands(), initial)
-        new_entry = (self.root / "www/exam/index.html").read_text()
+        new_entry = (self.root / "www/vm/index.html").read_text()
         self.assertNotEqual(first_entry, new_entry)
         for output in first_entry.split():
-            self.assertTrue((self.root / "www/exam" / output).exists())
+            self.assertTrue((self.root / "www/vm" / output).exists())
 
         # A lost published asset is restored, and subsequent builds settle again.
-        (self.root / "www/exam" / new_entry.split()[0]).unlink()
-        self.make("www/exam")
-        self.assertTrue((self.root / "www/exam" / new_entry.split()[0]).exists())
+        (self.root / "www/vm" / new_entry.split()[0]).unlink()
+        self.make("www/vm")
+        self.assertTrue((self.root / "www/vm" / new_entry.split()[0]).exists())
         commands = self.commands()
-        self.make("www/exam")
+        self.make("www/vm")
         self.assertEqual(self.commands(), commands)
 
     def test_upstream_sdk_make_targets(self) -> None:
@@ -175,7 +175,7 @@ class BuildTests(unittest.TestCase):
             self.assertTrue((sysroot / "usr/lib/libSystem.dylib").is_symlink())
 
     def test_vm_incremental_build_and_missing_disk_and_runtime(self) -> None:
-        vm = "www/exam/vm"
+        vm = "www/vm/vm"
         self.write(f"{vm}/guest/startup", "guest")
         self.write(f"{vm}/build/downloads/risclet-0.5.5", "risclet")
         for name in ("riscbox.js", "riscbox.wasm", "riscbox.d.ts", "fw_dynamic.bin-boot.gz", "linux-kernel.gz"):
@@ -261,17 +261,17 @@ Path("build/rootfs.ext4").write_bytes(Path(sys.argv[2]).read_bytes() + Path("gue
     def test_cleanup_preserves_deployment_and_private_data(self) -> None:
         preserved = (
             "config.json", "db/codegrinder.db", "backup/database.gz",
-            "www/exam/vm/runtime/package.json",
+            "www/vm/vm/runtime/package.json",
         )
         deployed = (
             "target/release/codegrinder", "target/release/grind",
             "stepper/dist/stepper.linux_amd64", "stepper/dist/stepper.linux_riscv64",
-            "www/exam/vm/image/risclet.cfg",
+            "www/vm/vm/image/risclet.cfg",
             "www/grind.linux_amd64", "www/web/scripts/app.js", "www/web/sw.js",
-            "www/exam/index.html", "www/exam/dist/app-old.js",
-            "www/exam/vm/runtime/riscbox-2026.10.7/riscbox.js",
-            "www/exam/vm/runtime/riscbox.js", "www/exam/vm/image/drive-old/blk.txt",
-            "www/exam/vm/image/risclet-old.json",
+            "www/vm/index.html", "www/vm/dist/app-old.js",
+            "www/vm/vm/runtime/riscbox-2026.10.7/riscbox.js",
+            "www/vm/vm/runtime/riscbox.js", "www/vm/vm/image/drive-old/blk.txt",
+            "www/vm/vm/image/risclet-old.json",
         )
         intermediates = (
             "target/release/deps/library", "target/release/.fingerprint/package",
@@ -279,10 +279,10 @@ Path("build/rootfs.ext4").write_bytes(Path(sys.argv[2]).read_bytes() + Path("gue
             "target/riscv64gc-unknown-linux-musl/standalone-linux/stepper",
             "stepper/dist/stepper.linux_riscv64.part",
             "www/web/generated/codegrinder.ts", "www/web/node_modules/package/file",
-            "www/exam/build/ui/app.js", "www/exam/codegrinder.ts",
-            "www/exam/index.html.part", "www/grind.linux_amd64.part",
-            "www/exam/vm/image/risclet-current.json.part",
-            "www/exam/vm/build/rootfs.ext4", "www/exam/vm/runtime/riscbox-2026.10.7/.built",
+            "www/vm/build/ui/app.js", "www/vm/codegrinder.ts",
+            "www/vm/index.html.part", "www/grind.linux_amd64.part",
+            "www/vm/vm/image/risclet-current.json.part",
+            "www/vm/vm/build/rootfs.ext4", "www/vm/vm/runtime/riscbox-2026.10.7/.built",
             "macos-minimal-sdk/sysroot-macos-arm64/usr/lib/libSystem.B.dylib",
             "macos-minimal-sdk/sysroot-macos-x86_64/usr/lib/libSystem.B.dylib",
             "macos-minimal-sdk/download/archive", "macos-minimal-sdk/hello",
@@ -290,13 +290,13 @@ Path("build/rootfs.ext4").write_bytes(Path(sys.argv[2]).read_bytes() + Path("gue
         )
         for name in (*preserved, *deployed, *intermediates):
             self.write(name, name)
-        self.write("www/exam/.published-assets.json", json.dumps([
+        self.write("www/vm/.published-assets.json", json.dumps([
             "dist/app-old.js", "vm/image/risclet.cfg", "vm/image/drive-old",
             "vm/image/risclet-old.json", "vm/runtime/riscbox-2026.10.7", "vm/runtime/riscbox.js",
         ]))
         stale = (
-            "www/exam/dist/app-stale.js", "www/exam/vm/image/drive-stale/blk.txt",
-            "www/exam/vm/image/stale.cfg", "www/exam/vm/runtime/riscbox-2020.1.1/riscbox.js",
+            "www/vm/dist/app-stale.js", "www/vm/vm/image/drive-stale/blk.txt",
+            "www/vm/vm/image/stale.cfg", "www/vm/vm/runtime/riscbox-2020.1.1/riscbox.js",
         )
         for name in stale:
             self.write(name, name)
@@ -306,7 +306,7 @@ Path("build/rootfs.ext4").write_bytes(Path(sys.argv[2]).read_bytes() + Path("gue
         for name in (*intermediates, *stale):
             self.assertFalse((self.root / name).exists(), name)
         # Repeated cleanup uses the durable inventory after build caches disappear.
-        self.make("www/exam", "mostlyclean")
+        self.make("www/vm", "mostlyclean")
         self.make(".", "clean")
         for name in preserved:
             self.assertEqual((self.root / name).read_text(), name)
@@ -315,14 +315,14 @@ Path("build/rootfs.ext4").write_bytes(Path(sys.argv[2]).read_bytes() + Path("gue
 
     def test_cleanup_keeps_published_vm_instead_of_unpublished_build(self) -> None:
         # A publication captures hashed configs, disks, runtime, and UI assets together.
-        self.write("www/exam/build/ui/app-current.js", "bundle")
-        self.write("www/exam/index.template.html", "{{app}} {{style}} {{favicon}}")
-        self.write("www/exam/style.css", "style")
-        self.write("www/exam/favicon.svg", "icon")
-        self.write("www/exam/vm/image/riscv-current.cfg", json.dumps({
+        self.write("www/vm/build/ui/app-current.js", "bundle")
+        self.write("www/vm/index.template.html", "{{app}} {{style}} {{favicon}}")
+        self.write("www/vm/style.css", "style")
+        self.write("www/vm/favicon.svg", "icon")
+        self.write("www/vm/vm/image/riscv-current.cfg", json.dumps({
             "drive0": {"file": "riscv-drive-current/blk.txt"},
         }))
-        self.write("www/exam/vm/build/assets.json", json.dumps({"riscv": {
+        self.write("www/vm/vm/build/assets.json", json.dumps({"riscv": {
             "configUrl": "vm/image/riscv-current.cfg",
             "runtimeUrl": "vm/runtime/riscbox-current/riscbox.js",
         }}))
@@ -331,49 +331,49 @@ Path("build/rootfs.ext4").write_bytes(Path(sys.argv[2]).read_bytes() + Path("gue
             "vm/runtime/riscbox-current/riscbox.js", "vm/runtime/riscbox-current/riscbox.wasm",
         )
         for name in kept[1:]:
-            self.write(f"www/exam/{name}", "active")
+            self.write(f"www/vm/{name}", "active")
         subprocess.run(
-            ["python3", "scripts/publish.py"], cwd=self.root / "www/exam", check=True,
+            ["python3", "scripts/publish.py"], cwd=self.root / "www/vm", check=True,
         )
 
         # New build metadata does not change which assets the published UI needs.
-        self.write("www/exam/vm/build/assets.json", "{}")
+        self.write("www/vm/vm/build/assets.json", "{}")
         stale = (
             "vm/image/riscv-unpublished.cfg", "vm/image/riscv-drive-unpublished/blk.txt",
             "vm/runtime/riscbox-unpublished/riscbox.js", "dist/app-old.js",
         )
         for name in stale:
-            self.write(f"www/exam/{name}", "stale")
-        self.make("www/exam/vm", "mostlyclean")
-        self.assertTrue((self.root / "www/exam/dist/app-old.js").exists())
-        self.make("www/exam", "mostlyclean")
-        self.make("www/exam", "mostlyclean")
+            self.write(f"www/vm/{name}", "stale")
+        self.make("www/vm/vm", "mostlyclean")
+        self.assertTrue((self.root / "www/vm/dist/app-old.js").exists())
+        self.make("www/vm", "mostlyclean")
+        self.make("www/vm", "mostlyclean")
         for name in (*kept, "dist/app-current.js", "index.html"):
-            self.assertTrue((self.root / "www/exam" / name).exists(), name)
+            self.assertTrue((self.root / "www/vm" / name).exists(), name)
         for name in stale:
-            self.assertFalse((self.root / "www/exam" / name).exists(), name)
+            self.assertFalse((self.root / "www/vm" / name).exists(), name)
 
     def test_cleanup_requires_inventory_for_existing_page(self) -> None:
-        self.write("www/exam/vm/guest/startup", "guest")
-        self.write("www/exam/index.html", "existing page")
-        asset = self.write("www/exam/dist/app.js", "existing bundle")
-        cache = self.write("www/exam/build/input", "cache")
+        self.write("www/vm/vm/guest/startup", "guest")
+        self.write("www/vm/index.html", "existing page")
+        asset = self.write("www/vm/dist/app.js", "existing bundle")
+        cache = self.write("www/vm/build/input", "cache")
         result = subprocess.run(
             ["make", "--no-print-directory", "mostlyclean"],
-            cwd=self.root / "www/exam", text=True, capture_output=True, check=False,
+            cwd=self.root / "www/vm", text=True, capture_output=True, check=False,
         )
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("rebuild the exam page", result.stderr)
+        self.assertIn("rebuild the VM client page", result.stderr)
         self.assertTrue(asset.exists())
         self.assertTrue(cache.exists())
 
         # Full cleanup needs no inventory, and an unpublished empty tree can be swept.
-        self.make("www/exam", "clean")
+        self.make("www/vm", "clean")
         self.assertFalse(asset.exists())
         self.assertFalse(cache.exists())
-        self.write("www/exam/vm/runtime/stale.js", "stale")
-        self.make("www/exam", "mostlyclean")
-        self.assertFalse((self.root / "www/exam/vm/runtime/stale.js").exists())
+        self.write("www/vm/vm/runtime/stale.js", "stale")
+        self.make("www/vm", "mostlyclean")
+        self.assertFalse((self.root / "www/vm/vm/runtime/stale.js").exists())
 
     def test_rust_checks_precede_tests_and_stay_component_scoped(self) -> None:
         self.make("grind", "test", "TEST_ARGS=workspace")

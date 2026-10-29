@@ -52,7 +52,7 @@ For build workflows and routine validation:
 - Run only checks relevant to the changed code and its affected boundaries. CLI-only changes do not require server tests; browser-only changes do not require Rust tests. Reserve the workspace-wide `make test` and end-to-end suite for changes that actually affect those boundaries.
 - Run Rust formatting checks and Clippy before tests. If formatting must change, finish formatting before starting the tests. Do not repeat successful tests unless subsequent changes affect the tested behavior.
 - Every build component provides `mostlyclean` and `clean`. `mostlyclean` removes intermediates while preserving native release executables and every deployed browser/client asset, including assets used by cached pages. The Rust cache is shared, so component cleanup removes shared intermediates while preserving both native executables. `clean` also removes that component's deployment assets. Neither target touches configuration, databases, backups, or installed system files.
-- For `www/exam`, `mostlyclean` preserves only the currently published page's active assets and removes stale UI bundles, VM configurations, disk images, and runtime releases. Publication records these assets in `.published-assets.json`, which survives build-cache cleanup. Previously cached exam pages are not retained by this sweep.
+- For `www/vm`, `mostlyclean` preserves only the currently published page's active assets and removes stale UI bundles, VM configurations, disk images, and runtime releases. Publication records these assets in `.published-assets.json`, which survives build-cache cleanup. Previously cached exam pages are not retained by this sweep.
 - Use POSIX shell for straightforward build sequencing and decisions, with BusyBox compatibility where practical. Use dependency-free Python with `#!/usr/bin/env python3` when scripting needs more complex data processing; build scripts must not require a virtual environment or uv.
 
 For database schema and queries:
@@ -74,7 +74,7 @@ For protocol changes:
     * Client does not know/care about database layout—protocol should minimize leaking relational database structure
 - Session authentication uses explicit raw session keys in gRPC metadata. Do not use HTTP cookies or `session_cookie` request fields for session auth.
 
-For the web interfaces under `www/exam` and `www/web`:
+For the web interfaces under `www/vm` and `www/web`:
 
 - Use the Alpine system `node` and `npm` packages for dependency installation, proto generation, tests, and builds. Node 24 is the supported runtime; do not add a project-local Node toolchain.
 

@@ -16,7 +16,7 @@ def prune(root: Path, vm_only: bool) -> None:
             raise ValueError("invalid published asset inventory")
         active = {Path(path) for path in value}
     elif (root / "index.html").exists():
-        raise ValueError("rebuild the exam page to record its assets before mostlyclean")
+        raise ValueError("rebuild the VM client page to record its assets before mostlyclean")
     else:
         active = set()
 
@@ -45,7 +45,7 @@ def main() -> int:
             raise ValueError("usage: prune.py [--vm-only]")
         prune(Path(__file__).resolve().parent.parent, bool(sys.argv[1:]))
     except (OSError, ValueError) as error:
-        print(f"Exam cleanup: {error}", file=sys.stderr)
+        print(f"VM client cleanup: {error}", file=sys.stderr)
         return 1
     return 0
 

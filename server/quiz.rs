@@ -291,7 +291,7 @@ async fn redeem(
         let Some((key,session,identity))=result else { return Err(AppError::Forbidden("Invalid or expired entry. Check the code and password; relaunch from Canvas if necessary.".into())); };
         // A fragment avoids forwarding the bearer key in HTTP requests or referrers.
         let handoff=serde_json::json!({"session":session,"identity":identity}).to_string();
-        let location=format!("/exam/?assignment={}#quiz={}",escape(&format!("{}:{}:{}",key.user_id,key.course_id,key.problem_set_id)),escape(&handoff));
+        let location=format!("/vm/?assignment={}#quiz={}",escape(&format!("{}:{}:{}",key.user_id,key.course_id,key.problem_set_id)),escape(&handoff));
         Ok((axum::http::StatusCode::SEE_OTHER,[(header::LOCATION,location),(header::CACHE_CONTROL,"no-store".into()),(header::REFERRER_POLICY,"no-referrer".into())]).into_response())
     }.await)
 }
@@ -979,7 +979,7 @@ mod http_tests {
         assert_eq!(statuses, vec![303, 403]);
         let success = if first.status().as_u16() == 303 { first } else { second };
         let location = success.headers()[header::LOCATION].to_str().unwrap();
-        assert!(location.starts_with("/exam/?assignment=student%3Acourse%3Aset#quiz="));
+        assert!(location.starts_with("/vm/?assignment=student%3Acourse%3Aset#quiz="));
         assert!(!location.split('#').next().unwrap().contains("session"));
         headers.insert("x-real-ip", "198.51.100.10".parse().unwrap());
         assert_eq!(

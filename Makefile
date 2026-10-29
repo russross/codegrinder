@@ -3,7 +3,7 @@ DIST_DIR ?= $(ROOT_DIR)/www
 MACOS_SDK_DIR ?= $(ROOT_DIR)/macos-minimal-sdk
 export DIST_DIR MACOS_SDK_DIR
 
-.PHONY: all setup build server grind web web-check exam test end2end clean mostlyclean \
+.PHONY: all setup build server grind web web-check vm test end2end clean mostlyclean \
 	grind-dist grind-linux-amd64 grind-linux-arm64 grind-macos-amd64 grind-macos-arm64
 
 all: build
@@ -30,8 +30,8 @@ web:
 web-check:
 	$(MAKE) -C www/web check
 
-exam:
-	$(MAKE) -C www/exam
+vm:
+	$(MAKE) -C www/vm
 
 grind-dist grind-linux-amd64 grind-linux-arm64 grind-macos-amd64 grind-macos-arm64:
 	$(MAKE) -C grind $@
