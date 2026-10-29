@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 use std::future::Future;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -83,11 +83,28 @@ impl CodeGrinderServer {
             .ok_or_else(|| AppError::Unauthorized("missing session key".to_owned()))?
             .to_owned();
         let config = self.config.clone();
+        let quiz_ip_allowed = self.ip_filter.enabled() && self.ip_allowed(request);
+        let station_ip = request_client_ip(request)
+            .and_then(|ip| ip.parse::<IpAddr>().ok())
+            .map(|ip| ip.to_string());
         self.db
             .transaction_until(true, request_deadline(request), move |conn| {
                 let user_id =
                     load_session_user_id(conn, &session_key, &config.session_secret, now_utc())?;
-                store::load_user_by_id(conn, &user_id)
+                let hash = crate::sessions::session_key_hash(&session_key, &config.session_secret)?;
+                let mut user = store::load_user_by_id(conn, &user_id)?;
+                user.quiz_scope = crate::quiz::load_scope(conn, &hash, station_ip.as_deref())?;
+                if user.quiz_scope.is_some() {
+                    if !quiz_ip_allowed {
+                        return Err(AppError::Forbidden(
+                            "quiz access requires an approved testing-center station".into(),
+                        ));
+                    }
+                    user.admin = false;
+                    user.author = false;
+                    user.instructor = false;
+                }
+                Ok(user)
             })
             .await
     }
@@ -1029,6 +1046,60 @@ mod tests {
         })
         .await
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn quiz_scope_is_preserved_through_rpc_authentication_and_rechecks_station_and_assignment()
+     {
+        let mut service = test_service().await;
+        let sessions = seed_service_users(&service.db, false, true).await;
+        seed_service_assignments(&service.db).await;
+        service.ip_filter = IpFilter::from_entries(&["192.0.2.0/24".into()]).unwrap();
+        service
+            .db
+            .transaction(true, |conn| {
+                conn.execute(
+                    "INSERT INTO quiz_assignments VALUES ('student','c1','ps1','configuration')",
+                    [],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let key = AssignmentKey {
+            user_id: "student".into(),
+            course_id: "c1".into(),
+            problem_set_id: "ps1".into(),
+        };
+        let mut ordinary =
+            auth_request(GetAssignmentRequest { assignment: Some(key.clone()) }, &sessions.student);
+        ordinary.metadata_mut().insert("x-real-ip", "192.0.2.10".parse().unwrap());
+        assert_eq!(
+            service.get_assignment(ordinary).await.unwrap_err().code(),
+            Code::PermissionDenied
+        );
+        let hash =
+            crate::sessions::session_key_hash(&sessions.student, &service.config.session_secret)
+                .unwrap();
+        service.db.transaction(true,move |conn| {
+            conn.execute("INSERT INTO quiz_sessions VALUES (?,'student','c1','ps1','configuration','192.0.2.10')",[hash])?;
+            Ok(())
+        }).await.unwrap();
+        let mut allowed =
+            auth_request(GetAssignmentRequest { assignment: Some(key.clone()) }, &sessions.student);
+        allowed.metadata_mut().insert("x-real-ip", "192.0.2.10".parse().unwrap());
+        assert!(service.get_assignment(allowed).await.is_ok());
+        let mut wrong_ip = auth_request(HelloRequest::default(), &sessions.student);
+        wrong_ip.metadata_mut().insert("x-real-ip", "192.0.2.11".parse().unwrap());
+        assert_eq!(service.hello(wrong_ip).await.unwrap_err().code(), Code::PermissionDenied);
+        let mut other = auth_request(
+            GetAssignmentRequest {
+                assignment: Some(AssignmentKey { user_id: "other".into(), ..key }),
+            },
+            &sessions.student,
+        );
+        other.metadata_mut().insert("x-real-ip", "192.0.2.10".parse().unwrap());
+        assert_eq!(service.get_assignment(other).await.unwrap_err().code(), Code::PermissionDenied);
     }
 
     #[tokio::test]

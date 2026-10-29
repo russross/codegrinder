@@ -10,7 +10,7 @@
     "test": "node --experimental-transform-types --test saving.test.mjs workspace.test.mjs tests/input.test.mjs tests/workspace.test.mjs tests/publication.test.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test:browser": "node --test browser.test.mjs",
-    "test:widgets": "node --test --test-concurrency=1 tests/session.test.mjs tests/terminal.test.mjs tests/highlighting.test.mjs tests/instructions.test.mjs tests/fallback.test.mjs"
+    "test:widgets": "node --test --test-concurrency=1 tests/session.test.mjs tests/terminal.test.mjs tests/highlighting.test.mjs tests/instructions.test.mjs tests/fallback.test.mjs tests/quiz-entry.test.mjs"
   },
   "keywords": [],
   "author": "",

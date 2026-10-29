@@ -43,6 +43,7 @@ pub struct UserRow {
     pub admin: bool,
     pub author: bool,
     pub instructor: bool,
+    pub quiz_scope: Option<crate::quiz::QuizScope>,
 }
 
 pub fn load_user_by_id(conn: &Connection, user_id: &str) -> AppResult<UserRow> {
@@ -63,6 +64,7 @@ fn user_from_row(row: &Row<'_>) -> rusqlite::Result<UserRow> {
         admin: row.get::<_, i64>("admin")? != 0,
         author: row.get::<_, i64>("author")? != 0,
         instructor: row.get::<_, i64>("instructor")? != 0,
+        quiz_scope: None,
     })
 }
 
@@ -113,6 +115,18 @@ pub fn list_assignments(
         })
     })?;
     let mut items = rows.collect::<Result<Vec<_>, _>>()?;
+    let mut visible = Vec::new();
+    for item in items.drain(..) {
+        let key = item.assignment.as_ref().ok_or_else(|| {
+            AppError::Internal("assignment list item missing assignment key".into())
+        })?;
+        match crate::quiz::require_access(conn, current_user, key) {
+            Ok(()) => visible.push(item),
+            Err(AppError::Forbidden(_)) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    let mut items = visible;
     for item in &mut items {
         let Some(key) = item.assignment.as_ref() else {
             return Err(AppError::Internal(
@@ -148,6 +162,7 @@ pub fn get_assignment(
     key: &AssignmentKey,
     ip_allowed: bool,
 ) -> AppResult<GetAssignmentResponse> {
+    crate::quiz::require_access(conn, current_user, key)?;
     let (
         problem_set_note,
         course_name,

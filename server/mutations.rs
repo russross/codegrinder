@@ -1331,6 +1331,7 @@ fn save_commit_core(
         .assignment
         .as_ref()
         .ok_or_else(|| AppError::BadRequest("assignment is required".to_owned()))?;
+    crate::quiz::require_access(conn, current_user, key)?;
     if !allow_action && !commit.action.is_empty() {
         return Err(AppError::BadRequest("workspace commit action must be empty".to_owned()));
     }
@@ -2543,6 +2544,7 @@ mod tests {
             admin: false,
             author: false,
             instructor: false,
+            quiz_scope: None,
         }
     }
 
@@ -2554,6 +2556,7 @@ mod tests {
             admin: false,
             author: true,
             instructor: false,
+            quiz_scope: None,
         }
     }
 

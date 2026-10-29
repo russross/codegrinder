@@ -37,8 +37,10 @@ codegrinder.example.edu {
 	@exam_assets path /exam/dist/app-* /exam/dist/style-* /exam/dist/favicon-* /exam/vm/runtime/riscbox-*/* /exam/vm/image/risclet-*.json /exam/vm/image/drive-*/*
 	header @exam_assets Cache-Control "public, max-age=31536000, immutable"
 
-	@dynamic path /codegrinder.CodeGrinderService/* /lti/* /v2/version /version
-	reverse_proxy @dynamic h2c://127.0.0.1:1400
+	@dynamic path /codegrinder.CodeGrinderService/* /lti/* /quiz/* /v2/version /version
+	reverse_proxy @dynamic h2c://127.0.0.1:1400 {
+		header_up X-Real-IP {remote_host}
+	}
 
 	file_server {
 		precompressed br

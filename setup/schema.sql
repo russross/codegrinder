@@ -730,3 +730,47 @@ CREATE VIEW problem_catalog_rows AS
         problem_set_step_scope.step_number,
         problem_set_step_scope.step_note,
         problem_set_step_scope.step_weight;
+
+-- Apply once to an existing database before deploying quiz-enabled server code.
+CREATE TABLE quiz_assignments (
+    user_id text NOT NULL,
+    course_id text NOT NULL,
+    problem_set_id text NOT NULL,
+    assignment_tag text NOT NULL,
+    PRIMARY KEY (user_id, course_id, problem_set_id),
+    FOREIGN KEY (user_id, course_id, problem_set_id) REFERENCES assignments ON DELETE CASCADE ON UPDATE CASCADE
+) WITHOUT ROWID;
+
+-- One pending entry per station also provides a persistent station attempt budget.
+CREATE TABLE quiz_entries (
+    station_ip text PRIMARY KEY,
+    quiz_code text NOT NULL CHECK (length(quiz_code) = 6 AND quiz_code NOT GLOB '*[^0-9]*'),
+    user_id text NOT NULL,
+    course_id text NOT NULL,
+    problem_set_id text NOT NULL,
+    assignment_tag text NOT NULL,
+    entry_created_at text NOT NULL,
+    entry_expires_at text NOT NULL,
+    entry_attempts integer NOT NULL DEFAULT 0 CHECK (entry_attempts >= 0),
+    entry_consumed_at text,
+    FOREIGN KEY (user_id, course_id, problem_set_id) REFERENCES quiz_assignments ON DELETE CASCADE ON UPDATE CASCADE
+) WITHOUT ROWID;
+
+-- Station budgets survive replacement of a pending entry.
+CREATE TABLE quiz_station_attempts (
+    station_ip text PRIMARY KEY,
+    attempt_window_end text NOT NULL,
+    station_attempts integer NOT NULL CHECK (station_attempts >= 0)
+) WITHOUT ROWID;
+
+CREATE TABLE quiz_sessions (
+    session_key_hash text PRIMARY KEY,
+    user_id text NOT NULL,
+    course_id text NOT NULL,
+    problem_set_id text NOT NULL,
+    assignment_tag text NOT NULL,
+    station_ip text NOT NULL,
+    FOREIGN KEY (session_key_hash) REFERENCES user_sessions ON DELETE CASCADE,
+    FOREIGN KEY (user_id, course_id, problem_set_id) REFERENCES assignments ON DELETE CASCADE ON UPDATE CASCADE
+) WITHOUT ROWID;
+CREATE INDEX quiz_sessions_station ON quiz_sessions(station_ip);

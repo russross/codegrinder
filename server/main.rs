@@ -10,6 +10,7 @@ mod lti;
 mod mutations;
 mod passback;
 mod proto;
+mod quiz;
 mod service;
 mod sessions;
 mod signatures;
@@ -84,7 +85,7 @@ async fn main() -> AppResult<()> {
         Router::new().route_service("/codegrinder.CodeGrinderService/{*grpc}", grpc_web);
     // Administrative requests and container execution share a listener, not transactions.
     let lti_state = LtiState { db, config, login_tokens, ip_filter, version };
-    let app = lti::router(lti_state).merge(grpc_router);
+    let app = lti::router(lti_state.clone()).merge(quiz::router(lti_state)).merge(grpc_router);
     serve(app, args.bind).await
 }
 

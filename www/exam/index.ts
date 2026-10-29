@@ -1,3 +1,4 @@
+import { acceptQuizSession } from "./quiz-entry";
 import {
     AssignmentKey,
     AssignmentProblemProgress,
@@ -424,6 +425,7 @@ async function loadProblem(
 }
 
 async function loadAssignment(): Promise<void> {
+    await acceptQuizSession(storeSessionKey);
     const client = createMainClient();
     const userId = await authenticate(client);
 

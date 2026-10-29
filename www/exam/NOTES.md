@@ -180,3 +180,13 @@ Preserve behavior checks for session restore/token removal; owned versus guest-o
 Use real runtime/guest checks for VM lifecycle, share population, input backpressure, disk-overlay disposal, and same-image/different-image switching. Use browser checks for clipboard interception, read-only editing, terminal reset/history, and instructions/default-tab boot behavior. Pixel/renderer checks belong to the widget suite rather than duplicating full-page RPC tests.
 
 Trace operations through [index.ts](index.ts), [saving.ts](saving.ts), [problem-workspace.ts](problem-workspace.ts), [editor-session.ts](editor-session.ts), and [vm-session.ts](vm-session.ts); filenames are trace points, not a required future decomposition. Run the affected Make targets described in [BUILD.md](BUILD.md), with disposable Chrome profiles and test browsers closed afterward.
+
+
+Quiz entry into the VM client
+-----------------------------
+
+The VM client is shared by the existing `/exam/` LTI workflow and the attended `/quiz/` connector. Server admission is described in [server notes](../../server/NOTES.md#attended-respondus-quiz-entry). The client directory and published asset URLs remain unchanged.
+
+A successful connector handoff opens `/exam/?assignment=...#quiz=...`. `quiz-entry.ts` immediately removes the fragment, places its raw bearer key into the existing tab-scoped session storage, and renders the supplied student/course/assignment identity using text nodes in a modal dialog. Continue is required; Escape does not dismiss it. Assignment authentication and workspace requests begin after confirmation. Ordinary `/exam/` entry and reload have no fragment and use their existing login-token/session restoration path. All grading, saving, and VM behavior stays shared. Session scope, exact station-IP checks, expiry, and revocation are enforced by the server rather than by the dialog or client URL.
+
+Run the focused browser check with `node --test tests/quiz-entry.test.mjs` from this directory. It uses Chromium with a disposable profile and covers credential removal, tab storage, safe identity rendering, required confirmation, ordinary reload, and invalid handoffs.

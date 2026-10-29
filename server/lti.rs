@@ -30,6 +30,7 @@ enum LaunchUi {
     Web,
     Js,
     Exam,
+    Quiz,
 }
 
 impl LaunchUi {
@@ -39,8 +40,9 @@ impl LaunchUi {
             "web" => Ok(Self::Web),
             "js" => Ok(Self::Js),
             "exam" => Ok(Self::Exam),
+            "quiz" => Ok(Self::Quiz),
             _ => Err(AppError::BadRequest(format!(
-                "UI type must be cli, web, js, or exam, not {raw:?}"
+                "UI type must be cli, web, js, exam, or quiz, not {raw:?}"
             ))),
         }
     }
@@ -51,11 +53,12 @@ impl LaunchUi {
             Self::Web => "web",
             Self::Js => "js",
             Self::Exam => "exam",
+            Self::Quiz => "quiz",
         }
     }
 
     const fn is_restricted(self) -> bool {
-        matches!(self, Self::Exam)
+        matches!(self, Self::Exam | Self::Quiz)
     }
 }
 
@@ -76,8 +79,8 @@ pub struct VersionPayload {
     pub grind_version_recommended: String,
 }
 
-struct LaunchUpdate {
-    assignment_key: String,
+pub(crate) struct LaunchUpdate {
+    pub(crate) assignment_key: String,
     new_course: bool,
     new_user: bool,
     new_assignment: bool,
@@ -103,9 +106,13 @@ async fn launch(
     State(state): State<LtiState>,
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     Path((ui, unique)): Path<(String, String)>,
+    uri: axum::http::Uri,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
+    if ui == "quiz" {
+        return crate::quiz::launch(state, peer, headers, body, unique, uri).await;
+    }
     match launch_inner(state, peer, headers, body, ui, unique).await {
         Ok(location) => {
             let mut response = StatusCode::SEE_OTHER.into_response();
@@ -187,7 +194,18 @@ async fn launch_inner(
     let form_for_db = form.clone();
     let update = state
         .db
-        .transaction(true, move |conn| update_launch(conn, &form_for_db, &unique, restricted, now))
+        .transaction(true, move |conn| {
+            let update = update_launch(conn, &form_for_db, &unique, restricted, now)?;
+            conn.execute(
+                "DELETE FROM quiz_assignments WHERE user_id=? AND course_id=? AND problem_set_id=?",
+                params![
+                    form_first(&form_for_db, "user_id"),
+                    form_first(&form_for_db, "context_id"),
+                    unique
+                ],
+            )?;
+            Ok(update)
+        })
         .await?;
     if update.new_course {
         eprintln!(
@@ -235,7 +253,7 @@ fn launch_location(ui: LaunchUi, assignment_key: &str, token: &str, course_label
     )
 }
 
-fn update_launch(
+pub(crate) fn update_launch(
     conn: &Connection,
     form: &BTreeMap<String, Vec<String>>,
     unique: &str,
@@ -329,7 +347,7 @@ fn update_launch(
     })
 }
 
-fn validate_oauth_signature(
+pub(crate) fn validate_oauth_signature(
     method: &str,
     request_url: &str,
     form: &BTreeMap<String, Vec<String>>,
@@ -341,18 +359,16 @@ fn validate_oauth_signature(
     }
     let got = compute_oauth_signature(method, request_url, form, secret)?;
     if got != expected {
-        return Err(AppError::Unauthorized(format!(
-            "Signature mismatch. Got {got} but expected {expected}"
-        )));
+        return Err(AppError::Unauthorized("Signature mismatch".to_owned()));
     }
     Ok(())
 }
 
-fn form_first(form: &BTreeMap<String, Vec<String>>, key: &str) -> String {
+pub(crate) fn form_first(form: &BTreeMap<String, Vec<String>>, key: &str) -> String {
     form.get(key).and_then(|values| values.first()).cloned().unwrap_or_default()
 }
 
-fn is_instructor_role(roles: &str) -> bool {
+pub(crate) fn is_instructor_role(roles: &str) -> bool {
     roles
         .split(',')
         .any(|role| matches!(role, "Instructor" | "urn:lti:role:ims/lis/TeachingAssistant"))
@@ -399,6 +415,12 @@ fn get_config_xml(config: &ServerConfig) -> String {
     <lticm:property name="tool_id">{}</lticm:property>
     <lticm:property name="privacy_level">public</lticm:property>
     <lticm:property name="domain">{}</lticm:property>
+    <lticm:options name="assignment_selection">
+      <lticm:property name="url">https://{}/lti/picker</lticm:property>
+      <lticm:property name="text">Choose a CodeGrinder problem set</lticm:property>
+      <lticm:property name="message_type">ContentItemSelectionRequest</lticm:property>
+      <lticm:property name="enabled">true</lticm:property>
+    </lticm:options>
     <lticm:options name="custom_fields">
       <lticm:property name="canvas_assignment_unlock_at">$Canvas.assignment.unlockAt.iso8601</lticm:property>
       <lticm:property name="canvas_assignment_due_at">$Canvas.assignment.dueAt.iso8601</lticm:property>
@@ -412,6 +434,7 @@ fn get_config_xml(config: &ServerConfig) -> String {
         escape_xml(&config.tool_name),
         escape_xml(&config.tool_description),
         escape_xml(&config.tool_id),
+        escape_xml(&config.hostname),
         escape_xml(&config.hostname)
     )
 }
@@ -424,7 +447,7 @@ fn error_response(err: AppError) -> Response {
     (err.status_code(), err.to_string()).into_response()
 }
 
-fn escape_xml(raw: &str) -> String {
+pub(crate) fn escape_xml(raw: &str) -> String {
     raw.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
@@ -436,6 +459,20 @@ mod tests {
     use chrono::Utc;
 
     use super::*;
+
+    #[test]
+    fn invalid_signature_response_does_not_disclose_a_valid_signature() {
+        let url = "https://ta.example/lti/picker";
+        let form = BTreeMap::from([
+            ("oauth_signature".into(), vec!["submitted-signature".into()]),
+            ("roles".into(), vec!["Instructor".into()]),
+        ]);
+        let computed = compute_oauth_signature("POST", url, &form, "secret").unwrap();
+        let error = validate_oauth_signature("POST", url, &form, "secret").unwrap_err();
+        assert_eq!(error.status_code(), StatusCode::UNAUTHORIZED);
+        assert!(!error.to_string().contains(&computed));
+        assert!(!error.to_string().contains("submitted-signature"));
+    }
     use crate::config::IpFilterConfig;
     use crate::db::open_test_connection;
 
@@ -467,7 +504,7 @@ mod tests {
 
         assert!(LaunchUi::parse("exam").unwrap().is_restricted());
         let error = LaunchUi::parse("javascript").unwrap_err();
-        assert!(error.to_string().contains("cli, web, js, or exam"));
+        assert!(error.to_string().contains("cli, web, js, exam, or quiz"));
     }
 
     #[test]
