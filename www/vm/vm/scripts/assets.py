@@ -50,17 +50,17 @@ def prepare(version: str, names: list[str]) -> None:
     # All boot URLs resolve within the matching immutable runtime release.
     if re.fullmatch(r"\d+\.\d+\.\d+", version) is None:
         raise ValueError("expected Riscbox release version")
-    release = f"../runtime/riscbox-{version}"
-    firmware = payload(r"fw_dynamic\.bin-.*\.gz")
-    kernel = payload(r"linux-.*\.gz")
+    directory = payload(r"riscbox-[a-f0-9]+")
+    runtime = f"vm/runtime/riscbox-{version}/{directory}"
+    release = f"../runtime/riscbox-{version}/{directory}"
     assets: dict[str, dict[str, str]] = {}
     outputs = ["build/assets.json"]
     for name in names:
         drive = Path(f"build/{name}-disk-name").read_text(encoding="utf-8").strip()
         config: Configuration = {
             "version": 1, "machine": "riscv64", "memory_size": 256,
-            "bios": f"{release}/{firmware}",
-            "kernel": f"{release}/{kernel}",
+            "bios": f"{release}/fw_dynamic.bin",
+            "kernel": f"{release}/linux",
             "cmdline": "root=/dev/vda rw rootfstype=ext4 console=hvc0 quiet loglevel=0",
             "console": "virtio", "drive0": {"file": f"{drive}/blk.txt"},
             "fs0": {"server": "workspace", "tag": "shared"},
@@ -72,8 +72,8 @@ def prepare(version: str, names: list[str]) -> None:
         write_changed(Path("image") / f"{name}.cfg", content)
         assets[name] = {
             "configUrl": f"vm/image/{filename}",
-            "runtimeUrl": f"vm/runtime/riscbox-{version}/riscbox.js",
-            "wasmUrl": f"vm/runtime/riscbox-{version}/riscbox.wasm",
+            "runtimeUrl": f"{runtime}/riscbox.js",
+            "wasmUrl": f"{runtime}/riscbox.wasm",
         }
         outputs.extend([f"image/{filename}", f"image/{name}.cfg"])
 

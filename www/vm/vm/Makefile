@@ -1,4 +1,4 @@
-RISCBOX_VERSION := 2026.10.7
+RISCBOX_VERSION := 0.9.0
 .DEFAULT_GOAL := all
 RISCLET_VERSION := 0.5.5
 ALPINE_VERSION := 3.24.3
@@ -52,8 +52,9 @@ build/riscbox.stamp: $(RISCBOX_ARCHIVE) build/riscbox-version
 	rm -rf build/riscbox.part
 	mkdir -p build/riscbox.part
 	tar -xzf '$(RISCBOX_ARCHIVE)' --strip-components=1 -C build/riscbox.part
-	test -f build/riscbox.part/riscbox.js
-	test -f build/riscbox.part/riscbox.wasm
+	for file in build/riscbox.part/riscbox-*/*.br; do brotli -d -k "$$file"; done
+	test -f build/riscbox.part/riscbox-*/riscbox.js
+	test -f build/riscbox.part/riscbox-*/riscbox.wasm
 	test -f build/riscbox.part/riscbox.d.ts
 	rm -rf build/riscbox
 	mv build/riscbox.part build/riscbox
@@ -62,15 +63,15 @@ build/riscbox.stamp: $(RISCBOX_ARCHIVE) build/riscbox-version
 
 runtime/riscbox-$(RISCBOX_VERSION)/.built: build/riscbox.stamp
 	mkdir -p '$(@D)'
-	cp -R build/riscbox/. '$(@D)/'
+	cp -R build/riscbox/riscbox-* '$(@D)/'
 	printf '{"type":"commonjs"}\n' > '$(@D)/package.json'
 	sh ../../../scripts/outputs.sh build/runtime-outputs.mk RUNTIME $@ $$(find '$(@D)' -type f ! -name .built | sort)
 	touch $@
 
 # Kernel and firmware are shared by every preparation boot.
 build/boot.stamp: build/riscbox.stamp build/linux build/fw_dynamic.bin
-	gzip -dc build/riscbox/linux-*.gz > build/linux
-	gzip -dc build/riscbox/fw_dynamic.bin-*.gz > build/fw_dynamic.bin
+	cp build/riscbox/riscbox-*/linux build/linux
+	cp build/riscbox/riscbox-*/fw_dynamic.bin build/fw_dynamic.bin
 	touch $@
 
 build/linux build/fw_dynamic.bin:
@@ -108,7 +109,7 @@ $(foreach image,$(IMAGES),build/$(image)-rootfs.ext4): build/%-rootfs.ext4: buil
 # The upstream splitter hashes content; each image adds its sibling name.
 $(foreach image,$(IMAGES),build/$(image)-disk-name): build/%-disk-name: build/%-rootfs.ext4 build/riscbox.stamp
 	mkdir -p image build/$*-split
-	python3 build/riscbox/splitimg.py $< build/$*-split > $@.part
+	uv run -q --script build/riscbox/splitimg.py $< build/$*-split > $@.part
 	awk '{print "$*-" $$1}' $@.part > $@
 	mkdir -p image/$$(cat $@)
 	cp -R build/$*-split/$$(awk '{print $$1}' $@.part)/. image/$$(cat $@)/

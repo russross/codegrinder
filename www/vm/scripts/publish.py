@@ -36,7 +36,7 @@ def publish() -> None:
         config = json.loads(configuration.read_text(encoding="utf-8"))
         active.append(configuration.as_posix())
         active.append((configuration.parent / config["drive0"]["file"]).parent.as_posix())
-        active.append(Path(image["runtimeUrl"]).parent.as_posix())
+        active.append(Path(*Path(image["runtimeUrl"]).parts[:3]).as_posix())
     inventory = json.dumps(sorted(set(active)), indent=2) + "\n"
     Path("build/published-outputs.mk").write_text(
         f"PUBLISHED_OUTPUTS := {' '.join(outputs)}\n"
