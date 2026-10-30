@@ -322,39 +322,39 @@ CREATE VIEW user_role_flags AS
     FROM users;
 
 CREATE VIEW accessible_assignments AS
+    -- Owners inherit any instructor privileges they hold in the course.
     SELECT
-        viewer_user_id,
-        assignment_user_id,
-        course_id,
-        problem_set_id,
-        MAX(is_owner) AS is_owner,
-        MAX(is_course_instructor) AS is_course_instructor,
-        MIN(restricted) AS restricted
-    FROM (
-        SELECT
-            assignments.user_id AS viewer_user_id,
-            assignments.user_id AS assignment_user_id,
-            assignments.course_id,
-            assignments.problem_set_id,
-            1 AS is_owner,
-            0 AS is_course_instructor,
-            assignments.restricted
-        FROM assignments
-        UNION ALL
-        SELECT
-            instructors.user_id AS viewer_user_id,
-            assignments.user_id AS assignment_user_id,
-            assignments.course_id,
-            assignments.problem_set_id,
-            0 AS is_owner,
-            1 AS is_course_instructor,
-            0 AS restricted
-        FROM assignments
-        JOIN user_courses AS instructors
-            ON instructors.course_id = assignments.course_id
-            AND instructors.is_instructor
-    )
-    GROUP BY viewer_user_id, assignment_user_id, course_id, problem_set_id;
+        assignments.user_id AS viewer_user_id,
+        assignments.user_id AS assignment_user_id,
+        assignments.course_id,
+        assignments.problem_set_id,
+        1 AS is_owner,
+        COALESCE(membership.is_instructor, 0) AS is_course_instructor,
+        CASE
+            WHEN membership.is_instructor THEN 0
+            ELSE assignments.restricted
+        END AS restricted
+    FROM assignments
+    LEFT JOIN user_courses AS membership
+        ON membership.user_id = assignments.user_id
+        AND membership.course_id = assignments.course_id
+
+    UNION ALL
+
+    -- Instructor inspection excludes owners already returned above.
+    SELECT
+        instructors.user_id AS viewer_user_id,
+        assignments.user_id AS assignment_user_id,
+        assignments.course_id,
+        assignments.problem_set_id,
+        0 AS is_owner,
+        1 AS is_course_instructor,
+        0 AS restricted
+    FROM assignments
+    JOIN user_courses AS instructors
+        ON instructors.course_id = assignments.course_id
+        AND instructors.is_instructor
+    WHERE instructors.user_id <> assignments.user_id;
 
 CREATE VIEW accessible_problem_sets AS
     SELECT DISTINCT viewer_user_id, problem_set_id
@@ -651,11 +651,9 @@ CREATE VIEW workspace_step_context AS
         problem_set_step_scope.step_number,
         problem_set_step_scope.problem_type,
         problem_set_step_scope.step_note,
-        problem_set_step_scope.step_weight,
-        problem_step_whitelist.whitelist
+        problem_set_step_scope.step_weight
     FROM assignment_problem_progress
-    NATURAL JOIN problem_set_step_scope
-    NATURAL JOIN problem_step_whitelist;
+    NATURAL JOIN problem_set_step_scope;
 
 CREATE VIEW grading_step_context AS
     SELECT

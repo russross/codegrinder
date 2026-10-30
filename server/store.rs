@@ -156,12 +156,21 @@ fn list_assignment_problems(
         .collect::<Result<Vec<_>, _>>()?)
 }
 
-pub fn get_assignment(
+struct AssignmentAccess {
+    problem_set_note: String,
+    course_name: String,
+    download_status: AssignmentDownloadStatus,
+    prerequisite_problem_set_id: String,
+    is_course_instructor: bool,
+}
+
+// Resolve viewer policy before reading assignment progress or workspace files.
+fn assignment_access(
     conn: &Connection,
     current_user: &UserRow,
     key: &AssignmentKey,
     ip_allowed: bool,
-) -> AppResult<GetAssignmentResponse> {
+) -> AppResult<AssignmentAccess> {
     crate::quiz::require_access(conn, current_user, key)?;
     let (
         problem_set_note,
@@ -192,6 +201,24 @@ pub fn get_assignment(
             "assignment is restricted to approved IP ranges".to_owned(),
         ));
     }
+    Ok(AssignmentAccess {
+        problem_set_note,
+        course_name,
+        download_status: AssignmentDownloadStatus::try_from(download_status)
+            .map_err(|_| AppError::Internal("unknown assignment download status".to_owned()))?,
+        prerequisite_problem_set_id,
+        is_course_instructor,
+    })
+}
+
+pub fn get_assignment(
+    conn: &Connection,
+    current_user: &UserRow,
+    key: &AssignmentKey,
+    ip_allowed: bool,
+) -> AppResult<GetAssignmentResponse> {
+    let access = assignment_access(conn, current_user, key, ip_allowed)?;
+    // Assignment summaries include progress for every problem in the set.
     let mut stmt = conn.prepare(
         "SELECT problem_id, problem_note, current_step_number, first_step_number, last_step_number, completed FROM assignment_problem_progress WHERE user_id = ? AND course_id = ? AND problem_set_id = ? ORDER BY problem_id",
     )?;
@@ -209,11 +236,11 @@ pub fn get_assignment(
         .collect::<Result<Vec<_>, _>>()?;
     Ok(GetAssignmentResponse {
         assignment: Some(key.clone()),
-        problem_set_note,
-        course_name,
+        problem_set_note: access.problem_set_note,
+        course_name: access.course_name,
         problems,
-        download_status,
-        prerequisite_problem_set_id,
+        download_status: access.download_status as i32,
+        prerequisite_problem_set_id: access.prerequisite_problem_set_id,
     })
 }
 
@@ -300,29 +327,20 @@ pub fn get_workspace(
     {
         return Err(AppError::BadRequest("unknown workspace file state".to_owned()));
     }
-    let assignment = get_assignment(conn, current_user, &query.key, query.ip_allowed)?;
-    if assignment.download_status != AssignmentDownloadStatus::Available as i32 {
+    let access = assignment_access(conn, current_user, &query.key, query.ip_allowed)?;
+    if access.download_status != AssignmentDownloadStatus::Available {
         return Err(AppError::Forbidden("assignment is not available for download".to_owned()));
     }
-    let step = if query.requested_step > 0 {
-        query.requested_step
-    } else {
-        assignment
-            .problems
-            .iter()
-            .find(|p| p.problem_id == query.problem_id)
-            .map(|p| p.current_step_number)
-            .ok_or_else(|| AppError::NotFound("problem not found in assignment".to_owned()))?
-    };
+    // Resolve implicit steps using only this problem's view-owned progress.
     let context = conn
         .query_row(
-            "SELECT problem_note, problem_type, step_note, step_weight, first_step_number, last_step_number FROM workspace_step_context WHERE user_id = ? AND course_id = ? AND problem_set_id = ? AND problem_id = ? AND step_number = ?",
+            "SELECT problem_note, problem_type, step_note, step_weight, first_step_number, last_step_number, step_number FROM workspace_step_context WHERE user_id = ?1 AND course_id = ?2 AND problem_set_id = ?3 AND problem_id = ?4 AND step_number = CASE WHEN ?5 > 0 THEN ?5 ELSE current_step_number END",
             params![
                 query.key.user_id,
                 query.key.course_id,
                 query.key.problem_set_id,
                 query.problem_id,
-                step
+                query.requested_step
             ],
             |row| {
                 Ok((
@@ -332,11 +350,13 @@ pub fn get_workspace(
                     row.get::<_, i64>("step_weight")?,
                     row.get::<_, i64>("first_step_number")?,
                     row.get::<_, i64>("last_step_number")?,
+                    row.get::<_, i64>("step_number")?,
                 ))
             },
         )
         .optional()?
         .ok_or_else(|| AppError::NotFound("workspace step not found".to_owned()))?;
+    let step = context.6;
     let mut regular_files = load_step_files(conn, &query.problem_id, step, "regular", true)?;
     let starter_files = load_step_files(conn, &query.problem_id, step, "starter", true)?;
     let student_files = if query.file_state == proto::WorkspaceFileState::Current as i32 {
@@ -349,22 +369,10 @@ pub fn get_workspace(
     } else {
         starter_student_files(conn, &query.key, &query.problem_id, step, starter_files)?
     };
-    if query.include_solution_files {
-        let access = conn.query_row(
-            "SELECT is_course_instructor FROM accessible_assignment_policy WHERE viewer_user_id = ? AND assignment_user_id = ? AND course_id = ? AND problem_set_id = ?",
-            params![
-                current_user.user_id,
-                query.key.user_id,
-                query.key.course_id,
-                query.key.problem_set_id
-            ],
-            |row| row.get::<_, i64>(0),
-        )? != 0;
-        if !current_user.author && !access {
-            return Err(AppError::Forbidden(
-                "solution files require author or instructor access".to_owned(),
-            ));
-        }
+    if query.include_solution_files && !current_user.author && !access.is_course_instructor {
+        return Err(AppError::Forbidden(
+            "solution files require author or instructor access".to_owned(),
+        ));
     }
     let problem_type = load_problem_type(conn, &context.1)?;
     regular_files.extend(problem_type.files.iter().map(|(path, content)| {
@@ -682,6 +690,51 @@ mod tests {
         let instructor_status = status_by_problem_set(&instructor_items);
         assert_eq!(instructor_status["future"], AssignmentDownloadStatus::Available as i32);
         assert_eq!(instructor_status["slice2"], AssignmentDownloadStatus::Available as i32);
+    }
+
+    #[test]
+    fn workspace_resolves_current_step_and_preserves_explicit_step_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_test_connection(&dir.path().join("db.sqlite")).unwrap();
+        seed_store_fixture(&conn);
+        insert_assignment(&conn, "student", "base", None, None);
+        let student = user(&conn, "student");
+        let query = WorkspaceQuery {
+            key: key("student", "base"),
+            problem_id: "p1".to_owned(),
+            requested_step: 0,
+            file_state: WorkspaceFileState::Current as i32,
+            include_contents: true,
+            include_solution_files: false,
+            ip_allowed: true,
+        };
+
+        // Current progress advances through passed steps and stays at the final step.
+        for step in 1..=3 {
+            let workspace = get_workspace(&conn, &student, query.clone()).unwrap();
+            assert_eq!(workspace.step_number, step);
+            assert_eq!(
+                workspace.student_owned_files["answer.txt"],
+                format!("starter{step}").as_bytes()
+            );
+            insert_commit(&conn, "student", "base", step, true, &[("answer.txt", b"passed")]);
+        }
+        assert_eq!(get_workspace(&conn, &student, query.clone()).unwrap().step_number, 3);
+        let mut explicit = query.clone();
+        explicit.requested_step = 1;
+        assert_eq!(get_workspace(&conn, &student, explicit).unwrap().step_number, 1);
+
+        // Slice reads resolve their own bounds and reject steps outside that scope.
+        insert_assignment(&conn, "student", "slice1", None, None);
+        let mut slice = query;
+        slice.key = key("student", "slice1");
+        let workspace = get_workspace(&conn, &student, slice.clone()).unwrap();
+        assert_eq!(
+            (workspace.step_number, workspace.first_step_number, workspace.last_step_number),
+            (1, 1, 1)
+        );
+        slice.requested_step = 2;
+        assert!(matches!(get_workspace(&conn, &student, slice), Err(AppError::NotFound(_))));
     }
 
     #[test]

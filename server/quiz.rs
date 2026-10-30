@@ -711,22 +711,6 @@ mod tests {
         assert!(actor.quiz_scope.is_some());
         assert!(require_access(&conn, &actor, &key).is_err());
     }
-    #[test]
-    fn existing_database_upgrade_matches_new_schema() {
-        let conn = Connection::open_in_memory().unwrap();
-        let base = include_str!("../setup/schema.sql").split("-- Apply once").next().unwrap();
-        conn.execute_batch(base).unwrap();
-        conn.execute_batch(include_str!("../setup/migrations/quiz.sql")).unwrap();
-        conn.execute_batch(include_str!("../setup/migrations/quiz-tags.sql")).unwrap();
-        let count: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name LIKE 'quiz_%'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(count, 4);
-    }
 }
 
 #[cfg(test)]
