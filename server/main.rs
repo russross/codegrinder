@@ -66,7 +66,7 @@ async fn main() -> AppResult<()> {
     let daycare = DaycareRuntime::new(config.clone())?;
     let version = VersionPayload {
         version: VERSION.to_owned(),
-        grind_version_required: "3.0.0".to_owned(),
+        grind_version_required: "3.1.0".to_owned(),
         grind_version_recommended: "3.1.0".to_owned(),
     };
     let service = CodeGrinderServer::new(CodeGrinderServerParts {

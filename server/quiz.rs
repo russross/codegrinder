@@ -768,7 +768,7 @@ mod http_tests {
             login_tokens: Arc::new(LoginTokens::default()),
             version: VersionPayload {
                 version: "3.1.0".into(),
-                grind_version_required: "3.0.0".into(),
+                grind_version_required: "3.1.0".into(),
                 grind_version_recommended: "3.1.0".into(),
             },
         };
