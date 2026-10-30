@@ -1,4 +1,5 @@
 import { defaultKeymap } from "@codemirror/commands";
+import { indentUnit } from "@codemirror/language";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { basicSetup } from "codemirror";
@@ -35,6 +36,7 @@ export class EditorSession {
     constructor(host: HTMLElement, private readonly options: EditorSessionOptions) {
         this.view = new EditorView({ parent: host, state: EditorState.create({ extensions: [
             basicSetup, keymap.of([{ key: "Tab", run: softTab }, ...defaultKeymap]),
+            indentUnit.of("    "), EditorState.tabSize.of(4),
             EditorView.theme({
                 "&": { fontSize: `${defaultFontSize}px` },
                 ".cm-scroller": { fontFamily: monospaceFontFamily },

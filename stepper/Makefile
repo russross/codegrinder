@@ -10,6 +10,9 @@ build: amd64 riscv64
 amd64:
 	RUSTFLAGS='-C target-feature=+crt-static' cargo zigbuild --locked --profile standalone-linux -p stepper --target $(AMD64)
 	sh ../scripts/publish-client.sh ../target/$(AMD64)/standalone-linux/stepper dist/stepper.linux_amd64
+	sh ../scripts/publish-client.sh dist/stepper.linux_amd64 ../problemtypes/containers/c/stepper
+	sh ../scripts/publish-client.sh dist/stepper.linux_amd64 ../problemtypes/containers/prolog/stepper
+	sh ../scripts/publish-client.sh dist/stepper.linux_amd64 ../problemtypes/containers/riscv/stepper
 
 riscv64:
 	RUSTFLAGS='-C target-feature=-crt-static -C link-arg=-dynamic' cargo zigbuild --locked --profile standalone-linux -p stepper --target $(RISCV64)

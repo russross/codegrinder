@@ -1,4 +1,5 @@
 import { EditorSession } from "../editor-session.ts";
+import { insertNewlineAndIndent } from "@codemirror/commands";
 import { VmSession } from "../vm-session.ts";
 import { renderFileTree } from "../workspace-view.ts";
 import { language } from "@codemirror/language";
@@ -52,6 +53,12 @@ async function editorTests() {
         onSynced: trigger => synced.push(trigger), onError: error => errors.push(error),
         confirmDiscard: () => { prompts++; return discard; } });
     fs.subscribe(change => session.handleChange(change));
+    fs.writeFile("indent.c", "int main() {");
+    session.open(fs, "indent.c");
+    session.view.dispatch({ selection: { anchor: session.view.state.doc.length } });
+    insertNewlineAndIndent(session.view);
+    check(session.view.state.doc.toString() === "int main() {\n    ", "C autoindent must insert four spaces");
+    await session.flush();
     session.open(fs, "a.s");
     check(session.view.state.facet(language) === riscletLanguage, "assembly files use the teaching dialect by default");
     const edit = text => session.view.dispatch({ changes: { from: 0, to: session.view.state.doc.length, insert: text } });
