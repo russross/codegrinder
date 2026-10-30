@@ -607,6 +607,7 @@ impl CodeGrinderService for CodeGrinderServer {
         &self,
         request: Request<PrepareProblemRequest>,
     ) -> Result<Response<PrepareProblemResponse>, Status> {
+        eprintln!("warning: legacy RPC PrepareProblem invoked");
         let deadline = request_deadline(&request);
         let current_user =
             self.authenticated_user(&request).await.map_err(AppError::grpc_status)?;
@@ -636,6 +637,7 @@ impl CodeGrinderService for CodeGrinderServer {
         &self,
         request: Request<SaveProblemRequest>,
     ) -> Result<Response<SaveProblemResponse>, Status> {
+        eprintln!("warning: legacy RPC SaveProblem invoked");
         let deadline = request_deadline(&request);
         let current_user =
             self.authenticated_user(&request).await.map_err(AppError::grpc_status)?;
@@ -711,6 +713,7 @@ impl CodeGrinderService for CodeGrinderServer {
         &self,
         request: Request<SaveUngradedCommitRequest>,
     ) -> Result<Response<SaveUngradedCommitResponse>, Status> {
+        eprintln!("warning: legacy RPC SaveUngradedCommit invoked");
         let deadline = request_deadline(&request);
         let ip_allowed = self.ip_allowed(&request);
         let current_user =
@@ -742,6 +745,7 @@ impl CodeGrinderService for CodeGrinderServer {
         &self,
         request: Request<SaveGradedCommitRequest>,
     ) -> Result<Response<SaveGradedCommitResponse>, Status> {
+        eprintln!("warning: legacy RPC SaveGradedCommit invoked");
         let deadline = request_deadline(&request);
         let ip_allowed = self.ip_allowed(&request);
         let current_user =
@@ -774,6 +778,7 @@ impl CodeGrinderService for CodeGrinderServer {
         &self,
         request: Request<DaycareRequest>,
     ) -> Result<Response<Self::DaycareStream>, Status> {
+        eprintln!("warning: legacy RPC Daycare invoked");
         let deadline = request_deadline(&request);
         self.daycare.run(request.into_inner(), deadline).await
     }
