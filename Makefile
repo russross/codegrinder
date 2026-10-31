@@ -55,7 +55,8 @@ mostlyclean:
 	$(MAKE) -C server mostlyclean
 	$(MAKE) -C grind mostlyclean
 	$(MAKE) -C www mostlyclean
-	rm -rf '$(MACOS_SDK_DIR)/sysroot-macos-x86_64' '$(MACOS_SDK_DIR)/sysroot-macos-arm64' '$(MACOS_SDK_DIR)/download'
+	rm -rf '$(MACOS_SDK_DIR)/sysroot-macos-x86_64' '$(MACOS_SDK_DIR)/sysroot-macos-arm64'
+	if [ -d '$(MACOS_SDK_DIR)/download' ]; then find '$(MACOS_SDK_DIR)/download' -mindepth 1 -maxdepth 1 ! -name .gitignore -exec rm -rf {} +; fi
 	rm -f '$(MACOS_SDK_DIR)/hello'
 	$(MAKE) -C tests mostlyclean
 
@@ -64,6 +65,7 @@ clean:
 	$(MAKE) -C server clean
 	$(MAKE) -C grind clean
 	$(MAKE) -C www clean
-	rm -rf '$(MACOS_SDK_DIR)/sysroot-macos-x86_64' '$(MACOS_SDK_DIR)/sysroot-macos-arm64' '$(MACOS_SDK_DIR)/download'
+	rm -rf '$(MACOS_SDK_DIR)/sysroot-macos-x86_64' '$(MACOS_SDK_DIR)/sysroot-macos-arm64'
+	if [ -d '$(MACOS_SDK_DIR)/download' ]; then find '$(MACOS_SDK_DIR)/download' -mindepth 1 -maxdepth 1 ! -name .gitignore -exec rm -rf {} +; fi
 	rm -f '$(MACOS_SDK_DIR)/hello'
 	$(MAKE) -C tests clean
