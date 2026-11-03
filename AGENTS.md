@@ -305,7 +305,7 @@ For the web interfaces under `www/vm` and `www/web`:
 - Author save requests must carry explicit intent:
   - create request => error if problem/problem set already exists
   - update request => error if problem/problem set does not exist
-- Once a problem is assigned, `SaveProblem` may update metadata, weights, and authored file sets, but must reject changes to the number of steps or any step's problem type.
+- Once a problem is assigned, `SaveProblem` may update metadata, weights, and authored file sets, but must preserve existing steps' problem types. An assigned whole-problem set prevents step-count changes; assigned slices permit changes outside their bounds. Removing steps must also preserve the bounds of unassigned slices.
 - Once a problem set is assigned, `SaveProblemSet` may update metadata and problem weights, but must reject changes to problem membership, first/last step slice bounds, or continuation shape.
 - Do not add separate preflight existence checks purely to distinguish create from update. Catch that error at save time.
 
@@ -319,7 +319,7 @@ For the web interfaces under `www/vm` and `www/web`:
 - Problem-set create/update calls `SaveProblemSet` with explicit `SAVE_MODE_CREATE` or `SAVE_MODE_UPDATE`; the server enforces existence semantics at save time.
 - Problem-set update must preserve membership and slice bounds when the problem set is already assigned; metadata and weights may still change.
 - Problem create/update uses the end-to-end authoring flow described above: for each step refresh canonical type files, run `make clean`, gather author material with client-side pre-filtering for `.git`, `.gitignore`, and canonical type files, call `PrepareProblem`, run every signed validation bundle through daycare, require passing validation, attach the signed validation results, then call `SaveProblem`. Create mode also creates the default same-id single-problem problem set.
-- Problem update must preserve step count and per-step problem type when the problem is already assigned; metadata, weights, and authored file sets may still change.
+- Problem update must preserve existing per-step problem types when the problem is assigned; step-count changes must preserve assigned whole-problem scopes and all slice bounds. Metadata, weights, and authored file sets may still change.
 - The client must not trust its own validation as persistence authority; `SaveProblem` verifies signed validation bundles before writing any problem rows.
 
 # `grind student`

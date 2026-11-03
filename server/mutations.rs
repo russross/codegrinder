@@ -936,18 +936,6 @@ fn validate_assigned_problem_shape(
     problem_id: &str,
     new_steps: &[ProblemStep],
 ) -> AppResult<()> {
-    let assignment_count: i64 = conn.query_row(
-        "SELECT COUNT(1)
-         FROM assignments
-         JOIN problem_set_problems
-             ON problem_set_problems.problem_set_id = assignments.problem_set_id
-         WHERE problem_set_problems.problem_id = ?",
-        params![problem_id],
-        |row| row.get(0),
-    )?;
-    if assignment_count == 0 {
-        return Ok(());
-    }
     let old_steps = conn
         .prepare(
             "SELECT step_number, problem_type FROM problem_steps WHERE problem_id = ? ORDER BY step_number",
@@ -956,11 +944,45 @@ fn validate_assigned_problem_shape(
             Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
         })?
         .collect::<Result<Vec<_>, _>>()?;
+    // Whole-problem assignments cover additions as well as removals. Every
+    // slice must retain its bounds, even when it has not yet been assigned.
     if old_steps.len() != new_steps.len() {
-        return Err(AppError::Conflict(
-            "cannot change the number of steps in an assigned problem".to_owned(),
-        ));
+        let blocking_set = conn.query_row(
+            "SELECT problem_set_id, first_step, last_step,
+                    EXISTS(SELECT 1 FROM assignments WHERE assignments.problem_set_id = problem_set_problems.problem_set_id)
+             FROM problem_set_problems
+             WHERE problem_id = ? AND (
+                 (first_step IS NULL AND EXISTS(SELECT 1 FROM assignments WHERE assignments.problem_set_id = problem_set_problems.problem_set_id))
+                 OR (last_step IS NOT NULL AND last_step > ?)
+             )
+             ORDER BY problem_set_id LIMIT 1",
+            params![problem_id, new_steps.len() as i64],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?, row.get::<_, Option<i64>>(2)?, row.get::<_, bool>(3)?)),
+        ).optional()?;
+        if let Some((set_id, first, last, assigned)) = blocking_set {
+            let reason = match (first, last) {
+                (Some(first), Some(last)) => {
+                    format!("problem set {set_id:?} references steps {first}-{last}")
+                }
+                _ => format!("assigned problem set {set_id:?} includes the whole problem"),
+            };
+            let state = if first.is_some() && assigned { " (assigned)" } else { "" };
+            return Err(AppError::Conflict(format!(
+                "cannot change problem {problem_id:?} from {} to {} steps: {reason}{state}",
+                old_steps.len(),
+                new_steps.len()
+            )));
+        }
     }
+    let assigned: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM assignments JOIN problem_set_problems USING (problem_set_id) WHERE problem_id = ?)",
+        params![problem_id],
+        |row| row.get(0),
+    )?;
+    if !assigned {
+        return Ok(());
+    }
+    // Retained steps keep their types whenever any assignment uses the problem.
     for (index, ((old_step, old_type), new_step)) in old_steps.iter().zip(new_steps).enumerate() {
         let expected_step = (index + 1) as i64;
         if *old_step != expected_step || new_step.step != expected_step {
@@ -2214,6 +2236,102 @@ mod tests {
             )
             .unwrap();
         assert_eq!(step_count, 1);
+    }
+
+    #[test]
+    fn problem_update_preserves_commits_when_changing_unassigned_steps() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_connection(&dir.path().join("db.sqlite")).unwrap();
+        seed_problem_type(&conn);
+        seed_problem(&conn, "p1", 2);
+        insert_problem_set(&conn, "slice", None, &[("p1", 1, 1)]);
+        seed_assignment(&conn, "slice");
+        let mut commit = commit_for_student("grade", "saved", b"student work");
+        commit.assignment.as_mut().unwrap().problem_set_id = "slice".to_owned();
+        persist_commit(&conn, &commit, CommitPersistence::Full).unwrap();
+        let user = author_user();
+        let config = test_config();
+        let bundle = |count: i64| {
+            let draft = AuthorProblemDraft {
+                problem_id: "p1".to_owned(),
+                problem_note: "Updated".to_owned(),
+                steps: (1..=count)
+                    .map(|step_number| AuthorProblemStepDraft {
+                        step_number,
+                        problem_type: "python".to_owned(),
+                        note: "Step".to_owned(),
+                        weight: 1.0,
+                        files: vec![file("answer.txt", b"solution")],
+                        starter_files: if step_number == 1 {
+                            vec![file("answer.txt", b"starter")]
+                        } else {
+                            Vec::new()
+                        },
+                    })
+                    .collect(),
+                ..Default::default()
+            };
+            let mut bundle = prepared_author_bundle_from_draft(&conn, &user, &config, draft);
+            sign_passing_validations(&mut bundle, &config);
+            bundle
+        };
+        save_problem(&conn, &user, SaveMode::Update as i32, &bundle(3), &config).unwrap();
+        save_problem(&conn, &user, SaveMode::Update as i32, &bundle(1), &config).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM problem_steps WHERE problem_id = 'p1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 1);
+        let saved: Vec<u8> = conn.query_row("SELECT content FROM commit_files WHERE problem_id = 'p1' AND step_number = 1 AND path = 'answer.txt'", [], |row| row.get(0)).unwrap();
+        assert_eq!(saved, b"student work");
+    }
+
+    #[test]
+    fn problem_step_count_respects_assignment_and_slice_scopes() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_connection(&dir.path().join("db.sqlite")).unwrap();
+        seed_problem_type(&conn);
+        seed_problem(&conn, "p1", 4);
+        insert_problem_set(&conn, "assigned-slice", None, &[("p1", 1, 2)]);
+        seed_assignment(&conn, "assigned-slice");
+        insert_problem_set(&conn, "future-slice", None, &[("p1", 3, 4)]);
+
+        let steps = |count: i64| -> Vec<ProblemStep> {
+            (1..=count)
+                .map(|step| ProblemStep {
+                    step,
+                    problem_type: "python".to_owned(),
+                    ..Default::default()
+                })
+                .collect()
+        };
+        assert!(validate_assigned_problem_shape(&conn, "p1", &steps(5)).is_ok());
+        let error = validate_assigned_problem_shape(&conn, "p1", &steps(3)).unwrap_err();
+        assert!(
+            matches!(error, AppError::Conflict(ref message) if message.contains("future-slice") && message.contains("3-4"))
+        );
+
+        conn.execute("DELETE FROM problem_sets WHERE problem_set_id = 'future-slice'", []).unwrap();
+        assert!(validate_assigned_problem_shape(&conn, "p1", &steps(2)).is_ok());
+        let error = validate_assigned_problem_shape(&conn, "p1", &steps(1)).unwrap_err();
+        assert!(
+            matches!(error, AppError::Conflict(ref message) if message.contains("assigned-slice") && message.contains("1-2") && message.contains("assigned"))
+        );
+
+        insert_problem_set(&conn, "whole", None, &[("p1", 0, 0)]);
+        conn.execute("UPDATE assignments SET grade_id = 'slice-grade'", []).unwrap();
+        seed_assignment(&conn, "whole");
+        let error = validate_assigned_problem_shape(&conn, "p1", &steps(5)).unwrap_err();
+        assert!(
+            matches!(error, AppError::Conflict(ref message) if message.contains("whole") && message.contains("whole problem"))
+        );
+        let mut changed_type = steps(4);
+        changed_type[2].problem_type = "other".to_owned();
+        assert!(matches!(
+            validate_assigned_problem_shape(&conn, "p1", &changed_type),
+            Err(AppError::Conflict(_))
+        ));
     }
 
     #[test]
