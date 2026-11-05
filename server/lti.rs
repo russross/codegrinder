@@ -128,10 +128,13 @@ pub(crate) fn log_launch_error(
         if err.status_code().is_server_error() { "ERROR" } else { "WARN" },
         "lti_launch_failed",
         format_args!(
-            "peer={peer} ui={ui:?} problem_set={unique:?} user={:?} course={:?} title={:?} status={} error={:?}",
+            "peer={peer} ui={ui:?} problem_set={unique:?} user={:?} course={:?} title={:?} custom_canvas_assignment_unlock_at={:?} custom_canvas_assignment_due_at={:?} custom_canvas_assignment_lock_at={:?} status={} error={:?}",
             form_first(form, "user_id"),
             form_first(form, "context_id"),
             form_first(form, "resource_link_title"),
+            form.get("custom_canvas_assignment_unlock_at"),
+            form.get("custom_canvas_assignment_due_at"),
+            form.get("custom_canvas_assignment_lock_at"),
             err.status_code().as_u16(),
             err.to_string(),
         ),
@@ -483,13 +486,20 @@ impl AssignmentLaunch {
         }
 
         // Parse dates before writing any rows and compare instants rather than input strings.
-        let date = |field: &str| {
-            parse_canvas_time(&form_first(form, field))
+        // Canvas leaves the substitution literal when an assignment date is unset.
+        let date = |field: &str, placeholder: &str| {
+            let raw = form_first(form, field);
+            if raw == placeholder {
+                return Ok(None);
+            }
+            parse_canvas_time(&raw)
                 .map_err(|err| AppError::BadRequest(format!("LTI field {field} {err}")))
         };
-        let unlock_at = date("custom_canvas_assignment_unlock_at")?;
-        let due_at = date("custom_canvas_assignment_due_at")?;
-        let lock_at = date("custom_canvas_assignment_lock_at")?;
+        let unlock_at =
+            date("custom_canvas_assignment_unlock_at", "$Canvas.assignment.unlockAt.iso8601")?;
+        let due_at = date("custom_canvas_assignment_due_at", "$Canvas.assignment.dueAt.iso8601")?;
+        let lock_at =
+            date("custom_canvas_assignment_lock_at", "$Canvas.assignment.lockAt.iso8601")?;
         for (earlier, later, message) in [
             (unlock_at, due_at, "unlock_at must not be after due_at"),
             (due_at, lock_at, "due_at must not be after lock_at"),
@@ -813,6 +823,28 @@ mod tests {
             vec!["2026-01-04T04:00:00+01:00".into()],
         );
         assert!(AssignmentLaunch::parse(&form, "ps1").is_ok());
+
+        // Unset Canvas dates clear stored dates when the assignment is relaunched.
+        for (field, placeholder) in [
+            ("custom_canvas_assignment_unlock_at", "$Canvas.assignment.unlockAt.iso8601"),
+            ("custom_canvas_assignment_due_at", "$Canvas.assignment.dueAt.iso8601"),
+            ("custom_canvas_assignment_lock_at", "$Canvas.assignment.lockAt.iso8601"),
+        ] {
+            form.insert(field.into(), vec![placeholder.into()]);
+        }
+        update_launch(&conn, &form, "ps1", false, Utc::now()).unwrap();
+        let dates: (Option<String>, Option<String>, Option<String>) = conn
+            .query_row("SELECT unlock_at, due_at, lock_at FROM assignments", [], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .unwrap();
+        assert_eq!(dates, (None, None, None));
+
+        // Only the matching literal is absent; other malformed values remain errors.
+        for invalid in ["$Canvas.assignment.dueAt.iso8601", "not a date"] {
+            form.insert("custom_canvas_assignment_unlock_at".into(), vec![invalid.into()]);
+            assert!(AssignmentLaunch::parse(&form, "ps1").is_err());
+        }
     }
 
     #[test]
