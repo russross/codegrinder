@@ -31,7 +31,7 @@ web-check:
 	$(MAKE) -C www/web check
 
 vm:
-	$(MAKE) -C www/vm
+	$(MAKE) -C client
 
 grind-dist grind-linux-amd64 grind-linux-arm64 grind-macos-amd64 grind-macos-arm64:
 	$(MAKE) -C grind $@

@@ -30,7 +30,7 @@ if name == "npm" and arguments == ["ci"]:
 elif name == "webpack":
     if Path("index.template.html").exists():
         Path("build/ui").mkdir(parents=True, exist_ok=True)
-        Path("build/ui/app-fixture.js").write_text("bundle")
+        Path("build/ui/app.js").write_text("bundle")
     else:
         Path("scripts/app.js").write_text("bundle")
         Path("sw.js").write_text("worker")
@@ -52,9 +52,7 @@ class BuildTests(unittest.TestCase):
         # Only build definitions and tiny fixtures enter the disposable checkout.
         for name in (
             "Makefile", "scripts", "server/Makefile", "grind/Makefile", "stepper/Makefile",
-            "www/Makefile", "www/web/Makefile", "www/vm/Makefile",
-            "www/vm/scripts/publish.py", "www/vm/scripts/prune.py", "www/vm/vm/Makefile",
-            "www/vm/vm/scripts/assets.py", "tests/Makefile",
+            "www/Makefile", "www/web/Makefile", "client", "vms", "tests/Makefile",
             "macos-minimal-sdk/Makefile", "macos-minimal-sdk/versions.inc",
         ):
             source = ROOT / name
@@ -136,33 +134,6 @@ class BuildTests(unittest.TestCase):
         self.make("www/web")
         self.assertEqual(sum(command == ["npm", "ci"] for command in self.commands()), 2)
 
-    def test_exam_css_publication_and_missing_deployment(self) -> None:
-        self.browser_fixture("www/vm")
-        self.write("www/vm/index.ts", "source")
-        self.write("www/vm/index.template.html", "{{app}} {{style}} {{favicon}}")
-        self.write("www/vm/favicon.svg", "icon")
-        self.write("www/vm/vm/Makefile", "all:\n\t@mkdir -p build\n\t@test -f build/assets.json || printf '{}' > build/assets.json\n")
-        self.make("www/vm", "-j4")
-        initial = self.commands()
-        first_entry = (self.root / "www/vm/index.html").read_text()
-        self.make("www/vm")
-        self.assertEqual(self.commands(), initial)
-        self.write("www/vm/style.css", "changed style")
-        self.make("www/vm")
-        self.assertEqual(self.commands(), initial)
-        new_entry = (self.root / "www/vm/index.html").read_text()
-        self.assertNotEqual(first_entry, new_entry)
-        for output in first_entry.split():
-            self.assertTrue((self.root / "www/vm" / output).exists())
-
-        # A lost published asset is restored, and subsequent builds settle again.
-        (self.root / "www/vm" / new_entry.split()[0]).unlink()
-        self.make("www/vm")
-        self.assertTrue((self.root / "www/vm" / new_entry.split()[0]).exists())
-        commands = self.commands()
-        self.make("www/vm")
-        self.assertEqual(self.commands(), commands)
-
     def test_upstream_sdk_make_targets(self) -> None:
         self.write("macos-minimal-sdk/src/usr/include/stdio.h", "header")
         self.write("macos-minimal-sdk/src/x86_64/libSystem.s", "x86 stubs")
@@ -174,206 +145,166 @@ class BuildTests(unittest.TestCase):
             self.assertTrue((sysroot / "usr/lib/libSystem.B.dylib").exists())
             self.assertTrue((sysroot / "usr/lib/libSystem.dylib").is_symlink())
 
-    def test_vm_incremental_build_and_missing_disk_and_runtime(self) -> None:
-        vm = "www/vm/vm"
-        self.write(f"{vm}/guest/startup", "guest")
-        self.write(f"{vm}/build/downloads/risclet-0.5.5", "risclet")
-        for name in ("riscbox.js", "riscbox.wasm", "riscbox.d.ts", "fw_dynamic.bin-boot.gz", "linux-kernel.gz"):
-            self.write(f"{vm}/fixture-release/{name}", name)
-        splitter = '''import hashlib
-import json
-import os
+    def vm_fixture(self) -> None:
+        self.browser_fixture("client")
+        self.write("client/index.ts", "source")
+        self.write("client/index.template.html", "{{app}} {{style}} {{favicon}}")
+        self.write("client/favicon.svg", "icon")
+        self.write("stepper/Makefile", "riscv64:\n\t@mkdir -p dist\n\t@test -f dist/stepper.linux_riscv64 || echo runner > dist/stepper.linux_riscv64\n")
+        self.write("tools/uv", '#!/bin/sh\nshift 3\nexec python3 "$@"\n', executable=True)
+        self.write("build/downloads/alpine-minirootfs-3.24.3-riscv64.tar.gz", "alpine")
+        self.write("build/downloads/risclet-0.5.5", "risclet")
+        for name in ("riscbox.js", "riscbox.wasm", "linux", "fw_dynamic.bin"):
+            self.write(f"release/riscbox-deadbeef/{name}", name)
+        self.write("release/riscbox.d.ts", "declarations")
+        self.write("release/splitimg.py", '''import hashlib
 import sys
 from pathlib import Path
-with open(os.environ["BUILD_LOG"], "a") as log:
-    log.write(json.dumps(["split"]) + "\\n")
-drive = "drive-" + hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest()[:8]
-directory = Path(sys.argv[2]) / drive
+name = "drive-" + hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest()[:8]
+directory = Path(sys.argv[2]) / name
 directory.mkdir(parents=True, exist_ok=True)
 (directory / "blk.txt").write_text("disk")
-print(drive)
-'''
-        self.write(f"{vm}/fixture-release/splitimg.py", splitter)
-        archive = self.root / f"{vm}/build/downloads/riscbox-2026.10.7.tar.gz"
-        with tarfile.open(archive, "w:gz") as output:
-            output.add(self.root / f"{vm}/fixture-release", arcname="riscbox")
-
-        # Local preparation substitutes for downloads and QEMU, preserving Make's graph.
-        self.write(f"{vm}/scripts/fetch.sh", '#!/bin/sh\nset -eu\nprintf alpine > "$3"\n', executable=True)
-        self.write(
-            f"{vm}/scripts/download-release.sh",
-            '#!/bin/sh\nset -eu\nif [ "$1" = risclet ]; then printf risclet > "$3"; else tar -czf "$3" fixture-release; fi\n',
-            executable=True,
-        )
-        prepare = '''#!/usr/bin/env python3
-import json
-import os
+print(name)
+''')
+        with tarfile.open(self.root / "build/downloads/riscbox-0.9.0.tar.gz", "w:gz") as archive:
+            archive.add(self.root / "release", arcname="riscbox")
+        self.write("vms/build-image.sh", '''#!/usr/bin/env python3
 import sys
 from pathlib import Path
-with open(os.environ["BUILD_LOG"], "a") as log:
-    log.write(json.dumps(["image"]) + "\\n")
-Path("build/rootfs.ext4").write_bytes(Path(sys.argv[2]).read_bytes() + Path("guest/startup").read_bytes())
-'''
-        self.write(f"{vm}/build-image.sh", prepare, executable=True)
-        self.make(vm, "-j4")
-        self.assertEqual(self.commands(), [["image"], ["split"]])
-        manifest = self.root / f"{vm}/build/assets.json"
-        first_manifest = manifest.stat().st_mtime_ns
-        self.make(vm)
-        self.assertEqual(self.commands(), [["image"], ["split"]])
-        self.assertEqual(manifest.stat().st_mtime_ns, first_manifest)
+name = sys.argv[1]
+Path(f"build/{name}-rootfs.ext4").write_bytes(Path("guest/etc/inittab").read_bytes() + name.encode())
+''', executable=True)
 
-        # A changed publisher runs once even when its manifest bytes stay identical.
-        publisher = self.root / f"{vm}/scripts/assets.py"
-        publisher.write_text(publisher.read_text() + "\n# Fixture publisher revision.\n")
-        self.assertIn("scripts/assets.py", self.make(vm))
-        self.assertNotIn("scripts/assets.py", self.make(vm))
-        self.assertEqual(manifest.stat().st_mtime_ns, first_manifest)
-
-        # Lost deployment files recover without rebuilding the QEMU-prepared image.
-        drive = (self.root / f"{vm}/build/disk-name").read_text().strip()
-        block = self.root / f"{vm}/image/{drive}/blk.txt"
-        block.unlink()
-        self.make(vm)
-        self.assertTrue(block.exists())
-        self.assertEqual(self.commands(), [["image"], ["split"], ["split"]])
-        runtime = self.root / f"{vm}/runtime/riscbox-2026.10.7/riscbox.wasm"
-        runtime.unlink()
-        self.make(vm)
-        self.assertTrue(runtime.exists())
-        manifest.unlink()
-        self.make(vm)
-        self.assertTrue(manifest.exists())
-        config = self.root / vm / json.loads(manifest.read_text())["configUrl"].removeprefix("vm/")
-        config.unlink()
-        self.make(vm)
-        self.assertTrue(config.exists())
+    def test_client_incremental_publication_and_source_deletions(self) -> None:
+        self.vm_fixture()
+        self.make("client", "-j4")
+        page = self.root / "www/client/index.html"
+        first = page.stat().st_mtime_ns
         commands = self.commands()
-        manifest_timestamp = manifest.stat().st_mtime_ns
-        self.make(vm)
+        self.make("client")
         self.assertEqual(self.commands(), commands)
-        self.assertEqual(manifest.stat().st_mtime_ns, manifest_timestamp)
+        self.assertEqual(page.stat().st_mtime_ns, first)
+        self.write("client/style.css", "changed style")
+        self.make("client")
+        self.assertEqual((self.root / "www/client/dist/style.css").read_text(), "changed style")
+        self.assertEqual(page.stat().st_mtime_ns, first)
+        self.write("client/extra.ts", "extra")
+        self.make("client")
+        (self.root / "client/extra.ts").unlink()
+        self.make("client")
+        self.assertFalse((self.root / "build/client/extra.ts").exists())
+        (self.root / "www/client/dist/app.js").unlink()
+        self.make("client")
+        self.assertTrue((self.root / "www/client/dist/app.js").exists())
+        (self.root / "build/client/google/protobuf/duration.ts").unlink()
+        self.make("client")
+        self.assertTrue((self.root / "build/client/google/protobuf/duration.ts").exists())
+        self.assertFalse((self.root / "client/codegrinder.ts").exists())
+        self.assertFalse((self.root / "client/node_modules").exists())
 
-        self.write(f"{vm}/guest/startup", "updated guest")
-        self.make(vm)
-        self.assertEqual(self.commands()[-2:], [["image"], ["split"]])
+    def test_vm_missing_outputs_and_download_cache(self) -> None:
+        self.vm_fixture()
+        self.make("vms")
+        rootfs = self.root / "build/vms/build/c-rootfs.ext4"
+        timestamp = rootfs.stat().st_mtime_ns
+        assets = json.loads((self.root / "build/vms/build/assets.json").read_text())
+        self.assertEqual(assets["c"]["configUrl"], "../vms/c.cfg")
+        self.assertEqual(assets["c"]["runtimeUrl"], "../vms/riscbox-deadbeef/riscbox.js")
+        config = self.root / "www/vms/c.cfg"
+        drive = config.parent / json.loads(config.read_text())["drive0"]["file"]
+        for path in (drive, config, self.root / "www/vms/riscbox-deadbeef/riscbox.wasm"):
+            path.unlink()
+            self.make("vms")
+            self.assertTrue(path.exists(), str(path))
+            self.assertEqual(rootfs.stat().st_mtime_ns, timestamp)
+        cached = self.root / "build/downloads/riscbox-0.9.0/riscbox.d.ts"
+        extracted = cached.stat().st_mtime_ns
+        self.make("vms")
+        self.assertEqual(cached.stat().st_mtime_ns, extracted)
+        shutil.rmtree(self.root / "build/downloads/riscbox-0.9.0")
+        self.make("vms")
+        self.assertTrue(cached.exists())
 
-    def test_cleanup_preserves_deployment_and_private_data(self) -> None:
-        preserved = (
-            "config.json", "db/codegrinder.db", "backup/database.gz",
-            "www/vm/vm/runtime/package.json",
-        )
+    def test_cleanup_preserves_published_assets_and_private_data(self) -> None:
+        self.vm_fixture()
+        self.make("client")
+        page = self.root / "www/client/index.html"
+        inventory = (page.parent / ".published-assets.json").read_text()
+        self.write("www/vms/c-drive-stale/blk.txt", "stale")
+        self.write("www/client/dist/app-stale.js", "stale")
+        self.write("db/private", "private")
+        self.make("vms", "mostlyclean")
+        self.assertTrue((self.root / "build/client").exists())
+        self.assertTrue((self.root / "www/client/dist/app-stale.js").exists())
+        self.make("client", "mostlyclean")
+        self.make("client", "mostlyclean")
+        self.assertFalse((self.root / "build/client").exists())
+        self.assertFalse((self.root / "www/client/dist/app-stale.js").exists())
+        self.assertFalse((self.root / "www/vms/c-drive-stale").exists())
+        for name in json.loads(inventory):
+            self.assertTrue((page.parent / name).exists(), name)
+        self.assertTrue((self.root / "build/downloads/riscbox-0.9.0.tar.gz").exists())
+        self.make("client", "clean")
+        self.assertFalse(page.exists())
+        self.assertFalse((self.root / "www/vms").exists())
+        self.assertEqual((self.root / "db/private").read_text(), "private")
+
+    def test_cleanup_requires_inventory_for_existing_page(self) -> None:
+        self.write("www/client/index.html", "existing page")
+        self.write("www/client/dist/app.js", "existing bundle")
+        result = subprocess.run(["make", "-C", str(self.root / "client"), "mostlyclean"],
+                                text=True, capture_output=True, check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("rebuild the VM client page", result.stderr)
+        self.assertTrue((self.root / "www/client/dist/app.js").exists())
+
+    def test_vm_cleanup_without_published_client(self) -> None:
+        self.write("www/vms/c.cfg", "unpublished configuration")
+        self.write("www/vms/c-drive-stale/blk.txt", "unpublished drive")
+        self.make("vms", "mostlyclean")
+        self.assertEqual(list((self.root / "www/vms").iterdir()), [])
+
+    def test_root_cleanup_preserves_deployment_and_private_data(self) -> None:
+        private = ("config.json", "db/codegrinder.db", "backup/database.gz")
         deployed = (
             "target/release/codegrinder", "target/release/grind",
             "stepper/dist/stepper.linux_amd64", "stepper/dist/stepper.linux_riscv64",
-            "www/vm/vm/image/risclet.cfg",
             "www/grind.linux_amd64", "www/web/scripts/app.js", "www/web/sw.js",
-            "www/vm/index.html", "www/vm/dist/app-old.js",
-            "www/vm/vm/runtime/riscbox-2026.10.7/riscbox.js",
-            "www/vm/vm/runtime/riscbox.js", "www/vm/vm/image/drive-old/blk.txt",
-            "www/vm/vm/image/risclet-old.json",
+            "www/client/index.html", "www/client/dist/app.js",
+            "www/vms/c.cfg", "www/vms/c-drive-current/blk.txt",
+            "www/vms/riscbox-current/riscbox.js",
         )
         intermediates = (
             "target/release/deps/library", "target/release/.fingerprint/package",
             "target/aarch64-unknown-linux-musl/release/grind", "target/.rustc_info.json",
             "target/riscv64gc-unknown-linux-musl/standalone-linux/stepper",
-            "stepper/dist/stepper.linux_riscv64.part",
+            "stepper/dist/stepper.linux_riscv64.part", "www/grind.linux_amd64.part",
             "www/web/generated/codegrinder.ts", "www/web/node_modules/package/file",
-            "www/vm/build/ui/app.js", "www/vm/codegrinder.ts",
-            "www/vm/index.html.part", "www/grind.linux_amd64.part",
-            "www/vm/vm/image/risclet-current.json.part",
-            "www/vm/vm/build/rootfs.ext4", "www/vm/vm/runtime/riscbox-2026.10.7/.built",
+            "build/client/codegrinder.ts", "build/client/node_modules/package/file",
+            "build/vms/build/c-rootfs.ext4", "www/vms/stale.cfg",
+            "www/client/index.html.part", "www/client/.published-assets.json.part",
+            "www/vms/c-drive-stale/blk.txt", "www/client/dist/app-stale.js",
             "macos-minimal-sdk/sysroot-macos-arm64/usr/lib/libSystem.B.dylib",
             "macos-minimal-sdk/sysroot-macos-x86_64/usr/lib/libSystem.B.dylib",
             "macos-minimal-sdk/download/archive", "macos-minimal-sdk/hello",
             "tests/__pycache__/module.pyc",
         )
-        for name in (*preserved, *deployed, *intermediates):
+        for name in (*private, *deployed, *intermediates):
             self.write(name, name)
-        self.write("www/vm/.published-assets.json", json.dumps([
-            "dist/app-old.js", "vm/image/risclet.cfg", "vm/image/drive-old",
-            "vm/image/risclet-old.json", "vm/runtime/riscbox-2026.10.7", "vm/runtime/riscbox.js",
+        self.write("www/client/.published-assets.json", json.dumps([
+            "dist/app.js", "../vms/c.cfg", "../vms/c-drive-current",
+            "../vms/riscbox-current",
         ]))
-        stale = (
-            "www/vm/dist/app-stale.js", "www/vm/vm/image/drive-stale/blk.txt",
-            "www/vm/vm/image/stale.cfg", "www/vm/vm/runtime/riscbox-2020.1.1/riscbox.js",
-        )
-        for name in stale:
-            self.write(name, name)
         self.make(".", "mostlyclean")
-        for name in (*preserved, *deployed):
+        for name in (*private, *deployed):
             self.assertEqual((self.root / name).read_text(), name)
-        for name in (*intermediates, *stale):
+        for name in intermediates:
             self.assertFalse((self.root / name).exists(), name)
-        # Repeated cleanup uses the durable inventory after build caches disappear.
-        self.make("www/vm", "mostlyclean")
         self.make(".", "clean")
-        for name in preserved:
+        for name in private:
             self.assertEqual((self.root / name).read_text(), name)
         for name in deployed:
             self.assertFalse((self.root / name).exists(), name)
-
-    def test_cleanup_keeps_published_vm_instead_of_unpublished_build(self) -> None:
-        # A publication captures hashed configs, disks, runtime, and UI assets together.
-        self.write("www/vm/build/ui/app-current.js", "bundle")
-        self.write("www/vm/index.template.html", "{{app}} {{style}} {{favicon}}")
-        self.write("www/vm/style.css", "style")
-        self.write("www/vm/favicon.svg", "icon")
-        self.write("www/vm/vm/image/riscv-current.cfg", json.dumps({
-            "drive0": {"file": "riscv-drive-current/blk.txt"},
-        }))
-        self.write("www/vm/vm/build/assets.json", json.dumps({"riscv": {
-            "configUrl": "vm/image/riscv-current.cfg",
-            "runtimeUrl": "vm/runtime/riscbox-current/riscbox.js",
-        }}))
-        kept = (
-            "vm/image/riscv-current.cfg", "vm/image/riscv-drive-current/blk.txt",
-            "vm/runtime/riscbox-current/riscbox.js", "vm/runtime/riscbox-current/riscbox.wasm",
-        )
-        for name in kept[1:]:
-            self.write(f"www/vm/{name}", "active")
-        subprocess.run(
-            ["python3", "scripts/publish.py"], cwd=self.root / "www/vm", check=True,
-        )
-
-        # New build metadata does not change which assets the published UI needs.
-        self.write("www/vm/vm/build/assets.json", "{}")
-        stale = (
-            "vm/image/riscv-unpublished.cfg", "vm/image/riscv-drive-unpublished/blk.txt",
-            "vm/runtime/riscbox-unpublished/riscbox.js", "dist/app-old.js",
-        )
-        for name in stale:
-            self.write(f"www/vm/{name}", "stale")
-        self.make("www/vm/vm", "mostlyclean")
-        self.assertTrue((self.root / "www/vm/dist/app-old.js").exists())
-        self.make("www/vm", "mostlyclean")
-        self.make("www/vm", "mostlyclean")
-        for name in (*kept, "dist/app-current.js", "index.html"):
-            self.assertTrue((self.root / "www/vm" / name).exists(), name)
-        for name in stale:
-            self.assertFalse((self.root / "www/vm" / name).exists(), name)
-
-    def test_cleanup_requires_inventory_for_existing_page(self) -> None:
-        self.write("www/vm/vm/guest/startup", "guest")
-        self.write("www/vm/index.html", "existing page")
-        asset = self.write("www/vm/dist/app.js", "existing bundle")
-        cache = self.write("www/vm/build/input", "cache")
-        result = subprocess.run(
-            ["make", "--no-print-directory", "mostlyclean"],
-            cwd=self.root / "www/vm", text=True, capture_output=True, check=False,
-        )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("rebuild the VM client page", result.stderr)
-        self.assertTrue(asset.exists())
-        self.assertTrue(cache.exists())
-
-        # Full cleanup needs no inventory, and an unpublished empty tree can be swept.
-        self.make("www/vm", "clean")
-        self.assertFalse(asset.exists())
-        self.assertFalse(cache.exists())
-        self.write("www/vm/vm/runtime/stale.js", "stale")
-        self.make("www/vm", "mostlyclean")
-        self.assertFalse((self.root / "www/vm/vm/runtime/stale.js").exists())
 
     def test_rust_checks_precede_tests_and_stay_component_scoped(self) -> None:
         self.make("grind", "test", "TEST_ARGS=workspace")

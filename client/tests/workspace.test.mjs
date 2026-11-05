@@ -6,9 +6,9 @@ import test from "node:test";
 import ts from "typescript";
 import { snapshotRegression } from "./workspace.mjs";
 
-const assets = JSON.parse(await readFile(new URL("../vm/build/assets.json", import.meta.url), "utf8")).riscv;
-const adapter = fileURLToPath(new URL(`../${assets.runtimeUrl}`, import.meta.url));
-const wasm = fileURLToPath(new URL(`../${assets.wasmUrl}`, import.meta.url));
+const assets = JSON.parse(await readFile(new URL("../../vms/build/assets.json", import.meta.url), "utf8")).riscv;
+const adapter = fileURLToPath(new URL(`../../../www/client/${assets.runtimeUrl}`, import.meta.url));
+const wasm = fileURLToPath(new URL(`../../../www/client/${assets.wasmUrl}`, import.meta.url));
 
 // A supplied current build checks metadata and links without a guest image.
 test("snapshots preserve complete real WASM namespaces", async () => {

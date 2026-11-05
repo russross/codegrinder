@@ -1,7 +1,7 @@
 import type { Riscbox } from "@riscbox/runtime";
 import { VmSession } from "./vm-session";
 import type { VmImage, VmSessionOptions, VmTarget, VmTransition } from "./vm-session";
-import assets from "./vm/build/assets.json";
+import assets from "../vms/build/assets.json";
 
 export const EXAM_TRANSITION: VmTransition = {
     workspace: "files", poweroff: "force", discardDiskChanges: true, boot: false,

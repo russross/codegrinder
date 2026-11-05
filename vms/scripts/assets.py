@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import sys
@@ -51,8 +50,8 @@ def prepare(version: str, names: list[str]) -> None:
     if re.fullmatch(r"\d+\.\d+\.\d+", version) is None:
         raise ValueError("expected Riscbox release version")
     directory = payload(r"riscbox-[a-f0-9]+")
-    runtime = f"vm/runtime/riscbox-{version}/{directory}"
-    release = f"../runtime/riscbox-{version}/{directory}"
+    runtime = f"../vms/{directory}"
+    release = directory
     assets: dict[str, dict[str, str]] = {}
     outputs = ["build/assets.json"]
     for name in names:
@@ -66,18 +65,16 @@ def prepare(version: str, names: list[str]) -> None:
             "fs0": {"server": "workspace", "tag": "shared"},
         }
         content = json.dumps(config, indent=2) + "\n"
-        digest = hashlib.sha256(content.encode()).hexdigest()[:16]
-        filename = f"{name}-{digest}.cfg"
-        write_changed(Path("image") / filename, content)
-        write_changed(Path("image") / f"{name}.cfg", content)
+        filename = f"{name}.cfg"
+        write_changed(Path("../../www/vms") / filename, content)
         assets[name] = {
-            "configUrl": f"vm/image/{filename}",
+            "configUrl": f"../vms/{filename}",
             "runtimeUrl": f"{runtime}/riscbox.js",
             "wasmUrl": f"{runtime}/riscbox.wasm",
         }
-        outputs.extend([f"image/{filename}", f"image/{name}.cfg"])
+        outputs.append(f"../../www/vms/{filename}")
 
-    # Immutable configurations keep already-open clients on their original disk.
+    # Stable configurations are revalidated when a VM starts.
     write_changed(Path("build/assets.json"), json.dumps(assets, indent=2) + "\n")
     Path("build/assets-outputs.mk").write_text(
         f"ASSETS_OUTPUTS := {' '.join(outputs)}\n"

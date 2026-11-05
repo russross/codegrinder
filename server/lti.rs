@@ -246,7 +246,7 @@ async fn launch_inner(
 fn launch_location(ui: LaunchUi, assignment_key: &str, token: &str, course_label: &str) -> String {
     format!(
         "/{}/?assignment={}&token={}&course={}",
-        if matches!(ui, LaunchUi::Exam) { "vm" } else { ui.as_str() },
+        if matches!(ui, LaunchUi::Exam) { "client" } else { ui.as_str() },
         escape(assignment_key),
         escape(token),
         escape(course_label)
@@ -506,7 +506,7 @@ mod tests {
         assert!(exam.is_restricted());
         assert_eq!(
             launch_location(exam, "u:c:p", "token", "course"),
-            "/vm/?assignment=u%3Ac%3Ap&token=token&course=course"
+            "/client/?assignment=u%3Ac%3Ap&token=token&course=course"
         );
         let error = LaunchUi::parse("javascript").unwrap_err();
         assert!(error.to_string().contains("cli, web, js, exam, or quiz"));

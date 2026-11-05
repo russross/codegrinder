@@ -10,6 +10,7 @@ import webpack from "webpack";
 import config from "./webpack.config.mjs";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
+const deployment = path.resolve(directory, "../../www");
 
 test("Chromium verifies exam RPC integration, terminals, clipboard, and the real VM filesystem", { timeout: 360_000 }, async () => {
     const output = await mkdtemp(path.join(tmpdir(), "exam-browser-test-"));
@@ -29,9 +30,13 @@ test("Chromium verifies exam RPC integration, terminals, clipboard, and the real
             response.end('<!doctype html><html><head><meta charset="UTF-8"><link rel="icon" href="/favicon.svg"></head><body><script src="/browser.js"></script></body></html>');
             return;
         }
-        const root = url.pathname.endsWith(".browser.js") || url.pathname === "/browser.js"
+        // Serve published entry files separately from the generated test bundle.
+        const generated = url.pathname.endsWith(".browser.js") || url.pathname === "/browser.js"
             || /^\/app-[a-f0-9]+\.js$/.test(url.pathname)
-            || /^\/[a-f0-9]+\.wasm$/.test(url.pathname) ? output : directory;
+            || /^\/[a-f0-9]+\.wasm$/.test(url.pathname);
+        const entry = url.pathname === "/index.html" || url.pathname.startsWith("/dist/");
+        const root = url.pathname.startsWith("/vms/") ? deployment
+            : entry ? path.join(deployment, "client") : generated ? output : directory;
         const filename = path.resolve(root, `.${decodeURIComponent(url.pathname)}`);
         if (!filename.startsWith(`${root}/`)) { response.writeHead(403).end(); return; }
         try {

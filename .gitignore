@@ -11,3 +11,7 @@ problemtypes
 .ruff_cache
 TODO.md
 /target/
+
+/build/
+/www/client/
+/www/vms/

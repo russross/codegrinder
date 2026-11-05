@@ -9,14 +9,14 @@ from pathlib import Path
 
 def publish() -> None:
     # Direct page dependencies use stable URLs; lazy chunks retain content names.
-    Path("dist").mkdir(exist_ok=True)
+    Path("../../www/client/dist").mkdir(parents=True, exist_ok=True)
     files = sorted(path for path in Path("build/ui").iterdir() if path.is_file() and path.name != ".built")
     if Path("build/ui/app.js") not in files:
         raise ValueError("expected one application entry bundle")
     for path in files:
-        shutil.copyfile(path, Path("dist") / path.name)
+        shutil.copyfile(path, Path("../../www/client/dist") / path.name)
     for name in ("style.css", "favicon.svg"):
-        shutil.copyfile(name, Path("dist") / name)
+        shutil.copyfile(name, Path("../../www/client/dist") / name)
     replacements = {"app": "dist/app.js", "style": "dist/style.css", "favicon": "dist/favicon.svg"}
 
     # Check the complete page before replacing the live entry or its dependency list.
@@ -30,29 +30,29 @@ def publish() -> None:
 
     # Record the VM assets embedded in this bundle, independently of later builds.
     active = list(outputs)
-    images = json.loads(Path("vm/build/assets.json").read_text(encoding="utf-8"))
+    images = json.loads(Path("../vms/build/assets.json").read_text(encoding="utf-8"))
     for image in images.values():
-        configuration = Path(image["configUrl"])
+        configuration = Path("../../www/client") / image["configUrl"]
         config = json.loads(configuration.read_text(encoding="utf-8"))
-        active.append(configuration.as_posix())
-        active.append((configuration.parent / config["drive0"]["file"]).parent.as_posix())
-        active.append(Path(*Path(image["runtimeUrl"]).parts[:3]).as_posix())
+        active.append(image["configUrl"])
+        active.append((Path(image["configUrl"]).parent / config["drive0"]["file"]).parent.as_posix())
+        active.append(Path(image["runtimeUrl"]).parent.as_posix())
     inventory = json.dumps(sorted(set(active)), indent=2) + "\n"
     Path("build/published-outputs.mk").write_text(
         f"PUBLISHED_OUTPUTS := {' '.join(outputs)}\n"
-        "index.html: $(PUBLISHED_OUTPUTS)\n$(PUBLISHED_OUTPUTS):\n",
+        "../../www/client/index.html: $(addprefix ../../www/client/,$(PUBLISHED_OUTPUTS))\n$(addprefix ../../www/client/,$(PUBLISHED_OUTPUTS)):\n",
         encoding="utf-8",
     )
 
     # Publish the entry only after every referenced asset is available.
-    entry = Path("index.html")
+    entry = Path("../../www/client/index.html")
     if not entry.exists() or entry.read_text(encoding="utf-8") != page:
-        temporary = Path("index.html.part")
+        temporary = Path("../../www/client/index.html.part")
         temporary.write_text(page, encoding="utf-8")
         temporary.replace(entry)
-    temporary = Path(".published-assets.json.part")
+    temporary = Path("../../www/client/.published-assets.json.part")
     temporary.write_text(inventory, encoding="utf-8")
-    temporary.replace(".published-assets.json")
+    temporary.replace("../../www/client/.published-assets.json")
 
 
 def main() -> int:

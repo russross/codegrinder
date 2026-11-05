@@ -10,8 +10,8 @@
     "skipLibCheck": true,
     "baseUrl": ".",
     "paths": {
-      "@riscbox/runtime": ["vm/build/riscbox/riscbox.d.ts"],
-      "@riscbox/storage": ["vm/build/riscbox/riscbox.d.ts"]
+      "@riscbox/runtime": ["../vms/build/riscbox/riscbox.d.ts"],
+      "@riscbox/storage": ["../vms/build/riscbox/riscbox.d.ts"]
     }
   },
   "include": ["*.ts", "*.d.ts", "google/**/*.ts", "tests/*.ts"],

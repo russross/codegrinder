@@ -5,16 +5,16 @@ all: web vm
 web:
 	$(MAKE) -C web
 vm:
-	$(MAKE) -C vm
+	$(MAKE) -C ../client
 grind-dist:
 	$(MAKE) -C ../grind grind-dist
 
 mostlyclean:
 	$(MAKE) -C web mostlyclean
-	$(MAKE) -C vm mostlyclean
+	$(MAKE) -C ../client mostlyclean
 	$(MAKE) -C ../grind mostlyclean-dist
 
 clean:
 	$(MAKE) -C web clean
-	$(MAKE) -C vm clean
+	$(MAKE) -C ../client clean
 	$(MAKE) -C ../grind clean-dist

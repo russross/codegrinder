@@ -20,17 +20,19 @@ def prune(root: Path, vm_only: bool) -> None:
     else:
         active = set()
 
-    # Only generated deployment trees are swept; runtime package metadata is source.
-    directories = [Path("vm/image"), Path("vm/runtime")]
+    # Sweep deployed VM payloads and bundles using paths relative to the entry page.
+    directories = [Path("../vms")]
     if not vm_only:
         directories.append(Path("dist"))
-    active.add(Path("vm/runtime/package.json"))
+        for name in ("index.html.part", ".published-assets.json.part"):
+            (root / name).unlink(missing_ok=True)
     for directory in directories:
-        target = root / directory
+        target = (root / directory).resolve()
         if not target.exists():
             continue
         for path in target.iterdir():
-            if path.relative_to(root) in active:
+            relative = directory / path.name
+            if relative in active:
                 continue
             if path.is_dir() and not path.is_symlink():
                 shutil.rmtree(path)
@@ -43,7 +45,7 @@ def main() -> int:
     try:
         if sys.argv[1:] not in ([], ["--vm-only"]):
             raise ValueError("usage: prune.py [--vm-only]")
-        prune(Path(__file__).resolve().parent.parent, bool(sys.argv[1:]))
+        prune(Path.cwd().parent / "www/client" if Path.cwd().name in ("client", "vms") else Path.cwd(), bool(sys.argv[1:]))
     except (OSError, ValueError) as error:
         print(f"VM client cleanup: {error}", file=sys.stderr)
         return 1

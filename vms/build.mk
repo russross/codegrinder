@@ -1,11 +1,11 @@
-RISCBOX_VERSION := 0.9.0
+RISCBOX_VERSION := $(shell cat riscbox.version)
 .DEFAULT_GOAL := all
-RISCLET_VERSION := 0.5.5
-ALPINE_VERSION := 3.24.3
+RISCLET_VERSION := $(shell cat risclet.version)
+ALPINE_VERSION := $(shell cat alpine.version)
 ALPINE_SHA256 := 9714553757e7bf645eff5dcc52bdd206f358a7bed77874842567852e8326a51d
-RISCBOX_ARCHIVE := build/downloads/riscbox-$(RISCBOX_VERSION).tar.gz
-RISCLET_BINARY := build/downloads/risclet-$(RISCLET_VERSION)
-ALPINE_ARCHIVE := build/downloads/alpine-minirootfs-$(ALPINE_VERSION)-riscv64.tar.gz
+RISCBOX_ARCHIVE := ../downloads/riscbox-$(RISCBOX_VERSION).tar.gz
+RISCLET_BINARY := ../downloads/risclet-$(RISCLET_VERSION)
+ALPINE_ARCHIVE := ../downloads/alpine-minirootfs-$(ALPINE_VERSION)-riscv64.tar.gz
 IMAGES := riscv c
 riscv_SIZE := 12
 c_SIZE := 16
@@ -14,13 +14,13 @@ c_PACKAGES := make tzdata tcc tcc-libs-static musl-dev
 riscv_TOOLS := build/riscv-tools.tar
 c_TOOLS := -
 GUEST_SOURCES := $(shell find guest -type f | sort)
-STEPPER := ../../../stepper/dist/stepper.linux_riscv64
+STEPPER := ../../stepper/dist/stepper.linux_riscv64
 
 all: build/assets.stamp
 
 # Inventories capture removed sources and release changes without touching unchanged inputs.
 build/guest-inputs: FORCE
-	sh ../../../scripts/inventory.sh $@ $(GUEST_SOURCES)
+	sh ../../scripts/inventory.sh $@ $(GUEST_SOURCES)
 
 build/riscbox-version: FORCE
 	@mkdir -p build
@@ -37,35 +37,28 @@ build/risclet-version: FORCE
 	@printf '%s\n' '$(RISCLET_VERSION)' > $@.part
 	@cmp -s $@.part $@ && rm $@.part || mv $@.part $@
 
-$(RISCBOX_ARCHIVE): scripts/download-release.sh scripts/fetch.sh
+$(RISCBOX_ARCHIVE):
 	./scripts/download-release.sh riscbox '$(RISCBOX_VERSION)' '$@'
 
-$(RISCLET_BINARY): scripts/download-release.sh scripts/fetch.sh
+$(RISCLET_BINARY):
 	./scripts/download-release.sh risclet '$(RISCLET_VERSION)' '$@'
 
-$(ALPINE_ARCHIVE): scripts/fetch.sh build/alpine-version
+$(ALPINE_ARCHIVE):
 	./scripts/fetch.sh 'https://dl-cdn.alpinelinux.org/alpine/v$(basename $(ALPINE_VERSION))/releases/riscv64/$(notdir $@)' '$(ALPINE_SHA256)' '$@'
 
 # Public declarations, runtime, and boot payloads always come from the same archive.
 -include build/runtime-outputs.mk $(foreach image,$(IMAGES),build/$(image)-disk-outputs.mk) build/assets-outputs.mk build/release-outputs.mk
-build/riscbox.stamp: $(RISCBOX_ARCHIVE) build/riscbox-version
-	rm -rf build/riscbox.part
-	mkdir -p build/riscbox.part
-	tar -xzf '$(RISCBOX_ARCHIVE)' --strip-components=1 -C build/riscbox.part
-	for file in build/riscbox.part/riscbox-*/*.br; do brotli -d -k "$$file"; done
-	test -f build/riscbox.part/riscbox-*/riscbox.js
-	test -f build/riscbox.part/riscbox-*/riscbox.wasm
-	test -f build/riscbox.part/riscbox.d.ts
-	rm -rf build/riscbox
-	mv build/riscbox.part build/riscbox
-	sh ../../../scripts/outputs.sh build/release-outputs.mk RELEASE $@ $$(find build/riscbox -type f | sort)
+build/riscbox.stamp: $(RISCBOX_ARCHIVE) build/riscbox-version scripts/unpack-release.py
+	python3 scripts/unpack-release.py '$(RISCBOX_ARCHIVE)' ../downloads/riscbox-$(RISCBOX_VERSION)
+	for file in ../downloads/riscbox-$(RISCBOX_VERSION)/riscbox-*/*.br; do [ -f "$$file" ] || continue; [ -f "$${file%.br}" ] || brotli -d -k "$$file"; done
+	ln -sfn ../../downloads/riscbox-$(RISCBOX_VERSION) build/riscbox
+	sh ../../scripts/outputs.sh build/release-outputs.mk RELEASE $@ $$(find ../downloads/riscbox-$(RISCBOX_VERSION) -type f | sort)
 	touch $@
 
-runtime/riscbox-$(RISCBOX_VERSION)/.built: build/riscbox.stamp
-	mkdir -p '$(@D)'
-	cp -R build/riscbox/riscbox-* '$(@D)/'
-	printf '{"type":"commonjs"}\n' > '$(@D)/package.json'
-	sh ../../../scripts/outputs.sh build/runtime-outputs.mk RUNTIME $@ $$(find '$(@D)' -type f ! -name .built | sort)
+build/runtime.stamp: build/riscbox.stamp
+	mkdir -p ../../www/vms
+	cp -R build/riscbox/riscbox-* ../../www/vms/
+	sh ../../scripts/outputs.sh build/runtime-outputs.mk RUNTIME $@ $$(find ../../www/vms/riscbox-* -type f | sort)
 	touch $@
 
 # Kernel and firmware are shared by every preparation boot.
@@ -84,12 +77,12 @@ build/riscv-tools.tar: $(RISCLET_BINARY) build/risclet-version
 
 # Each sibling image inventories its own overlay, including source deletions.
 $(foreach image,$(IMAGES),build/$(image)-inputs): build/%-inputs: FORCE
-	sh ../../../scripts/inventory.sh $@ $$(find $* -type f | sort)
+	sh ../../scripts/inventory.sh $@ $$(find $* -type f | sort)
 
 # Consult Cargo before comparing the published runner's timestamp.
 .PHONY: stepper
 stepper:
-	$(MAKE) -C ../../../stepper riscv64
+	$(MAKE) -C ../../stepper riscv64
 
 $(STEPPER): stepper
 
@@ -108,33 +101,20 @@ $(foreach image,$(IMAGES),build/$(image)-rootfs.ext4): build/%-rootfs.ext4: buil
 
 # The upstream splitter hashes content; each image adds its sibling name.
 $(foreach image,$(IMAGES),build/$(image)-disk-name): build/%-disk-name: build/%-rootfs.ext4 build/riscbox.stamp
-	mkdir -p image build/$*-split
+	mkdir -p ../../www/vms build/$*-split
 	uv run -q --script build/riscbox/splitimg.py $< build/$*-split > $@.part
 	awk '{print "$*-" $$1}' $@.part > $@
-	mkdir -p image/$$(cat $@)
-	cp -R build/$*-split/$$(awk '{print $$1}' $@.part)/. image/$$(cat $@)/
+	mkdir -p ../../www/vms/$$(cat $@)
+	cp -R build/$*-split/$$(awk '{print $$1}' $@.part)/. ../../www/vms/$$(cat $@)/
 	rm -rf build/$*-split
 	rm $@.part
-	sh ../../../scripts/outputs.sh build/$*-disk-outputs.mk DISK_$* $@ $$(find "image/$$(cat $@)" -type f | sort)
+	sh ../../scripts/outputs.sh build/$*-disk-outputs.mk DISK_$* $@ $$(find "../../www/vms/$$(cat $@)" -type f | sort)
 	touch $@
 
-build/assets.stamp: $(foreach image,$(IMAGES),build/$(image)-disk-name) scripts/assets.py runtime/riscbox-$(RISCBOX_VERSION)/.built
+build/assets.stamp: $(foreach image,$(IMAGES),build/$(image)-disk-name) scripts/assets.py build/runtime.stamp
 	python3 scripts/assets.py '$(RISCBOX_VERSION)' $(IMAGES)
 	touch build/assets.stamp
 
-# The published page owns the active disks and runtime, even after a newer build.
-mostlyclean:
-	python3 ../scripts/prune.py --vm-only
-	rm -rf build
-	rm -f image/*.part
-	if [ -d runtime ]; then find runtime -name .built -type f -delete; fi
-
-clean:
-	rm -rf build
-	rm -rf runtime/riscbox-*
-	rm -f runtime/riscbox.js runtime/riscbox.wasm runtime/riscbox.d.ts runtime/SHA256SUMS
-	rm -rf image
-
 FORCE:
-.PHONY: all mostlyclean clean FORCE
+.PHONY: all stepper FORCE
 .DELETE_ON_ERROR:

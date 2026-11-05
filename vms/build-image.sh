@@ -32,11 +32,11 @@ fakeroot sh -eu -c '
     cp -R "$4/." "$2/"
     [ "$5" = - ] || tar -xpf "$5" -C "$2"
     mkdir -p "$2/usr/local/bin"
-    cp ../../../stepper/dist/stepper.linux_riscv64 "$2/usr/local/bin/stepper"
+    cp ../../stepper/dist/stepper.linux_riscv64 "$2/usr/local/bin/stepper"
     chmod 755 "$2/usr/local/bin/stepper"
     stage=$2
     shift 5
-    printf "%s\n" "$@" > "$stage/etc/exam-packages"
+    printf "%s\n" "$@" > "$stage/etc/guest-packages"
     cd "$stage"
     chown -R 0:0 .
     find . -print0 | cpio --null --quiet -o -H newc | gzip -1 > "$initramfs"
@@ -46,7 +46,7 @@ fakeroot sh -eu -c '
 if ! timeout 300 qemu-system-riscv64 \
     -machine virt -m 512M -smp 1 -nographic -no-reboot \
     -bios build/fw_dynamic.bin -kernel build/linux -initrd build/$name-setup-initramfs.gz \
-    -append 'console=ttyS0,115200 rdinit=/sbin/exam-prepare riscv_isa_fallback panic=-1' \
+    -append 'console=ttyS0,115200 rdinit=/sbin/guest-prepare riscv_isa_fallback panic=-1' \
     -netdev user,id=net -device virtio-net-device,netdev=net \
     -fsdev "local,id=output,path=$output,security_model=none" \
     -device virtio-9p-device,fsdev=output,mount_tag=output \
@@ -70,4 +70,4 @@ fakeroot sh -eu -c '
     mkfs.ext4 -q -F -m 0 -O ^has_journal -d "$2" "$3"
 ' sh "$output/rootfs.tar" "$stage" "$(pwd)/build/$name-rootfs.ext4.part" "$size"
 mv "build/$name-rootfs.ext4.part" "build/$name-rootfs.ext4"
-echo "Prepared $size MiB writable $name exam image."
+echo "Prepared $size MiB writable $name guest image."
