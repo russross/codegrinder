@@ -7,6 +7,7 @@ RISCBOX_ARCHIVE := ../downloads/riscbox-$(RISCBOX_VERSION).tar.gz
 RISCLET_BINARY := ../downloads/risclet-$(RISCLET_VERSION)
 ALPINE_ARCHIVE := ../downloads/alpine-minirootfs-$(ALPINE_VERSION)-riscv64.tar.gz
 IMAGES := riscv c
+BLOCK_SIZE_KIB := 2048
 riscv_SIZE := 12
 c_SIZE := 16
 riscv_PACKAGES := make tzdata
@@ -100,9 +101,14 @@ $(foreach image,$(IMAGES),build/$(image)-rootfs.ext4): build/%-rootfs.ext4: buil
 	./build-image.sh '$*' '$($*_SIZE)' '$(ALPINE_ARCHIVE)' '$($*_TOOLS)' $($*_PACKAGES)
 
 # The upstream splitter hashes content; each image adds its sibling name.
-$(foreach image,$(IMAGES),build/$(image)-disk-name): build/%-disk-name: build/%-rootfs.ext4 build/riscbox.stamp
+build/split-settings: FORCE
+	@mkdir -p build
+	@printf '%s\n' '$(BLOCK_SIZE_KIB)' > $@.part
+	@cmp -s $@.part $@ && rm $@.part || mv $@.part $@
+
+$(foreach image,$(IMAGES),build/$(image)-disk-name): build/%-disk-name: build/%-rootfs.ext4 build/riscbox.stamp build/split-settings
 	mkdir -p ../../dist/vms build/$*-split
-	uv run -q --script build/riscbox/splitimg.py $< build/$*-split > $@.part
+	uv run -q --script build/riscbox/splitimg.py $< build/$*-split '$(BLOCK_SIZE_KIB)' > $@.part
 	awk '{print "$*-" $$1}' $@.part > $@
 	mkdir -p ../../dist/vms/$$(cat $@)
 	cp -R build/$*-split/$$(awk '{print $$1}' $@.part)/. ../../dist/vms/$$(cat $@)/

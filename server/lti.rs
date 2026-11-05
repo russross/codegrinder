@@ -565,7 +565,7 @@ fn get_config_xml(config: &ServerConfig) -> String {
     <lticm:property name="domain">{}</lticm:property>
     <lticm:options name="assignment_selection">
       <lticm:property name="url">https://{}/lti/picker</lticm:property>
-      <lticm:property name="text">Choose a CodeGrinder problem set</lticm:property>
+      <lticm:property name="text">! CodeGrinder problem set selection</lticm:property>
       <lticm:property name="message_type">ContentItemSelectionRequest</lticm:property>
       <lticm:property name="enabled">true</lticm:property>
     </lticm:options>

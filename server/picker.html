@@ -1,0 +1,55 @@
+<form method="post" action="/quiz/configure" id="picker" data-consumer="<!-- consumer -->">
+<!-- credentials -->
+<select id="problem-set" name="problem_set" aria-label="Problem set" size="7" required><!-- options --></select>
+<div class="filter-row"><span id="result-count" role="status"></span><div class="tags" id="tags" role="group" aria-label="Filter by tags"></div></div>
+<div class="launch-row" role="radiogroup" aria-labelledby="launch-label"><span id="launch-label">Launch mode:</span><div class="modes">
+<label class="mode"><input type="radio" name="mode" value="cli" checked>CLI</label>
+<label class="mode"><input type="radio" name="mode" value="web">Web</label>
+<label class="mode"><input type="radio" name="mode" value="exam">Testing-center VM</label>
+<label class="mode"><input type="radio" name="mode" value="quiz">Respondus quiz</label>
+</div></div>
+<div id="quiz-password" hidden><label class="field-label" for="password">Quiz password</label>
+<input id="password" type="text" name="password" autocomplete="new-password" maxlength="256" disabled>
+<p>Use the same password in the Canvas quiz’s Respondus settings.</p></div>
+<button class="submit" type="submit">Select this problem set</button>
+</form>
+<script>
+const form = document.querySelector('#picker');
+const select = document.querySelector('#problem-set');
+const tagList = document.querySelector('#tags');
+const submit = form.querySelector('[type=submit]');
+// Preserve the full catalog while each filter rebuilds the visible options.
+const catalog = Array.from(select.options, option => ({ option, tags: JSON.parse(option.dataset.tags) }));
+const selected = new Set([form.dataset.consumer]);
+function render() {
+    const previous = select.value;
+    const matches = catalog.filter(item => [...selected].every(tag => item.tags.includes(tag)));
+    select.replaceChildren(...matches.map(item => item.option));
+    select.value = matches.some(item => item.option.value === previous) ? previous : (matches[0]?.option.value ?? '');
+    submit.disabled = matches.length === 0;
+    document.querySelector('#result-count').textContent = `Filter (${matches.length} problem ${matches.length === 1 ? 'set' : 'sets'}):`;
+    // Selected filters stay available for removal, including an unmatched consumer key.
+    const available = new Set([...selected, ...matches.flatMap(item => item.tags)]);
+    tagList.replaceChildren(...[...available].sort((a, b) => Number(selected.has(b)) - Number(selected.has(a)) || a.localeCompare(b)).map(tag => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = tag;
+        button.setAttribute('aria-pressed', String(selected.has(tag)));
+        button.addEventListener('click', () => {
+            if (selected.has(tag)) selected.delete(tag); else selected.add(tag);
+            render();
+            [...tagList.children].find(child => child.textContent === tag)?.focus();
+        });
+        return button;
+    }));
+}
+// Native radios supply keyboard navigation and exactly one submitted entry mode.
+form.addEventListener('change', () => {
+    const quiz = form.elements.mode.value === 'quiz';
+    document.querySelector('#quiz-password').hidden = !quiz;
+    document.querySelector('#password').disabled = !quiz;
+    document.querySelector('#password').required = quiz;
+    submit.textContent = quiz ? 'Continue setting up testing center quiz' : 'Select this problem set';
+});
+render();
+</script>

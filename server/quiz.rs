@@ -143,6 +143,25 @@ fn page(title: &str, body: &str) -> Response {
     ([(header::CACHE_CONTROL, "no-store"), (header::REFERRER_POLICY, "no-referrer")], Html(html))
         .into_response()
 }
+// Canvas picker pages share styling without changing student check-in pages.
+fn picker_page(title: &str, body: &str) -> Response {
+    page(title, &format!("<style>{}</style>{body}", include_str!("picker.css")))
+}
+
+fn quiz_setup(config: &crate::config::ServerConfig, connector: &str) -> String {
+    let ip_filter = if config.ip_filter.whitelist.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<p>Select <strong>Filter IP Addresses</strong> and enter: <code>{}</code></p>",
+            escape_xml(&config.ip_filter.whitelist.join(","))
+        )
+    };
+    include_str!("quiz-setup.html")
+        .replace("<!-- ip-filter -->", &ip_filter)
+        .replace("<!-- connector -->", &escape_xml(connector))
+        .replace("<!-- hostname -->", &escape_xml(&config.hostname))
+}
 fn response(result: AppResult<Response>) -> Response {
     match result {
         Ok(r) => r,
@@ -182,13 +201,21 @@ async fn picker_launch(State(state): State<LtiState>, body: Bytes) -> Response {
         let ticket = STANDARD.encode(serde_json::to_vec(&picker)?);
         let signature = hmac_sha256_base64(&state.config.session_secret, format!("quiz-picker:v1:{ticket}").as_bytes())?;
         let options = state.db.transaction(false, |conn| {
-            let mut stmt=conn.prepare("SELECT problem_set_id, problem_set_note FROM problem_sets ORDER BY problem_set_id")?;
-            let rows=stmt.query_map([], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?;
+            let mut stmt=conn.prepare("SELECT problem_set_id, problem_set_note, problem_set_tags FROM problem_sets ORDER BY problem_set_id")?;
+            let rows=stmt.query_map([], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?)))?;
             let mut out=String::new();
-            for row in rows { let (id,note)=row?; out.push_str(&format!("<option value=\"{}\">{} — {}</option>",escape_xml(&id),escape_xml(&id),escape_xml(&note))); }
+            for row in rows {
+                let (id,note,tags)=row?;
+                out.push_str(&format!("<option value=\"{}\" data-tags=\"{}\">{} — {}</option>",escape_xml(&id),escape_xml(&tags),escape_xml(&id),escape_xml(&note)));
+            }
             Ok(out)
         }).await?;
-        Ok(page("Choose a problem set", &format!("<h1>Choose a problem set</h1><form method=post action=/quiz/configure>{}{}<label>Problem set<select name=problem_set required>{options}</select></label><label>Entry mode<select name=mode><option value=cli>CLI</option><option value=web>Web</option><option value=exam>Testing-center VM</option><option value=quiz>Respondus quiz</option></select></label><label>Quiz password (quiz mode only)<input type=password name=password autocomplete=new-password maxlength=256></label><p>Use the same password in the Canvas quiz’s Respondus settings.</p><button>Create assignment link</button></form>", hidden("ticket",&ticket),hidden("signature",&signature))))
+        // The catalog stays local to this dialog; the signed ticket still controls submission.
+        let body = include_str!("picker.html")
+            .replace("<!-- credentials -->", &format!("{}{}", hidden("ticket", &ticket), hidden("signature", &signature)))
+            .replace("<!-- options -->", &options)
+            .replace("<!-- consumer -->", &escape_xml(&picker.consumer_key));
+        Ok(picker_page("Select a problem set", &body))
     }.await;
     response(result)
 }
@@ -216,7 +243,7 @@ async fn configure(State(state): State<LtiState>, body: Bytes) -> Response {
             let c=Context{course:picker.course.clone(),problem_set:set.clone()};
             url.push_str(&format!("?tag={}",tag(&state.config.session_secret,"assignment",&c,&password)?));
             let connector=format!("https://{}/quiz/connect?tag={}",state.config.hostname,tag(&state.config.session_secret,"connector",&c,&password)?);
-            instructions=format!("<h2>Canvas quiz setup</h2><p>Require Respondus, configure the matching password, and allow the CodeGrinder domain. Put this link in a quiz question, opening in a new tab:</p><textarea readonly aria-label='Quiz connector link'>{}</textarea><p>Copy this link before returning to Canvas. Regenerate both links when changing the password or copying to another course.</p>",escape_xml(&connector));
+            instructions=quiz_setup(&state.config, &connector);
         }
         let items=serde_json::json!({"@context":"http://purl.imsglobal.org/ctx/lti/v1/ContentItem", "@graph":[{"@type":"LtiLinkItem","mediaType":"application/vnd.ims.lti.v1.ltilink","title":set,"url":url,"placementAdvice":{"presentationDocumentTarget":"window"}}]}).to_string();
         let mut fields=BTreeMap::from([("lti_message_type".into(),vec!["ContentItemSelection".into()]),("lti_version".into(),vec!["LTI-1p0".into()]),("content_items".into(),vec![items]),("oauth_consumer_key".into(),vec![picker.consumer_key]),("oauth_nonce".into(),vec![random_id()]),("oauth_timestamp".into(),vec![Utc::now().timestamp().to_string()]),("oauth_signature_method".into(),vec!["HMAC-SHA1".into()]),("oauth_version".into(),vec!["1.0".into()])]);
@@ -228,7 +255,13 @@ async fn configure(State(state): State<LtiState>, body: Bytes) -> Response {
         let signature=crate::passback::compute_oauth_signature("POST",&picker.return_url,&signed_fields,&state.config.lti_secret)?;
         fields.insert("oauth_signature".into(),vec![signature]);
         let inputs=fields.iter().map(|(k,v)|hidden(k,&v[0])).collect::<String>();
-        Ok(page("Assignment link",&format!("<h1>Assignment link ready</h1>{instructions}<form method=post action=\"{}\">{inputs}<button>Use this assignment in Canvas</button></form>",escape_xml(&picker.return_url))))
+        let button = if mode == "quiz" { "Complete testing center quiz setup" } else { "Select this problem set" };
+        let return_form = format!("<form id=canvas-return method=post action=\"{}\">{inputs}<button class=submit>{button}</button></form>", escape_xml(&picker.return_url));
+        // Ordinary selections post the signed content item immediately; quiz setup waits for the instructor.
+        if mode != "quiz" {
+            return Ok(picker_page("Returning to Canvas", &format!("{return_form}<script>document.querySelector('#canvas-return').hidden = true; document.querySelector('#canvas-return').submit();</script>")));
+        }
+        Ok(picker_page("Testing center quiz setup", &instructions.replace("<!-- return-form -->", &return_form)))
     }.await;
     response(result)
 }
@@ -794,9 +827,26 @@ mod http_tests {
         )
         .unwrap();
         f.insert("oauth_signature".into(), vec![signature]);
+        state
+            .db
+            .transaction(true, |conn| {
+                conn.execute(
+                    "UPDATE problem_sets SET problem_set_tags=? WHERE problem_set_id='set'",
+                    [r#"["consumer","C & C++"]"#],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
         let r = picker_launch(State(state.clone()), Bytes::from(encode_params(&f))).await;
         assert_eq!(r.status(), 200);
-        assert!(text(r).await.contains("Choose a problem set"));
+        let picker_html = text(r).await;
+        assert!(!picker_html.contains("<h1>"));
+        assert!(picker_html.contains("data-consumer=\"consumer\""));
+        assert!(
+            picker_html.contains("data-tags=\"[&quot;consumer&quot;,&quot;C &amp; C++&quot;]\"")
+        );
+        assert!(!picker_html.contains("<!-- options -->"));
         f.insert("roles".into(), vec!["Learner".into()]);
         f.remove("oauth_signature");
         let signature = crate::passback::compute_oauth_signature(
@@ -840,6 +890,38 @@ mod http_tests {
         assert!(!html.contains("problem_set="));
         assert!(html.contains("opaque-canvas-data"));
         assert!(!html.contains("never-store-this-password"));
+        assert!(html.contains("Filter IP Addresses"));
+        assert!(html.contains("192.0.2.0/24"));
+        assert!(html.contains("<code>ta.example</code>"));
+        assert!(html.contains("Complete testing center quiz setup"));
+        assert!(!html.contains("document.querySelector('#canvas-return').submit()"));
+
+        // Setup instructions reflect this installation, including an absent whitelist.
+        let mut config = (*state.config).clone();
+        config.ip_filter.whitelist = vec!["144.38.145.1/24".into(), "144.38.130.1/24".into()];
+        assert!(
+            quiz_setup(&config, "https://ta.example/quiz/connect?tag=test")
+                .contains("144.38.145.1/24,144.38.130.1/24")
+        );
+        config.ip_filter.whitelist.clear();
+        assert!(
+            !quiz_setup(&config, "https://ta.example/quiz/connect?tag=test")
+                .contains("Filter IP Addresses")
+        );
+
+        // Ordinary modes immediately return their signed content item to Canvas.
+        for mode in ["cli", "web", "exam"] {
+            f.insert("mode".into(), vec![mode.into()]);
+            f.remove("password");
+            let r = configure(State(state.clone()), Bytes::from(encode_params(&f))).await;
+            assert_eq!(r.status(), 200);
+            let html = text(r).await;
+            assert!(html.contains("document.querySelector('#canvas-return').submit()"));
+            assert!(html.contains(&format!("/lti/problem_sets/{mode}/set")));
+            assert!(html.contains("opaque-canvas-data"));
+            assert!(html.contains("action=\"https://canvas.example/return?context=1\""));
+            assert!(!html.contains("Steps to finish"));
+        }
         f.insert("signature".into(), vec!["forged".into()]);
         assert_eq!(
             configure(State(state.clone()), Bytes::from(encode_params(&f))).await.status(),
