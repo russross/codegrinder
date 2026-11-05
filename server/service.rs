@@ -423,6 +423,14 @@ impl CodeGrinderService for CodeGrinderServer {
                 })
                 .await
                 .map_err(AppError::grpc_status)?;
+            crate::logging::record(
+                "INFO",
+                "user_session_created",
+                format_args!(
+                    "user={:?} user_name={:?} source=login_token",
+                    response.user_id, response.user_name,
+                ),
+            );
             return Ok(Response::new(response));
         }
         let user = self.authenticated_user(&request).await.map_err(AppError::grpc_status)?;

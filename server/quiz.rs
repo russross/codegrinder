@@ -23,7 +23,10 @@ use sha2::Sha256;
 
 use crate::error::{AppError, AppResult};
 use crate::ipfilter::extract_ip;
-use crate::lti::{LtiState, escape_xml, form_first, is_instructor_role, validate_oauth_signature};
+use crate::lti::{
+    LtiState, escape_xml, form_first, is_instructor_role, launch_identifier,
+    validate_oauth_signature,
+};
 use crate::proto::AssignmentKey;
 use crate::sessions::{create_session, session_key_hash};
 use crate::signatures::{escape, hmac_sha256_base64};
@@ -170,13 +173,12 @@ async fn picker_launch(State(state): State<LtiState>, body: Bytes) -> Response {
     let result = async {
         let f = form(&body);
         validate_oauth_signature("POST", &format!("https://{}/lti/picker",state.config.hostname), &f, &state.config.lti_secret)?;
-        if !is_instructor_role(&form_first(&f,"roles")) { return Err(AppError::Forbidden("the picker requires a course instructor".into())); }
+        if !is_instructor_role(&form_first(&f,"roles"))? { return Err(AppError::Forbidden("the picker requires a course instructor".into())); }
         let return_url = form_first(&f,"content_item_return_url");
         if !return_url.starts_with("https://") { return Err(AppError::BadRequest("missing secure Canvas content-item return URL".into())); }
-        let course = form_first(&f,"context_id");
-        if course.is_empty() { return Err(AppError::BadRequest("missing Canvas course identity".into())); }
+        let course = launch_identifier(&f,"context_id",false)?;
         // The signed launch supplies the return destination; submitted picker forms cannot replace it.
-        let picker = PickerState { course, return_url, consumer_key: form_first(&f,"oauth_consumer_key"), data: form_first(&f,"data"), expires: Utc::now().timestamp()+1800 };
+        let picker = PickerState { course, return_url, consumer_key: launch_identifier(&f,"oauth_consumer_key",false)?, data: form_first(&f,"data"), expires: Utc::now().timestamp()+1800 };
         let ticket = STANDARD.encode(serde_json::to_vec(&picker)?);
         let signature = hmac_sha256_base64(&state.config.session_secret, format!("quiz-picker:v1:{ticket}").as_bytes())?;
         let options = state.db.transaction(false, |conn| {
@@ -289,6 +291,7 @@ async fn redeem(
         // Return validation failures as values so the transaction commits the attempt count.
         let result=state.db.transaction(true,move |conn| redeem_entry(conn,&config,&ip,&f)).await?;
         let Some((key,session,identity))=result else { return Err(AppError::Forbidden("Invalid or expired entry. Check the code and password; relaunch from Canvas if necessary.".into())); };
+        crate::logging::record("INFO", "user_session_created", format_args!("user={:?} course={:?} problem_set={:?} source=quiz_entry", key.user_id, key.course_id, key.problem_set_id));
         // A fragment avoids forwarding the bearer key in HTTP requests or referrers.
         let handoff=serde_json::json!({"session":session,"identity":identity}).to_string();
         let location=format!("/client/?assignment={}#quiz={}",escape(&format!("{}:{}:{}",key.user_id,key.course_id,key.problem_set_id)),escape(&handoff));
@@ -400,39 +403,46 @@ pub async fn launch(
     set: String,
     uri: axum::http::Uri,
 ) -> Response {
-    response(
-        async {
-            log_headers(&state.config, "lti_launch", peer, &headers)?;
-            let ip = station(&state, peer, &headers)?;
-            let f = form(&body);
-            let query = form(uri.query().unwrap_or_default().as_bytes());
-            let assignment_tag = link_tag(&query)?;
-            let c = Context { course: form_first(&f, "context_id"), problem_set: set.clone() };
-            if c.course.is_empty() {
-                return Err(AppError::BadRequest("missing Canvas course identity".into()));
-            }
-            validate_launch_signature(
-                &state.config.lti_secret,
-                &format!("https://{}{}", state.config.hostname, uri.path()),
-                &f,
-                &query,
-            )?;
-            let body = state
-                .db
-                .transaction(true, move |conn| {
-                    crate::lti::update_launch(conn, &f, &set, true, Utc::now())?;
-                    let key = AssignmentKey {
-                        user_id: form_first(&f, "user_id"),
-                        course_id: c.course,
-                        problem_set_id: set,
-                    };
-                    prepare(conn, &key, &assignment_tag, &ip)
-                })
-                .await?;
-            Ok(preparation_page(&body))
+    let diagnostic_form = form(&body);
+    let diagnostic_set = set.clone();
+    let result = async {
+        log_headers(&state.config, "lti_launch", peer, &headers)?;
+        let ip = station(&state, peer, &headers)?;
+        let f = form(&body);
+        let query = form(uri.query().unwrap_or_default().as_bytes());
+        let assignment_tag = link_tag(&query)?;
+        let c = Context { course: form_first(&f, "context_id"), problem_set: set.clone() };
+        if c.course.is_empty() {
+            return Err(AppError::BadRequest("missing Canvas course identity".into()));
         }
-        .await,
-    )
+        validate_launch_signature(
+            &state.config.lti_secret,
+            &format!("https://{}{}", state.config.hostname, uri.path()),
+            &f,
+            &query,
+        )?;
+        let log_form = f.clone();
+        let log_set = set.clone();
+        let (body, update) = state
+            .db
+            .transaction(true, move |conn| {
+                let update = crate::lti::update_launch(conn, &f, &set, true, Utc::now())?;
+                let key = AssignmentKey {
+                    user_id: form_first(&f, "user_id"),
+                    course_id: c.course,
+                    problem_set_id: set,
+                };
+                Ok((prepare(conn, &key, &assignment_tag, &ip)?, update))
+            })
+            .await?;
+        update.log(&log_form, &log_set);
+        Ok(preparation_page(&body))
+    }
+    .await;
+    if let Err(err) = &result {
+        crate::lti::log_launch_error(err, peer, "quiz", &diagnostic_set, &diagnostic_form);
+    }
+    response(result)
 }
 
 // Canvas's default LTI signer copies URL parameters into the body and signs each

@@ -578,7 +578,10 @@ async fn run_action(
                 format!("Crashed with exit status {} while running unit tests", result.status),
             );
         } else {
-            parse_xunit(&mut report, &read_report(container, bundle, deadline).await);
+            parse_xunit(
+                &mut report,
+                &read_report(container, bundle, result.status, deadline).await,
+            );
             if result.status != 0 {
                 report.passed = false;
             }
@@ -590,7 +593,10 @@ async fn run_action(
                 format!("Crashed with exit status {} while running unit tests", result.status),
             );
         } else {
-            parse_check(&mut report, &read_report(container, bundle, deadline).await);
+            parse_check(
+                &mut report,
+                &read_report(container, bundle, result.status, deadline).await,
+            );
             if result.status != 0 {
                 report.passed = false;
             }
@@ -665,10 +671,26 @@ async fn execute_with_output(
 }
 
 // Preserve the retrieval error separately from the parser's invalid-input report.
-async fn read_report(container: &Container, bundle: &RuntimeBundle, deadline: Instant) -> Vec<u8> {
+async fn read_report(
+    container: &Container,
+    bundle: &RuntimeBundle,
+    command_exit: i32,
+    deadline: Instant,
+) -> Vec<u8> {
     match container.read_regular_file("test_detail.xml", deadline).await {
-        Ok(bytes) if bytes.len() <= REPORT_FILE_LIMIT => bytes,
-        Ok(_) => {
+        Ok(Some(bytes)) if bytes.len() <= REPORT_FILE_LIMIT => bytes,
+        Ok(None) => {
+            record(
+                if command_exit == 0 { "WARN" } else { "INFO" },
+                "daycare_report_unavailable",
+                format_args!(
+                    "container={:?} user={:?} problem={:?} step={} command_exit={command_exit} reason=report_missing",
+                    container.id, bundle.user_id, bundle.problem_id, bundle.step_number
+                ),
+            );
+            Vec::new()
+        }
+        Ok(Some(_)) => {
             record(
                 "WARN",
                 "daycare_report_unavailable",
@@ -1325,11 +1347,9 @@ impl Container {
         Ok(())
     }
 
-    async fn read_regular_file(&self, path: &str, deadline: Instant) -> AppResult<Vec<u8>> {
+    async fn read_regular_file(&self, path: &str, deadline: Instant) -> AppResult<Option<Vec<u8>>> {
         let files = self.copy_student_files(deadline).await?;
-        files.get(path).cloned().ok_or_else(|| {
-            AppError::BadRequest(format!("output file {path} was not produced by the container"))
-        })
+        Ok(files.get(path).cloned())
     }
 
     async fn download_files(
@@ -1762,6 +1782,20 @@ mod tests {
     use crate::config::{IpFilterConfig, ServerConfig};
     use crate::proto::{AssignmentKey, Commit, RuntimeLimits};
     use crate::signatures::{decode_signed_runtime_bundle, encode_signed_runtime_bundle};
+
+    #[tokio::test]
+    async fn missing_report_after_command_failure_completes_as_failed_grade() {
+        // A copied workspace without XML is an ordinary failed grading result.
+        let container = Container::new(Arc::new(Vec::new()), "test-container".to_owned());
+        container.files.set(BTreeMap::new()).unwrap();
+        let bundle = RuntimeBundle::default();
+        let bytes = read_report(&container, &bundle, 2, Instant::now()).await;
+        for parse in [parse_xunit, parse_check] {
+            let mut report = ReportCard { passed: true, ..ReportCard::default() };
+            parse(&mut report, &bytes);
+            assert!(!report.passed);
+        }
+    }
 
     #[test]
     fn download_globs_preserve_byte_and_class_semantics_without_backtracking() {

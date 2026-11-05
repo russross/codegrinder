@@ -39,12 +39,14 @@ pub fn timestamp_to_utc(ts: &Timestamp) -> AppResult<DateTime<Utc>> {
         .ok_or_else(|| AppError::BadRequest("invalid protobuf timestamp".to_owned()))
 }
 
-pub fn parse_canvas_time(raw: &str) -> Option<DateTime<Utc>> {
+pub fn parse_canvas_time(raw: &str) -> AppResult<Option<DateTime<Utc>>> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        return None;
+        return Ok(None);
     }
-    DateTime::parse_from_rfc3339(trimmed).map(|dt| dt.with_timezone(&Utc)).ok()
+    DateTime::parse_from_rfc3339(trimmed)
+        .map(|dt| Some(dt.with_timezone(&Utc)))
+        .map_err(|_| AppError::BadRequest("must be an RFC 3339 timestamp or empty".to_owned()))
 }
 
 pub fn local_session_defaults() -> Vec<DateTime<Utc>> {
