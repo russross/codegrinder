@@ -439,8 +439,8 @@ install_grind() {
         || fail "could not create a temporary file in $BIN_DIR"
     updater_temp=$(mktemp "$BIN_DIR/.update-grind.XXXXXX") \
         || fail "could not create a temporary file in $BIN_DIR"
-    download "$server/grind.$platform" "$grind_temp" "grind for $platform"
-    download "$server/update-grind" "$updater_temp" update-grind
+    download "$server/grind/grind.$platform" "$grind_temp" "grind for $platform"
+    download "$server/grind/update-grind" "$updater_temp" update-grind
     validate_grind "$grind_temp"
     validate_updater "$updater_temp"
 

@@ -11,7 +11,7 @@ mostlyclean:
 	$(MAKE) -C ../vms mostlyclean
 
 clean:
-	rm -rf ../build/client ../www/client
+	rm -rf ../build/client ../dist/client
 	$(MAKE) -C ../vms clean
 
 .PHONY: all proto check test test-widgets test-browser mostlyclean clean

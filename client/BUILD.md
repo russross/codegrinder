@@ -13,6 +13,6 @@ Source lives in `client/` and `vms/`. Builds stage source under root `build/`, w
 
 `make -C vms` prepares and publishes VM assets independently. QEMU for RISC-V, fakeroot, cpio, e2fsprogs, Brotli, and uv are required. Version-only files in `vms/` select upstream releases. UI edits do not rebuild unchanged guest images.
 
-Deploy `www/client/` and `www/vms/` together. These directories contain deployment assets only. Serve the app at `/client/` and VM assets at `/vms/`. Revalidate HTML, stable direct page dependencies, and `c.cfg`/`riscv.cfg`; cache content-hashed runtime and drive directories immutably. Preserve older immutable files during ordinary publication.
+Deploy `dist/client/` and `dist/vms/` together. These directories contain deployment assets only. Serve the app at `/client/` and VM assets at `/vms/`. Revalidate HTML, stable direct page dependencies, and `c.cfg`/`riscv.cfg`; cache content-hashed runtime and drive directories immutably. Preserve older immutable files during ordinary publication.
 
 `make -C client mostlyclean` removes staged client and VM intermediates and prunes deployed files outside the current publication inventory. It preserves the current page and its active assets. Downloads remain cached. `clean` also removes deployment trees. Use incremental builds during development.

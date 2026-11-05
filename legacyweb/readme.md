@@ -106,8 +106,8 @@ Building
 The protobuf sources live at `../../protocol/codegrinder.proto`. Build the API
 bundle whenever the protocol or a TypeScript entry point changes:
 
-    make -C www/web
-    make -C www/web test
+    make -C legacyweb
+    make -C legacyweb test
 
 Run those commands from the repository root. `npm run build` also invokes Make.
 Make installs locked dependencies only when package metadata changes, generates
@@ -120,7 +120,7 @@ without being checked. The generated TypeScript directory and `node_modules/`
 are not deployed.
 
 Use incremental builds without cleaning first. Missing dependencies are build
-bugs to fix. `make -C www/web mostlyclean` removes generated protobuf sources,
+bugs to fix. `make -C legacyweb mostlyclean` removes generated protobuf sources,
 npm dependencies, and build records while preserving deployed JavaScript.
 `clean` also removes deployed JavaScript and emitted chunks. Neither target
 changes configuration or external runtime assets. Run only checks relevant to

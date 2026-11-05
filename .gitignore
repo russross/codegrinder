@@ -13,5 +13,4 @@ TODO.md
 /target/
 
 /build/
-/www/client/
-/www/vms/
+/dist/

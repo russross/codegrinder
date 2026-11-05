@@ -47,6 +47,7 @@ For Rust `grind` client checks:
 For build workflows and routine validation:
 
 - Use the component Makefiles and invoke builds in other directories with `make -C ...`. Cargo owns Rust dependency tracking; Make owns component sequencing, generated web files, SDK inputs, and deployment publication.
+- Deployment assets live under ignored `dist/`, which has no Makefile. Browser sources live in `client/` and `legacyweb/`, with staged builds under `build/`. Grind downloads publish under `dist/grind/`; the server publishes to `dist/server/codegrinder`, and Caddy must block `/server` and its descendants.
 - Keep `macos-minimal-sdk/` synced with upstream without local changes. As an exception to component-owned cleanup, the root Makefile directly removes its generated sysroots, downloads, and `hello` test executable for both `mostlyclean` and `clean`; the upstream SDK has no `mostlyclean` target.
 - Do not routinely build from `clean` or `mostlyclean`. Use incremental Make rules. An incremental build that misses a dependency is a build bug to fix, not a reason to rebuild from scratch.
 - Run only checks relevant to the changed code and its affected boundaries. CLI-only changes do not require server tests; browser-only changes do not require Rust tests. Reserve the workspace-wide `make test` and end-to-end suite for changes that actually affect those boundaries.
@@ -74,7 +75,7 @@ For protocol changes:
     * Client does not know/care about database layout—protocol should minimize leaking relational database structure
 - Session authentication uses explicit raw session keys in gRPC metadata. Do not use HTTP cookies or `session_cookie` request fields for session auth.
 
-For the web interfaces under `client/` and `www/web`:
+For the web interfaces under `client/` and `legacyweb`:
 
 - Use the Alpine system `node` and `npm` packages for dependency installation, proto generation, tests, and builds. Node 24 is the supported runtime; do not add a project-local Node toolchain.
 

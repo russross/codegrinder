@@ -10,6 +10,6 @@ mostlyclean:
 	rm -rf ../build/vms
 
 clean:
-	rm -rf ../build/vms ../www/vms
+	rm -rf ../build/vms ../dist/vms
 
 .PHONY: all mostlyclean clean

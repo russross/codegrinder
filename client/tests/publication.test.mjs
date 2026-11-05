@@ -10,7 +10,7 @@ import test from "node:test";
 test("publication updates direct assets without rewriting unchanged HTML", async () => {
     const root = await mkdtemp(join(tmpdir(), "exam-publication-"));
     const directory = join(root, "build/client");
-    const deployed = join(root, "www/client");
+    const deployed = join(root, "dist/client");
     const publish = fileURLToPath(new URL("../scripts/publish.py", import.meta.url));
     const run = () => spawnSync("python3", [publish], { cwd: directory, encoding: "utf8" });
     try {
@@ -25,7 +25,7 @@ test("publication updates direct assets without rewriting unchanged HTML", async
         assert.equal(run().status, 0);
         const first = (await readFile(join(deployed, "index.html"), "utf8")).trim().split("\n");
         const timestamp = (await stat(join(deployed, "index.html"), { bigint: true })).mtimeNs;
-        assert.deepEqual(first, ["dist/app.js", "dist/style.css", "dist/favicon.svg"]);
+        assert.deepEqual(first, ["app.js", "style.css", "favicon.svg"]);
 
         // Refreshing the same entry URLs retrieves the newly published direct dependencies.
         await writeFile(join(directory, "build/ui/app.js"), "second application");
@@ -36,10 +36,10 @@ test("publication updates direct assets without rewriting unchanged HTML", async
         assert.equal((await stat(join(deployed, "index.html"), { bigint: true })).mtimeNs, timestamp);
         assert.equal(await readFile(join(deployed, first[0]), "utf8"), "second application");
         assert.equal(await readFile(join(deployed, first[1]), "utf8"), "second style");
-        assert.equal(await readFile(join(deployed, "dist/app-chunkhash.js"), "utf8"), "lazy chunk");
-        const before = (await readdir(join(deployed, "dist"))).sort();
+        assert.equal(await readFile(join(deployed, "app-chunkhash.js"), "utf8"), "lazy chunk");
+        const before = (await readdir(deployed)).sort();
         assert.equal(run().status, 0);
-        assert.deepEqual((await readdir(join(deployed, "dist"))).sort(), before);
+        assert.deepEqual((await readdir(deployed)).sort(), before);
 
         // Failed assembly cannot replace a working entry page with partial references.
         await writeFile(join(directory, "index.template.html"), "{{missing}}");

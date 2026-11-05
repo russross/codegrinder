@@ -246,7 +246,11 @@ async fn launch_inner(
 fn launch_location(ui: LaunchUi, assignment_key: &str, token: &str, course_label: &str) -> String {
     format!(
         "/{}/?assignment={}&token={}&course={}",
-        if matches!(ui, LaunchUi::Exam) { "client" } else { ui.as_str() },
+        match ui {
+            LaunchUi::Cli => "grind",
+            LaunchUi::Exam => "client",
+            _ => ui.as_str(),
+        },
         escape(assignment_key),
         escape(token),
         escape(course_label)
@@ -491,7 +495,7 @@ mod tests {
 
     #[test]
     fn launch_ui_paths_preserve_web_and_add_javascript() {
-        for (raw, expected_path) in [("web", "/web/"), ("js", "/js/")] {
+        for (raw, expected_path) in [("cli", "/grind/"), ("web", "/web/"), ("js", "/js/")] {
             let ui = LaunchUi::parse(raw).unwrap();
             let location = launch_location(ui, "u1:c1:ps1", "one time", "CS 101");
 

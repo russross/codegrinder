@@ -12,11 +12,11 @@ const shared = dataModule(await compile("./workspace.ts"));
 const source = (await compile("./problem-workspace.ts")).replace('"./workspace"', JSON.stringify(shared));
 const { ProblemWorkspace } = await import(dataModule(source));
 const assets = JSON.parse(await readFile(new URL("../vms/build/assets.json", import.meta.url), "utf8")).riscv;
-const { Riscbox } = createRequire(import.meta.url)(`../../www/client/${assets.runtimeUrl}`);
+const { Riscbox } = createRequire(import.meta.url)(`../../dist/client/${assets.runtimeUrl}`);
 const encode = text => new TextEncoder().encode(text);
 
 async function createRuntime() {
-    const wasm = await readFile(new URL(`../../www/client/${assets.wasmUrl}`, import.meta.url));
+    const wasm = await readFile(new URL(`../../dist/client/${assets.wasmUrl}`, import.meta.url));
     return Riscbox.prepare({
         wasmUrl: "https://fixture.invalid/riscbox.wasm",
         fetch: async url => new Response(String(url).endsWith(".wasm") ? wasm : Uint8Array.of(0x73, 0, 0x10, 0),

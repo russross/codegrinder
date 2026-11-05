@@ -1,7 +1,7 @@
 VM client semantics
 =====================
 
-This document defines the VM client's operation flows, ownership rules, persistence boundaries, and VM lifecycle invariants. The [server semantics](../server/NOTES.md) define authoritative access, sequencing, and grading. The [web client](../www/web/NOTES.md) has separate reset, save, and local-execution behavior. [UI.md](UI.md) supplies presentation details and [BUILD.md](BUILD.md) supplies build/check procedures.
+This document defines the VM client's operation flows, ownership rules, persistence boundaries, and VM lifecycle invariants. The [server semantics](../server/NOTES.md) define authoritative access, sequencing, and grading. The [web client](../legacyweb/NOTES.md) has separate reset, save, and local-execution behavior. [UI.md](UI.md) supplies presentation details and [BUILD.md](BUILD.md) supplies build/check procedures.
 
 The protocol is defined in [codegrinder.proto](../protocol/codegrinder.proto). The browser uses the generated protobuf-ts field names.
 
@@ -159,7 +159,7 @@ VM preparation shares the versions pinned in `vms/alpine.version`, `riscbox.vers
 
 Preparation overlays common `guest/` files with `c/` or `riscv/`, installs the native stepper built through its own Makefile, boots QEMU to install packages, and creates writable ext4 images without a host mount or journal. The C image is 16 MiB and provides TCC, make, tzdata, headers, startup objects, and shared libc. Preparation removes static libc to fit. The RISC-V image is 12 MiB and supplies make, tzdata, and Risclet. Both use America/Denver and the `workspace` host share with guest tag `shared`. Image logs, initramfs files, ext4 images, inventories, and split manifests stay in `build/vms/build/`.
 
-Publication writes only deployment assets to `www/client/` and `www/vms/`. The app page links stable `dist/app.js`, `dist/style.css`, and `dist/favicon.svg`; lazy chunks retain content names. VM runtime files publish directly under `www/vms/riscbox-HASH/`. Stable `c.cfg` and `riscv.cfg` reference sibling content-hashed drive directories and the matching runtime payload. Caddy revalidates the page, direct dependencies, and configurations; content-named runtime and drive assets may be cached immutably. Configurations are fetched with Riscbox's no-cache policy.
+Publication writes only deployment assets to `dist/client/` and `dist/vms/`. The app page links stable `app.js`, `style.css`, and `favicon.svg`; lazy chunks retain content names. VM runtime files publish directly under `dist/vms/riscbox-HASH/`. Stable `c.cfg` and `riscv.cfg` reference sibling content-hashed drive directories and the matching runtime payload. Caddy revalidates the page, direct dependencies, and configurations; content-named runtime and drive assets may be cached immutably. Configurations are fetched with Riscbox's no-cache policy.
 
 The client publication inventory resides beside its deployed page and records the current UI, configurations, drives, and runtime directory. Ordinary builds retain older immutable assets. `mostlyclean` prunes assets outside the published inventory, preserves that inventory, and removes staged source/dependency/build caches. `clean` removes the component's deployment tree as well. Raw downloads remain reusable. A tree with an entry page but no publication inventory must be rebuilt before pruning. Server data and configuration are never cleanup targets.
 

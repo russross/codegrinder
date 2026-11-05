@@ -1,8 +1,9 @@
 # Cargo tracks source files, embedded assets, build scripts, and compiler flags.
 # Always consult its graph rather than duplicating it with Make timestamps.
-.PHONY: all build check test test-only mostlyclean clean
+.PHONY: all build compile check test test-only mostlyclean clean
 all: build
-build:
+build: compile
+compile:
 	cargo build --release --locked -p $(PACKAGE)
 
 check:

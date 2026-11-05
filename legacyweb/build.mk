@@ -4,7 +4,7 @@ SOURCES := $(shell find scripts -type f -name '*.ts' | sort) $(wildcard *.ts *.j
 
 .PHONY: all build proto check test test-browser mostlyclean clean FORCE
 all: build
-build: build/.built
+build: build/.published
 proto: $(PROTO_OUTPUTS)
 
 # Inventories include source names so removing a module invalidates the bundle.
@@ -20,7 +20,7 @@ $(PROTO_OUTPUTS) &: ../../protocol/codegrinder.proto proto-gen.sh node_modules/.
 	touch $(PROTO_OUTPUTS)
 
 # Webpack emits page modules, workers, and optional chunks into the live tree.
--include build/outputs.mk
+-include build/outputs.mk build/published-outputs.mk
 build/.built: build/inputs $(PROTO_OUTPUTS) node_modules/.installed
 	npm run typecheck
 	node_modules/.bin/webpack
@@ -36,12 +36,9 @@ test: build
 test-browser: build
 	npm run test:browser
 
-# Deployed JavaScript and static source assets remain usable without npm.
-mostlyclean:
-	rm -rf build generated node_modules
-
-clean: mostlyclean
-	rm -f scripts/*.js scripts/*.wasm scripts/*.LICENSE.txt sw.js sw.js.LICENSE.txt
+# Static assets and generated bundles publish only after a successful build.
+build/.published: build/.built tools/publish.py
+	python3 tools/publish.py
 
 FORCE:
 .DELETE_ON_ERROR:

@@ -20,3 +20,4 @@ build/
 # dev nodes
 *.md
 !NOTES.md
+!readme.md

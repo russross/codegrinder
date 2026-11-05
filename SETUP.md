@@ -10,7 +10,7 @@ The Rust workspace uses the host toolchain for normal development:
     make -C server test
     make -C grind test
 
-`make server` builds only `codegrinder` for the current host.
+`make server` builds `codegrinder` for the current host and atomically publishes it to `dist/server/codegrinder`.
 The production server is always a native build; promoting a checkout
 does not change source files or build flags.
 
@@ -50,7 +50,7 @@ Zig, and `cargo-zigbuild`. Install the four Rust targets with rustup:
 Build individual clients with `make grind-linux-amd64`,
 `make grind-linux-arm64`, `make grind-macos-amd64`, or
 `make grind-macos-arm64`. `make grind-dist` builds all four and copies
-them into `www/` using the names expected by the download site.
+them into `dist/grind/` using the names expected by the download site.
 
 Linux outputs are static musl executables, and the build rejects a
 Linux output containing an ELF interpreter. macOS does not support
@@ -81,9 +81,9 @@ the populated config outside the repository.
 
 The preferred deployment runs directly from a live checkout. Build the
 release server in that checkout, then customize the installed OpenRC or
-systemd definition to execute `<checkout>/target/release/codegrinder`.
+systemd definition to execute `<checkout>/dist/server/codegrinder`.
 Do not copy the executable to `/usr/local/bin`; a service restart after a
-successful release build should run that build directly.
+successful release build should run the published binary.
 
 The checked-in OpenRC, systemd, and Caddy files are generic installation
 assets. Copy them into the system configuration and customize the installed
@@ -97,14 +97,14 @@ be overridden in `/etc/conf.d/codegrinder`:
 
 Caddy owns public TLS and reverse-proxies to the server's default
 `localhost:1400` cleartext listener. Configure the installed Caddyfile to
-serve static files directly from `<checkout>/www`; do not maintain a copied
+serve static files directly from `<checkout>/dist`; do not maintain a copied
 web tree under `/usr/share`. The Caddy account needs directory traversal
 permission from the checkout's parent directories and read permission for
-the files under `www`. The server requires `curl` for Canvas grade passback and verifies that it is available during startup.
+the public files under `dist`. The server requires `curl` for Canvas grade passback and verifies that it is available during startup.
 
-With this layout, build browser assets with `make -C www`, downloadable clients
-with `make grind-dist`, and the Rust server with `make server`, then restart
-the CodeGrinder service.
+With this layout, build the VM client with `make -C client`, the legacy web client with `make -C legacyweb`, downloadable clients with `make grind-dist`, and the Rust server with `make server`. Restart the CodeGrinder service when the new server build should become active.
+Caddy blocks `/server` and `/server/*` so the native server executable is never served. The updater and download page are authored in `grind/` and published beside the downloadable clients in `dist/grind/`. Old root download URLs and `/cli` URLs redirect to `/grind/`; CLI launch query parameters are preserved. `dist/` contains deployment assets only and has no Makefile.
+
 Caddy reads static content from the checkout immediately and does not need a
 copy or synchronization step. Docker runtime images and problem type data
 remain explicit manual build and installation steps.

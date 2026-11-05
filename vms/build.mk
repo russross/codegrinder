@@ -56,9 +56,9 @@ build/riscbox.stamp: $(RISCBOX_ARCHIVE) build/riscbox-version scripts/unpack-rel
 	touch $@
 
 build/runtime.stamp: build/riscbox.stamp
-	mkdir -p ../../www/vms
-	cp -R build/riscbox/riscbox-* ../../www/vms/
-	sh ../../scripts/outputs.sh build/runtime-outputs.mk RUNTIME $@ $$(find ../../www/vms/riscbox-* -type f | sort)
+	mkdir -p ../../dist/vms
+	cp -R build/riscbox/riscbox-* ../../dist/vms/
+	sh ../../scripts/outputs.sh build/runtime-outputs.mk RUNTIME $@ $$(find ../../dist/vms/riscbox-* -type f | sort)
 	touch $@
 
 # Kernel and firmware are shared by every preparation boot.
@@ -101,14 +101,14 @@ $(foreach image,$(IMAGES),build/$(image)-rootfs.ext4): build/%-rootfs.ext4: buil
 
 # The upstream splitter hashes content; each image adds its sibling name.
 $(foreach image,$(IMAGES),build/$(image)-disk-name): build/%-disk-name: build/%-rootfs.ext4 build/riscbox.stamp
-	mkdir -p ../../www/vms build/$*-split
+	mkdir -p ../../dist/vms build/$*-split
 	uv run -q --script build/riscbox/splitimg.py $< build/$*-split > $@.part
 	awk '{print "$*-" $$1}' $@.part > $@
-	mkdir -p ../../www/vms/$$(cat $@)
-	cp -R build/$*-split/$$(awk '{print $$1}' $@.part)/. ../../www/vms/$$(cat $@)/
+	mkdir -p ../../dist/vms/$$(cat $@)
+	cp -R build/$*-split/$$(awk '{print $$1}' $@.part)/. ../../dist/vms/$$(cat $@)/
 	rm -rf build/$*-split
 	rm $@.part
-	sh ../../scripts/outputs.sh build/$*-disk-outputs.mk DISK_$* $@ $$(find "../../www/vms/$$(cat $@)" -type f | sort)
+	sh ../../scripts/outputs.sh build/$*-disk-outputs.mk DISK_$* $@ $$(find "../../dist/vms/$$(cat $@)" -type f | sort)
 	touch $@
 
 build/assets.stamp: $(foreach image,$(IMAGES),build/$(image)-disk-name) scripts/assets.py build/runtime.stamp

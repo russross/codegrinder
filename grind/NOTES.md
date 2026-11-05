@@ -148,3 +148,9 @@ Expected argument, configuration, path, authorization, and transport errors prod
 Audit session/version gating, role-only help filtering, atomic download publication, stale metadata, missing files, cleanup preserving `.git`, reset basename matches, continuation advancement, passing non-owner inspection, interrupted daycare streams, and validation-before-author-save. Trace these through [client.rs](client.rs), [assignment.rs](assignment.rs), [student.rs](student.rs), [author.rs](author.rs), [admin.rs](admin.rs), and [daycare.rs](daycare.rs).
 
 Build with `make -C grind`; check formatting/Clippy with `make -C grind check`, then use `make -C grind test TEST_ARGS=...` for affected behavior. The shared Rust workspace supplies dependency versions, protobuf generation, lockfile, and release cache. Runtime dependencies include the TA, selected daycare, TLS trust, writable configured directories, and author-step Makefiles for creation. `mostlyclean` preserves native executables and deployed assets; no cleanup target removes configuration or user work.
+
+
+Download publication
+--------------------
+
+`make grind-dist` publishes platform executables and Brotli siblings under `dist/grind/`. The updater and download-page sources are `grind/update-grind` and `grind/index.html`; `make -C grind static-dist` publishes those two assets independently. Each platform distribution target also publishes them. The updater downloads its replacement and platform executable from `/grind/`. New CLI LTI launches target `/grind/`. Caddy redirects old root executable/updater URLs and `/cli` page URLs, preserving CLI launch parameters. `mostlyclean` preserves downloads; `clean-dist` removes this component's deployed assets.

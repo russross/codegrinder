@@ -1,7 +1,7 @@
 Server semantics
 ================
 
-This document defines the operation boundaries and invariants to preserve when changing the Rust TA and daycare server. The wire contract is [codegrinder.proto](../protocol/codegrinder.proto); database policy is defined in [schema.sql](../setup/schema.sql). Client obligations are documented for [grind](../grind/NOTES.md), [web](../www/web/NOTES.md), and [VM client](../client/NOTES.md). Protocol changes require explicit approval.
+This document defines the operation boundaries and invariants to preserve when changing the Rust TA and daycare server. The wire contract is [codegrinder.proto](../protocol/codegrinder.proto); database policy is defined in [schema.sql](../setup/schema.sql). Client obligations are documented for [grind](../grind/NOTES.md), [web](../legacyweb/NOTES.md), and [VM client](../client/NOTES.md). Protocol changes require explicit approval.
 
 
 Identity, state, and authority
@@ -154,7 +154,7 @@ Actions exist to show what student code does. Forward stdout and stderr in chunk
 
 The saved transcript retains at most 100,000 stream-data bytes and 500 events; adjacent stream events of the same kind may merge. Continue draining and transmitting output after the saved transcript fills. Truncation counters belong in operational logs. These limits protect database storage, not the number of bytes a live client is permitted to receive. Artifact events are separate byte maps and follow the workspace-copy limits and regular-file/path validation. An execution timeout also emits an error event, so actions display the reason for stopping and failing grades retain the diagnostic alongside preceding output. Infrastructure failures use the stream's terminal error response.
 
-Both CLI and exam grading consumers suppress live output, wait for the grade verdict after the coordinated result save, and replay the saved transcript only on failure. Successful grading should stay quiet apart from its verdict/progression messages. Non-grade actions display live output, require an explicit completion result, and perform no final grade save. The retiring `www/web` interface still uses the signed legacy flow and displays grading output directly; keeping its presentation fully aligned is not a priority.
+Both CLI and exam grading consumers suppress live output, wait for the grade verdict after the coordinated result save, and replay the saved transcript only on failure. Successful grading should stay quiet apart from its verdict/progression messages. Non-grade actions display live output, require an explicit completion result, and perform no final grade save. The retiring `legacyweb` interface still uses the signed legacy flow and displays grading output directly; keeping its presentation fully aligned is not a priority.
 
 After command completion, stop the container and confirm `State.Running` is false before report or download extraction. The first read copies `/home/student/.` from the stopped container and validates the tar into an immutable path-to-bytes map. Later reads reuse that map, including an empty successful snapshot; a failed copy is not cached as an empty success. Workspace extraction permits at most 100,000,000 content bytes, 20,000 archive entries, and 4,096 bytes per regular-file path. XML reports are limited to 5,000,000 bytes before parsing. These limits bound host-side processing and do not provide an aggregate container disk quota. Do not automatically replace submitted commit files with copied-out artifacts.
 
@@ -261,3 +261,9 @@ Deployment and environment validation:
 2. Deploy the built server and VM client assets using the component build workflows. Update the Caddy dynamic-route matcher for `/quiz/*` and authoritative IP headers. Ensure the service can append its dedicated quiz log.
 3. Refresh the Canvas tool configuration from `/lti/config.xml` to enable the assignment picker. Manual launch URLs continue to work. Configure both quiz links with the picker and use a distinct set if retaining a separately published fallback.
 4. On a real testing-center station, verify that regular Chrome and Respondus reach the server with the same unique station IP. Validate picker return, attendant identity/code displays, Respondus password and domain settings, VM boot/terminal/editing, reload, save, grade/passback, session replacement, and browser closure. Check IPv4/IPv6 consistency and headers from both browser paths. Headers and connector-link possession are evidence, not proof of Respondus execution; the attendant's password entry and observation establish that step in v1.
+
+
+Server deployment
+-----------------
+
+`make -C server` compiles the release executable through Cargo and atomically publishes changed bytes to `dist/server/codegrinder`. A running process retains its existing executable; the next service start uses the published replacement. OpenRC and systemd definitions select this deployment path and retain an explicit configuration path. Caddy serves the public portions of `dist/` and returns 404 for `/server` and its descendants. `mostlyclean` preserves the published executable; `clean` removes it without touching configuration or database files.

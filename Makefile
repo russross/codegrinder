@@ -1,5 +1,5 @@
 ROOT_DIR := $(CURDIR)
-DIST_DIR ?= $(ROOT_DIR)/www
+DIST_DIR ?= $(ROOT_DIR)/dist
 MACOS_SDK_DIR ?= $(ROOT_DIR)/macos-minimal-sdk
 export DIST_DIR MACOS_SDK_DIR
 
@@ -25,10 +25,10 @@ grind:
 	$(MAKE) -C grind
 
 web:
-	$(MAKE) -C www/web
+	$(MAKE) -C legacyweb
 
 web-check:
-	$(MAKE) -C www/web check
+	$(MAKE) -C legacyweb check
 
 vm:
 	$(MAKE) -C client
@@ -54,7 +54,8 @@ mostlyclean:
 	$(MAKE) -C stepper mostlyclean
 	$(MAKE) -C server mostlyclean
 	$(MAKE) -C grind mostlyclean
-	$(MAKE) -C www mostlyclean
+	$(MAKE) -C client mostlyclean
+	$(MAKE) -C legacyweb mostlyclean
 	rm -rf '$(MACOS_SDK_DIR)/sysroot-macos-x86_64' '$(MACOS_SDK_DIR)/sysroot-macos-arm64'
 	if [ -d '$(MACOS_SDK_DIR)/download' ]; then find '$(MACOS_SDK_DIR)/download' -mindepth 1 -maxdepth 1 ! -name .gitignore -exec rm -rf {} +; fi
 	rm -f '$(MACOS_SDK_DIR)/hello'
@@ -64,7 +65,8 @@ clean:
 	$(MAKE) -C stepper clean
 	$(MAKE) -C server clean
 	$(MAKE) -C grind clean
-	$(MAKE) -C www clean
+	$(MAKE) -C client clean
+	$(MAKE) -C legacyweb clean
 	rm -rf '$(MACOS_SDK_DIR)/sysroot-macos-x86_64' '$(MACOS_SDK_DIR)/sysroot-macos-arm64'
 	if [ -d '$(MACOS_SDK_DIR)/download' ]; then find '$(MACOS_SDK_DIR)/download' -mindepth 1 -maxdepth 1 ! -name .gitignore -exec rm -rf {} +; fi
 	rm -f '$(MACOS_SDK_DIR)/hello'

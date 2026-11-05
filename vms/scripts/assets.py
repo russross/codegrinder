@@ -66,13 +66,13 @@ def prepare(version: str, names: list[str]) -> None:
         }
         content = json.dumps(config, indent=2) + "\n"
         filename = f"{name}.cfg"
-        write_changed(Path("../../www/vms") / filename, content)
+        write_changed(Path("../../dist/vms") / filename, content)
         assets[name] = {
             "configUrl": f"../vms/{filename}",
             "runtimeUrl": f"{runtime}/riscbox.js",
             "wasmUrl": f"{runtime}/riscbox.wasm",
         }
-        outputs.append(f"../../www/vms/{filename}")
+        outputs.append(f"../../dist/vms/{filename}")
 
     # Stable configurations are revalidated when a VM starts.
     write_changed(Path("build/assets.json"), json.dumps(assets, indent=2) + "\n")
