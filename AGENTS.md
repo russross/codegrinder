@@ -2,8 +2,8 @@
 
 Development environment:
 
-- The Debian desktop mounts the live Alpine tree at `~/codegrinder` from `ocean:codegrinder` with SSHFS. Keep SSHFS manually managed with `~/.local/bin/mount-ocean`, which uses `-o no_contain_symlinks` for package, SDK, and VM links; do not manage it through a service.
-- Keep build assets in this mounted tree. Direct publication into `dist/` is the established workflow; `dist/server/codegrinder`, static assets, `db/`, and `config.json` are live. `setup/` primarily contains templates.
+- The Debian desktop has a local checkout and local build caches. Mount `ocean:codegrinder/dist` on `dist/` with user SSHFS when a workflow needs live deployment assets, and mount `ocean:codegrinder/problemtypes` on `problemtypes/` when it needs problem type sources. Unmount each with `fusermount3 -u` when finished; do not keep these mounts persistent or manage them through a service.
+- Direct publication into the mounted `dist/` is the established workflow; `dist/server/codegrinder` and static assets are live. The server's `db/` and `config.json` are on `ocean`; `setup/` primarily contains templates. Mount `dist/` before builds or cleanup that access deployment assets, so they operate on the intended live files.
 - SSH to `ocean` is authorized as needed, with `doas` available, but use it sparingly. Primary reasons are service restarts/reconfiguration, logs, and Docker operations. The live Alpine server deliberately has minimal tooling; keep development tools on the desktop. Local Debian service state does not represent the live server.
 
 Core architecture metaphors:
@@ -371,7 +371,7 @@ For the web interfaces under `client/` and `legacyweb`:
 # `grind problemtype`
 
 - `grind problemtype` is hidden from normal help unless cached admin mode is enabled locally. Hidden commands remain invokable; the server must enforce admin permissions for every problem type mutation RPC.
-- Problem type source material lives outside the tracked main repo under ignored `problemtypes/`, which is intended to be its own installation-specific git checkout.
+- Problem type source material lives outside the tracked main repo under ignored `problemtypes/`, mounted from the installation-specific checkout on `ocean` when needed.
 - The problem type source layout is `problemtypes/types/TYPE/type.conf` for metadata/actions, `problemtypes/types/TYPE/files/` for canonical files, `problemtypes/common/` for shared symlink targets, `problemtypes/containers/NAME/Dockerfile` for container builds, and `problemtypes/bin/` for deployment scripts.
 - `problemtypes/bin/sync-actions [TYPE...]` reads `type.conf` files and calls `grind problemtype action set`; `problemtypes/bin/sync-files [TYPE...]` replaces canonical file sets from `files/`; `problemtypes/bin/build-containers [NAME...]` builds container images.
 - `grind problemtype list` lists all problem types, containers, and actions by calling `GetProblemTypes`.

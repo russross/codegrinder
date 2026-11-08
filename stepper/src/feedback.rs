@@ -56,7 +56,8 @@ pub fn context<'a>(
     // Unsolicited stderr often contains diagnostics that need more context than
     // a transcript mismatch. Keep the byte cap shared by both display limits.
     let mut expected = expected.peekable();
-    let line_limit = if stream == Stream::Err && expected.peek().is_none() { 20 } else { 5 };
+    let unexpected_stderr = stream == Stream::Err && expected.peek().is_none();
+    let line_limit = if unexpected_stderr { 30 } else { 5 };
     let limited = &bytes[..bytes.len().min(20_000)];
     let end = limited
         .iter()
@@ -65,11 +66,11 @@ pub fn context<'a>(
         .nth(line_limit - 1)
         .map_or(limited.len(), |(i, _)| i + 1);
     // Compare corresponding full lines without realigning insertions or deletions.
-    // Lines beyond the phase's expected output remain highlighted as unexpected.
+    // Beyond the expected phase, highlight lines except for unsolicited stderr.
     for (line, displayed) in
         bytes.split_inclusive(|&b| b == b'\n').zip(limited[..end].split_inclusive(|&b| b == b'\n'))
     {
-        let inverse = expected.next() != Some(line);
+        let inverse = expected.next() != Some(line) && !unexpected_stderr;
         render(out, displayed, Action::Output(stream), inverse)?;
     }
     if end < bytes.len() {

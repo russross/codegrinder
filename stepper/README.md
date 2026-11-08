@@ -49,7 +49,7 @@ Stepper reads non-hidden `*.transcript` files directly inside `inputs`, sorted b
 
 Whitespace and bytes after the prefix are significant. NUL bytes and unterminated transcript records are rejected. Output order is independent between stdout and stderr. Both streams must match the current phase before the next input is sent. Stepper closes stdin after the last input, requires output EOF and a zero exit status, and rejects extra output. Empty transcripts are valid.
 
-ANSI feedback is always enabled. Output comparisons preserve raw bytes; displayed control bytes are escaped. Failure context is limited to five lines, or twenty for stderr when no expected stderr records remain in the current phase, and 20,000 raw bytes per block. Captured data itself has no quota.
+ANSI feedback is always enabled. Output comparisons preserve raw bytes; displayed control bytes are escaped. Failure context is limited to five lines, or thirty for stderr when no expected stderr records remain in the current phase, and 20,000 raw bytes per block. Unexpected stderr in that case is magenta without inverse highlighting. Captured data itself has no quota.
 
 
 Configuration

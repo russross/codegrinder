@@ -149,13 +149,13 @@ fn option_help_and_errors_do_not_run_tests_or_modify_reports() {
 // after matched stderr has the same diagnostic allowance as unsolicited stderr.
 #[test]
 fn diagnostic_context_depends_on_stream_and_remaining_expectations() {
-    let diagnostics: String = (1..=21).map(|line| format!("diagnostic-{line:02}\n")).collect();
+    let diagnostics: String = (1..=31).map(|line| format!("diagnostic-{line:02}\n")).collect();
     for (transcript, prefix, redirect, limit) in [
         (b"".as_slice(), "", "", 5),
         (b"! expected\n".as_slice(), "", " >&2", 5),
-        (b"> expected\n".as_slice(), "", " >&2", 20),
-        (b"".as_slice(), "", " >&2", 20),
-        (b"! expected\n".as_slice(), "printf 'expected\\n' >&2; ", " >&2", 20),
+        (b"> expected\n".as_slice(), "", " >&2", 30),
+        (b"".as_slice(), "", " >&2", 30),
+        (b"! expected\n".as_slice(), "printf 'expected\\n' >&2; ", " >&2", 30),
     ] {
         let fixture = Fixture::new(transcript);
         let program = format!("{prefix}printf '%s' '{diagnostics}'{redirect}; sleep 2");
@@ -165,6 +165,17 @@ fn diagnostic_context_depends_on_stream_and_remaining_expectations() {
         let text = &text[text.find('\x1b').unwrap()..];
         assert!(text.contains(&format!("diagnostic-{limit:02}")), "{text}");
         assert!(!text.contains(&format!("diagnostic-{:02}", limit + 1)), "{text}");
+        let style = if redirect.is_empty() {
+            "\x1b[7m"
+        } else if limit == 5 {
+            "\x1b[35m\x1b[7m"
+        } else {
+            "\x1b[35m"
+        };
+        assert!(text.contains(&format!("{style}diagnostic-01")), "{text}");
+        if limit == 30 {
+            assert!(!text.contains("highlighted lines"), "{text}");
+        }
     }
 }
 

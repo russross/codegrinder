@@ -412,6 +412,12 @@ impl Manager<'_> {
                     OutputKind::Missing => {
                         format!("{name} ended early—the following lines were missing:")
                     }
+                    OutputKind::Early if stream == Stream::Err && expected.is_empty() => {
+                        format!("unexpected {name}—input was expected before this output")
+                    }
+                    OutputKind::Extra if stream == Stream::Err && expected.is_empty() => {
+                        format!("unexpected {name}")
+                    }
                     OutputKind::Early => {
                         format!("unexpected {name}—input was expected before the highlighted lines")
                     }
