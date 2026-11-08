@@ -9,11 +9,9 @@ codegrinder.example.edu {
 	@server_private path /server /server/*
 	respond @server_private 404
 
-	# Preserve existing installer and download-page links during the transition.
+	# Preserve existing installer and download links during the transition.
 	@grind_downloads path /grind.* /update-grind
 	redir @grind_downloads /grind{uri} 308
-	@old_cli path /cli /cli/*
-	redir @old_cli /grind/?{query} 308
 
 	@not_grpc not path /codegrinder.CodeGrinderService/*
 	encode @not_grpc zstd gzip
@@ -35,7 +33,7 @@ codegrinder.example.edu {
 		-Server
 	}
 
-	@web_runtime path /web/* /js/*
+	@web_runtime path /web/*
 	header @web_runtime {
 		Cross-Origin-Opener-Policy same-origin
 		Cross-Origin-Embedder-Policy require-corp

@@ -2,8 +2,8 @@
 //!
 //! Call [`main`] from a standalone binary, or use [`invoked_as_stepper`] and
 //! [`run`] to dispatch by `argv[0]`. Both entry points return an exit code and
-//! report diagnostics themselves. They read `STEPPER_*` configuration from the
-//! environment and use the caller's working directory and standard streams.
+//! report diagnostics themselves. Explicit options override `STEPPER_*`
+//! environment settings; the caller supplies the directory and standard streams.
 //!
 //! Stepper owns process-wide signal handling and umask for the duration of the
 //! call. Dispatch on the main thread before starting other application threads;
@@ -92,7 +92,7 @@ impl InputTemplate {
                 i += 12;
             } else {
                 return Err(Error::message(
-                    "STEPPER_INPUT_TRANSFORM contains an unknown or unclosed token",
+                    "input transform contains an unknown or unclosed token",
                 ));
             }
         }
@@ -125,40 +125,135 @@ struct Config {
     argv: Vec<OsString>,
 }
 
+const USAGE: &str = "usage: stepper [options] [--] command [argument ...]";
+const HELP: &str = "Options override environment settings. Parsing stops at -- or the command.
+
+  --dir PATH                  Transcript directory (STEPPER_DIR; default: inputs)
+  --timeout SECONDS           Positive inactivity timeout (STEPPER_TIMEOUT; default: 5)
+  --grade                     Run all cases and write test_detail.xml
+  --no-grade                  Stop at the first failure (STEPPER_GRADE; default: false)
+  --input-transform TEMPLATE  Input path template (STEPPER_INPUT_TRANSFORM; default: @STEM@.input)
+  --help                      Show this help
+
+Value options also accept --name=value. Each setting may be supplied once.
+Template tokens: @STEM@, @TRANSCRIPT@, and @@ (literal @).";
+
+#[derive(Default)]
+struct Options {
+    directory: Option<OsString>,
+    timeout: Option<OsString>,
+    grade: Option<bool>,
+    template: Option<OsString>,
+    help: bool,
+    argv: Vec<OsString>,
+}
+
+impl Options {
+    fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Self, Error> {
+        let mut options = Self::default();
+        let mut args = args.into_iter();
+        // Only the prefix belongs to stepper. Once the command starts, retain
+        // every argument verbatim, including options and additional separators.
+        while let Some(arg) = args.next() {
+            if arg == "--" {
+                options.argv.extend(args);
+                break;
+            }
+            if !arg.as_bytes().starts_with(b"-") || arg == "-" {
+                options.argv.push(arg);
+                options.argv.extend(args);
+                break;
+            }
+            if arg == "--help" {
+                options.help = true;
+                return Ok(options);
+            }
+            if arg == "--grade" || arg == "--no-grade" {
+                if options.grade.is_some() {
+                    return Err(Error::message("grade setting supplied more than once"));
+                }
+                options.grade = Some(arg == "--grade");
+                continue;
+            }
+
+            // Split on raw bytes so paths and templates keep non-UTF-8 data.
+            // A following option cannot stand in for a missing option value.
+            let bytes = arg.as_bytes();
+            let (name, inline) = match bytes.iter().position(|&byte| byte == b'=') {
+                Some(index) => {
+                    (&bytes[..index], Some(OsString::from_vec(bytes[index + 1..].to_vec())))
+                }
+                None => (bytes, None),
+            };
+            let slot = match name {
+                b"--dir" => &mut options.directory,
+                b"--timeout" => &mut options.timeout,
+                b"--input-transform" => &mut options.template,
+                _ => {
+                    return Err(Error::message(format!(
+                        "unknown option: {}",
+                        arg.to_string_lossy()
+                    )));
+                }
+            };
+            let name = String::from_utf8_lossy(name);
+            if slot.is_some() {
+                return Err(Error::message(format!("{name} supplied more than once")));
+            }
+            let inline_value = inline.is_some();
+            let value = inline
+                .or_else(|| args.next())
+                .ok_or_else(|| Error::message(format!("{name} requires a value")))?;
+            if value.is_empty() || (!inline_value && value.as_bytes().starts_with(b"--")) {
+                return Err(Error::message(format!("{name} requires a nonempty value")));
+            }
+            *slot = Some(value);
+        }
+        Ok(options)
+    }
+}
+
 fn setting(name: &str, default: &str) -> OsString {
     env::var_os(name).filter(|value| !value.is_empty()).unwrap_or_else(|| default.into())
 }
 
 impl Config {
-    fn read(args: impl IntoIterator<Item = OsString>) -> Result<Self, Error> {
-        let seconds = setting("STEPPER_TIMEOUT", "5");
+    fn read(options: Options) -> Result<Self, Error> {
+        // Resolve overrides before validation: an unused environment value must
+        // never invalidate an explicitly supplied command-line setting.
+        let timeout_source =
+            if options.timeout.is_some() { "--timeout" } else { "STEPPER_TIMEOUT" };
+        let seconds = options.timeout.unwrap_or_else(|| setting("STEPPER_TIMEOUT", "5"));
         if !seconds.as_bytes().iter().all(u8::is_ascii_digit) {
-            return Err(Error::message("STEPPER_TIMEOUT must be a positive integer"));
+            return Err(Error::message(format!("{timeout_source} must be a positive integer")));
         }
         let seconds = seconds
             .to_str()
             .and_then(|s| s.parse::<u64>().ok())
-            .ok_or_else(|| Error::message("STEPPER_TIMEOUT is too large"))?;
+            .ok_or_else(|| Error::message(format!("{timeout_source} is too large")))?;
         if seconds == 0 {
-            return Err(Error::message("STEPPER_TIMEOUT must be positive"));
+            return Err(Error::message(format!("{timeout_source} must be positive")));
         }
-        let grade = match setting("STEPPER_GRADE", "false").as_bytes() {
-            b"true" => true,
-            b"false" => false,
-            _ => return Err(Error::message("STEPPER_GRADE must be true or false")),
+        let grade = match options.grade {
+            Some(grade) => grade,
+            None => match setting("STEPPER_GRADE", "false").as_bytes() {
+                b"true" => true,
+                b"false" => false,
+                _ => return Err(Error::message("STEPPER_GRADE must be true or false")),
+            },
         };
-        let template =
-            InputTemplate::parse(setting("STEPPER_INPUT_TRANSFORM", "@STEM@.input").as_bytes())?;
-        let mut argv: Vec<_> = args.into_iter().collect();
-        if argv.first().is_some_and(|arg| arg == "--") {
-            argv.remove(0);
-        }
+        let template = InputTemplate::parse(
+            options
+                .template
+                .unwrap_or_else(|| setting("STEPPER_INPUT_TRANSFORM", "@STEM@.input"))
+                .as_bytes(),
+        )?;
         Ok(Self {
-            directory: setting("STEPPER_DIR", "inputs").into(),
+            directory: options.directory.unwrap_or_else(|| setting("STEPPER_DIR", "inputs")).into(),
             timeout: Duration::from_secs(seconds),
             grade,
             template,
-            argv,
+            argv: options.argv,
         })
     }
 
@@ -199,7 +294,15 @@ fn discover(directory: &Path) -> Result<Vec<PathBuf>, Error> {
 }
 
 fn run_cli(args: impl IntoIterator<Item = OsString>, signals: &Signals) -> Result<u8, Error> {
-    let config = Config::read(args)?;
+    let options = Options::parse(args)?;
+    if options.help {
+        println!("{USAGE}\n\n{HELP}");
+        return Ok(0);
+    }
+    if options.argv.is_empty() {
+        return Err(Error::message(USAGE));
+    }
+    let config = Config::read(options)?;
     if config.grade {
         match fs::remove_file("test_detail.xml") {
             Ok(()) => {}
@@ -208,9 +311,6 @@ fn run_cli(args: impl IntoIterator<Item = OsString>, signals: &Signals) -> Resul
         }
     }
     let paths = discover(&config.directory)?;
-    if config.argv.is_empty() {
-        return Err(Error::message("usage: stepper -- command [argument ...]"));
-    }
     let mut report = Report::new();
     let stdout = io::stdout();
     let mut out = io::BufWriter::new(stdout.lock());
@@ -282,8 +382,9 @@ pub fn main() -> ExitCode {
 
 /// Run stepper with explicit arguments, excluding the program name.
 ///
-/// An optional leading `--` is accepted. Environment configuration, feedback,
-/// report publication, and exit codes match the standalone CLI. This returns
+/// Options override environment configuration; `--` or the first positional
+/// argument starts the command. Feedback, report publication, and exit codes
+/// match the standalone CLI. This returns
 /// normally after cleanup; it never calls `process::exit`.
 ///
 /// Call from the main thread before starting application worker threads.

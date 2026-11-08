@@ -30,6 +30,7 @@ def publish() -> None:
 
     # Record the VM assets embedded in this bundle, independently of later builds.
     active = list(outputs)
+    active.extend(("app.js.br", "index.html.br", "style.css.br"))
     images = json.loads(Path("../vms/build/assets.json").read_text(encoding="utf-8"))
     for image in images.values():
         configuration = Path("../../dist/client") / image["configUrl"]

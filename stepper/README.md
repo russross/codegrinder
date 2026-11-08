@@ -49,20 +49,26 @@ Stepper reads non-hidden `*.transcript` files directly inside `inputs`, sorted b
 
 Whitespace and bytes after the prefix are significant. NUL bytes and unterminated transcript records are rejected. Output order is independent between stdout and stderr. Both streams must match the current phase before the next input is sent. Stepper closes stdin after the last input, requires output EOF and a zero exit status, and rejects extra output. Empty transcripts are valid.
 
-ANSI feedback is always enabled. Output comparisons preserve raw bytes; displayed control bytes are escaped. Failure context is limited to five lines and 20,000 raw bytes per block. Captured data itself has no quota.
+ANSI feedback is always enabled. Output comparisons preserve raw bytes; displayed control bytes are escaped. Failure context is limited to five lines, or twenty for stderr when no expected stderr records remain in the current phase, and 20,000 raw bytes per block. Captured data itself has no quota.
 
 
 Configuration
 -------------
 
-| Environment variable      | Default         | Meaning                                                      |
-|---------------------------|-----------------|--------------------------------------------------------------|
-| `STEPPER_DIR`             | `inputs`        | Directory containing transcripts.                             |
-| `STEPPER_TIMEOUT`         | `5`             | Positive integer inactivity timeout in seconds.               |
-| `STEPPER_GRADE`           | `false`         | `true` runs all cases and publishes XML; `false` stops early.  |
-| `STEPPER_INPUT_TRANSFORM` | `@STEM@.input`  | Template for the path substituted at each `@INPUT@` in argv.  |
+| Option                       | Environment fallback      | Default        | Meaning                                                   |
+|------------------------------|---------------------------|----------------|-----------------------------------------------------------|
+| `--dir PATH`                 | `STEPPER_DIR`             | `inputs`       | Directory containing transcripts.                         |
+| `--timeout SECONDS`          | `STEPPER_TIMEOUT`         | `5`            | Positive integer inactivity timeout in seconds.            |
+| `--grade` / `--no-grade`     | `STEPPER_GRADE`           | `false`        | Run all cases and publish XML, or stop at the first failure. |
+| `--input-transform TEMPLATE` | `STEPPER_INPUT_TRANSFORM` | `@STEM@.input` | Template for the path substituted at each `@INPUT@` in argv. |
 
-Unset and empty settings use defaults. The timer resets only after a complete expected output record matches or a complete input record is delivered. Durations use three fractional digits. Exit codes are 0 for success, 1 for test failures, 2 for runner errors, and 128 plus the signal number for HUP, INT, or TERM.
+Explicit options override environment values before validation. Unset and empty environment settings use defaults; explicit empty values are errors. Value options accept both `--name value` and `--name=value`. Each setting may appear only once, including the grade setting. For values beginning with `--`, use the equals form.
+
+Options precede the command. `--` ends option parsing; the first positional argument also starts the command. All subsequent arguments pass through unchanged. Unknown options, missing values, invalid values, repeated settings, and missing commands exit with status 2. `--help` prints usage and settings and exits successfully without reading environment settings, discovering transcripts, or modifying reports.
+
+    stepper --dir tests --timeout 10 --grade -- ./program @INPUT@
+
+The timer resets only after a complete expected output record matches or a complete input record is delivered. Durations use three fractional digits. Exit codes are 0 for success, 1 for test failures, 2 for runner errors, and 128 plus the signal number for HUP, INT, or TERM.
 
 The input-path template supports `@STEM@` for the complete transcript path without its `.transcript` suffix, `@TRANSCRIPT@` for the unchanged path, and `@@` for a literal at sign. Other content is literal; unknown or unclosed tokens are errors. Expansion is single-pass. For example, `inputs/easy1.transcript` becomes `inputs/easy1.input` by default. Each argv element remains one argument, and no shell evaluation occurs.
 

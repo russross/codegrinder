@@ -51,14 +51,18 @@ pub fn context<'a>(
     out: &mut impl Write,
     bytes: &[u8],
     stream: Stream,
-    mut expected: impl Iterator<Item = &'a [u8]>,
+    expected: impl Iterator<Item = &'a [u8]>,
 ) -> io::Result<()> {
+    // Unsolicited stderr often contains diagnostics that need more context than
+    // a transcript mismatch. Keep the byte cap shared by both display limits.
+    let mut expected = expected.peekable();
+    let line_limit = if stream == Stream::Err && expected.peek().is_none() { 20 } else { 5 };
     let limited = &bytes[..bytes.len().min(20_000)];
     let end = limited
         .iter()
         .enumerate()
         .filter(|(_, b)| **b == b'\n')
-        .nth(4)
+        .nth(line_limit - 1)
         .map_or(limited.len(), |(i, _)| i + 1);
     // Compare corresponding full lines without realigning insertions or deletions.
     // Lines beyond the phase's expected output remain highlighted as unexpected.

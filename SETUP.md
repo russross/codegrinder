@@ -103,7 +103,7 @@ permission from the checkout's parent directories and read permission for
 the public files under `dist`. The server requires `curl` for Canvas grade passback and verifies that it is available during startup.
 
 With this layout, build the VM client with `make -C client`, the legacy web client with `make -C legacyweb`, downloadable clients with `make grind-dist`, and the Rust server with `make server`. Restart the CodeGrinder service when the new server build should become active.
-Caddy blocks `/server` and `/server/*` so the native server executable is never served. The updater and download page are authored in `grind/` and published beside the downloadable clients in `dist/grind/`. Old root download URLs and `/cli` URLs redirect to `/grind/`; CLI launch query parameters are preserved. `dist/` contains deployment assets only and has no Makefile.
+Caddy blocks `/server` and `/server/*` so the native server executable is never served. The updater and download page are authored in `grind/` and published beside the downloadable clients in `dist/grind/`. Old root download URLs redirect to `/grind/`. `dist/` contains deployment assets only and has no Makefile.
 
 Caddy reads static content from the checkout immediately and does not need a
 copy or synchronization step. Docker runtime images and problem type data

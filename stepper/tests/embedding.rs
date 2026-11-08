@@ -80,11 +80,17 @@ fn downstream_binary_dispatches_by_symlink_and_regains_its_process_state() {
     let output = fixture
         .command("stepper")
         .env("STEPPER_TEST_REPEAT", "true")
-        .args(["--", "sh", "-c", "printf 'done\\n'"])
+        .env("STEPPER_GRADE", "invalid")
+        .env("STEPPER_TIMEOUT", "invalid")
+        .args(["--no-grade", "--timeout=2", "--", "sh", "-c", "printf 'done\\n'"])
         .output()
         .unwrap();
     assert_eq!(String::from_utf8_lossy(&output.stdout).matches('✔').count(), 2);
     fixture.check_return(output, 0);
+    let help =
+        fixture.command("stepper").env("STEPPER_GRADE", "invalid").arg("--help").output().unwrap();
+    assert!(String::from_utf8_lossy(&help.stdout).contains("usage: stepper"));
+    fixture.check_return(help, 0);
 
     // Ordinary failure and invalid configuration must also return rather than
     // terminate the embedding binary or leave process-wide state changed.

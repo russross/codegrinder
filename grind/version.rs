@@ -1,1 +1,1 @@
-pub const CURRENT_VERSION: &str = "3.1.0";
+pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");

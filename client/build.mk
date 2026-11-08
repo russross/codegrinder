@@ -2,7 +2,7 @@
 PROTO_OUTPUTS := codegrinder.ts codegrinder.client.ts google/protobuf/duration.ts google/protobuf/timestamp.ts
 UI_SOURCES := $(filter-out $(PROTO_OUTPUTS) %.test.ts style.css,$(wildcard *.ts *.css)) tsconfig.json webpack.config.mjs
 
-all: ../../dist/client/index.html
+all: ../../dist/client/index.html $(addprefix ../../dist/client/,app.js.br index.html.br style.css.br)
 proto: $(PROTO_OUTPUTS)
 
 # Inventories capture source edits and deletions without invalidating unchanged bundles.
@@ -31,6 +31,12 @@ build/ui/.built: node_modules/.installed ../vms/build/assets.json build/ui-input
 # Keep prior immutable assets for already-open tabs and cached entry pages.
 ../../dist/client/index.html: build/ui/.built index.template.html style.css favicon.svg scripts/publish.py
 	python3 scripts/publish.py
+
+# Recreate compressed variants when their source changes or the variant is missing.
+../../dist/client/%.br: ../../dist/client/% | ../../dist/client/index.html
+	brotli -f -k -o $@ $<
+
+../../dist/client/app.js ../../dist/client/style.css:
 
 check: node_modules/.installed $(PROTO_OUTPUTS) ../vms/build/assets.json
 	bun run --bun typecheck
