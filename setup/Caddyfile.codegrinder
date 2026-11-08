@@ -41,13 +41,9 @@ codegrinder.example.edu {
 		Cross-Origin-Embedder-Policy require-corp
 	}
 
-	# Revalidate the page and direct dependencies; fetched content names stay immutable.
-	@vm_entry path /client /client/ /client/index.html /client/app.js /client/style.css /client/favicon.svg
-	header @vm_entry Cache-Control "no-cache"
-	@vm_configs path /vms/*.cfg
-	header @vm_configs Cache-Control "no-cache"
+	# Content-named assets can be reused without revalidation for one week.
 	@vm_assets path /client/app-* /vms/riscbox-*/* /vms/*-drive-*/*
-	header @vm_assets Cache-Control "public, max-age=31536000, immutable"
+	header @vm_assets Cache-Control "public, max-age=604800, immutable"
 
 	@dynamic path /codegrinder.CodeGrinderService/* /lti/* /quiz/* /v2/version /version
 	reverse_proxy @dynamic h2c://127.0.0.1:1400 {
