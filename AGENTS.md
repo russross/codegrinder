@@ -1,5 +1,11 @@
 # General project rules
 
+Development environment:
+
+- The Debian desktop mounts the live Alpine tree at `~/codegrinder` from `ocean:codegrinder` with SSHFS. Keep SSHFS manually managed with `~/.local/bin/mount-ocean`, which uses `-o no_contain_symlinks` for package, SDK, and VM links; do not manage it through a service.
+- Keep build assets in this mounted tree. Direct publication into `dist/` is the established workflow; `dist/server/codegrinder`, static assets, `db/`, and `config.json` are live. `setup/` primarily contains templates.
+- SSH to `ocean` is authorized as needed, with `doas` available, but use it sparingly. Primary reasons are service restarts/reconfiguration, logs, and Docker operations. The live Alpine server deliberately has minimal tooling; keep development tools on the desktop. Local Debian service state does not represent the live server.
+
 Core architecture metaphors:
 
 - The main server is the TA: a university course teaching assistant responsible for bookkeeping, grade management, problem sets, assignments, LMS integration, and mediation between students, instructors, and authors. The TA should be a lightweight administrative functionary, not the place for long-running work or broad execution policy. Database transactions must be short-lived and must not block on external network connections.
@@ -36,7 +42,8 @@ For Rust server startup and checks:
 - The secondary test/dev combined TA+daycare instance is reached through Caddy at `https://dev.russross.com`.
 - The end-to-end test script uses the deployed server, client, and production problem types selected by its live configuration. `make end2end` builds no binaries and starts or stops no services.
 - Build the Rust server with `make -C server`; use `make -C server check` for formatting and Clippy, and `make -C server test` for those checks followed by server tests. Pass `TEST_ARGS=...` to select specific Cargo tests.
-- Stop, start, restart, and check the local CodeGrinder server with `doas rc-service codegrinder ...`; do not launch ad hoc background server processes.
+- Server publication and Linux grind downloads use explicit static musl release targets through cargo-zigbuild on Debian and Alpine. Native checks and tests use the host toolchain. macOS downloads use the upstream minimal SDK shim.
+- Stop, start, restart, and check the live CodeGrinder server on `ocean` with `doas rc-service codegrinder ...` over SSH; do not launch ad hoc background server processes.
 
 For Rust `grind` client checks:
 
@@ -51,6 +58,7 @@ For build workflows and routine validation:
 - Keep `macos-minimal-sdk/` synced with upstream without local changes. As an exception to component-owned cleanup, the root Makefile directly removes its generated sysroots, downloads, and `hello` test executable for both `mostlyclean` and `clean`; the upstream SDK has no `mostlyclean` target.
 - Do not routinely build from `clean` or `mostlyclean`. Use incremental Make rules. An incremental build that misses a dependency is a build bug to fix, not a reason to rebuild from scratch.
 - Run only checks relevant to the changed code and its affected boundaries. CLI-only changes do not require server tests; browser-only changes do not require Rust tests. Reserve the workspace-wide `make test` and end-to-end suite for changes that actually affect those boundaries.
+- Server and grind test targets default to at most four threads, bounded by CPU count, using `RUST_TEST_THREADS` to leave scheduling headroom for process-heavy deadline tests; override that variable explicitly when needed.
 - Run Rust formatting checks and Clippy before tests. If formatting must change, finish formatting before starting the tests. Do not repeat successful tests unless subsequent changes affect the tested behavior.
 - Every build component provides `mostlyclean` and `clean`. `mostlyclean` removes intermediates while preserving native release executables and every deployed browser/client asset, including assets used by cached pages. The Rust cache is shared, so component cleanup removes shared intermediates while preserving both native executables. `clean` also removes that component's deployment assets. Neither target touches configuration, databases, backups, or installed system files.
 - For `client/` and `vms/`, `mostlyclean` preserves only the currently published page's active assets and removes stale UI bundles, VM configurations, disk images, and runtime releases. Publication records these assets in `.published-assets.json`, which survives build-cache cleanup. Previously cached exam pages are not retained by this sweep.
@@ -77,7 +85,7 @@ For protocol changes:
 
 For the web interfaces under `client/` and `legacyweb`:
 
-- Use the Alpine system `node` and `npm` packages for dependency installation, proto generation, tests, and builds. Node 24 is the supported runtime; do not add a project-local Node toolchain.
+- Use Bun for locked dependency installation, tests, and build tools on Debian and Alpine. Invoke JavaScript tools with Bun explicitly rather than relying on Node shebangs. Use system `protoc` with the Bun-driven TypeScript plugin.
 
 
 # `grind` Config

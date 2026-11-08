@@ -55,7 +55,7 @@ Save
 
 Save runs when the user clicks Save, leaves the editor, or switches files or problems. These requests, timed saves, and grading/actions enter one serialized queue. Each request captures its problem and step's save state. A request for a replaced step is ignored; a redundant workspace save becomes a no-op when it reaches the front of the queue.
 
-The editor debounces its buffered changes for thirty seconds after the latest edit. Blur and timer flushes immediately enqueue server persistence. Each problem separately debounces guest and returned-file changes. Explicit Save and file selection flush the editor before entering the server queue. VM interaction flushes editor bytes independently of network persistence. Submitting a snapshot allows the first subsequent edit to start a new timer. Only a successful persistence response acknowledges the submitted revision. If newer edits exist, their deadline is preserved; otherwise the problem becomes clean and any remaining timer is canceled. Failed saves remain dirty and retry after 30 seconds unless an earlier timer or save request handles them.
+The editor debounces its buffered changes for thirty seconds after the latest edit. Blur and timer flushes immediately enqueue server persistence. Each problem separately debounces guest and returned-file changes. Explicit Save and file selection flush the editor before entering the server queue. VM interaction flushes editor bytes independently of network persistence. Submitting a snapshot allows the first subsequent edit to start a new timer. Only a successful persistence response acknowledges the submitted revision. If newer edits exist, their deadline is preserved; otherwise the problem becomes clean and any remaining timer is canceled. Failed saves remain dirty and retry after 30 seconds unless an earlier timer or save request handles them. Reporting an error focuses the terminal; the resulting editor blur can enqueue an earlier retry. Acceptance tests keep a simulated outage active until pending work is checked, then restore the peer for retry.
 
 The deadline controls when a save is requested. Network latency and an operation already running in the queue can delay persistence.
 
@@ -153,7 +153,7 @@ Tab-scoped session storage retains only the client authentication key, not a dur
 Asset publication and runtime assumptions
 ----------------------------------------
 
-`client/` owns application source and `vms/` owns common guest files, image overlays, release version files, and image preparation tools. `make -C client` synchronizes source into `build/client/`, installs locked npm dependencies there, generates protocol bindings there, and invokes the staged build. The synchronization inventory removes deleted source inputs without removing generated outputs. `make -C vms` similarly stages source into `build/vms/`. Neither source directory contains generated files.
+`client/` owns application source and `vms/` owns common guest files, image overlays, release version files, and image preparation tools. `make -C client` synchronizes source into `build/client/`, installs dependencies from `bun.lock` with Bun there, generates protocol bindings there, and invokes the staged build. The synchronization inventory removes deleted source inputs without removing generated outputs. `make -C vms` similarly stages source into `build/vms/`. Neither source directory contains generated files.
 
 VM preparation shares the versions pinned in `vms/alpine.version`, `riscbox.version`, and `risclet.version`. Original downloads and the extracted Riscbox release are cached in `build/downloads/`; deleting this directory is safe. Alpine is unpacked directly into image staging trees. Risclet is distributed as a standalone executable. Riscbox supplies matching public declarations, JavaScript/WASM, firmware, kernel, and the disk splitter. Its compressed assets are expanded alongside originals for fallback serving.
 
@@ -183,6 +183,18 @@ The VM client is shared by the existing `/exam/` LTI workflow and the attended `
 
 A successful connector handoff opens `/client/?assignment=...#quiz=...`. `quiz-entry.ts` immediately removes the fragment, places its raw bearer key into the existing tab-scoped session storage, and renders the supplied student/course/assignment identity using text nodes in a modal dialog. Continue is required; Escape does not dismiss it. Assignment authentication and workspace requests begin after confirmation. Ordinary `/client/` entry and reload have no fragment and use their existing login-token/session restoration path. All grading, saving, and VM behavior stays shared. Session scope, exact station-IP checks, expiry, and revocation are enforced by the server rather than by the dialog or client URL.
 
-Run the focused browser check with `node --test tests/quiz-entry.test.mjs` from this directory. It uses Chromium with a disposable profile and covers credential removal, tab storage, safe identity rendering, required confirmation, ordinary reload, and invalid handoffs.
+Run the focused browser check with `bun test ./tests/quiz-entry.test.mjs` from this directory. It uses Chromium with a disposable profile and covers credential removal, tab storage, safe identity rendering, required confirmation, ordinary reload, and invalid handoffs.
 
 Riscbox releases use semantic versions starting with the pinned GitHub 0.9.0 archive. The VM build expands the archive's Brotli assets alongside their compressed originals and publishes its content-hashed asset directory inside the versioned runtime directory. Configuration, JavaScript, and WASM URLs include that hash. Preparation boots use the same expanded firmware and kernel. The release splitter runs with explicit `uv run --script` (Python 3.13+), since BusyBox env does not support its upstream shebang and emits compressed disk siblings when Brotli is available. Caddy's existing `file_server precompressed br` serves those siblings while original files remain available as fallbacks.
+
+
+Portable development tools
+--------------------------
+
+Browser build tools and tests run under Bun on Debian and Alpine. Dependency installation uses `bun install --frozen-lockfile` in the staged tree; webpack and TypeScript run with `bun run --bun` so package Node shebangs do not require Node. System protoc invokes the TypeScript generator through `protoc-gen-ts.sh`. The webpack bundle format and publication workflow remain unchanged.
+
+Browser checks discover Chromium or Chrome on PATH, or accept an executable path in `CODEGRINDER_CHROMIUM`. Semantic terminal-message assertions ignore soft-wrap whitespace; separate rendering checks cover clear screens and grid geometry. They use disposable profiles and close browser processes. The full exam test uses puppeteer-core with the installed browser and needs no chromedriver or downloaded browser. DISPLAY selects headed operation; otherwise checks use headless operation.
+
+When this tree is mounted with SSHFS, use `no_contain_symlinks`: package executable links, VM release links, and SDK links legitimately contain parent components. The default containment option rejects those links even when their resolved targets stay in this tree.
+
+Image preparation sets `FAKEROOTDONTTRYCHOWN=1` to simulate ownership without real host chown calls. Archive extraction preserves modes and bytes but uses extraction-time timestamps, avoiding unsupported symlink timestamp updates on SSHFS.

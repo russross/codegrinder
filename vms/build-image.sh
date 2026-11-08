@@ -23,14 +23,17 @@ stage=$(mktemp -d "$(pwd)/build/rootfs.XXXXXX")
 output=$(mktemp -d "$(pwd)/build/output.XXXXXX")
 trap 'rm -rf "$stage" "$output" build/$name-rootfs.ext4.part' EXIT HUP INT TERM
 
-# Fakeroot carries numeric ownership through both initramfs and ext4 construction.
+# Fakeroot carries numeric ownership without changing the host workspace's owners.
+# Archive timestamps are unnecessary for images and may be unsupported on symlinks.
+FAKEROOTDONTTRYCHOWN=1
+export FAKEROOTDONTTRYCHOWN
 initramfs="$(pwd)/build/$name-setup-initramfs.gz"
 export initramfs
 fakeroot sh -eu -c '
-    tar -xpf "$1" -C "$2"
+    tar -xpmf "$1" -C "$2"
     cp -R "$3/." "$2/"
     cp -R "$4/." "$2/"
-    [ "$5" = - ] || tar -xpf "$5" -C "$2"
+    [ "$5" = - ] || tar -xpmf "$5" -C "$2"
     mkdir -p "$2/usr/local/bin"
     cp ../../stepper/dist/stepper.linux_riscv64 "$2/usr/local/bin/stepper"
     chmod 755 "$2/usr/local/bin/stepper"
@@ -65,7 +68,7 @@ fi
 rm -rf "$stage"
 mkdir -p "$stage"
 fakeroot sh -eu -c '
-    tar -xpf "$1" -C "$2"
+    tar -xpmf "$1" -C "$2"
     truncate -s "${4}M" "$3"
     mkfs.ext4 -q -F -m 0 -O ^has_journal -d "$2" "$3"
 ' sh "$output/rootfs.tar" "$stage" "$(pwd)/build/$name-rootfs.ext4.part" "$size"

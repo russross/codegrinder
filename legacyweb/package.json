@@ -6,8 +6,8 @@
   "scripts": {
     "build": "make",
     "proto:generate": "make proto",
-    "test": "node --test test/*.test.js",
-    "test:browser": "node --test browser-test/*.test.js",
+    "test": "bun test test/*.test.js",
+    "test:browser": "bun test browser-test/*.test.js",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.worker.json"
   },
   "dependencies": {
@@ -19,7 +19,6 @@
     "@protobuf-ts/plugin": "2.11.1",
     "@types/ace": "0.0.52",
     "@types/markdown-it": "14.2.0",
-    "grpc-tools": "1.13.1",
     "puppeteer-core": "25.16.0",
     "ts-loader": "9.6.2",
     "typescript": "5.9.3",

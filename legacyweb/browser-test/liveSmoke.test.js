@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import puppeteer from "puppeteer-core";
@@ -7,21 +7,7 @@ import puppeteer from "puppeteer-core";
 const defaultTarget = "https://codegrinder.russross.com/web/";
 const buildBannerPattern = /^\/\*! CodeGrinder web build ([^ ]+) \*\//;
 
-async function chromiumExecutable() {
-  if (process.env.CODEGRINDER_CHROMIUM !== undefined) {
-    await access(process.env.CODEGRINDER_CHROMIUM);
-    return process.env.CODEGRINDER_CHROMIUM;
-  }
-  for (const candidate of ["/usr/bin/chromium", "/usr/bin/chromium-browser"]) {
-    try {
-      await access(candidate);
-      return candidate;
-    } catch {
-      // Try the next supported system package name.
-    }
-  }
-  throw new Error("Chromium is unavailable; set CODEGRINDER_CHROMIUM to its executable path");
-}
+import { chromiumExecutable } from "./chromium.mjs";
 
 function authorizationHeaders() {
   const username = process.env.CODEGRINDER_BROWSER_USERNAME;

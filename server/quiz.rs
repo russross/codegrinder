@@ -135,6 +135,7 @@ fn link_tag(parameters: &BTreeMap<String, Vec<String>>) -> AppResult<String> {
 fn hidden(name: &str, value: &str) -> String {
     format!("<input type=hidden name=\"{}\" value=\"{}\">", escape_xml(name), escape_xml(value))
 }
+const RECOVERY: &str = "<p>Note: if you do not have the six-digit code or it has expired:</p><ol><li>Close the LockDown Browser</li><li>Open Canvas in a regular browser</li><li>Click on the assignment that is paired with this quiz</li><li>Copy the 6-digit code</li><li>Return to the LockDown Browser and re-enter the quiz</li></ol>";
 fn page(title: &str, body: &str) -> Response {
     let html = format!(
         "<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>{}</title><style>body{{font:1.2rem system-ui;max-width:48rem;margin:3rem auto;padding:1rem}}label,input,select,button{{display:block;margin:.7rem 0;font:inherit}}input,select{{max-width:100%}}code{{font-size:3rem;letter-spacing:.2em}}textarea{{width:100%;height:6rem}}</style><main>{body}</main></html>",
@@ -284,15 +285,15 @@ pub fn prepare(
     let now = Utc::now();
     conn.execute("INSERT INTO quiz_assignments VALUES (?,?,?,?) ON CONFLICT(user_id,course_id,problem_set_id) DO UPDATE SET assignment_tag=excluded.assignment_tag",params![key.user_id,key.course_id,key.problem_set_id,assignment_tag])?;
     let code = format!("{:06}", rand::rng().random_range(0..1_000_000));
-    conn.execute("INSERT INTO quiz_entries(station_ip,quiz_code,user_id,course_id,problem_set_id,assignment_tag,entry_created_at,entry_expires_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(station_ip) DO UPDATE SET quiz_code=excluded.quiz_code,user_id=excluded.user_id,course_id=excluded.course_id,problem_set_id=excluded.problem_set_id,assignment_tag=excluded.assignment_tag,entry_created_at=excluded.entry_created_at,entry_expires_at=excluded.entry_expires_at,entry_attempts=0,entry_consumed_at=NULL",params![ip,code,key.user_id,key.course_id,key.problem_set_id,assignment_tag,db_time(now),db_time(now+Duration::minutes(10))])?;
+    conn.execute("INSERT INTO quiz_entries(station_ip,quiz_code,user_id,course_id,problem_set_id,assignment_tag,entry_created_at,entry_expires_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(station_ip) DO UPDATE SET quiz_code=excluded.quiz_code,user_id=excluded.user_id,course_id=excluded.course_id,problem_set_id=excluded.problem_set_id,assignment_tag=excluded.assignment_tag,entry_created_at=excluded.entry_created_at,entry_expires_at=excluded.entry_expires_at,entry_attempts=0,entry_consumed_at=NULL",params![ip,code,key.user_id,key.course_id,key.problem_set_id,assignment_tag,db_time(now),db_time(now+Duration::minutes(15))])?;
     let identity = identity(conn, key)?;
     Ok(format!(
-        "<h1>Testing-center quiz check-in</h1><pre>{}</pre><p>Student and attendant: write down this code:</p><code>{code}</code><p>The code expires in ten minutes. Exit Canvas in this browser and open the quiz in Respondus LockDown Browser. The attendant will enter the quiz password, then enter this code and password at the CodeGrinder link.</p>",
+        "<h1>Testing-center quiz check-in</h1><pre>{}</pre><p>Write down this code, which must be used within 15 minutes:</p><code>{code}</code><ol><li>Close this browser</li><li>Open the Respondus LockDown Browser and log in to Canvas</li><li>Select the quiz that is paired with this assignment</li><li>The testing center attendant will enter the quiz password</li><li>As soon as you enter the quiz, click on the link to open CodeGrinder<ul><li>You will need to enter the 6-digit code</li><li>The testing center attendant will need to re-enter the quiz password</li></ul></li><li>Then you can complete the quiz in CodeGrinder</li></ol>",
         escape_xml(&identity)
     ))
 }
 fn identity(conn: &Connection, key: &AssignmentKey) -> AppResult<String> {
-    conn.query_row("SELECT user_name,course_name,assignment_title FROM assignments NATURAL JOIN users NATURAL JOIN courses WHERE user_id=? AND course_id=? AND problem_set_id=?",params![key.user_id,key.course_id,key.problem_set_id],|r|Ok(format!("{}\n{}\n{}",r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?))).map_err(Into::into)
+    conn.query_row("SELECT user_name,user_login,course_name,assignment_title FROM assignments NATURAL JOIN users NATURAL JOIN courses WHERE user_id=? AND course_id=? AND problem_set_id=?",params![key.user_id,key.course_id,key.problem_set_id],|r|Ok(format!("{} (D# {})\n{}\n{}",r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?))).map_err(Into::into)
 }
 pub fn preparation_page(body: &str) -> Response {
     page("Quiz check-in", body)
@@ -304,12 +305,23 @@ async fn connector(
     headers: HeaderMap,
     uri: axum::http::Uri,
 ) -> Response {
-    response(async {
-        log_headers(&state.config, "connector",peer,&headers)?; station(&state,peer,&headers)?;
-        let f=form(uri.query().unwrap_or_default().as_bytes());
-        let fields=hidden("tag", &link_tag(&f)?);
-        Ok(page("Enter quiz",&format!("<h1>Enter quiz</h1><p>Testing-center attendant: verify that Respondus LockDown Browser is running, then enter the student’s code and quiz password.</p><form method=post action=/quiz/connect>{fields}<label>Six-digit code<input name=code inputmode=numeric pattern='[0-9]{{6}}' maxlength=6 required autocomplete=off></label><label>Quiz password<input name=password type=password required maxlength=256 autocomplete=off></label><button>Open assignment</button></form>")))
-    }.await)
+    response(
+        async {
+            log_headers(&state.config, "connector", peer, &headers)?;
+            station(&state, peer, &headers)?;
+            let f = form(uri.query().unwrap_or_default().as_bytes());
+            let fields = hidden("tag", &link_tag(&f)?);
+            Ok(page(
+                "Access the quiz in CodeGrinder",
+                &format!(
+                    "{}{}",
+                    include_str!("quiz-connect.html").replace("<!-- fields -->", &fields),
+                    RECOVERY
+                ),
+            ))
+        }
+        .await,
+    )
 }
 
 async fn redeem(
@@ -322,8 +334,8 @@ async fn redeem(
         log_headers(&state.config, "redemption",peer,&headers)?; let ip=station(&state,peer,&headers)?;
         let f=form(&body); link_tag(&f)?; let config=state.config.clone();
         // Return validation failures as values so the transaction commits the attempt count.
-        let result=state.db.transaction(true,move |conn| redeem_entry(conn,&config,&ip,&f)).await?;
-        let Some((key,session,identity))=result else { return Err(AppError::Forbidden("Invalid or expired entry. Check the code and password; relaunch from Canvas if necessary.".into())); };
+        let result=state.db.transaction(true,move |conn| redeem_entry_detail(conn,&config,&ip,&f)).await?;
+        let (key,session,identity)=match result { Ok(value) => value, Err(reason) => return Ok((axum::http::StatusCode::FORBIDDEN, page("Quiz entry failed", &format!("<h1>Quiz entry failed</h1><p><strong>{reason}</strong></p><p>Check the code and ask the attendant to check the quiz password. Reopen the CodeGrinder link in the quiz to try again.</p>{RECOVERY}"))).into_response()) };
         crate::logging::record("INFO", "user_session_created", format_args!("user={:?} course={:?} problem_set={:?} source=quiz_entry", key.user_id, key.course_id, key.problem_set_id));
         // A fragment avoids forwarding the bearer key in HTTP requests or referrers.
         let handoff=serde_json::json!({"session":session,"identity":identity}).to_string();
@@ -331,12 +343,21 @@ async fn redeem(
         Ok((axum::http::StatusCode::SEE_OTHER,[(header::LOCATION,location),(header::CACHE_CONTROL,"no-store".into()),(header::REFERRER_POLICY,"no-referrer".into())]).into_response())
     }.await)
 }
+#[cfg(test)]
 fn redeem_entry(
     conn: &Connection,
     config: &crate::config::ServerConfig,
     ip: &str,
     f: &BTreeMap<String, Vec<String>>,
 ) -> AppResult<Option<(AssignmentKey, String, String)>> {
+    Ok(redeem_entry_detail(conn, config, ip, f)?.ok())
+}
+fn redeem_entry_detail(
+    conn: &Connection,
+    config: &crate::config::ServerConfig,
+    ip: &str,
+    f: &BTreeMap<String, Vec<String>>,
+) -> AppResult<Result<(AssignmentKey, String, String), &'static str>> {
     let now = Utc::now();
     let time = db_time(now);
     conn.execute(
@@ -353,30 +374,50 @@ fn redeem_entry(
         |r| r.get::<_, i64>(0),
     )?;
     if attempts >= 20 {
-        return Ok(None);
+        return Ok(Err("Too many attempts. Ask the attendant for help."));
     }
     conn.execute(
         "UPDATE quiz_station_attempts SET station_attempts=station_attempts+1 WHERE station_ip=?",
         [ip],
     )?;
-    let pending=conn.query_row("SELECT user_id,course_id,problem_set_id,quiz_code,assignment_tag FROM quiz_entries WHERE station_ip=? AND entry_consumed_at IS NULL AND datetime(entry_expires_at)>datetime(?) AND entry_attempts<5",params![ip,time],|r|Ok((AssignmentKey{user_id:r.get(0)?,course_id:r.get(1)?,problem_set_id:r.get(2)?},r.get::<_,String>(3)?,r.get::<_,String>(4)?))).optional()?;
-    let Some((key, code, assignment_tag)) = pending else { return Ok(None) };
+    let pending=conn.query_row("SELECT user_id,course_id,problem_set_id,quiz_code,assignment_tag,datetime(entry_expires_at)<=datetime(?),entry_attempts,entry_consumed_at IS NOT NULL FROM quiz_entries WHERE station_ip=?",params![time,ip],|r|Ok((AssignmentKey{user_id:r.get(0)?,course_id:r.get(1)?,problem_set_id:r.get(2)?},r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,bool>(5)?,r.get::<_,i64>(6)?,r.get::<_,bool>(7)?))).optional()?;
+    let Some((key, code, assignment_tag, expired, attempts, consumed)) = pending else {
+        return Ok(Err("No code is available for this station."));
+    };
+    if expired {
+        return Ok(Err("The code has expired."));
+    }
+    if consumed || attempts >= 5 {
+        return Ok(Err("The code has already been used or has too many attempts."));
+    }
     let c = Context { course: key.course_id.clone(), problem_set: key.problem_set_id.clone() };
     conn.execute(
         "UPDATE quiz_entries SET entry_attempts=entry_attempts+1 WHERE station_ip=?",
         [ip],
     )?;
     let password = form_first(f, "password");
-    if code != form_first(f, "code")
-        || !verify(&config.session_secret, "assignment", &c, &password, &assignment_tag)
-        || !verify(&config.session_secret, "connector", &c, &password, &form_first(f, "tag"))
-    {
-        return Ok(None);
+    let bad_code = code != form_first(f, "code");
+    let bad_password =
+        !verify(&config.session_secret, "assignment", &c, &password, &assignment_tag)
+            || !verify(&config.session_secret, "connector", &c, &password, &form_first(f, "tag"));
+    match (bad_code, bad_password) {
+        (true, true) => {
+            return Ok(Err(
+                "The code and/or password is wrong, or this quiz link does not match the assignment.",
+            ));
+        }
+        (true, false) => return Ok(Err("The code is wrong.")),
+        (false, true) => {
+            return Ok(Err(
+                "The password is wrong or this quiz link does not match the assignment.",
+            ));
+        }
+        (false, false) => {}
     }
     // Availability uses the same authoritative policy view as workspace download.
     let ready=conn.query_row("SELECT download_available FROM accessible_assignment_policy WHERE viewer_user_id=? AND assignment_user_id=? AND course_id=? AND problem_set_id=?",params![key.user_id,key.user_id,key.course_id,key.problem_set_id],|r|r.get::<_,bool>(0))?;
     if !ready {
-        return Ok(None);
+        return Ok(Err("This assignment is not available yet."));
     }
     conn.execute("UPDATE user_sessions SET session_revoked_at=? WHERE session_key_hash IN (SELECT session_key_hash FROM quiz_sessions WHERE station_ip=? OR (user_id=? AND course_id=? AND problem_set_id=?)) AND session_revoked_at IS NULL",params![time,ip,key.user_id,key.course_id,key.problem_set_id])?;
     let session =
@@ -390,7 +431,7 @@ fn redeem_entry(
         "UPDATE quiz_entries SET entry_consumed_at=? WHERE station_ip=?",
         params![time, ip],
     )?;
-    Ok(Some((key.clone(), session.session_key, identity(conn, &key)?)))
+    Ok(Ok((key.clone(), session.session_key, identity(conn, &key)?)))
 }
 
 // Session checks repeat inside each workspace/save transaction, including final grade persistence.
@@ -732,6 +773,32 @@ mod tests {
         assert!(redeem_entry(&conn, &config, "192.0.2.10", &f).unwrap().is_none());
     }
     #[test]
+    fn redemption_reports_credential_failures_and_expiry() {
+        let (conn, _, _, f) = fixture();
+        let config = config();
+        let lifetime: i64 = conn.query_row("SELECT CAST((julianday(entry_expires_at)-julianday(entry_created_at))*86400 AS INTEGER) FROM quiz_entries", [], |r| r.get(0)).unwrap();
+        assert!((899..=900).contains(&lifetime));
+        let mut wrong = f.clone();
+        wrong.insert("code".into(), vec!["wrong".into()]);
+        assert_eq!(
+            redeem_entry_detail(&conn, &config, "192.0.2.10", &wrong).unwrap().unwrap_err(),
+            "The code is wrong."
+        );
+        wrong = f.clone();
+        wrong.insert("password".into(), vec!["wrong".into()]);
+        assert!(
+            redeem_entry_detail(&conn, &config, "192.0.2.10", &wrong)
+                .unwrap()
+                .unwrap_err()
+                .contains("password")
+        );
+        conn.execute("UPDATE quiz_entries SET entry_expires_at='2000-01-01'", []).unwrap();
+        assert_eq!(
+            redeem_entry_detail(&conn, &config, "192.0.2.10", &f).unwrap().unwrap_err(),
+            "The code has expired."
+        );
+    }
+    #[test]
     fn reopening_preparation_does_not_reset_station_attempt_budget() {
         let (conn, key, c, mut f) = fixture();
         f.insert("password".into(), vec!["wrong".into()]);
@@ -1000,7 +1067,8 @@ mod http_tests {
         let html = text(r).await;
         assert!(html.contains("Student"));
         assert!(html.contains("Course"));
-        assert!(html.contains("write down"));
+        assert!(html.contains("Write down this code, which must be used within 15 minutes"));
+        assert!(html.contains("Student (D# student)"));
         assert!(!html.contains("token="));
         let sessions: i64 = state
             .db

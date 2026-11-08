@@ -109,7 +109,7 @@ bundle whenever the protocol or a TypeScript entry point changes:
     make -C legacyweb
     make -C legacyweb test
 
-Run those commands from the repository root. `npm run build` also invokes Make.
+Use Bun and system protoc on Debian or Alpine; Node and npm are not required. Run those commands from the repository root. `bun run build` also invokes Make.
 Make installs locked dependencies only when package metadata changes, generates
 temporary TypeScript sources under `generated/` only when required, type
 checks the handwritten TypeScript, and bundles the TypeScript entry points with
@@ -121,7 +121,7 @@ are not deployed.
 
 Use incremental builds without cleaning first. Missing dependencies are build
 bugs to fix. `make -C legacyweb mostlyclean` removes generated protobuf sources,
-npm dependencies, and build records while preserving deployed JavaScript.
+Bun-installed dependencies, and build records while preserving deployed JavaScript.
 `clean` also removes deployed JavaScript and emitted chunks. Neither target
 changes configuration or external runtime assets. Run only checks relevant to
 the changed browser code; UI-only changes do not require Rust tests.
@@ -139,13 +139,13 @@ Testing
 
 The tests are intentionally split by boundary:
 
-*   `npm test` runs deterministic tests for domain transformations, byte-file
+*   `bun run test` runs deterministic tests for domain transformations, byte-file
     handling, concurrency state, worker-message validation, service-worker
     controller selection, and deployable bundle shape. These tests must remain
     useful at runtime boundaries; TypeScript alone cannot validate JSON,
     structured-clone messages, generated artifacts, or asynchronous ordering.
-*   `npm run typecheck` checks the page and worker environments separately.
-*   `npm run test:browser` launches the Alpine system Chromium against
+*   `bun run --bun typecheck` checks the page and worker environments separately.
+*   `bun run test:browser` launches installed Chrome/Chromium against
     `https://codegrinder.russross.com/web/` by default. It first rejects a
     partial deployment whose application, runtime, worker, and service-worker
     build identities disagree. It exercises JavaScript modules and the full
@@ -154,10 +154,9 @@ The tests are intentionally split by boundary:
     stopping a blocked Turtle program in the deployed Python runtime.
 
 Set `CODEGRINDER_BROWSER_TEST_URL` to exercise another deployed `/web/` root.
-Set `CODEGRINDER_CHROMIUM` when Chromium is not installed at
-`/usr/bin/chromium` or `/usr/bin/chromium-browser`. A Basic-authenticated target
+Set `CODEGRINDER_CHROMIUM` to override browser discovery on PATH. A Basic-authenticated target
 also requires both `CODEGRINDER_BROWSER_USERNAME` and
-`CODEGRINDER_BROWSER_PASSWORD`. The browser test is separate from `npm test`
+`CODEGRINDER_BROWSER_PASSWORD`. The browser test is separate from `bun run test`
 because it depends on a deployed HTTPS site, external CDN assets, and a real
 browser. It is suitable for a post-deployment or scheduled check.
 
@@ -208,7 +207,7 @@ Hosting
 CodeGrinder serves this directory and its gRPC-Web endpoint from the same
 origin. Daycare calls may use another registered host; CORS is therefore
 required at the daycare boundary. Deploy all generated JavaScript artifacts as
-one generation. The build-identity preflight in `npm run test:browser` detects
+one generation. The build-identity preflight in `bun run test:browser` detects
 a partial copy before it exercises the page.
 
 The local runtimes require the service worker so a worker can wait synchronously

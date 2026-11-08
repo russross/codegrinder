@@ -1,3 +1,4 @@
+import { chromiumExecutable } from "./chromium.mjs";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
@@ -33,7 +34,7 @@ export async function runChromePage(html, directory, options = {}) {
     });
     await new Promise(resolveListen => server.listen(0, "127.0.0.1", resolveListen));
     const flags = process.env.DISPLAY ? [] : ["--headless=new"];
-    const chrome = spawn("/usr/bin/chromium-browser", [...flags, "--no-sandbox", "--disable-dev-shm-usage",
+    const chrome = spawn(await chromiumExecutable(), [...flags, "--no-sandbox", "--disable-dev-shm-usage",
         "--no-first-run", "--no-default-browser-check",
         "--ignore-gpu-blocklist", ...(process.env.DISPLAY ? ["--use-angle=gl"] : ["--use-angle=vulkan"]),
         ...(options.chromeArgs ?? []),

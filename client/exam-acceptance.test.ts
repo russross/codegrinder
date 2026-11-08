@@ -13,6 +13,10 @@ import { loadRuntime, vmImageForProblemType } from "./vm";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 function check(condition: boolean, message: string): void { if (!condition) throw new Error(message); }
+// Browser fonts can soft-wrap a message within a word; rendering is checked separately.
+function hasTerminalMessage(text: string, message: string): boolean {
+    return text.replace(/\s/g, "").includes(message.replace(/\s/g, ""));
+}
 async function until(predicate: () => boolean | Promise<boolean>, message: string): Promise<void> {
     const deadline = Date.now() + 20_000;
     while (!await predicate()) {
@@ -142,7 +146,7 @@ export async function runExamAcceptance(): Promise<string[]> {
                 check(commit !== undefined && Object.keys(commit.files).join() === "main.s", "Save included unofficial files");
                 if (commit === undefined) throw new Error("Missing commit");
                 if (blockSave) { blockSave = false; await new Promise<void>(resolve => { release = resolve; }); }
-                if (failSave) { failSave = false; return reply(new Uint8Array(), 14); }
+                if (failSave) return reply(new Uint8Array(), 14);
                 saved.set(commit.problemId, decoder.decode(commit.files["main.s"]));
                 return reply(SaveWorkspaceCommitResponse.toBinary(SaveWorkspaceCommitResponse.create({ saveStatus: CommitSaveStatus.SAVED })));
             }
@@ -231,10 +235,12 @@ export async function runExamAcceptance(): Promise<string[]> {
         release?.();
         await until(() => saved.get("first") === "in flight\n", "Blocked save did not finish");
         check(!button("save-button").disabled, "Older acknowledgement cleared newer editor edits");
+        // Keep the outage active across retries triggered by terminal focus and editor blur.
         failSave = true;
         button("save-button").click();
-        await until(async () => (await gradingOutput?.readText())?.includes("Save failed") === true, "RPC failure was not reported");
+        await until(async () => hasTerminalMessage(await gradingOutput?.readText() ?? "", "Save failed"), "RPC failure was not reported");
         check(!button("save-button").disabled, "RPC failure cleared pending work");
+        failSave = false;
         button("save-button").click();
         await until(() => saved.get("first") === "newer edit\n", "Retry did not save retained bytes");
         const active = machine;
@@ -327,7 +333,7 @@ export async function runExamAcceptance(): Promise<string[]> {
         holdAction = true;
         button("action-write-button").click();
         await until(async () => finishAction !== undefined && editor().state.doc.toString() === "action output"
-            && (await gradingOutput?.readText())?.includes("streamed action output") === true,
+            && hasTerminalMessage(await gradingOutput?.readText() ?? "", "streamed action output"),
             "Action did not stream output and files before completion");
         check(editor().state.readOnly && button("action-write-button").disabled && button("vm-tab-button").disabled,
             "Action unlocked editing or VM input before completion");
@@ -364,9 +370,9 @@ export async function runExamAcceptance(): Promise<string[]> {
             await until(() => calls.filter(method => method === "RunAssignmentAction").length > before
                 && !button("action-grade-button").disabled, "Failed stream retained the action lock");
             const output = await gradingOutput?.readText() ?? "";
-            check(output.includes("failed:"), "Action stream failure was not reported");
+            check(hasTerminalMessage(output, "failed:"), "Action stream failure was not reported");
             if (failure === "missing") {
-                check(output.includes("without a completion result"), "Missing completion was treated as success");
+                check(hasTerminalMessage(output, "without a completion result"), `Missing completion was treated as success: ${JSON.stringify(output)}`);
                 check(window.problemSet[0].saving.isDirty(window.problemSet[0].workspace.revision()),
                     "Incomplete action acknowledged its returned file revision");
             }
@@ -385,7 +391,7 @@ export async function runExamAcceptance(): Promise<string[]> {
         await until(() => calls.filter(method => method === "RunAssignmentAction").length > beforeInspection
             && !button("action-grade-button").disabled, "Non-saved grade did not finish");
         check(window.problemSet[0].currentStepNumber === 1n
-            && (await gradingOutput?.readText())?.includes("do not own this assignment") === true,
+            && hasTerminalMessage(await gradingOutput?.readText() ?? "", "do not own this assignment"),
             "Non-saved passing grade advanced the problem or hid its save status");
         actionSaveStatus = CommitSaveStatus.SAVED;
         button("vm-tab-button").click();
@@ -400,8 +406,8 @@ export async function runExamAcceptance(): Promise<string[]> {
         check(latest.started && guestOutput.startsWith(bootsBeforeGrade) && editor().state.doc.toString() === "graded output",
             "Failed grade restarted the VM or advanced the step");
         const failureOutput = await gradingOutput?.readText() ?? "";
-        check(failureOutput.includes("grade diagnostics"), `Grading lost its failure transcript: ${JSON.stringify(failureOutput)}`);
-        check(!failureOutput.includes("live grade output"), "Grading displayed intermediate output");
+        check(hasTerminalMessage(failureOutput, "grade diagnostics"), `Grading lost its failure transcript: ${JSON.stringify(failureOutput)}`);
+        check(!hasTerminalMessage(failureOutput, "live grade output"), "Grading displayed intermediate output");
         check(failureOutput.replace(/\s/g, "").endsWith("GradewasnotpostedtotheLMSbecausetheassignmentislocked"),
             `Grading lost its final server-lock notice: ${JSON.stringify(failureOutput)}`);
         const actionsBeforeWrite = calls.filter(method => method === "RunAssignmentAction").length;

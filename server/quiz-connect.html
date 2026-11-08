@@ -1,0 +1,43 @@
+<h1>Access the quiz in CodeGrinder</h1>
+<form method="post" action="/quiz/connect">
+<!-- fields -->
+<h2>Student</h2>
+<p id="code-label">Enter the six-digit code</p>
+<div class="digits" role="group" aria-labelledby="code-label">
+<input aria-label="Digit 1" inputmode="numeric" pattern="[0-9]" maxlength="1" required autofocus autocomplete="one-time-code">
+<input aria-label="Digit 2" inputmode="numeric" pattern="[0-9]" maxlength="1" required>
+<input aria-label="Digit 3" inputmode="numeric" pattern="[0-9]" maxlength="1" required>
+<input aria-label="Digit 4" inputmode="numeric" pattern="[0-9]" maxlength="1" required>
+<input aria-label="Digit 5" inputmode="numeric" pattern="[0-9]" maxlength="1" required>
+<input aria-label="Digit 6" inputmode="numeric" pattern="[0-9]" maxlength="1" required>
+</div>
+<input type="hidden" name="code">
+<h2>Testing-center attendant</h2>
+<ul><li>Verify that Respondus LockDown Browser is running</li><li>Re-enter the quiz password</li><li>Verify the details on the next page</li></ul>
+<label>Quiz password <input name="password" type="password" required maxlength="256" autocomplete="off"></label>
+<button>Continue to CodeGrinder</button>
+</form>
+<style>.digits{display:flex;gap:.4rem}.digits input{box-sizing:border-box;width:2.5rem;text-align:center;font-size:1.5rem}.digits+p{margin-top:2rem}form{margin-bottom:3rem}</style>
+<script>
+const digits = [...document.querySelectorAll('.digits input')];
+const code = document.querySelector('input[name=code]');
+function update() { code.value = digits.map(input => input.value).join(''); }
+digits.forEach((input, index) => {
+    input.addEventListener('input', () => {
+        input.value = input.value.replace(/[^0-9]/g, '').slice(-1);
+        update();
+        if (input.value && index < digits.length - 1) digits[index + 1].focus();
+    });
+    input.addEventListener('keydown', event => {
+        if (event.key === 'Backspace' && !input.value && index > 0) digits[index - 1].focus();
+    });
+    input.addEventListener('paste', event => {
+        const value = event.clipboardData.getData('text').replace(/\D/g, '').slice(0, digits.length - index);
+        if (!value) return;
+        event.preventDefault();
+        [...value].forEach((digit, offset) => { digits[index + offset].value = digit; });
+        update();
+        digits[Math.min(index + value.length, digits.length - 1)].focus();
+    });
+});
+</script>

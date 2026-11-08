@@ -23,11 +23,11 @@ name = Path(sys.argv[0]).name
 arguments = sys.argv[1:]
 with open(os.environ["BUILD_LOG"], "a") as log:
     log.write(json.dumps([name, *arguments]) + "\\n")
-if name == "npm" and arguments == ["ci"]:
+if name == "bun" and arguments == ["install", "--frozen-lockfile"]:
     shutil.rmtree("node_modules", ignore_errors=True)
     Path("node_modules/.bin").mkdir(parents=True, exist_ok=True)
     Path("node_modules/.bin/webpack").symlink_to(sys.argv[0])
-elif name == "webpack":
+elif name == "bun" and arguments == ["run", "--bun", "webpack"]:
     if Path("index.template.html").exists():
         Path("build/ui").mkdir(parents=True, exist_ok=True)
         Path("build/ui/app.js").write_text("bundle")
@@ -36,8 +36,11 @@ elif name == "webpack":
         Path("sw.js").write_text("worker")
 elif name == "clang":
     Path(arguments[arguments.index("-o") + 1]).write_text(arguments[-1])
-elif name == "cargo" and arguments[0] == "build":
-    binary = Path("../target/release") / arguments[arguments.index("-p") + 1]
+elif name == "readelf":
+    print("static executable")
+elif name == "cargo" and arguments[0] in ("build", "zigbuild"):
+    target = arguments[arguments.index("--target") + 1] if "--target" in arguments else ""
+    binary = Path("../target") / target / "release" / arguments[arguments.index("-p") + 1]
     binary.parent.mkdir(parents=True, exist_ok=True)
     source = Path("input.txt")
     binary.write_text(source.read_text() if source.exists() else "executable")
@@ -59,7 +62,7 @@ class BuildTests(unittest.TestCase):
         for name in (
             "Makefile", "scripts", "server/Makefile", "grind/Makefile", "stepper/Makefile",
             "legacyweb", "grind/index.html", "grind/update-grind", "client", "vms", "tests/Makefile",
-            "macos-minimal-sdk/Makefile", "macos-minimal-sdk/versions.inc",
+            "macos-minimal-sdk/Makefile", "macos-minimal-sdk/versions.inc", "macos-minimal-sdk/update.sh",
         ):
             source = ROOT / name
             destination = self.root / name
@@ -69,7 +72,7 @@ class BuildTests(unittest.TestCase):
             else:
                 shutil.copyfile(source, destination)
         self.write("protocol/codegrinder.proto", "protocol")
-        for name in ("npm", "cargo", "clang", "rustfmt"):
+        for name in ("bun", "cargo", "clang", "rustfmt", "readelf"):
             self.write(f"tools/{name}", TOOL, executable=True)
 
     def write(self, name: str, content: str, *, executable: bool = False) -> Path:
@@ -94,7 +97,7 @@ class BuildTests(unittest.TestCase):
         return [json.loads(line) for line in self.log.read_text().splitlines()]
 
     def browser_fixture(self, directory: str) -> None:
-        for name in ("package.json", "package-lock.json", "tsconfig.json", "webpack.config.mjs"):
+        for name in ("package.json", "bun.lock", "tsconfig.json", "webpack.config.mjs"):
             self.write(f"{directory}/{name}", "{}")
         prefix = "generated/" if directory.endswith("web") else ""
         paths = [f"{prefix}{name}" for name in (
@@ -134,11 +137,11 @@ class BuildTests(unittest.TestCase):
         generated.unlink()
         self.make("legacyweb", "-j4")
         self.assertTrue(generated.exists())
-        installed = sum(command == ["npm", "ci"] for command in self.commands())
+        installed = sum(command == ["bun", "install", "--frozen-lockfile"] for command in self.commands())
         self.assertEqual(installed, 1)
-        self.write("legacyweb/package-lock.json", '{"changed": true}')
+        self.write("legacyweb/bun.lock", '{"changed": true}')
         self.make("legacyweb")
-        self.assertEqual(sum(command == ["npm", "ci"] for command in self.commands()), 2)
+        self.assertEqual(sum(command == ["bun", "install", "--frozen-lockfile"] for command in self.commands()), 2)
 
     def test_server_publication_is_atomic_and_preserved_by_mostlyclean(self) -> None:
         self.write("server/input.txt", "first executable")

@@ -18,7 +18,7 @@ const buildInputPaths = [
   path.join(webDirectory, "buildVersion.mjs"),
   path.join(webDirectory, "index.html"),
   path.join(webDirectory, "local-runtimes.json"),
-  path.join(webDirectory, "package-lock.json"),
+  path.join(webDirectory, "bun.lock"),
   path.join(webDirectory, "package.json"),
   path.join(webDirectory, "styles.css"),
   path.join(webDirectory, "sw.ts"),

@@ -11,30 +11,30 @@ proto: $(PROTO_OUTPUTS)
 build/inputs: FORCE
 	sh ../../scripts/inventory.sh $@ $(SOURCES) ../../protocol/codegrinder.proto
 
-node_modules/.installed: package.json package-lock.json
-	npm ci
+node_modules/.installed: package.json bun.lock
+	bun install --frozen-lockfile
 	touch $@
 
-$(PROTO_OUTPUTS) &: ../../protocol/codegrinder.proto proto-gen.sh node_modules/.installed
+$(PROTO_OUTPUTS) &: ../../protocol/codegrinder.proto proto-gen.sh protoc-gen-ts.sh node_modules/.installed
 	./proto-gen.sh
 	touch $(PROTO_OUTPUTS)
 
 # Webpack emits page modules, workers, and optional chunks into the live tree.
 -include build/outputs.mk build/published-outputs.mk
 build/.built: build/inputs $(PROTO_OUTPUTS) node_modules/.installed
-	npm run typecheck
-	node_modules/.bin/webpack
+	bun run --bun typecheck
+	bun run --bun webpack
 	sh ../../scripts/outputs.sh build/outputs.mk WEB $@ $$(find scripts -type f \( -name '*.js' -o -name '*.wasm' -o -name '*.LICENSE.txt' \) | sort) sw.js
 	touch $@
 
 check: $(PROTO_OUTPUTS)
-	npm run typecheck
+	bun run --bun typecheck
 
 test: build
-	npm test
+	bun run test
 
 test-browser: build
-	npm run test:browser
+	bun run test:browser
 
 # Static assets and generated bundles publish only after a successful build.
 build/.published: build/.built tools/publish.py

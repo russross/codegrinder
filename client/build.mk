@@ -9,22 +9,22 @@ proto: $(PROTO_OUTPUTS)
 build/ui-inputs: FORCE
 	sh ../../scripts/inventory.sh $@ $(UI_SOURCES)
 
-node_modules/.installed: package.json package-lock.json
-	npm ci
+node_modules/.installed: package.json bun.lock
+	bun install --frozen-lockfile
 	touch $@
 
 ../vms/build/assets.json: FORCE
 	$(MAKE) -C ../../vms
 
-$(PROTO_OUTPUTS) &: ../../protocol/codegrinder.proto proto-gen.sh node_modules/.installed
+$(PROTO_OUTPUTS) &: ../../protocol/codegrinder.proto proto-gen.sh protoc-gen-ts.sh node_modules/.installed
 	./proto-gen.sh
 	touch $(PROTO_OUTPUTS)
 
 # Output inventories also recover individual bundles removed outside cleanup.
 -include build/ui-outputs.mk build/published-outputs.mk
 build/ui/.built: node_modules/.installed ../vms/build/assets.json build/ui-inputs $(PROTO_OUTPUTS)
-	npm run typecheck
-	node_modules/.bin/webpack
+	bun run --bun typecheck
+	bun run --bun webpack
 	sh ../../scripts/outputs.sh build/ui-outputs.mk UI $@ $$(find build/ui -type f ! -name .built | sort)
 	touch $@
 
@@ -33,16 +33,16 @@ build/ui/.built: node_modules/.installed ../vms/build/assets.json build/ui-input
 	python3 scripts/publish.py
 
 check: node_modules/.installed $(PROTO_OUTPUTS) ../vms/build/assets.json
-	npm run typecheck
+	bun run --bun typecheck
 
 test: all
-	npm test
+	bun run test
 
 test-widgets: node_modules/.installed $(PROTO_OUTPUTS) ../vms/build/assets.json
-	npm run test:widgets
+	bun run test:widgets
 
 test-browser: all
-	npm run test:browser
+	bun run test:browser
 
 FORCE:
 .PHONY: all proto check test test-widgets test-browser FORCE
