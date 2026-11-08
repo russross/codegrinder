@@ -35,8 +35,8 @@ impl Db {
             if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                 return Err(deadline_exceeded());
             }
-            let conn = open_connection_until(&path, deadline)?;
-            set_job_deadline(&conn, deadline)?;
+            let mut conn = open_connection_until(&path, deadline)?;
+            set_job_deadline(&mut conn, deadline)?;
             f(&conn)
         });
 
@@ -128,7 +128,7 @@ impl Db {
     }
 }
 
-fn set_job_deadline(conn: &Connection, deadline: Option<Instant>) -> AppResult<()> {
+fn set_job_deadline(conn: &mut Connection, deadline: Option<Instant>) -> AppResult<()> {
     let Some(deadline) = deadline else {
         conn.busy_timeout(DEFAULT_BUSY_TIMEOUT)?;
         conn.progress_handler(0, None::<fn() -> bool>)?;
@@ -150,28 +150,28 @@ pub fn open_connection(path: &Path) -> AppResult<Connection> {
 }
 
 fn open_connection_until(path: &Path, deadline: Option<Instant>) -> AppResult<Connection> {
-    let conn = Connection::open_with_flags(
+    let mut conn = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_FULL_MUTEX,
     )?;
-    configure_connection(&conn, deadline)?;
+    configure_connection(&mut conn, deadline)?;
     Ok(conn)
 }
 
 #[cfg(test)]
 pub fn open_test_connection(path: &Path) -> AppResult<Connection> {
-    let conn = Connection::open_with_flags(
+    let mut conn = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_CREATE
             | OpenFlags::SQLITE_OPEN_READ_WRITE
             | OpenFlags::SQLITE_OPEN_FULL_MUTEX,
     )?;
-    configure_connection(&conn, None)?;
+    configure_connection(&mut conn, None)?;
     conn.execute_batch(include_str!("../setup/schema.sql"))?;
     Ok(conn)
 }
 
-fn configure_connection(conn: &Connection, deadline: Option<Instant>) -> AppResult<()> {
+fn configure_connection(conn: &mut Connection, deadline: Option<Instant>) -> AppResult<()> {
     // Connection setup can acquire database locks, so it uses the same timeout and
     // SQL progress deadline as the transaction that follows it.
     set_job_deadline(conn, deadline)?;

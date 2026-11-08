@@ -62,6 +62,112 @@ fn assert_result(output: &Output, code: i32, diagnostic: &str) {
     assert!(log(output).contains(diagnostic), "{}", log(output));
 }
 
+// Invalid environment values are irrelevant when the corresponding explicit
+// options provide the effective configuration, including disabled grading.
+#[test]
+fn explicit_options_override_environment_and_preserve_command_arguments() {
+    let fixture = Fixture::new(b"> done\n");
+    let output = fixture.command()
+        .env("STEPPER_DIR", "missing")
+        .env("STEPPER_TIMEOUT", "invalid")
+        .env("STEPPER_GRADE", "invalid")
+        .env("STEPPER_INPUT_TRANSFORM", "@BOGUS@")
+        .args(["--dir=inputs", "--timeout", "2", "--no-grade",
+            "--input-transform", "@TRANSCRIPT@", "sh", "-c",
+            "test \"$1\" = inputs/test.transcript && test \"$2\" = --grade && test \"$3\" = -- && printf 'done\\n'",
+            "student", "@INPUT@", "--grade", "--"])
+        .output().unwrap();
+    assert_result(&output, 0, "Passed 1/1");
+    assert!(!fixture.0.join("test_detail.xml").exists());
+
+    let output = fixture
+        .command()
+        .args([
+            "--grade",
+            "--timeout=2",
+            "--dir",
+            "inputs",
+            "--input-transform=@STEM@.input",
+            "--",
+            "sh",
+            "-c",
+            "test \"$1\" = inputs/test.input && printf 'done\\n'",
+            "student",
+            "@INPUT@",
+        ])
+        .output()
+        .unwrap();
+    assert_result(&output, 0, "Passed 1/1");
+    assert!(fixture.0.join("test_detail.xml").is_file());
+}
+
+// Help and syntax errors must leave an existing grade report intact and avoid
+// starting the supplied command, even when inherited settings are invalid.
+#[test]
+fn option_help_and_errors_do_not_run_tests_or_modify_reports() {
+    let fixture = Fixture::new(b"");
+    let report = fixture.0.join("test_detail.xml");
+    fs::write(&report, b"keep report").unwrap();
+    let output = fixture
+        .command()
+        .env("STEPPER_DIR", "missing")
+        .env("STEPPER_TIMEOUT", "invalid")
+        .env("STEPPER_GRADE", "invalid")
+        .env("STEPPER_INPUT_TRANSFORM", "@BOGUS@")
+        .args(["--grade", "--help"])
+        .output()
+        .unwrap();
+    assert_result(&output, 0, "usage: stepper");
+    assert!(log(&output).contains("STEPPER_INPUT_TRANSFORM"));
+
+    for args in [
+        vec!["--unknown"],
+        vec!["--dir"],
+        vec!["--timeout", "--grade"],
+        vec!["--dir="],
+        vec!["--input-transform", ""],
+        vec!["--dir=inputs", "--dir=inputs"],
+        vec!["--grade", "--no-grade"],
+        vec!["--no-grade", "--no-grade"],
+        vec!["--timeout=1", "--timeout=2"],
+        vec!["--input-transform=x", "--input-transform=y"],
+        vec!["--grade=true"],
+        vec!["--timeout=0", "true"],
+        vec!["--timeout=1.5", "true"],
+        vec!["--timeout=18446744073709551616", "true"],
+        vec!["--input-transform=@BOGUS@", "true"],
+        vec!["--grade", "--"],
+    ] {
+        let output = fixture.command().args(&args).output().unwrap();
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {}", log(&output));
+        assert!(String::from_utf8_lossy(&output.stderr).starts_with("Stepper: "));
+        assert_eq!(fs::read(&report).unwrap(), b"keep report");
+    }
+}
+
+// Exercise phase expectations as well as the display boundary. Output arriving
+// after matched stderr has the same diagnostic allowance as unsolicited stderr.
+#[test]
+fn diagnostic_context_depends_on_stream_and_remaining_expectations() {
+    let diagnostics: String = (1..=21).map(|line| format!("diagnostic-{line:02}\n")).collect();
+    for (transcript, prefix, redirect, limit) in [
+        (b"".as_slice(), "", "", 5),
+        (b"! expected\n".as_slice(), "", " >&2", 5),
+        (b"> expected\n".as_slice(), "", " >&2", 20),
+        (b"".as_slice(), "", " >&2", 20),
+        (b"! expected\n".as_slice(), "printf 'expected\\n' >&2; ", " >&2", 20),
+    ] {
+        let fixture = Fixture::new(transcript);
+        let program = format!("{prefix}printf '%s' '{diagnostics}'{redirect}; sleep 2");
+        let output = fixture.shell(&program);
+        assert_result(&output, 1, "[output truncated]");
+        let text = log(&output);
+        let text = &text[text.find('\x1b').unwrap()..];
+        assert!(text.contains(&format!("diagnostic-{limit:02}")), "{text}");
+        assert!(!text.contains(&format!("diagnostic-{:02}", limit + 1)), "{text}");
+    }
+}
+
 // Inspect XML using the platform parser when available, in addition to checking
 // the literal escaping. The runner has no dependency on this test-only tool.
 fn validate_xml(path: &Path) {

@@ -3,6 +3,10 @@ name = "codegrinder"
 version.workspace = true
 edition.workspace = true
 
+[package.metadata.grind]
+required = "3.1.0"
+recommended = "3.1.1"
+
 [[bin]]
 name = "codegrinder"
 path = "main.rs"
@@ -37,6 +41,7 @@ tower.workspace = true
 
 [build-dependencies]
 tonic-prost-build.workspace = true
+toml.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

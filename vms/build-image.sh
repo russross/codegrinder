@@ -35,7 +35,7 @@ fakeroot sh -eu -c '
     cp -R "$4/." "$2/"
     [ "$5" = - ] || tar -xpmf "$5" -C "$2"
     mkdir -p "$2/usr/local/bin"
-    cp ../../stepper/dist/stepper.linux_riscv64 "$2/usr/local/bin/stepper"
+    cp ../../dist/server/stepper.linux_riscv64 "$2/usr/local/bin/stepper"
     chmod 755 "$2/usr/local/bin/stepper"
     stage=$2
     shift 5

@@ -15,7 +15,7 @@ c_PACKAGES := make tzdata tcc tcc-libs-static musl-dev
 riscv_TOOLS := build/riscv-tools.tar
 c_TOOLS := -
 GUEST_SOURCES := $(shell find guest -type f | sort)
-STEPPER := ../../stepper/dist/stepper.linux_riscv64
+STEPPER := ../../dist/server/stepper.linux_riscv64
 
 all: build/assets.stamp
 
@@ -80,13 +80,6 @@ build/riscv-tools.tar: $(RISCLET_BINARY) build/risclet-version
 $(foreach image,$(IMAGES),build/$(image)-inputs): build/%-inputs: FORCE
 	sh ../../scripts/inventory.sh $@ $$(find $* -type f | sort)
 
-# Consult Cargo before comparing the published runner's timestamp.
-.PHONY: stepper
-stepper:
-	$(MAKE) -C ../../stepper riscv64
-
-$(STEPPER): stepper
-
 build/riscv-rootfs.ext4: build/riscv-inputs build/riscv-tools.tar
 
 build/c-rootfs.ext4: build/c-inputs
@@ -122,5 +115,5 @@ build/assets.stamp: $(foreach image,$(IMAGES),build/$(image)-disk-name) scripts/
 	touch build/assets.stamp
 
 FORCE:
-.PHONY: all stepper FORCE
+.PHONY: all FORCE
 .DELETE_ON_ERROR:

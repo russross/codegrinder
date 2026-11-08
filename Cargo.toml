@@ -8,14 +8,14 @@ opt-level = "s"
 # Standalone runners prioritize image footprint without changing host profiles.
 [profile.standalone-linux]
 inherits = "release"
-opt-level = "z"
+opt-level = "s"
 lto = true
 codegen-units = 1
 strip = true
 panic = "abort"
 
 [workspace.package]
-version = "3.1.0"
+version = "3.1.1"
 edition = "2024"
 
 [workspace.dependencies]
@@ -24,18 +24,18 @@ base64 = "=0.23.1"
 bytes = "=1.12.1"
 chrono = { version = "=0.4.45", default-features = false }
 clap = "=4.6.7"
-flate2 = "=1.1.10"
+flate2 = "=1.1.11"
 form_urlencoded = "=1.2.2"
 hex = "=0.4.3"
 hmac = "=0.13.0"
 http = "=1.5.0"
-ignore = "=0.4.33"
+ignore = "=0.4.34"
 libc = "=0.2.191"
 prost = "=0.14.4"
 prost-types = "=0.14.4"
 rand = "=0.10.3"
-roxmltree = "=0.21.1"
-rusqlite = { version = "=0.40.2", default-features = false }
+roxmltree = "=0.21.2"
+rusqlite = { version = "=0.41.1", default-features = false }
 semver = "=1.0.28"
 serde = "=1.0.229"
 serde_json = "=1.0.154"
@@ -46,9 +46,9 @@ tar = { version = "=0.4.46", default-features = false }
 thiserror = "=2.0.21"
 tokio = "=1.54.1"
 tokio-stream = "=0.1.19"
-toml = "=1.1.8"
-tonic = { version = "=0.14.6", default-features = false }
-tonic-prost = "=0.14.6"
-tonic-prost-build = "=0.14.6"
-tonic-web = "=0.14.6"
+toml = "=1.2.1"
+tonic = { version = "=0.14.9", default-features = false }
+tonic-prost = "=0.14.9"
+tonic-prost-build = "=0.14.9"
+tonic-web = "=0.14.9"
 tower = "=0.5.3"

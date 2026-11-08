@@ -13,7 +13,7 @@ trap 'rm -f "$destination.part"' EXIT HUP INT TERM
 # Only verified, complete bytes enter the download cache.
 curl --fail --location --show-error --retry 3 --connect-timeout 20 --max-time 300 \
     --output "$destination.part" "$url"
-printf '%s  %s\n' "$digest" "$destination.part" | sha256sum -cs || {
+printf '%s  %s\n' "$digest" "$destination.part" | sha256sum -c >/dev/null || {
     echo "download checksum failed: $destination" >&2
     exit 1
 }

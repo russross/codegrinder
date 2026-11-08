@@ -17,6 +17,8 @@ grind-dist: static-dist grind-linux-amd64 grind-linux-arm64 grind-macos-amd64 gr
 static-dist:
 	sh ../scripts/publish-client.sh index.html '$(DIST_DIR)/grind/index.html'
 	sh ../scripts/publish-client.sh update-grind '$(DIST_DIR)/grind/update-grind'
+	brotli -q 11 -f '$(DIST_DIR)/grind/index.html'
+	brotli -q 11 -f '$(DIST_DIR)/grind/update-grind'
 
 grind-linux-amd64 grind-linux-arm64 grind-macos-amd64 grind-macos-arm64: static-dist
 
@@ -55,5 +57,6 @@ clean-dist:
 	rm -f '$(DIST_DIR)/grind/grind.linux_amd64' '$(DIST_DIR)/grind/grind.linux_arm64' '$(DIST_DIR)/grind/grind.darwin_amd64' '$(DIST_DIR)/grind/grind.darwin_arm64'
 	rm -f '$(DIST_DIR)/grind/grind.linux_amd64.br' '$(DIST_DIR)/grind/grind.linux_arm64.br' '$(DIST_DIR)/grind/grind.darwin_amd64.br' '$(DIST_DIR)/grind/grind.darwin_arm64.br'
 	rm -f '$(DIST_DIR)/grind/index.html' '$(DIST_DIR)/grind/update-grind' '$(DIST_DIR)/grind/index.html.part' '$(DIST_DIR)/grind/update-grind.part'
+	rm -f '$(DIST_DIR)/grind/index.html.br' '$(DIST_DIR)/grind/update-grind.br'
 
 .PHONY: static-dist
