@@ -1,6 +1,7 @@
 .DEFAULT_GOAL := all
 AMD64 := x86_64-unknown-linux-musl
 RISCV64 := riscv64gc-unknown-linux-musl
+DIST_DIR ?= $(abspath ../dist)
 
 # Cargo tracks sources and flags; publication preserves unchanged output times.
 .PHONY: all build amd64 riscv64 check test test-only mostlyclean clean
@@ -10,13 +11,12 @@ build: amd64 riscv64
 amd64:
 	RUSTFLAGS='-C target-feature=+crt-static' cargo zigbuild --locked --profile standalone-linux -p stepper --target $(AMD64)
 	sh ../scripts/publish-client.sh ../target/$(AMD64)/standalone-linux/stepper dist/stepper.linux_amd64
-	sh ../scripts/publish-client.sh dist/stepper.linux_amd64 ../problemtypes/containers/c/stepper
-	sh ../scripts/publish-client.sh dist/stepper.linux_amd64 ../problemtypes/containers/prolog/stepper
-	sh ../scripts/publish-client.sh dist/stepper.linux_amd64 ../problemtypes/containers/riscv/stepper
+	sh ../scripts/publish-client.sh dist/stepper.linux_amd64 '$(DIST_DIR)/server/stepper.linux_amd64'
 
 riscv64:
 	RUSTFLAGS='-C target-feature=-crt-static -C link-arg=-dynamic' cargo zigbuild --locked --profile standalone-linux -p stepper --target $(RISCV64)
 	sh ../scripts/publish-client.sh ../target/$(RISCV64)/standalone-linux/stepper dist/stepper.linux_riscv64
+	sh ../scripts/publish-client.sh dist/stepper.linux_riscv64 '$(DIST_DIR)/server/stepper.linux_riscv64'
 
 # Check every target, including fixtures compiled as external consumers.
 check:
@@ -37,3 +37,4 @@ mostlyclean:
 
 clean: mostlyclean
 	rm -rf dist
+	rm -f '$(DIST_DIR)/server/stepper.linux_amd64' '$(DIST_DIR)/server/stepper.linux_riscv64'

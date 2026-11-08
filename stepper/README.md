@@ -10,7 +10,7 @@ Build and run from the repository root:
     make -C stepper
     stepper/dist/stepper.linux_amd64 -- command argument ...
 
-The component build publishes amd64 Alpine and RISC-V 64 Linux executables under `stepper/dist/`. Both grading containers and exam guests install the matching runner as `/usr/local/stepper`. A grind executable invoked through a symlink named `stepper` also runs this mode before initializing the client. Problem types retain their existing runner configuration.
+The component build publishes amd64 Alpine and RISC-V 64 Linux executables under `stepper/dist/` and `dist/server/`. Both grading containers and exam guests install the matching runner as `/usr/local/bin/stepper`. A grind executable invoked through a symlink named `stepper` also runs this mode before initializing the client. Problem types retain their existing runner configuration.
 
 The executable uses one synchronous thread and one student process per case. It uses `std` and `libc`; normal Linux execution needs no helper utilities. Executable shell text without a shebang falls back to `/bin/sh` on an exec-format error. The macOS development build uses `ps` during failure/interruption cleanup to find descendants. Transcripts and captured output use heap buffers. The process inherits the current directory and environment, with `LC_ALL=C` and umask 077.
 
@@ -89,4 +89,4 @@ See [tests/README.md](tests/README.md) for process regression tests. [NOTES.md](
 
 `make -C stepper build` produces both standalone deployment binaries. `amd64` and `riscv64` select one architecture. Builds use the shared Cargo.lock and target cache, cargo-zigbuild, Zig, and the installed Rust standard libraries for `x86_64-unknown-linux-musl` and `riscv64gc-unknown-linux-musl`.
 
-The workspace's `standalone-linux` release profile selects size optimization, LTO, one codegen unit, stripped symbols, and aborting panics. Grind embeds the library using its existing release profile and distribution rules. `mostlyclean` preserves published runners; `clean` also removes `stepper/dist/`. Rust and Zig are needed only at build time.
+The workspace's `standalone-linux` release profile selects size optimization, LTO, one codegen unit, stripped symbols, and aborting panics. Grind embeds the library using its existing release profile and distribution rules. `mostlyclean` preserves published runners; `clean` also removes `stepper/dist/` and the published runners in `dist/server/`. Rust and Zig are needed only at build time.
