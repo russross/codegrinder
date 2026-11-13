@@ -35,6 +35,8 @@ Initial assignment load
 Workspace state
 ---------------
 
+Instructions use CommonMark with only the Markdown table extension enabled through markdown-it. Raw HTML is omitted and unsafe URLs are rejected. Relative images resolve against the document path into canonical workspace files, are tracked as refresh dependencies, and are embedded as isolated image data URLs. Tables support inline Markdown and column alignment; footnotes, task lists, strikethrough, and automatic bare-URL linking are not enabled.
+
 Each problem keeps three related pieces of state:
 
 *   `systemOwnedFiles` is the latest canonical system file set from the TA. The editor displays these files read-only.
@@ -163,7 +165,7 @@ Publication writes only deployment assets to `dist/client/` and `dist/vms/`. The
 
 The client publication inventory resides beside its deployed page and records the current UI, configurations, drives, and runtime directory. Ordinary builds retain older immutable assets. `mostlyclean` prunes assets outside the published inventory, preserves that inventory, and removes staged source/dependency/build caches. `clean` removes the component's deployment tree as well. Raw downloads remain reusable. A tree with an entry page but no publication inventory must be rebuilt before pruning. Server data and configuration are never cleanup targets.
 
-The browser requires same-origin authenticated gRPC-Web access for bookkeeping and execution. Local VM dependencies do not change authorization or file ownership. Source edits do not rerun unchanged image preparation; deleted outputs are recovered through generated Make inventories.
+The browser requires same-origin authenticated gRPC-Web access for bookkeeping and execution. Local VM dependencies do not change authorization or file ownership. Client builds and checks consume the existing VM asset manifest and Riscbox declarations without invoking VM preparation. Run `make -C vms` (root `make vm`) explicitly to prepare missing outputs or apply VM source/version changes, then `make -C client` (root `make client`) to rebuild the UI. VM builds recover deleted outputs through generated Make inventories.
 
 
 Audit boundaries

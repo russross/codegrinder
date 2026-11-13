@@ -1,6 +1,7 @@
 .DEFAULT_GOAL := all
 PROTO_OUTPUTS := codegrinder.ts codegrinder.client.ts google/protobuf/duration.ts google/protobuf/timestamp.ts
 UI_SOURCES := $(filter-out $(PROTO_OUTPUTS) %.test.ts style.css,$(wildcard *.ts *.css)) tsconfig.json webpack.config.mjs
+VM_INPUTS := ../vms/build/assets.json ../vms/build/riscbox/riscbox.d.ts
 
 all: ../../dist/client/index.html $(addprefix ../../dist/client/,app.js.br index.html.br style.css.br)
 proto: $(PROTO_OUTPUTS)
@@ -13,8 +14,10 @@ node_modules/.installed: package.json bun.lock
 	bun install --frozen-lockfile
 	touch $@
 
-../vms/build/assets.json: FORCE
-	$(MAKE) -C ../../vms
+# VM outputs are prepared separately; client builds only consume them.
+$(VM_INPUTS):
+	@echo 'Missing VM build output: $@. Run make -C vms from the repository root first.' >&2
+	@exit 1
 
 $(PROTO_OUTPUTS) &: ../../protocol/codegrinder.proto proto-gen.sh protoc-gen-ts.sh node_modules/.installed
 	./proto-gen.sh
@@ -22,7 +25,7 @@ $(PROTO_OUTPUTS) &: ../../protocol/codegrinder.proto proto-gen.sh protoc-gen-ts.
 
 # Output inventories also recover individual bundles removed outside cleanup.
 -include build/ui-outputs.mk build/published-outputs.mk
-build/ui/.built: node_modules/.installed ../vms/build/assets.json build/ui-inputs $(PROTO_OUTPUTS)
+build/ui/.built: node_modules/.installed $(VM_INPUTS) build/ui-inputs $(PROTO_OUTPUTS)
 	bun run --bun typecheck
 	bun run --bun webpack
 	sh ../../scripts/outputs.sh build/ui-outputs.mk UI $@ $$(find build/ui -type f ! -name .built | sort)
@@ -38,13 +41,13 @@ build/ui/.built: node_modules/.installed ../vms/build/assets.json build/ui-input
 
 ../../dist/client/app.js ../../dist/client/style.css:
 
-check: node_modules/.installed $(PROTO_OUTPUTS) ../vms/build/assets.json
+check: node_modules/.installed $(PROTO_OUTPUTS) $(VM_INPUTS)
 	bun run --bun typecheck
 
 test: all
 	bun run test
 
-test-widgets: node_modules/.installed $(PROTO_OUTPUTS) ../vms/build/assets.json
+test-widgets: node_modules/.installed $(PROTO_OUTPUTS) $(VM_INPUTS)
 	bun run test:widgets
 
 test-browser: all

@@ -231,8 +231,8 @@ async fn configure(State(state): State<LtiState>, body: Bytes) -> Response {
         if picker.expires <= Utc::now().timestamp() { return Err(AppError::Forbidden("picker session expired; reopen it from Canvas".into())); }
         let set=form_first(&f,"problem_set");
         let set_db=set.clone();
-        state.db.transaction(false,move |conn| {
-            if !conn.query_row("SELECT EXISTS(SELECT 1 FROM problem_sets WHERE problem_set_id=?)",[set_db],|r|r.get::<_,bool>(0))? { return Err(AppError::BadRequest("unknown problem set".into())); } Ok(())
+        let title = state.db.transaction(false,move |conn| {
+            conn.query_row("SELECT problem_set_note FROM problem_sets WHERE problem_set_id=?",[set_db],|r|r.get::<_,String>(0)).optional()?.ok_or_else(|| AppError::BadRequest("unknown problem set".into()))
         }).await?;
         let mode=form_first(&f,"mode");
         if !matches!(mode.as_str(),"cli"|"web"|"exam"|"quiz") { return Err(AppError::BadRequest("invalid entry mode".into())); }
@@ -246,7 +246,8 @@ async fn configure(State(state): State<LtiState>, body: Bytes) -> Response {
             let connector=format!("https://{}/quiz/connect?tag={}",state.config.hostname,tag(&state.config.session_secret,"connector",&c,&password)?);
             instructions=quiz_setup(&state.config, &connector);
         }
-        let items=serde_json::json!({"@context":"http://purl.imsglobal.org/ctx/lti/v1/ContentItem", "@graph":[{"@type":"LtiLinkItem","mediaType":"application/vnd.ims.lti.v1.ltilink","title":set,"url":url,"placementAdvice":{"presentationDocumentTarget":"window"}}]}).to_string();
+        let target = if mode == "cli" { "frame" } else { "window" };
+        let items=serde_json::json!({"@context":"http://purl.imsglobal.org/ctx/lti/v1/ContentItem", "@graph":[{"@type":"LtiLinkItem","mediaType":"application/vnd.ims.lti.v1.ltilink","title":title,"url":url,"placementAdvice":{"presentationDocumentTarget":target}}]}).to_string();
         let mut fields=BTreeMap::from([("lti_message_type".into(),vec!["ContentItemSelection".into()]),("lti_version".into(),vec!["LTI-1p0".into()]),("content_items".into(),vec![items]),("oauth_consumer_key".into(),vec![picker.consumer_key]),("oauth_nonce".into(),vec![random_id()]),("oauth_timestamp".into(),vec![Utc::now().timestamp().to_string()]),("oauth_signature_method".into(),vec!["HMAC-SHA1".into()]),("oauth_version".into(),vec!["1.0".into()])]);
         if !picker.data.is_empty() { fields.insert("data".into(),vec![picker.data]); }
         let mut signed_fields = fields.clone();
@@ -951,6 +952,8 @@ mod http_tests {
         let r = configure(State(state.clone()), Bytes::from(encode_params(&f))).await;
         assert_eq!(r.status(), 200);
         let html = text(r).await;
+        assert!(html.contains("&quot;title&quot;:&quot;Quiz&quot;"));
+        assert!(html.contains("&quot;presentationDocumentTarget&quot;:&quot;window&quot;"));
         assert!(html.contains("/quiz/set?tag="));
         assert!(html.contains("/quiz/connect?tag="));
         assert!(!html.contains("configuration="));
@@ -983,6 +986,13 @@ mod http_tests {
             let r = configure(State(state.clone()), Bytes::from(encode_params(&f))).await;
             assert_eq!(r.status(), 200);
             let html = text(r).await;
+            assert!(html.contains("&quot;title&quot;:&quot;Quiz&quot;"));
+            let target = if mode == "cli" { "frame" } else { "window" };
+            assert!(
+                html.contains(&format!(
+                    "&quot;presentationDocumentTarget&quot;:&quot;{target}&quot;"
+                ))
+            );
             assert!(html.contains("document.querySelector('#canvas-return').submit()"));
             assert!(html.contains(&format!("/lti/problem_sets/{mode}/set")));
             assert!(html.contains("opaque-canvas-data"));

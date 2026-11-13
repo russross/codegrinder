@@ -164,6 +164,19 @@ body {
     flex-shrink: 1;
 }
 
+/* Tables retain their content width and scroll with the instructions pane. */
+#instructions-tab-content table {
+    border-collapse: collapse;
+    align-self: flex-start;
+    margin-block: 1em;
+}
+
+#instructions-tab-content th,
+#instructions-tab-content td {
+    border: 1px solid #aaa;
+    padding: 0.35em 0.65em;
+}
+
 #terminal {
     min-height: 0;
     flex-grow: 1; /* Allow terminal to grow and fill space */
